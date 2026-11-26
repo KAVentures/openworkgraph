@@ -45,10 +45,23 @@ sample rather than adding a copy. It is deleted like any other log.
 | Format | Import | Export | Notes |
 | --- | --- | --- | --- |
 | CSV | yes | yes | You map the case, activity, timestamp and (optional) resource columns. |
-| Excel (.xlsx) | yes | no | One worksheet is converted to CSV on this computer, then mapped and imported like any CSV (below). |
+| Excel (.xlsx) | yes | yes | Import: one worksheet is converted to CSV on this computer, then mapped and imported like any CSV (below). Export: the CSV export's rows as text cells ([Excel event-log export](#excel-event-log-export)). |
+| SQLite database | yes | no | One table is converted to CSV, then mapped like any CSV ([SQLite database files](#sqlite-database-files)). |
+| JSON Lines | yes | no | One JSON object per line, flattened to CSV columns ([JSON Lines files](#json-lines-files)). |
+| Apache Parquet | yes | yes | Import: converted to CSV ([Parquet files](#parquet-files)). Export: the CSV export's rows with a typed UTC timestamp column ([Parquet event-log export](#parquet-event-log-export)). |
 | XES (IEEE 1849) | yes | yes | `concept:name`, `time:timestamp` and `org:resource`; up to 32 other attributes of 500 characters each are imported as strings. Choose **XES with retained attributes** to include static trace and event attributes in the export. |
 | OCEL 2.0 JSON | yes | yes | Objects, object types, events, event-to-object links and supplied directed object-to-object relationships with qualifiers. Object attribute values keep their times (below). |
 | OCEL 2.0 XML | yes | yes | The same retained content in the OCEL 2.0 worked-example XML layout (`.xmlocel`). Objects must precede events as in the original 2.0 printed root schema. See the relationship contract for schema/example errata and format limits. |
+| OCEL 2.0 SQLite | no | yes | `GET /v1/event-logs/{log_id}/ocel.sqlite`: the OCEL 2.0 relational layout with per-type event and object tables. |
+| gzip (`.gz`) | yes | no | Any import may be gzip-compressed ([Compressed files](#compressed-files)). |
+
+**CSV with retained event attributes** (`format=csv-attributes`, also for
+matching cases) writes the exact CSV export's four columns, then one column per
+retained event attribute (such as the extra columns kept at import), sorted by
+name. Text values are written as stored; other values as compact JSON; a missing
+value is an empty cell. Importing the file with those columns kept gives the
+same events and values back. A log with more than 500 distinct event attributes,
+or with an attribute named like one of the four columns, is refused; use OCEL.
 
 The attribute export uses the selected case notion and includes values in the
 download, including supported lifecycle fields. The standard XES choice exports
@@ -70,6 +83,26 @@ mapping, `naive_timestamp_offset=+01:00` in the API). That choice is recorded
 with the import. XML with a `DOCTYPE` or entity declaration is refused before
 parsing.
 
+### Delimiters
+
+When you choose a CSV or text file, the dashboard reads its first rows on this computer and picks the
+delimiter (comma, semicolon, tab or pipe) that splits the header into the most columns, with the next
+rows splitting into the same number. Quoted cells may contain the delimiter. Comma wins ties, and a
+`.tsv` file is always read as tab-separated. You can still change **Delimiter** before importing.
+
+### Text encodings
+
+CSV files are read as UTF-8 unless the mapping names another `encoding` (`encoding=` on the import,
+append and preview routes): `windows-1252`, the Western European "ANSI" encoding that spreadsheets and
+older systems often save, or `utf-16`, which Excel's "Unicode text" export uses (with a byte-order
+mark). Such a file is converted to UTF-8 in a temporary file under the workspace folder before the
+normal CSV import reads it, and the copy is removed afterwards. Decoding is strict: a byte that is
+not valid in the named encoding refuses the file with its offset rather than being replaced. A
+non-default encoding is part of the import's recorded transform; the content digest still describes
+the original bytes. A file that is not valid UTF-8 and names no encoding is refused with a hint (and
+the line, where the parser reports it). The dashboard chooses **Text encoding** from the file's first
+bytes: a UTF-16 or UTF-8 byte-order mark, UTF-8 when they decode strictly, otherwise Windows-1252.
+
 ### Compressed files
 
 Any import or appended file may be gzip-compressed, as public logs such as the BPI Challenge
@@ -80,15 +113,41 @@ without limit; a damaged archive is refused. The dashboard picks the format from
 report's digests describe the decompressed bytes, so the same log compressed or not counts as the same
 file.
 
+### Resources in OCEL files
+
+OCEL 2.0 has no resource field. As in PM4Py and XES, an event's resource travels as its
+`org:resource` event attribute:
+
+- **Export:** OCEL JSON and XML write each event's resource as `org:resource`, listed first among
+  its attributes. Events without a resource have none.
+- **Import:** an `org:resource` attribute becomes the event's resource, so handover, role and
+  resource analyses work on OCEL logs from other tools. It is taken out of the event's other
+  attributes and does not count toward their limit.
+- **Invalid values:** a value that cannot be a resource (too long, or with control characters)
+  stays an ordinary attribute instead of refusing the file.
+
+A log therefore keeps its resources through an OCEL export and re-import. Logs imported before
+this change keep `org:resource` as an attribute until they are imported again.
+
 ### Timestamp formats
 
 ISO 8601 times (`2024-03-04T14:05:00Z`, `2024-03-04 14:05:00+01:00`) need no
 setting. For other layouts, such as `13/03/2024 14:05`, `04.03.2024 14:05:00`
-or `04-MAR-24 02.05.00 PM`, declare the format of the timestamp column as a
+`04-MAR-24 02.05.00 PM` or `04.03.2024 14:05:00,123` (fractional seconds after a comma or a point are
+recognised too), declare the format of the timestamp column as a
 strptime pattern ("Timestamp format" in the CSV mapping, `timestamp_format=` in
 the API). Patterns may use `%d %m %Y %y %H %I %M %S %f %p %b %B %z`, with
 spaces and `/ . - : , T` between them. They need a year, a month and a day,
 and `%I` needs `%p`.
+
+Times written as Unix time (as many APIs and JSON exports do) use one of two
+named formats instead of a pattern: `unix-seconds` (up to 10 digits, such as
+`1709561100` or `1709561100.25`, at most 6 decimals) and `unix-milliseconds`
+(up to 13 digits, such as `1709561100123`, at most 3 decimals). They count from
+1970-01-01 UTC, so they need no offset decision, and one given anyway does not
+shift them. Signs, exponents, separators and longer values are rejected as
+unparseable. Format detection offers them when every sampled value is a
+plain number of 9–10 (seconds) or 12–13 (milliseconds) digits.
 
 Every value must match the pattern exactly. A value with trailing text, an
 impossible date such as 31/02, or a value in another layout is rejected as
@@ -105,6 +164,18 @@ day in the sample is 12 or less, day-first and month-first both fit; the
 dashboard then lists both with how the first value would read, and you choose.
 Quarantined rows are released with ISO parsing only, so re-import a file that
 needs a format.
+
+### XES and OCEL times without an offset
+
+XES and OCEL times should carry a UTC offset, but some tools write them without one. PM4Py, for
+example, writes the times of a log without time zones as `2024-03-04T14:05:00`. Such a file used to
+import no events. Now it is refused with a hint until you choose the offset those times use: the same
+**Offset for times without one** as for CSV (`naive_timestamp_offset=` on the import and append
+routes). Times that carry an offset are read as written, and times that are not ISO 8601 are still
+rejected. The offset also applies to the times of OCEL object attribute values. The import reports
+`timestamps_with_assumed_offset`, or `timestamps_without_offset` when no offset was chosen, and the
+offset is part of the import's recorded transform. The dashboard looks at the first times of an XES
+or OCEL file and proposes this computer's offset when some have none.
 
 ### Reusing an earlier mapping
 
@@ -134,6 +205,15 @@ identities when appending.
 An import or append runs one at a time. You can prepare another file while a
 save is running. The completed save keeps newer file and mapping choices in
 the form.
+
+### Unnamed and duplicate columns
+
+Column names must be non-empty and unambiguous (not repeated, also ignoring case), so a mapping can
+never pick a different column than the one you meant; a file with an empty or repeated column name
+is refused. One exception: many exports end every line with a delimiter (`case;activity;time;`),
+which leaves one unnamed last column. That column is ignored when it is empty in every row. If it
+holds a value in any row the file is refused, rather than a value being dropped silently, and two or
+more unnamed trailing columns are still refused.
 
 ### SQLite database files
 
@@ -166,6 +246,11 @@ number. At most 2,000,000 lines, 500 columns and 1 MB per line are read, and the
 most 256 MB. `POST /v1/event-logs/jsonl-to-csv` with the file as the body returns `rows`, `columns`
 and `csv`. Nothing is stored. A `.json` file is still read as OCEL 2.0 JSON.
 
+**JSON Lines** in the export menu (`GET /v1/event-logs/{log_id}/export?format=jsonl`) writes one
+object per event under the chosen case notion with `case_id`, `activity`, `timestamp` (ISO 8601 UTC)
+and `resource` (`null` when missing), in the CSV export's order. The matching-case export offers the
+same format. Importing the file gives the same CSV as the CSV export.
+
 ### Parquet files
 
 A `.parquet` file, as data warehouses and lakes export, is read with DuckDB's `read_parquet` in an
@@ -177,6 +262,15 @@ cell, and binary values are left empty and counted. At most 2,000,000 rows and 5
 and the upload may be at most 512 MB. `POST /v1/event-logs/parquet-to-csv` with the file as the body
 returns `rows`, `columns`, `csv` and `dates_have_no_offset`. Nothing is stored: the upload is copied
 to a temporary file in the data folder, read and removed.
+
+### Title rows and Excel's delimiter hint
+
+Report-style exports often put a title or an export date above the column names. Set the line that
+holds the column names with `header_row=` (1 to 50) on the import, append and preview routes; the
+lines above it are skipped and the setting is part of the import's recorded transform. A first line
+`sep=;` (Excel's delimiter hint) is skipped automatically and its delimiter is used. Timestamp format
+detection finds the column names below such lines by itself. The dashboard skips a `sep=` line when it
+reads the columns; choosing a header row in the dashboard is not available yet.
 
 ### Excel workbooks
 
@@ -367,7 +461,8 @@ AI bearer tokens and MCP clients cannot read or change imported business logs.
 | `POST /v1/event-logs/xlsx-to-csv?sheet=...` | Convert one worksheet of the `.xlsx` request body to CSV (`csv`, `sheet`, `sheets`, `rows`, `columns`, `date_columns`, `dates_have_no_offset`). Nothing is stored. |
 | `POST /v1/event-logs/{log_id}/delete` | Delete the log and every row that belongs to it. |
 | `GET`/`POST /v1/event-logs/{log_id}/expiry` (`{"delete_after": ISO time \| null}`) | Read, set or clear the date after which the log is deleted automatically (below). |
-| `POST /v1/event-logs/{log_id}/export/matching-cases` | Download matching cases. Body contains `cohort` and optional `case_id`, `include_unfiltered`, `case_type`, `events_from` and `events_before`. Query `format` is `csv` (default), `csv-review`, `xes`, `xes-attributes`, `ocel`, `ocelxml`, `sourcecsv`, or `sourcecsv-review`. Source-ID formats require the `source_case` notion. |
+| `POST /v1/event-logs/{log_id}/export/matching-cases` | Download matching cases. Body contains `cohort` and optional `case_id`, `include_unfiltered`, `case_type`, `events_from` and `events_before`. Query `format` is `csv` (default), `csv-attributes`, `csv-review`, `jsonl`, `xes`, `xes-attributes`, `ocel`, `ocelxml`, `sourcecsv`, or `sourcecsv-review`. Source-ID formats require the `source_case` notion. |
+| `POST /v1/event-logs/{log_id}/export/matching-cases.xlsx` | Download matching cases as an Excel workbook. The body is the same as for `export/matching-cases`. The worksheet holds the exact CSV rows as text cells, at most 1,048,575 events. |
 | `POST /v1/event-logs/{log_id}/derive` | Save the cases matching a filter as a new log (below). |
 | `POST /v1/event-logs/combine` | Combine 2 to 10 saved logs into a new log (below). |
 | `GET /v1/event-logs/{log_id}/quality` | Stored quality and mapping reports per import and append, plus current whole-log diagnostics (below). |
@@ -411,7 +506,7 @@ AI bearer tokens and MCP clients cannot read or change imported business logs.
 | `GET`/`POST /v1/event-logs/{log_id}/case-tags`, `POST .../case-tags/remove` | Analyst tags on cases (below). |
 | `GET`/`POST /v1/event-logs/{log_id}/activity-glossary`, `POST .../activity-glossary/delete`, `POST .../activity-glossary/import`, `GET .../activity-glossary.csv` | The owner's notes per activity (below). |
 | `GET /v1/event-logs/{log_id}/root-cause?outcome=...` | Case features associated with an outcome, with confidence intervals. |
-| `GET /v1/event-logs/{log_id}/export?format=csv\|xes\|ocel\|ocelxml` | Download the log. |
+| `GET /v1/event-logs/{log_id}/export?format=csv\|csv-attributes\|jsonl\|xes\|ocel\|ocelxml` | Download the log. |
 | `GET /v1/event-logs/{log_id}/ocel.sqlite` | Owner-only download of the retained OCEL 2.0 log as standard SQLite event/object and relationship tables; created temporarily and cleaned up after response. |
 | `GET /v1/event-logs/{log_id}/report.html?sla_seconds=&variants=` | Download a self-contained HTML report (below). |
 | `GET`/`POST /v1/event-logs/{log_id}/saved-reports`, `GET .../saved-reports/{name}` | Copies of the report saved on this computer (below). |
@@ -797,6 +892,38 @@ selected cluster's `cluster_key`. It returns the total and a page of members ord
 by literal case key, with an optional `limit` of 1–100 (default 50). Send the returned
 `next_after` as `after` to continue. If the cluster changes, rerun the report to get
 its current key. This route requires a dashboard session.
+
+From **Inspect cases**, **Tag cases matching this cluster** can mark the cases
+whose current paths match that cluster, within the case scope used to build it.
+Preview the count and sample before applying; existing tag notes on matching
+cases will be replaced. The preview is checked again at save time, so changes to
+the matching cases or existing notes require another preview. The selected paths
+are re-evaluated on the current log, not a frozen report-time case list. When a
+cluster cannot fit the bounded variant filter, request size, or 100,000-case
+tagging limit, tagging is not available; inspect or download its case list instead. Tagging does not change
+stored events and the cluster report must be run again afterward.
+
+**Download cluster report JSON** includes the original request, the complete
+returned cluster summary, settings and case notion. The CSV gives one row per
+cluster with the same coverage counts and the displayed top variants and
+contrasting activities. These are the returned top five variants and up to six
+contrasting activities per side, not a list of every variant or activity. Both
+report downloads reflect the last completed analysis and are cleared when its
+settings change. CSV text is escaped for spreadsheet review.
+
+From **Inspect cases**, **Download cluster cases (CSV)** recomputes the selected
+cluster with its original settings and scope, then downloads case keys, duration,
+event count and first/last activity. Each file contains up to 50,000 cases in
+case-key order. When more cases remain, download subsequent files using the next
+page control; the dashboard reports progress. A continuation cursor is bound to
+the log, cluster and settings. Formula-like text is escaped for spreadsheet review.
+The cluster key detects a
+change in the cluster's variant composition and counts since the report, but it
+does not freeze case membership before the first download. For a multi-file
+export, a streaming digest of all exported case rows is checked on every later
+page; changed membership or exported values require starting again. Pages are
+recomputed from the current log, and no case list is retained by this check.
+This download requires a dashboard session.
 
 Clusters describe the structure of the imported log. They are not process types,
 causes, or a judgement of how any case was handled.
@@ -1519,6 +1646,19 @@ not even on handover edges. Handover counts say who touched a case next, not who
 responsible or how well anyone worked. One million events are analysed in seconds
 (`OWG_SCALE_ACCEPTANCE=1 pytest tests/test_event_log_organization.py`).
 
+**Download network (GraphML)** saves the same network for Gephi, yEd or Cytoscape
+(`GET /v1/event-logs/{log_id}/organization.graphml`, with the same parameters as `organization`):
+
+- one node per resource, with its event, case and activity counts and its kind;
+- directed `handover` and `subcontracting` edges;
+- `working_together` edges weighted by shared cases. Their `symmetric` attribute is true and
+  their direction carries no meaning; the graph stays directed so networkx and other strict
+  readers load it.
+
+Resources stay pseudonymous unless **Show resource names** is checked, and the file says which.
+No duration, speed or score is added. Node identifiers are generated, and labels are escaped XML
+text. The `X-OWG-Network` header counts resources and edges and states the naming choice.
+
 ### Roles
 
 "Discover roles" groups resources that perform a similar mix of activities. This is organizational
@@ -1767,6 +1907,21 @@ under the chosen case notion and the source's activity mapping.
   `{"name": "Q1", "events_from": "2024-01-01T00:00:00Z", "events_before":
   "2024-04-01T00:00:00Z"}` saves the whole log's first quarter. The response's
   `time_window` reports the cases with events in it and the events left out.
+* **Activity trim (optional):** `trim_from_activity` and/or `trim_to_activity`
+  (the dashboard's *Keep events from the first … until …* fields) keep each
+  matching case's events from the first occurrence of one activity to the last
+  (`trim_mode: "longest"`, the default) or the next (`"first"`) occurrence of
+  another, both included: the endpoints trim of other process-mining tools.
+  Leave one out to trim only the start or only the end of each case. With the
+  same activity at both ends, `"first"` keeps one cycle up to its next
+  occurrence. Activity names are those of the analysis, after any activity
+  mapping. The events in between are kept whatever their activity. A matching
+  case without the endpoints is left out. A time window applies first, so the
+  endpoints are looked for inside it. The response's `activity_trim` reports the
+  cases with the endpoints and the events left out. The same fields work for
+  the matching-case export (`POST /v1/event-logs/{log_id}/export/matching-cases`)
+  and the preview. In a flat export of an object-centric log, a case keeps only
+  its own segment, even when it shares events with other cases.
 * **The new log:** counts against the 50-log limit. It can be analysed,
   exported, compared with the source (see *Comparing two logs*) or deleted like
   any other log.
@@ -2152,6 +2307,23 @@ format. The process tree is translated block by block:
 The net has one source place, marked with one token, and one sink place. The sink is declared in
 `finalmarkings`, as PM4Py and ProM read it. Silent transitions carry the ProM `$invisible$` flag.
 
+**Download process tree (PTML)** saves the discovered tree itself, in the PTML format that
+`pm4py.read_ptml` and ProM's process-tree plug-ins read
+(`GET /v1/event-logs/{log_id}/model-discovery.ptml`, same parameters as the PNML export). It
+keeps the block structure that the PNML and BPMN exports flatten:
+
+- activities become `manualTask` and skips become `automaticTask`;
+- `seq`, `xor` and `and` become `sequence`, `xor` and `and`;
+- a loop becomes `xorLoop` with its body, its redo part and a silent exit.
+
+Identifiers are UUIDs derived from each node's position, so the same tree gives the same file.
+The `X-OWG-Process-Tree` header counts nodes and activities.
+
+**Process tree in PM4Py notation** (under the download) shows the same tree as PM4Py prints it, for
+example `->( 'Receive', X( tau, 'Approve' ), 'Close' )`. It can be pasted into
+`pm4py.objects.process_tree.utils.generic.parse`. Labels are written as they are, so a label
+containing a single quote may need editing before PM4Py's parser accepts it.
+
 Place and transition identifiers are generated (`p0`, `t0`, …); activity names appear only as
 transition names. Tests replay every trace up to six steps and check that the net accepts exactly
 the traces the process tree accepts.
@@ -2160,6 +2332,25 @@ the traces the process tree accepts.
 case-filter parameters. It returns `application/xml` with an `X-OWG-Petri-Net` header that counts
 places, transitions and silent transitions. Dashboard session only. Like the discovered draft, the
 net is a candidate model for review, not a verified workflow.
+
+### BPMN export of the discovered model
+
+`GET /v1/event-logs/{log_id}/model-discovery.bpmn` takes the same parameters as the PNML export.
+It returns BPMN 2.0 XML with diagram interchange (shapes and edges) for Camunda Modeler, bpmn.io,
+Signavio and other BPMN designers. The dashboard's **Download BPMN** button sits next to the
+Petri net download.
+
+The file uses the same writer and layout as the process catalog's BPMN export:
+
+- activities become tasks;
+- choices and loops become exclusive gateways;
+- concurrent branches become diverging and converging parallel gateways;
+- the model gets start and end events.
+
+Observed branch shares stay on their sequence flows as unconfirmed rule text. The process
+documentation names the log, case notion, discovery settings and model digest, and marks the file
+as an unreviewed, non-executable draft. The `X-OWG-BPMN` header counts tasks, gateways and flows.
+OWG's own BPMN import reads the file back into an editable draft.
 
 ## Process map with abstraction sliders
 
@@ -2192,6 +2383,19 @@ for a spreadsheet: one row per activity (events and cases), start activity, path
 cases and the median, mean and 90th-percentile gap in seconds) and end activity, with cells that
 would start a formula prefixed with `'`.
 Nothing is uploaded; activity names in the file are as sensitive as the log.
+
+**Download map (Graphviz DOT)** saves the same map as a Graphviz graph, as PM4Py and bupaR draw
+directly-follows graphs. Use it to re-lay out the map with `dot -Tsvg`, or open it in Graphviz
+Online, Gephi or yEd. The server builds it from the current slider settings and case filter with
+`GET /v1/event-logs/{log_id}/process-map.dot`, which takes the same parameters as `process-map`.
+
+- Each shown activity is a box labelled with its event count.
+- Start and end are circles.
+- Each path's arrow is labelled with its count and median gap, and its width grows with frequency.
+
+Node identifiers are generated (`a0`, `a1`, …). Activity names appear only inside escaped,
+quoted labels, so a name cannot add statements to the graph. The `X-OWG-Map` header counts
+activities and paths. Dashboard session only.
 
 ## Predicting open cases
 
@@ -2711,6 +2915,11 @@ notion. Import validates the rules and case notion against the destination log.
 Filter names are unique within each log.
 
 
+Use **Update from active filter** to replace a saved filter's criteria with the
+current selection. The saved filter keeps its identity and name. If another
+edit changed it since the list was loaded, OWG asks you to reload and review
+before updating.
+
 The case evidence drill-down also uses the active case filter, so browsing cases shows the same
 cases the filtered views count ("N matching cases (case filter applied)"). Object-type maps keep
 their own case notion and are not filtered.
@@ -2867,6 +3076,11 @@ and authorizes nothing.
 `GET /v1/event-logs/{log_id}/automation-candidates?limit=&case_type=` plus the usual case-filter
 parameters; dashboard session only.
 
+**Download JSON** and **Download CSV** save the ranking shown. The CSV has one row per activity
+with the score and its volume, routine and waiting components, occurrences, cases, per-week
+rate, routing pattern, same-predecessor and same-successor shares, median wait before, resources
+and repeats per case. Cells that a spreadsheet would read as formulas start with `'`.
+
 ## Performance spectrum
 
 The performance spectrum shows how long each step-to-step segment took, over calendar time. It
@@ -2913,6 +3127,15 @@ case filter. Send the exact activity pair as `{"segment":["A","B"]}`, with optio
 (default 50). Use the returned `next_after` as `after` to continue. Both routes require a
 dashboard session.
 
+**Download JSON** saves the spectrum as drawn, including the sampled lines. **Download CSV** has
+two kinds of row:
+
+- one `segment` row per segment, with occurrences, the median, 25th, 75th and 95th percentile
+  duration in seconds, and the shares that finish in start order (`fifo_share`) or are released
+  together (`batched_share`);
+- one `period` row per busy period of that segment, with its UTC start, its occurrences by speed
+  class and its median duration.
+
 ## Heuristics net
 
 **Heuristics net** (the heuristics miner of ProM and PM4Py, after Weijters and Ribeiro's Flexible
@@ -2944,6 +3167,12 @@ as the two literal labels for a transition or back-and-forth loop, or one for a 
 For a repeated activity, send a transition with the same label twice. Send the returned
 `next_after` as `after` to page by literal case key. The optional `limit` is 1–100 (default 50).
 
+**Download JSON** saves the net shown, including its settings, splits, joins and loops.
+**Download CSV** lists every arrow the miner kept, one per row: from, to, occurrences, dependency
+measure (empty for start and end arrows) and why it was kept (`threshold`, `best_connection`,
+`short_loop`, `start` or `end`). Changing a threshold disables the download until the net is
+discovered again.
+
 ## Activity profile
 
 **Activity profile** shows one activity from every side, like the activity views of Celonis and
@@ -2960,6 +3189,10 @@ from activities literally named `(start)` or `(end)`. The profile API marks boun
 
 `GET /v1/event-logs/{log_id}/activity-profile?profile_activity=Check` plus the case-filter
 parameters (`activity` there is the case filter). Agents use `get_process_activity_profile`.
+
+**Download JSON** and **Download CSV** save the profile shown. The CSV has one row per neighbour
+(`comes_after` and `comes_before`, with times, share and median gap in hours, and the case start
+or end as `(start of case)` or `(end of case)`), per weekday and per UTC hour.
 
 ## Activities that happen together
 
@@ -3010,6 +3243,15 @@ parameters as the summary. Send `{"activity":"Check"}` for a continuation or `{"
 for a case ending. Each response gives the exact branch total and up to `limit` cases (1–100,
 default 50) in literal case-key order. Send the returned `next_after` as `after` in the next body.
 Each page reflects the current log.
+
+**Download JSON** and **Download CSV** save the branches at the current point. Each CSV row gives:
+
+- the path that leads there and whether it is anchored at the case start or anywhere;
+- the next activity, or `(case ends)`;
+- its cases and share;
+- the median hours from the previous step and to the case end.
+
+Going deeper or back replaces the download with the new point.
 
 ## Due dates
 
@@ -3097,6 +3339,20 @@ log. Agents use
 `get_unusual_process_cases`; case IDs and paths are included only for logs shared at the cases
 level.
 
+**Download all unusual cases (CSV)** saves every matching case, not only the page shown, highest
+score first. It uses the chosen reason and the case filter
+(`GET /v1/event-logs/{log_id}/unusual-cases.csv`, with the same parameters as `unusual-cases`
+without paging; dashboard session only). Columns:
+
+- `case_id` and `score`;
+- `signals`, separated by semicolons;
+- `reasons`, the readable details separated by ` | `;
+- `events`, `hours` and `path`, with up to 50 activities joined by ` → `;
+- `path_truncated`.
+
+Cells that a spreadsheet would read as formulas start with `'`. The `X-OWG-Unusual-Cases` header
+counts rows, unusual cases and cases.
+
 ## Milestone funnel
 
 **Milestone funnel** follows cases through 2 to 8 activities you choose, in order, as Celonis's
@@ -3122,6 +3378,11 @@ parameters. Dashboard sessions can additionally request `evidence_step=2&evidenc
 (or `reached`); the first 50 matching case IDs in sorted order are returned with a total and
 truncation flag. Case evidence is not available through the shared agent tool; agents with access
 to a shared log use `get_process_funnel` (aggregates only).
+
+**Download JSON** and **Download CSV** save the funnel shown. The CSV has one row per step with
+cases reached, share of step 1, conversion from the previous step, cases dropped (and how many may
+still be open), the median hours from the previous step and what stopped cases did last. Changing
+a step, the window or the evidence choice disables the download until the funnel is shown again.
 
 ## Model change
 
@@ -3212,6 +3473,15 @@ Send `retained_activities` from the report's `activities`, plus a `group` of `tr
 or `end`. The body also needs `activities` containing the two transition labels or one start or
 end label. The dashboard-only response gives the exact totals and cases in literal key order.
 Send `next_after` as `after` to continue, and use `limit` from 1 to 100 (default 50).
+
+**Download JSON** saves the comparison shown. **Download CSV** gives the matrix in long form:
+
+- one row per ordered activity pair;
+- the log's and the model's relation (`→`, `←`, `||` or `#`);
+- whether the two agree.
+
+Changing the model or activity coverage disables the download until the footprints are compared
+again.
 
 ## Check against a Petri net (PNML import and token replay)
 
@@ -3350,6 +3620,41 @@ tagged. Tagging again with the same tag does not duplicate it.
 body, plus the case-filter parameters (`tag` there is the filter for cases already tagged, so the
 new tag is `new_tag`). A tag is the analyst's label, not a finding.
 
+### Process trees (PTML) from PM4Py and ProM
+
+The file picker also accepts a **process tree** in PTML, as `pm4py.write_ptml` and ProM's Inductive
+Miner save it. The tree is converted to its workflow net with the same block construction as the
+discovered-model PNML export, then replayed, aligned or saved as a reference net like any PNML
+file. `POST /v1/event-logs/ptml-to-pnml` takes the PTML file as the body (dashboard session only,
+at most 2 MB, nothing stored). It returns the `pnml`, the tree's `name`, place and transition
+counts and the activity labels.
+
+Supported nodes:
+
+- `manualTask` (an activity) and `automaticTask` (a silent step);
+- `sequence`, `xor` and `and`;
+- `or` (inclusive choice): execute any nonempty subset of branches, with parallel interleaving of their activities;
+- `interleaved`: execute every child exactly once, in any order, with no overlap between whole child blocks;
+- `xorLoop` with two children (PM4Py: do, redo) or three (ProM: do, redo, exit). The exit runs
+  once after the loop.
+
+Other operators (such as `def`), a node with two parents, cycles, unconnected nodes,
+unknown references and XML with a DOCTYPE or entity declaration are refused with a message.
+Nothing is approximated by the converter. PTML requires an ASCII-compatible XML encoding (such as UTF-8) and both parsers are bounded to 250 nesting levels.
+
+A tree can also be pasted as PM4Py prints it (`print(tree)`), for example
+`->( 'Register', X( 'Check', tau ), *( 'Fix', tau ), 'Close' )`. Its notation:
+
+- `->` is a sequence, `X` a choice, `+` parallel and `*` a loop (two or three children);
+- `tau` is a silent step;
+- labels are single-quoted. A label ends at the quote followed by a comma or a closing bracket,
+  so quotes inside a label are kept.
+
+`O` denotes inclusive choice and `<>` denotes interleaving. For example, `O( 'Pay', 'Ship' )` accepts either alone or both in either order, whereas `<>( ->( 'A', 'B' ), ->( 'C', 'D' ) )` accepts only the two whole-block orders. The compiled nets use linear-size branch selection/lock constructions. Exact net semantics do not make the downstream bounded token-replay heuristic complete: highly branching nets can exceed its silent-state budget; review alignments and their limits before interpreting apparent deviations. The dashboard field is
+**Or paste a PM4Py process tree**. Its endpoint is `POST /v1/event-logs/process-tree-to-pnml`
+with `{"notation": "…"}` (dashboard session only, at most 200,000 characters, nesting at most 250
+levels). The response has the same shape as `ptml-to-pnml`.
+
 ## Temporal profile
 
 **Temporal profile** (as in PM4Py and ProM) learns the usual time between every ordered pair of
@@ -3452,6 +3757,20 @@ through `get_process_decision_rules` (see PROCESS_INTELLIGENCE_FOR_AGENTS.md).
 ### Excel event-log export
 
 Dashboard owners can download a saved log as an Excel workbook (`GET /v1/event-logs/{log_id}/events.xlsx`). The workbook preserves case IDs, activities, timestamps, and resources as literal text cells, with a frozen header and filter. It is a CSV-equivalent view rather than an OCEL relationship export.
+
+### Parquet event-log export
+
+**Apache Parquet (typed columns)** in the export menu downloads the same rows as a Parquet file
+(`GET /v1/event-logs/{log_id}/events.parquet`, dashboard session only), for DuckDB, pandas or
+PM4Py, Spark, Power BI and cloud warehouses. Columns:
+
+- `case_id` and `activity`: strings;
+- `timestamp`: a UTC-adjusted timestamp with microsecond precision, not text;
+- `resource`: a string, null where the event has none.
+
+The CSV export is streamed to a temporary file and converted by DuckDB, so large logs are not held
+in memory; both temporary files are removed after the download. The `X-OWG-Rows` header counts
+events. The workspace's Parquet import reads the file back to the same events.
 
 ### Rework and loop case evidence
 
