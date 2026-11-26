@@ -1428,6 +1428,7 @@
     }
     function invalidate(){
       sourceGeneration++;
+      resetReview();
       output.replaceChildren(el('p','Documents changed. Run clarification again before recording any answer.'));
     }
     function appendDocument(values={}){
@@ -1546,7 +1547,72 @@
         output.append(box);
       }
     };
-    section.append(sources,add,button('Find open questions across sources',()=>locked(run)),output);
+    const revisionPanel=el('details');revisionPanel.append(el('summary','Compare previous and current policy source bundles'),
+      el('p','Use the current documents above as the candidate bundle. Enter the previous exact source bundle below as JSON with title and text per document. This is a temporary comparison, not a new ledger decision.','muted'));
+    const previous=el('textarea');previous.rows=8;previous.maxLength=700000;previous.setAttribute('aria-label','Previous policy source bundle JSON');
+    previous.placeholder='[{"title":"Previous SOP","text":"Exact prior text"}]';
+    const oldFile=el('input');oldFile.type='file';oldFile.accept='.json,application/json';oldFile.setAttribute('aria-label','Load previous policy bundle JSON');
+    const reviewOutput=el('div');reviewOutput.setAttribute('role','status');
+    let reviewSerial=0,reviewPin=null,reviewBasis=null,reviewResult=null;
+    const resetReview=()=>{reviewSerial++;reviewPin=reviewBasis=reviewResult=null;reviewOutput.replaceChildren(el('p','Review inputs again after changes.','muted'));};
+    previous.oninput=resetReview;
+    oldFile.onchange=()=>locked(async()=>{const file=oldFile.files?.[0];if(!file)return;
+      if(file.size>400*1024)throw Error('Choose previous bundle JSON no larger than 400 KiB.');
+      previous.value=await file.text();oldFile.value='';resetReview();});
+    const revisionDownload=button('Download current comparison page JSON',()=>{
+      if(!reviewResult||record!==reviewBasis?.record||sourceGeneration!==reviewBasis?.generation)return;
+      const url=URL.createObjectURL(new Blob([JSON.stringify(reviewResult,null,2)],{type:'application/json'}));
+      const a=el('a');a.href=url;a.download='owg-policy-source-revision-review.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
+    });
+    const compareButton=button('Compare exact source bundles',()=>locked(async()=>{
+      resetReview();const selected=record,generation=sourceGeneration;
+      let baseline;try{baseline=JSON.parse(previous.value);}catch{throw Error('Previous bundle must be valid JSON.');}
+      const candidate=docs();
+      if(!selected?.workflow_id||!Array.isArray(baseline)||baseline.length<1||baseline.length>5||!candidate.length)
+        throw Error('Provide a saved revision and one to five documents in each bundle.');
+      reviewBasis={record:selected,generation,baseline,candidate};
+      await pageReview(0,'all',null);
+    }));
+    async function pageReview(offset,kind,subject){
+      const basis=reviewBasis;if(!basis||record!==basis.record||sourceGeneration!==basis.generation){resetReview();return;}
+      const ticket=++reviewSerial;reviewOutput.replaceChildren(el('p','Comparing exact retained revision and supplied sources…'));
+      try{
+        const value=await request('/v1/process-catalog/clarify/source-revision-review'+queryFor(basis.record),
+          {expected_content_sha256:basis.record.content_sha256,baseline:basis.baseline,candidate:basis.candidate,
+           change_kind:kind,offset,limit:25,...(subject?{subject_type:subject.subject_type,target_id:subject.target_id}:{}),
+           ...(reviewPin?{expected_review_sha256:reviewPin}:{})});
+        if(ticket!==reviewSerial||record!==basis.record||sourceGeneration!==basis.generation)return;
+        if(reviewPin&&value.review_sha256!==reviewPin)throw Error('Source comparison changed.');
+        reviewPin=value.review_sha256;reviewResult=value;
+        const counts=value.indexed_statement_occurrence_counts,p=value.page;
+        reviewOutput.replaceChildren(el('h5','Exact indexed statement comparison'),
+          el('p',counts.added+' added · '+counts.removed+' removed · '+counts.retained+' identical-text occurrences retained.'),
+          el('p',value.both_bounded_document_scans_complete?'Bounded document scans complete.':'Incomplete indexed source coverage; do not treat this as a complete change inventory.','note'),
+          el('p',value.subjects_with_review_flags+' process subjects flagged for renewed review. Bundle identical: '+String(value.document_bundles_identical)+'.'),
+          el('p','Review SHA-256 '+value.review_sha256,'muted'));
+        const subjectPicker=el('select');subjectPicker.setAttribute('aria-label','Source revision subject');
+        const choices=[null,...value.subjects];choices.forEach((s,i)=>{const o=el('option',s?s.subject_type+' · '+s.target_id:'All subjects / raw statements');o.value=String(i);subjectPicker.append(o);});
+        subjectPicker.value=String(subject?choices.findIndex(s=>s&&s.subject_type===subject.subject_type&&s.target_id===subject.target_id):0);
+        const kindPicker=el('select');kindPicker.setAttribute('aria-label','Source revision change type');
+        for(const k of ['all','added','removed','retained']){const o=el('option',k);o.value=k;kindPicker.append(o);}kindPicker.value=kind;
+        const filter=()=>locked(()=>pageReview(0,kindPicker.value,choices[Number(subjectPicker.value)]));
+        subjectPicker.onchange=kindPicker.onchange=filter;
+        const subjectsList=el('ul');
+        value.subjects.forEach(s=>subjectsList.append(el('li',s.subject_type+' '+s.target_id+' · '+s.added_matching_occurrences+' added / '+s.removed_matching_occurrences+' removed · '+(s.review_flags.join(', ')||'No listed flags'))));
+        const details=el('details');details.append(el('summary','All process subject review flags'),subjectsList);
+        reviewOutput.append(details,subjectPicker,kindPicker,el('p',p.matching_occurrences+' matching occurrences · offset '+p.offset));
+        for(const row of p.rows){const item=el('section');item.append(el('h6',row.kind));
+          for(const [label,cite] of [['Previous',row.baseline],['Current',row.candidate]])if(cite)item.append(el('p',label+' · '+cite.document_title+' · characters '+cite.start+'–'+cite.end+(cite.instruction_like?' · instruction-like (excluded from matching)':'')+': '+cite.text));
+          reviewOutput.append(item);}
+        const prev=button('Previous source evidence page',()=>locked(()=>pageReview(Math.max(0,p.offset-25),kind,subject)));
+        const next=button('Next source evidence page',()=>locked(()=>pageReview(p.next_offset,kind,subject)));
+        prev.disabled=p.offset===0;next.disabled=p.next_offset===null;
+        const notes=el('ul');value.interpretation.forEach(t=>notes.append(el('li',t)));
+        reviewOutput.append(prev,next,revisionDownload,notes);
+      }catch(error){if(ticket===reviewSerial){resetReview();reviewOutput.replaceChildren(el('p',error.message,'note'));}}
+    }
+    revisionPanel.append(previous,oldFile,compareButton,reviewOutput);
+    section.append(sources,add,button('Find open questions across sources',()=>locked(run)),output,revisionPanel);
     host.append(section);
     appendDocument();
   }

@@ -65,6 +65,11 @@ const path=require('node:path');
    await page.locator('#owgPathsResults button',{hasText:'Go to Check'}).click();
    await page.locator('#owgPathsStatus').filter({hasText:'9 cases (75%) reach this point, in a median'}).waitFor();
    const deeper=await rowsText();assert(deeper.startsWith('Approve666.7%')&&deeper.includes('Reject333.3%'),deeper);
+   // The branches at this point download with the path that leads there.
+   const [pathCsv]=await Promise.all([page.waitForEvent('download'),page.locator('#owgPathsReportCsv').click()]);
+   const pathLines=(await fs.readFile(await pathCsv.path(),'utf8')).trim().split(/\r?\n/);
+   assert.equal(pathLines[0],'path,anchor,next,cases,share,median_hours_from_previous,median_hours_to_case_end');
+   assert.match(pathLines[1],/^Open → Check,start,Approve,6,0\.66\d*,/);assert.match(pathLines[2],/^Open → Check,start,Reject,3,0\.33\d*,/);
    const review=page.locator('#owgPathsCaseReview');
    await box.getByRole('button',{name:'Inspect cases continuing to Reject'}).click();
    await review.getByRole('status').filter({hasText:'3 cases in this branch'}).waitFor();

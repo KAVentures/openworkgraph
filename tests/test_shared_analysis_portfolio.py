@@ -158,3 +158,71 @@ def test_same_source_with_different_spec_is_not_a_portfolio_contradiction(store)
     r=review(store,person(),select(a,b,c))
     assert r["conflicting_claimed_basis_pairs"]==[]
     assert r["comparable_count"]==1
+
+
+def test_optional_pairwise_review_finds_nonbaseline_compatible_sets(store):
+    a=store.publish(person(),published(4,source="a",spec="a"))
+    b=store.publish(person(),published(8,source="b",spec="b"))
+    c=store.publish(person(),published(2,source="c",spec="b"))
+    d=store.publish(person(),published(6,source="d",spec="a"))
+    req=select(a,b,c,d)
+    original=review(store,person(),req)
+    assert "pairwise_review" not in original
+    report=review(store,person(),req.model_copy(update={"include_pairwise":True}))
+    pw=report["pairwise_review"]
+    assert pw["pair_count"]==6 and pw["comparable_pair_count"]==2
+    assert pw["maximal_pairwise_compatible_sets"]==[[0,3],[1,2]]
+    assert pw["isolated_selection_indices"]==[]
+    assert all(c["comparable_neighbors"]==1 and c["withheld_neighbors"]==2 for c in pw["selection_coverage"])
+    pair=next(p for p in pw["pairs"] if (p["left_index"],p["right_index"])==(1,2))
+    assert pair["changes"][0]["change_decimal"]=="-6"
+    assert report["report_sha256"]!=original["report_sha256"]
+    assert report["report_sha256"]==review(store,person(),req.model_copy(update={"include_pairwise":True}))["report_sha256"]
+    assert not pw["sets_are_disjoint_populations"]
+
+
+def test_pairwise_conflict_suppresses_every_involved_member(store):
+    a=store.publish(person(),published(4,source="a"))
+    b=store.publish(person(),published(8,source="b"))
+    c=store.publish(person(),published(9,source="b"))
+    d=store.publish(person(),published(12,source="d"))
+    request=select(a,b,c,d).model_copy(update={"include_pairwise":True})
+    pw=review(store,person(),request)["pairwise_review"]
+    assert pw["comparable_pair_count"]==1
+    assert pw["maximal_pairwise_compatible_sets"]==[[0,3]]
+    assert pw["isolated_selection_indices"]==[1,2]
+    assert pw["refusal_reason_counts"]["portfolio_conflicting_claimed_basis"]==5
+    assert all(not p["changes"] for p in pw["pairs"] if not p["comparable"])
+
+
+def test_pairwise_acl_revocation_and_strict_boolean(store):
+    a=store.publish(person(),published(4))
+    b=store.publish(person(),published(8,source="c"))
+    for d in (a,b):
+        store.access(person(),d["view_id"],Access(expected_access_revision=1,
+            members=[{"actor_id":"bob","role":"viewer"}],user_confirmed=True))
+    req=select(a,b).model_copy(update={"include_pairwise":True})
+    reader=person("bob",scopes={"org:analysis:read"})
+    assert review(store,reader,req)["pairwise_review"]["pair_count"]==1
+    store.access(person(),b["view_id"],Access(expected_access_revision=2,members=[],user_confirmed=True))
+    with pytest.raises(PublicationError) as exc:review(store,reader,req)
+    assert exc.value.status==404
+    with pytest.raises(ValidationError):
+        PortfolioRequest.model_validate({**req.model_dump(),"include_pairwise":"true"})
+
+
+def test_pairwise_maximum_and_no_transitive_inference(monkeypatch):
+    from gateway import analysis_portfolio_pairwise as pairwise
+    # Compatibility need not be transitive; overlapping maximal cliques
+    # must never be collapsed into an apparently comparable component.
+    edges={(0,1),(1,2),(1,3),(2,3)}
+    def compare(left,right):
+        ok=(left,right) in edges
+        return {"refusal_reasons":[] if ok else ["incompatible"],"changes":[],
+                "same_claimed_source":False,"same_claimed_analysis_spec":ok}
+    monkeypatch.setattr(pairwise,"compare_snapshots",compare)
+    pw=pairwise.pairwise_review(list(range(8)),set())
+    assert pw["pair_count"]==28
+    assert pw["maximal_pairwise_compatible_sets"]==[[1,2,3],[0,1]]
+    assert pw["isolated_selection_indices"]==[4,5,6,7]
+    assert not pw["transitive_comparability_assumed"]
