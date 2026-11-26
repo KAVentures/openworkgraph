@@ -67,7 +67,7 @@ with TestClient(app) as client:
     assert client.post(signing_path,json={}).status_code==401
     assert client.post(signing_path,json={},headers=bearer).status_code==403
     assert client.post(signing_path,json={'document':'{"confirmed":false}'},headers=h).status_code==422
-    for action in ("inbox-status","inbox-admit","inbox-review","inbox-forget","inbox-retire","inbox-dossier"):
+    for action in ("inbox-status","inbox-admit","inbox-review","inbox-forget","inbox-retire","inbox-dossier","audit-verify","audit-timeline"):
         path="/v1/process-catalog/procurement-workforce/exchange/"+action
         assert client.post(path,json={"document":"{}"}).status_code==401
         assert client.post(path,json={"document":"{}"},headers=bearer).status_code==403
@@ -80,6 +80,39 @@ with TestClient(app) as client:
     assert trust_status.status_code==200,trust_status.text
     assert trust_status.json()['revision']==0
     assert trust_status.headers['cache-control']=='no-store'
+    # Real signed archives, verified through the production HTTP boundary.
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    from test_agent_procurement_workforce_timeline import snapshot,manifest
+    from test_agent_procurement_workforce_exchange import row
+    key=Ed25519PrivateKey.generate()
+    x=snapshot({"site":(key,[row("site",incident=True)])},100)
+    y=snapshot({"site":(key,[row("site")])},120)
+    historical={"confirmed":True,"expected_dossier_sha256":x[0]["dossier_sha256"],
+                "dossier":x[0],"trust":x[1]["trust"]}
+    m=manifest(x,y)
+    timeline_body={"confirmed":True,"expected_manifest_sha256":digest(m),"manifest":m,
+                   "dossiers":[x[0],y[0]]}
+    def audit_call(action,document):
+        return client.post('/v1/process-catalog/procurement-workforce/exchange/'+action,
+                           json={"document":json.dumps(document)},headers=h)
+    result=audit_call("audit-verify",historical)
+    assert result.status_code==200,result.text
+    assert result.headers["cache-control"]=="no-store"
+    assert result.json()["verification"]["historical_report_recomputed"]
+    assert result.json()["report"]["included_journals"]==1
+    assert not result.json()["local_trust_registry_used"]
+    result=audit_call("audit-timeline",timeline_body)
+    assert result.status_code==200,result.text
+    assert result.headers["cache-control"]=="no-store"
+    assert result.json()["timeline"]["unique_journals_with_observed_rollback_referrals"]==1
+    assert not result.json()["result_persisted"]
+    assert audit_call("audit-verify",{**historical,"confirmed":False}).status_code==422
+    assert audit_call("audit-verify",{**historical,"expected_dossier_sha256":"0"*64}).status_code==422
+    assert audit_call("audit-timeline",{**timeline_body,"dossiers":[y[0],x[0]]}).status_code==422
+    dup=json.dumps(historical)[:-1]+',"confirmed":true}'
+    assert client.post('/v1/process-catalog/procurement-workforce/exchange/audit-verify',
+                       json={"document":dup},headers=h).status_code==422
+    assert client.post(trust_path,json={"document":"{}"},headers=h).json()==trust_status.json()
     overview_path='/v1/process-catalog/procurement-workforce/overview'
     assert client.get(overview_path).status_code==401
     assert client.get(overview_path,headers=bearer).status_code==403
