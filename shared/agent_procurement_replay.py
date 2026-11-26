@@ -36,7 +36,7 @@ MAX_SUITE_BYTES = 256 * 1024
 # The generated project's trusted runtime/evaluate modules are identical to
 # those used by the existing customer shadow evaluator. No model mode.
 _OFFLINE = """
-import json,sys
+import json,sys,time
 sys.path.insert(0,sys.argv[1])
 from evaluate import compare,validate_suite
 from execute import digest,reference
@@ -51,8 +51,24 @@ def evaluate(plans):
         'process_reference':reference(spec),'spec_sha256':digest(spec),
         'suite_sha256':digest(suite),
         'results':[{'case_id':case['id'],'plan':plans.get(case['id'])} for case in cases]})
-print(json.dumps({'reference':evaluate({}),
-                  'reports':[evaluate(plans) for plans in payload['captures']]},
+reference_report=evaluate({})
+reports=[]
+seen=set()
+for plans in payload['captures']:
+    report=evaluate(plans)
+    # On coarse-resolution clocks identical independently evaluated results can
+    # have identical envelopes. Re-evaluate after the actual clock advances;
+    # never alter timestamps or the duplicate-evidence check for imported reports.
+    deadline=time.monotonic()+1.0
+    while digest(report) in seen:
+        if time.monotonic()>=deadline:
+            raise RuntimeError('cannot distinguish offline evaluation timestamps')
+        time.sleep(0.001)
+        report=evaluate(plans)
+    seen.add(digest(report))
+    reports.append(report)
+print(json.dumps({'reference':reference_report,
+                  'reports':reports},
                  allow_nan=False,separators=(',',':')))
 """
 
