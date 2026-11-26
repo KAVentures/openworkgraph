@@ -759,6 +759,8 @@ def register_process_intelligence_tools(mcp: Any, runtime_module: Any) -> None:
         """When the way cases of a shared log run changed (concept drift): cases grouped by start week or month,
         adjacent windows compared on their paths with a permutation test, and for each change point the paths whose
         share moved most and each window's median duration. A change may also come from how events are recorded.
+        owner_change_markers lists the owner's dated notes on the timeline (label and date) with the change points
+        each falls near, to help explain a change.
         Aggregates only.
         """
         if window not in ("week", "month"):
