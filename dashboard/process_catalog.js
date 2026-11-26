@@ -1307,7 +1307,7 @@
     const section=el('section');section.appendChild(el('h4','AI workforce procurement'));
     section.appendChild(el('p','Compare portable shadow evaluations, freeze a repeated trial, or review its full scheduled population. Files are inspected only on this computer and are not retained. Model identities, measurements and business outcomes remain unverified.'));
     const mode=el('select');mode.id='owgCatalogProcurementMode';mode.setAttribute('aria-label','Procurement operation');
-    for(const [value,label] of [['compare','Compare completed shadow reports'],['freeze','Freeze a repeated trial plan'],['review','Review a frozen trial and captures'],['operating-cost','Review human and AI operating costs'],['router-freeze','Freeze a held-out router rehearsal'],['router-review','Review held-out routing predictions'],['router-change-freeze','Freeze router version comparison'],['router-change-assess','Assess paired router version change'],['router-change-decide','Record controlled router change referral'],['router-pilot-freeze','Freeze controlled router pilot'],['router-pilot-review','Review controlled pilot observations'],['router-pilot-decide','Record pilot expansion or rollback referral'],['router-monitor-freeze','Freeze multi-window router monitoring'],['router-monitor-review','Review cumulative monitoring snapshot'],['router-monitor-decide','Record monitoring or rollback referral'],['router-journal-list','List locally retained monitoring journals'],['router-journal-append','Retain a monitoring checkpoint locally'],['router-journal-refresh','Refresh monitoring using the local clock'],['router-journal-detail','Inspect retained monitoring history'],['router-journal-decide','Record retained monitoring decision'],['router-journal-forget','Remove retained monitoring journal'],['router-producer-grant','Issue scoped monitoring producer credential'],['router-producer-revoke','Revoke monitoring producer credential'],['router-finance-reconcile','Reconcile declared booked financial amounts'],['nominate','Nominate a candidate before holdout'],['assess','Assess the held-out trial'],['decide','Record a pinned rehearsal decision'],['outcome-review','Review controlled sandbox outcomes'],['rollout-review','Request separate rollout review'],['deployment-review','Review monitored deployment readiness'],['deployment-decide','Record deployment review referral']]){
+    for(const [value,label] of [['compare','Compare completed shadow reports'],['freeze','Freeze a repeated trial plan'],['review','Review a frozen trial and captures'],['operating-cost','Review human and AI operating costs'],['router-freeze','Freeze a held-out router rehearsal'],['router-review','Review held-out routing predictions'],['router-change-freeze','Freeze router version comparison'],['router-change-assess','Assess paired router version change'],['router-change-decide','Record controlled router change referral'],['router-pilot-freeze','Freeze controlled router pilot'],['router-pilot-review','Review controlled pilot observations'],['router-pilot-decide','Record pilot expansion or rollback referral'],['router-monitor-freeze','Freeze multi-window router monitoring'],['router-monitor-review','Review cumulative monitoring snapshot'],['router-monitor-decide','Record monitoring or rollback referral'],['router-journal-list','List locally retained monitoring journals'],['router-journal-append','Retain a monitoring checkpoint locally'],['router-journal-refresh','Refresh monitoring using the local clock'],['router-journal-schedule','Set journal-specific scheduled review consent'],['router-journal-detail','Inspect retained monitoring history'],['router-journal-decide','Record retained monitoring decision'],['router-journal-forget','Remove retained monitoring journal'],['router-producer-grant','Issue scoped monitoring producer credential'],['router-producer-revoke','Revoke monitoring producer credential'],['router-finance-reconcile','Reconcile declared booked financial amounts'],['nominate','Nominate a candidate before holdout'],['assess','Assess the held-out trial'],['decide','Record a pinned rehearsal decision'],['outcome-review','Review controlled sandbox outcomes'],['rollout-review','Request separate rollout review'],['deployment-review','Review monitored deployment readiness'],['deployment-decide','Record deployment review referral']]){
       const option=el('option',label);option.value=value;mode.appendChild(option);
     }
     const modeLabel=el('label','Procurement operation ');modeLabel.htmlFor=mode.id;modeLabel.appendChild(mode);
@@ -1360,7 +1360,7 @@
       const routerMonitorMode=operation.startsWith('router-monitor-');
       const routerJournalMode=operation.startsWith('router-journal-')||operation==='router-finance-reconcile';
       const routerProducerMode=operation.startsWith('router-producer-');
-      const heading={'router-finance-reconcile':'Retained finance reconciliation','router-producer-grant':'Scoped monitoring producer credential','router-producer-revoke':'Monitoring producer revoked','router-journal-list':'Retained monitoring journals','router-journal-append':'Retained monitoring checkpoint','router-journal-refresh':'Clock-refreshed monitoring checkpoint','router-journal-detail':'Retained monitoring history','router-journal-decide':'Retained monitoring decision','router-journal-forget':'Monitoring journal removal','router-monitor-freeze':'Frozen multi-window router monitoring','router-monitor-review':'Cumulative router monitoring review','router-monitor-decide':'Monitoring review referral receipt','router-pilot-freeze':'Frozen controlled router pilot','router-pilot-review':'Controlled router pilot review','router-pilot-decide':'Pilot review referral receipt','router-change-freeze':'Frozen router version comparison','router-change-assess':'Paired router version assessment','router-change-decide':'Controlled router change receipt','router-freeze':'Frozen router rehearsal plan','router-review':'Held-out router rehearsal review','operating-cost':'Human and AI operating cost comparison',nominate:'Frozen candidate nomination',assess:'Held-out selection assessment',decide:'Rehearsal decision receipt','outcome-review':'Controlled sandbox outcome review','rollout-review':'Separate rollout review receipt','deployment-review':'Monitored deployment readiness','deployment-decide':'Release-owner referral receipt'};
+      const heading={'router-finance-reconcile':'Retained finance reconciliation','router-producer-grant':'Scoped monitoring producer credential','router-producer-revoke':'Monitoring producer revoked','router-journal-list':'Retained monitoring journals','router-journal-append':'Retained monitoring checkpoint','router-journal-refresh':'Clock-refreshed monitoring checkpoint','router-journal-schedule':'Scheduled review consent','router-journal-detail':'Retained monitoring history','router-journal-decide':'Retained monitoring decision','router-journal-forget':'Monitoring journal removal','router-monitor-freeze':'Frozen multi-window router monitoring','router-monitor-review':'Cumulative router monitoring review','router-monitor-decide':'Monitoring review referral receipt','router-pilot-freeze':'Frozen controlled router pilot','router-pilot-review':'Controlled router pilot review','router-pilot-decide':'Pilot review referral receipt','router-change-freeze':'Frozen router version comparison','router-change-assess':'Paired router version assessment','router-change-decide':'Controlled router change receipt','router-freeze':'Frozen router rehearsal plan','router-review':'Held-out router rehearsal review','operating-cost':'Human and AI operating cost comparison',nominate:'Frozen candidate nomination',assess:'Held-out selection assessment',decide:'Rehearsal decision receipt','outcome-review':'Controlled sandbox outcome review','rollout-review':'Separate rollout review receipt','deployment-review':'Monitored deployment readiness','deployment-decide':'Release-owner referral receipt'};
       output.appendChild(el('h5',(selectionMode||outcomeMode||deploymentMode||economicsMode||routerMode||routerChangeMode||routerPilotMode||routerMonitorMode||routerJournalMode||routerProducerMode)?heading[operation]:operation==='freeze'?'Frozen trial plan · '+result.scheduled_attempts+' attempts':'Candidate procurement comparison'));
       output.appendChild(el('p','Exact saved revision '+envelope.revision+'. '+(envelope.references_latest_revision_at_inspection?
         'Latest saved revision at inspection.':'Historical revision; current revision '+envelope.latest_revision_at_inspection+'. Evaluate the current design before substitution.')));
@@ -1398,6 +1398,7 @@
             el('p','Historical overdue windows: '+(result.overdue_window_history.join(', ')||'none recorded')),
             el('p','Latest snapshot: '+result.latest_report.snapshot_sha256+' · '+new Date(result.latest_report.as_of_ms).toISOString()),
             el('p',(result.credential_authenticated_observations||0)+' observations submitted with scoped producer credentials; this does not verify their outcomes.'));
+          output.appendChild(el('p','Scheduled deadline review consent: '+(result.scheduled_deadline_review_enabled?'enabled':'disabled')+'. The local scheduler must also be enabled.'));
           const grants=el('ul');for(const g of result.producer_grants||[])grants.appendChild(el('li',g.grant_id+' · '+g.producer_alias+' · '+g.window_id+' / '+g.arm+' · '+(g.revoked?'revoked':g.expires_ms<=Date.now()?'expired':'active')));output.append(el('h6','Producer grants'),grants);
           const money=(v,currency)=>{
             if(v==null)return 'unbounded';
@@ -1424,7 +1425,7 @@
           output.append(el('h6','Latest window results'),windows,el('h6','Chained local audit history'));
           const history=el('ul');for(const e of result.history){
             const item=el('li',e.sequence+' · '+e.kind+' · '+new Date(e.recorded_at_ms).toISOString());
-            item.append(el('p','Entry: '+e.entry_sha256),el('p',e.kind==='decision'?e.details.disposition.replaceAll('_',' ')+' · '+e.details.reviewer_alias:e.kind==='producer_grant'||e.kind==='producer_revoke'?'Grant '+e.details.grant_id:e.kind==='producer_checkpoint'?'Producer '+e.details.producer_alias+' · '+e.details.accepted_observations+' accepted observations':e.kind==='finance_reconciliation'?'Finance statement '+e.details.window_id+' · '+e.details.reconciliation_sha256:'Snapshot '+e.details.snapshot_sha256+' · '+e.details.recorded_cases+' recorded cases'));
+            item.append(el('p','Entry: '+e.entry_sha256),el('p',e.kind==='decision'?e.details.disposition.replaceAll('_',' ')+' · '+e.details.reviewer_alias:e.kind==='producer_grant'||e.kind==='producer_revoke'?'Grant '+e.details.grant_id:e.kind==='producer_checkpoint'?'Producer '+e.details.producer_alias+' · '+e.details.accepted_observations+' accepted observations':e.kind==='finance_reconciliation'?'Finance statement '+e.details.window_id+' · '+e.details.reconciliation_sha256:e.kind==='schedule_consent'?'Scheduled deadline review '+(e.details.enabled?'enabled':'disabled'):'Snapshot '+e.details.snapshot_sha256+' · '+e.details.recorded_cases+' recorded cases'));
             history.appendChild(item);
           }
           output.append(history,el('p','Locally retained declarations, not authenticated production telemetry or a tamper-proof external audit log. No deployment or rollback performed.'));
@@ -1898,6 +1899,39 @@
       button('Clear procurement review',()=>{documentFile.value='';planFile.value='';clearProcurementReview();}),output);
     host.appendChild(section);
   }
+  function installWorkforceSchedule(host){
+    const section=el('details');section.append(el('summary','Schedule local workforce deadline reviews'),
+      el('p','Only journals with separate explicit consent are reviewed, and only crossed frozen boundaries create a checkpoint. No external source reads, messages or deployment actions.'));
+    const output=el('div');let generation=0;
+    const show=async()=>{
+      const attempt=++generation;
+      const data=await request('/v1/schedules');
+      if(attempt!==generation||!output.isConnected)return;
+      output.replaceChildren(el('p',data.scheduler_running?'Local scheduler running':'Local scheduler not running'));
+      const current=data.schedules.find(s=>s.kind==='procurement_monitor_deadlines'&&s.target_id==='local');
+      if(!current){
+        const interval=el('input');interval.type='number';interval.min='15';interval.max='10080';interval.step='1';interval.value='15';interval.setAttribute('aria-label','Monitoring review interval in minutes');
+        const label=el('label','Interval in minutes ');label.append(interval);
+        output.append(label,button('Enable local deadline schedule',async()=>{
+          const minutes=Number(interval.value);if(!Number.isInteger(minutes)||minutes<15||minutes>10080)throw new Error('Choose an integer interval of 15 to 10080 minutes.');
+          if(!window.confirm('Run local deadline reviews for explicitly opted-in monitoring journals at this interval?'))return;
+          await request('/v1/schedules',{kind:'procurement_monitor_deadlines',target_id:'local',interval_minutes:minutes,confirm_scheduled_runs:true});await show();
+        }));
+      }else{
+        output.append(el('p',(current.enabled?'Enabled':'Paused')+' · every '+current.interval_minutes+' minutes · next '+(current.next_run_at||'not scheduled')),
+          el('p','Last result: '+(current.last_result||'not run')+' · pause reason '+(current.paused_reason||'none')),
+          button(current.enabled?'Pause deadline schedule':'Resume deadline schedule',async()=>{
+            if(!window.confirm((current.enabled?'Pause':'Resume')+' the local deadline schedule?'))return;
+            await request('/v1/schedules/update',{schedule_id:current.schedule_id,enabled:!current.enabled});await show();
+          }),
+          button('Remove deadline schedule',async()=>{
+            if(!window.confirm('Remove this schedule? Retained journals and their consent are unchanged.'))return;
+            await request('/v1/schedules/delete',{schedule_id:current.schedule_id});await show();
+          }));
+      }
+    };
+    section.append(button('Load deadline schedule status',show),output);host.appendChild(section);
+  }
   function installWorkforceAllocation(host){
     const section=el('details');section.append(el('summary','Optimize selected workflow AI budget scenarios'),
       el('p','Upload an exact allocation bundle (see AGENT_PROCUREMENT_WORKFORCE_ALLOCATION.md). This is a finite conditional comparison, not spending approval or an execution decision.'));
@@ -1980,7 +2014,7 @@
             el('p','Retained cutoff: '+new Date(r.as_of_ms).toISOString()+' · head '+r.head_sha256),
             el('p','Rollback triggers: '+(r.sticky_rollback_triggers.map(x=>(x.window_id||'cumulative')+': '+x.reason).join(' · ')||'none recorded')),
             el('p','Rollback referral: '+(r.rollback_referral_recorded?'recorded':'not recorded')+' · due for review: '+(r.due_for_review_windows.join(', ')||'none')),
-            el('p','Declared finance statements: '+(r.finance_reconciled_windows.join(', ')||'none')),
+            el('p','Declared finance statements: '+(r.finance_reconciled_windows.join(', ')||'none')+' · scheduled review consent '+(r.scheduled_deadline_review_enabled?'enabled':'disabled')),
             button('Open saved revision',()=>load(r.workflow_id,r.revision)));
           for(const [name,a] of Object.entries(r.arms))section.appendChild(armLine(name,a,r.currency));
           list.appendChild(section);
@@ -2141,6 +2175,7 @@
     const backlogHost=el('div');backlogHost.id='owgCatalogBacklog';host.appendChild(backlogHost);
     host.appendChild(button('Review AI workforce monitoring',()=>workforceOverview()));
     const workforceHost=el('div');workforceHost.id='owgWorkforceOverview';host.appendChild(workforceHost);
+    installWorkforceSchedule(host);
     installWorkforceAllocation(host);
     const message=el('p','No saved process has been loaded.');message.id='owgCatalogStatus';message.setAttribute('role','status');host.appendChild(message);
     const editor=el('div');editor.id='owgCatalogEditor';host.appendChild(editor);

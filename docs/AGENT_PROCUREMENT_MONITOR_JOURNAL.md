@@ -58,3 +58,5 @@ The optional [scoped producer interface](AGENT_PROCUREMENT_MONITOR_PRODUCER.md) 
 The [local workforce overview](AGENT_PROCUREMENT_WORKFORCE_OVERVIEW.md) aggregates retained journals across saved workflows without combining currencies or counting exact overlapping cohorts. It also exposes a prioritized incident and deadline queue.
 
 For closed-window declarations of booked revenue, expenses and telemetry reconciliation, see [finance reconciliation](AGENT_PROCUREMENT_FINANCE.md). Booked figures are not added to modeled savings or imputed labor.
+
+Optional unattended deadline review uses the existing local scheduler and [journal-specific consent](AGENT_PROCUREMENT_MONITOR_SCHEDULE.md). Idle ticks do not consume journal entries.

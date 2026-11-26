@@ -10,6 +10,7 @@ schedule with an explicit confirmation. Supported jobs:
   the signal inbox reflects the current data;
 - ``event_log_report``: save a copy of an event log's self-contained HTML report
   in the local data folder, keeping the newest ten;
+- ``procurement_monitor_deadlines``: review crossed frozen window deadlines for explicitly opted-in retained local journals, without external source reads;
 - ``local_backup``: at most daily, create a verified unencrypted snapshot
   outside the data folder, excluding credentials; rotate owned scheduled files
   only after success, with separate user acknowledgment.

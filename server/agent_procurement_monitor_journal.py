@@ -299,7 +299,7 @@ def list_journals(workflow_id,revision,doc):
             key=_key(workflow_id,revision,k[0]);state,history=_read(conn,key)
             view=_view(key,state,history)
             rows.append({x:view[x] for x in ("monitor_id","plan_sha256","head_sha256","entry_count","checkpoint_count",
-                         "sticky_rollback_triggers","rollback_referral_recorded","eligible_for_continued_monitoring_review")})
+                         "sticky_rollback_triggers","rollback_referral_recorded","eligible_for_continued_monitoring_review","scheduled_deadline_review_enabled")})
     return {"format":FORMAT,"journals":rows,"result_persisted":False,"execution_authorized":False}
 
 

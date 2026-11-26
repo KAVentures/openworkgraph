@@ -54,6 +54,8 @@ with TestClient(app) as client:
     assert overview_result.json()['journal_count']==0
     assert client.post(base+'router-finance-reconcile',params=params,json={'document':'{}'},headers=bearer).status_code==403
     assert client.post(base+'router-finance-reconcile',params=params,json={'document':'{}'},headers=h).status_code==422
+    assert client.post(base+'router-journal-schedule',params=params,json={'document':'{}'},headers=bearer).status_code==403
+    assert client.post(base+'router-journal-schedule',params=params,json={'document':'{}'},headers=h).status_code==422
     journal_body={'document':'{}'}
     assert client.post(base+'router-journal-list',params=params,json=journal_body).status_code==401
     assert client.post(base+'router-journal-list',params=params,json=journal_body,headers=bearer).status_code==403
