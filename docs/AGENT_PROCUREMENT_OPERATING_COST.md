@@ -145,3 +145,7 @@ conditional outcome and regression bounds, and gate status. OWG does not
 choose a portfolio, launch a router or grant execution permission. Routing
 accuracy, pre-execution classification, volumes, outcome transfer and actual
 benefits require separate validation before production use.
+
+Quality gate status, financial evidence completeness and capacity evidence
+completeness are reported separately; a quality pass is not proof of complete
+cost measurements or verified economics.

@@ -221,6 +221,8 @@ def evaluate(policy, annual_cases, manual_fixed, fixed_costs, summaries, money, 
                         "routing_variable_cost":money(routing_variable),
                         "avoidable_manual_fixed_microunits":str(avoidable),
                         "checks":checks,"declared_evidence_status":_combine(checks.values()),
+                        "financial_evidence_complete":annual_cost[1] is not None and all(x is not None for x in first),
+                        "capacity_evidence_complete":all(x is not None for x in capacity),
                         "positive_first_year_lower_bound":None if first[0] is None else first[0]>0,
                         "routes":routes})
     return {"annual_cases":annual_cases,"category_volumes":dict(sorted(volumes.items())),

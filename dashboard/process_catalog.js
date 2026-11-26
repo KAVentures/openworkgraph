@@ -1439,8 +1439,9 @@
           const countRange=v=>count(v.lower)+' to '+count(v.upper);
           for(const plan of p.portfolios){
             const section=el('section');
-            section.append(el('h6',plan.portfolio_id+' · declared evidence: '+plan.declared_evidence_status),
+            section.append(el('h6',plan.portfolio_id+' · declared quality gates: '+plan.declared_evidence_status),
               el('p',plan.ai_cases+' AI-assigned / '+plan.manual_cases+' manual cases · active agents: '+(plan.active_candidate_ids.join(', ')||'none')),
+              el('p','Financial evidence: '+(plan.financial_evidence_complete?'complete for these assumptions':'incomplete')+' · capacity evidence: '+(plan.capacity_evidence_complete?'complete for these assumptions':'incomplete')),
               el('p','Annual cost: '+range(plan.annual_cost)),
               el('p','First-year cost: '+range(plan.first_year_cost)),
               el('p','Recurring savings: '+range(plan.recurring_savings)),
