@@ -559,7 +559,8 @@ async def convert_parquet_event_log(request: Request):
 
 @router.post("/v1/event-logs/timestamp-formats")
 async def detect_timestamp_formats(request: Request, column: str = Query(min_length=1, max_length=200),
-                                   delimiter: str = Query(default=",", max_length=1)):
+                                   delimiter: str = Query(default=",", max_length=1),
+                                   time_column: str = Query(default="", max_length=200)):
     """Which known timestamp formats read every value of one column, from the start of a CSV file (body,
     at most 256 KB). Nothing is stored."""
     from . import event_log_timestamp_formats as formats
@@ -568,7 +569,8 @@ async def detect_timestamp_formats(request: Request, column: str = Query(min_len
     if len(body) > 256 * 1024:
         raise HTTPException(413, "send at most the first 256 KB of the file")
     try:
-        samples = formats.sample_column(body.decode("utf-8", errors="replace"), "\t" if delimiter == "t" else delimiter, column)
+        samples = formats.sample_column(body.decode("utf-8", errors="replace"), "\t" if delimiter == "t" else delimiter, column,
+                                        time_column=time_column)
         result = await run_in_threadpool(formats.detect, samples)
     except formats.TimestampFormatError as exc:
         raise HTTPException(422, str(exc)) from None
@@ -628,6 +630,7 @@ async def preview_event_log_import(
     naive_timestamp_offset: str = Query(default="", max_length=6),
     timestamp_format: str = Query(default="", max_length=64),
     encoding: str = Query(default="", pattern="^(|utf-8|windows-1252|utf-16)$"),
+    time_column: str = Query(default="", max_length=200),
     identity: dict = Depends(_source_identity_mapping),
 ):
     _require_dashboard(request)
@@ -643,7 +646,8 @@ async def preview_event_log_import(
                "attribute_columns": attribute_column[:64], "delimiter": "\t" if delimiter == "t" else delimiter,
                **({"header_row": header_row} if header_row > 1 else {}),
                "keep_rejected": keep_rejected, "naive_timestamp_offset": naive_timestamp_offset,
-               "timestamp_format": timestamp_format, **({"encoding": encoding} if encoding else {}), **identity}
+               "timestamp_format": timestamp_format, **({"encoding": encoding} if encoding else {}),
+               **({"time_column": time_column} if time_column else {}), **identity}
     return await run_in_threadpool(_respond, preview.preview_csv, bytes(body), mapping, partial=partial)
 
 
@@ -663,6 +667,7 @@ async def import_event_log(
     naive_timestamp_offset: str = Query(default="", max_length=6),
     timestamp_format: str = Query(default="", max_length=64),
     encoding: str = Query(default="", pattern="^(|utf-8|windows-1252|utf-16)$"),
+    time_column: str = Query(default="", max_length=200),
     identity: dict = Depends(_source_identity_mapping),
 ):
     _require_dashboard(request)
@@ -685,7 +690,8 @@ async def import_event_log(
                    **({"keep_rejected": True} if keep_rejected else {}),
                    **({"naive_timestamp_offset": naive_timestamp_offset} if naive_timestamp_offset else {}),
                    **({"timestamp_format": timestamp_format} if timestamp_format else {}),
-                   **({"encoding": encoding} if encoding else {})}
+                   **({"encoding": encoding} if encoding else {}),
+                   **({"time_column": time_column} if time_column else {})}
         mapping.update(identity)
         return _respond(workspace.import_log, spool, name=name, source_format=format, mapping=mapping)
 
@@ -705,6 +711,7 @@ async def append_event_log(
     naive_timestamp_offset: str = Query(default="", max_length=6),
     timestamp_format: str = Query(default="", max_length=64),
     encoding: str = Query(default="", pattern="^(|utf-8|windows-1252|utf-16)$"),
+    time_column: str = Query(default="", max_length=200),
     identity: dict = Depends(_source_identity_mapping),
 ):
     _require_dashboard(request)
@@ -726,7 +733,8 @@ async def append_event_log(
                    **({"keep_rejected": True} if keep_rejected else {}),
                    **({"naive_timestamp_offset": naive_timestamp_offset} if naive_timestamp_offset else {}),
                    **({"timestamp_format": timestamp_format} if timestamp_format else {}),
-                   **({"encoding": encoding} if encoding else {})}
+                   **({"encoding": encoding} if encoding else {}),
+                   **({"time_column": time_column} if time_column else {})}
         mapping.update(identity)
         try:
             result = await run_in_threadpool(workspace.append_log, log_id, spool, source_format=format, mapping=mapping)
