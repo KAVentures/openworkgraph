@@ -373,6 +373,109 @@ async def convert_sqlite_event_log(request: Request, table: str | None = Query(d
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
+@router.post("/v1/event-logs/petri-soundness")
+async def event_log_petri_soundness(request: Request):
+    """Bounded structural and behavioral validation of one explicitly marked ordinary PNML net."""
+    from . import event_log_petri_soundness as soundness
+    from . import event_log_petri_replay as replay
+    _require_dashboard(request)
+    data = bytearray()
+    async for chunk in request.stream():
+        if len(data) + len(chunk) > replay.MAX_BYTES:
+            raise HTTPException(413, "the Petri net file is larger than 2 MB")
+        data.extend(chunk)
+    try:
+        result = await run_in_threadpool(soundness.analyze, bytes(data))
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+@router.post("/v1/event-logs/petri-policy-review")
+async def event_log_petri_policy_review(request: Request):
+    """Check one or two PNML models against a declared untimed policy suite.
+
+    Binary framing: u32 rules length, UTF-8 JSON rules, u32 baseline length,
+    baseline bytes, optional candidate bytes. No source or report is retained.
+    """
+    from . import event_log_petri_policy as policy
+    from . import event_log_petri_replay as replay
+    _require_dashboard(request)
+    if request.headers.get("content-type", "").split(";")[0].strip().lower() != "application/octet-stream":
+        raise HTTPException(415, "send framed model and rule bytes")
+    data = bytearray()
+    async for chunk in request.stream():
+        if len(data) + len(chunk) > 8 + policy.MAX_RULE_BYTES + 2 * replay.MAX_BYTES:
+            raise HTTPException(413, "model policy review payload is too large")
+        data.extend(chunk)
+    if len(data) < 8:
+        raise HTTPException(422, "missing rule or model length")
+    n = int.from_bytes(data[:4], "big")
+    if n > policy.MAX_RULE_BYTES:
+        raise HTTPException(413, "rule specification is too large")
+    if n < 1 or len(data) < 8 + n:
+        raise HTTPException(422, "invalid rule framing")
+    m = int.from_bytes(data[4+n:8+n], "big")
+    offset = 8 + n
+    if m > replay.MAX_BYTES or len(data) - offset - m > replay.MAX_BYTES:
+        raise HTTPException(413, "each model must be at most 2 MB")
+    if m < 1 or len(data) < offset + m:
+        raise HTTPException(422, "invalid baseline framing")
+
+    def pairs(items):
+        result = {}
+        for key, value in items:
+            if key in result:
+                raise ValueError("Repeated JSON key")
+            result[key] = value
+        return result
+
+    def constant(_):
+        raise ValueError("Non-finite JSON value")
+
+    try:
+        spec = json.loads(bytes(data[4:4+n]).decode("utf-8"), object_pairs_hook=pairs, parse_constant=constant)
+    except (ValueError, UnicodeError, RecursionError):
+        raise HTTPException(422, "rules must be strict UTF-8 JSON") from None
+    try:
+        result = await run_in_threadpool(policy.review, bytes(data[offset:offset+m]), spec,
+                                         bytes(data[offset+m:]) or None)
+    except (workspace.EventLogWorkspaceError, UnicodeError) as exc:
+        raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+@router.post("/v1/event-logs/petri-language-comparison")
+async def event_log_petri_language_comparison(request: Request):
+    """Compare two exact PNML byte streams, with no storage or external execution.
+
+    Binary body: four-byte unsigned big-endian baseline length, baseline bytes,
+    then candidate bytes. Each model is independently limited to 2 MB.
+    """
+    from . import event_log_petri_language as language
+    from . import event_log_petri_replay as replay
+    _require_dashboard(request)
+    if request.headers.get("content-type", "").split(";")[0].strip().lower() != "application/octet-stream":
+        raise HTTPException(415, "send two framed PNML byte streams")
+    data = bytearray()
+    async for chunk in request.stream():
+        if len(data) + len(chunk) > 4 + 2 * replay.MAX_BYTES:
+            raise HTTPException(413, "the model pair is too large")
+        data.extend(chunk)
+    if len(data) < 4:
+        raise HTTPException(422, "missing baseline length")
+    size = int.from_bytes(data[:4], "big")
+    if size > replay.MAX_BYTES or len(data) - 4 - size > replay.MAX_BYTES:
+        raise HTTPException(413, "each model must be at most 2 MB")
+    if size < 1 or size >= len(data) - 4:
+        raise HTTPException(422, "both models must be nonempty")
+    try:
+        result = await run_in_threadpool(language.compare, bytes(data[4:4+size]), bytes(data[4+size:]))
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
 @router.post("/v1/event-logs/ptml-to-pnml")
 async def convert_ptml_process_tree(request: Request):
     """Convert a PTML process tree (ProM, PM4Py) to a PNML workflow net for replay. Nothing is stored."""
