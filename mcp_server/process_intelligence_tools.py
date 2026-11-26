@@ -19,6 +19,39 @@ _NOTE = ("Describes recorded events in an owner-shared event log. Durations are 
          "events; associations are not causes. Nothing here authorizes an action or changes the log.")
 
 
+CASE_FILTER_GUIDE = """# case_filter: choosing a group of cases
+
+Many process tools take case_filter, a JSON object. Every key you give must hold for a case (AND). It must match
+at least 5 cases, or the tool refuses. Insights return a ready-made case filter ("cohort") for each finding.
+
+Keys and values:
+- started_from / started_before, ended_from / ended_before: ISO time with an offset, e.g. "2024-03-01T00:00:00Z".
+- activity / without_activity: an activity name the case does (or never does), e.g. "Escalate".
+- starts_with / ends_with: the case's first or last activity.
+- resource: a resource that worked on the case (only if the owner shares resources).
+- attribute: a case attribute value, "name=value", e.g. "region=EU" (object-centric and case-level attributes).
+- event_attribute: a value on any event of the case, "name=value" (where CSV columns usually land).
+- attribute_range: {"name": "amount", "min": 100, "max": 500} on a numeric attribute (min inclusive, max exclusive).
+- duration: {"min": 3600, "max": 86400} case duration in seconds (first to last event).
+- events: {"min": 2, "max": 20} events per case.
+- path_cases: {"min": 1, "max": 4} how many cases follow exactly the same path as the case (both ends
+  inclusive, counted over the whole log): low values pick rare paths, high values the mainstream.
+- rework: true for cases that repeat an activity, false for those that do not.
+- follows: up to 5 rules [{"from": "A", "to": "B", "mode": "direct" or "eventual", "negate": false,
+  "min_hours"?: 0, "max_hours"?: 24}]; all must hold.
+- variants: a list of exact paths, each a list of activity names.
+- tag / without_tag: a case tag the owner set.
+- all_of: 2 to 4 case filters that must all hold (no nesting).
+- label: a display name for the group; it does not filter.
+
+Examples:
+- EU orders started in 2024: {"event_attribute": "region=EU", "started_from": "2024-01-01T00:00:00Z"}
+- Slow cases with rework: {"duration": {"min": 604800}, "rework": true}
+- Cases where Approve comes directly before Pay: {"follows": [{"from": "Approve", "to": "Pay", "mode": "direct",
+  "negate": false}]}
+"""
+
+
 def investigate_process_prompt(question: str = "", log_id: str = "") -> str:
     """A step-by-step playbook for answering a process question from a shared log. Pure text: the AI still calls
     each tool itself, and every tool keeps its own sharing checks."""
@@ -31,7 +64,8 @@ def investigate_process_prompt(question: str = "", log_id: str = "") -> str:
         target,
         "",
         "If the question is about one group of cases (a region, product, period or a cohort an insight returned), "
-        "pass it as case_filter (the same keys as insight cohorts) to every tool that takes one, and compare with "
+        "pass it as case_filter (keys in the openworkgraph://process-case-filter resource) to every tool that "
+        "takes one, and compare with "
         "the whole log or compare_process_cohorts; a filter matching fewer than 5 cases is refused.",
         "Work through these steps, skipping those the question does not need or whose tools are not listed, and cite "
         "the tool behind each claim:",
@@ -65,7 +99,8 @@ def propose_monitors_prompt(goal: str = "", log_id: str = "") -> str:
         target,
         "",
         "If the question is about one group of cases (a region, product, period or a cohort an insight returned), "
-        "pass it as case_filter (the same keys as insight cohorts) to every tool that takes one, and compare with "
+        "pass it as case_filter (keys in the openworkgraph://process-case-filter resource) to every tool that "
+        "takes one, and compare with "
         "the whole log or compare_process_cohorts; a filter matching fewer than 5 cases is refused.",
         "1. get_process_signals: see what the owner already monitors, so you do not propose duplicates.",
         "2. get_process_overview (weekly trend, KPIs), get_process_drift and get_stuck_process_cases or "
@@ -93,7 +128,8 @@ def evaluate_change_prompt(change: str = "", log_id: str = "") -> str:
         target,
         "",
         "If the question is about one group of cases (a region, product, period or a cohort an insight returned), "
-        "pass it as case_filter (the same keys as insight cohorts) to every tool that takes one, and compare with "
+        "pass it as case_filter (keys in the openworkgraph://process-case-filter resource) to every tool that "
+        "takes one, and compare with "
         "the whole log or compare_process_cohorts; a filter matching fewer than 5 cases is refused.",
         "1. get_process_overview and get_process_waiting_times: the baseline and where time goes now.",
         "2. If some cases already work the proposed way, compare them with the rest using compare_process_cohorts "
@@ -141,6 +177,11 @@ def register_process_intelligence_tools(mcp: Any, runtime_module: Any) -> None:
         owner did not share are never listed.
         """
         return _get("list_process_logs", "/v1/process-intelligence/logs")
+
+    @mcp.resource("openworkgraph://process-case-filter")
+    def process_case_filter_guide() -> str:
+        """The keys and value formats of case_filter, the group-of-cases filter most process tools take."""
+        return CASE_FILTER_GUIDE
 
     @mcp.prompt()
     def investigate_process(question: str = "", log_id: str = "") -> str:
