@@ -76,6 +76,14 @@ with open(sys.argv[1],'rb') as f:
   result=event_log_xlsx.to_csv(f)
 print(result['rows'], len(result['columns']))`,await download.path()]).toString().trim();
    assert.equal(exported,'18 4');
+   // The same log as typed Parquet: the timestamp is a real UTC timestamp column.
+   await page.locator('#owgEventLogExportFormat').selectOption('parquet');
+   const [parquetDownload]=await Promise.all([page.waitForEvent('download'),page.locator('#owgEventLogExport').click()]);
+   assert.match(parquetDownload.suggestedFilename(),/\.parquet$/);
+   const parquetCheck=execFileSync(python,['-c',`import sys, duckdb
+c=duckdb.connect()
+print(c.execute("SELECT count(*), typeof(any_value(timestamp)) FROM read_parquet(?)",[sys.argv[1]]).fetchone())`,await parquetDownload.path()]).toString().trim();
+   assert.equal(parquetCheck,"(18, 'TIMESTAMP WITH TIME ZONE')");
    // A file that is not a workbook is refused with a clear message, and nothing is selected.
    await page.locator('#owgEventLogFile').setInputFiles({name:'broken.xlsx',mimeType:'application/octet-stream',buffer:Buffer.from('not a zip')});
    await page.locator('#owgEventLogStatus').filter({hasText:'not an .xlsx workbook'}).waitFor();
@@ -89,6 +97,6 @@ print(result['rows'], len(result['columns']))`,await download.path()]).toString(
    const audit=await page.evaluate(async()=>window.axe.run({include:[['#owgEventLogFile']]},{runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21aa']}}));
    assert.deepEqual(audit.violations.map(v=>v.id+': '+v.nodes.map(n=>n.target).join(',')),[]);
    assert.deepEqual(errors,[]);
-   console.log('Event-log Excel import browser acceptance passed: workbook converted locally, mapped, imported with a chosen offset, and a broken file refused.');
+   console.log('Event-log Excel import browser acceptance passed: workbook converted locally, mapped, imported with a chosen offset, and a broken file refused, with Excel and typed Parquet exports.');
  }finally{if(browser)await browser.close();server.kill();}
 })().catch(e=>{console.error(e);process.exitCode=1;});

@@ -44,6 +44,18 @@ const path=require('node:path');
    const cell=async(a,b)=>(await matrix.locator('tbody tr').nth(header.indexOf(a)).locator('td').nth(header.indexOf(b)+1).textContent());
    assert.equal(await cell('Check','Pay'),'||');
    assert.equal(await cell('Register','Approve'),'#');
+   // The matrix downloads as one row per cell, matching the table.
+   const [footCsv]=await Promise.all([page.waitForEvent('download'),page.locator('#owgFootprintsReportCsv').click()]);
+   const footLines=(await fs.readFile(await footCsv.path(),'utf8')).trim().split(/\r?\n/);
+   assert.equal(footLines[0],'from,to,log_relation,model_relation,agrees');
+   assert.equal(footLines.length,1+36);
+   assert(footLines.includes('Check,Pay,||,||,true'),footLines.join('|'));
+   await page.locator('#owgFootprintsNoise').selectOption('0');
+   assert.equal(await page.locator('#owgFootprintsReportCsv').isDisabled(),true);
+   await page.locator('#owgFootprintsNoise').selectOption('0.2');
+   await page.locator('#owgFootprintsRun').click();
+   await page.locator('#owgFootprintsReportCsv:not([disabled])').waitFor();
+   await out.locator('details summary').click();
    const review=page.locator('#owgFootprintsCaseReview');
    await out.getByRole('button',{name:'Inspect cases for Check → Check',exact:true}).click();
    await review.getByRole('status').filter({hasText:'4 occurrences in 4 cases.'}).waitFor();
@@ -69,6 +81,6 @@ const path=require('node:path');
    const audit=await page.evaluate(async()=>window.axe.run(document.querySelector('#owgFootprints'),{runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21aa']}}));
    assert.deepEqual(audit.violations.map(v=>v.id+': '+v.nodes.map(n=>n.target).join(',')),[]);
    assert.deepEqual(errors,[]);
-   console.log('Footprints browser acceptance passed: conformance matrix, exact case evidence and history, cohort and activity projection, WCAG audit.');
+   console.log('Footprints browser acceptance passed: conformance matrix, exact case evidence and history, cohort and activity projection, matrix CSV, WCAG audit.');
  }finally{if(browser)await browser.close();server.kill();}
 })().catch(error=>{console.error(error);process.exit(1);});

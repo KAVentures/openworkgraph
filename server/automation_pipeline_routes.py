@@ -74,6 +74,23 @@ def portfolio_rollup(request: Request):
     return _respond(pipeline.portfolio)
 
 
+@router.get("/v1/automation-pipeline/budget-scenario/inventory")
+async def portfolio_budget_inventory(request: Request):
+    from . import automation_budget_scenario as scenario
+    _require_dashboard(request)
+    return await run_in_threadpool(_respond, scenario.inventory)
+
+
+@router.post("/v1/automation-pipeline/budget-scenario")
+async def portfolio_budget_scenario(request: Request):
+    from . import automation_budget_scenario as scenario
+    from .event_log_routes import _json_body
+    _require_dashboard(request)
+    spec = await _json_body(request, "portfolio budget scenario", strict=True, limit=16384)
+    _require_dashboard(request)
+    return await run_in_threadpool(_respond, scenario.solve, spec)
+
+
 @router.get("/v1/automation-pipeline/benefit-overlap")
 def benefit_overlap_review(request: Request):
     """Read-only potential benefit duplication review, never an aggregate savings claim."""
@@ -256,11 +273,58 @@ def _benefit(operation: Callable[..., Any], *args: Any) -> JSONResponse:
         raise HTTPException(404 if str(exc) in {"unknown idea", "unknown measurement"} else 422, str(exc)) from None
 
 
+@router.get("/v1/automation-pipeline/{idea_id}/quality-benefit/inventory")
+async def quality_benefit_inventory(request: Request, idea_id: str):
+    from . import automation_quality_benefit as quality
+    _require_dashboard(request)
+    return await run_in_threadpool(_benefit, quality.inventory, idea_id)
+
+
+@router.post("/v1/automation-pipeline/{idea_id}/quality-benefit")
+async def quality_benefit_scenario(request: Request, idea_id: str):
+    from . import automation_quality_benefit as quality
+    from .event_log_routes import _json_body
+    _require_dashboard(request)
+    spec = await _json_body(request, "quality and adoption scenario", strict=True, limit=65536)
+    _require_dashboard(request)
+    return await run_in_threadpool(_benefit, quality.analyze, idea_id, spec)
+
+
 @router.get("/v1/automation-pipeline/{idea_id}/realized-value")
 def realized_value(request: Request, idea_id: str):
     from . import automation_benefits
     _require_dashboard(request)
     return _benefit(automation_benefits.report, idea_id)
+
+
+@router.post("/v1/automation-pipeline/{idea_id}/retained-effort/preview")
+async def preview_retained_effort(request: Request, idea_id: str):
+    from . import automation_retained_effort as effort
+    from .event_log_routes import _json_body
+    from .event_log_workspace import EventLogWorkspaceError
+    from starlette.concurrency import run_in_threadpool
+    _require_dashboard(request)
+    body = await _json_body(request, "retained effort measurement", strict=True, limit=16384)
+    _require_dashboard(request)
+    try:
+        return await run_in_threadpool(_benefit, effort.preview, idea_id, body)
+    except EventLogWorkspaceError:
+        raise HTTPException(422, "retained log or case notion unavailable") from None
+
+
+@router.post("/v1/automation-pipeline/{idea_id}/retained-effort/record")
+async def record_retained_effort(request: Request, idea_id: str):
+    from . import automation_retained_effort as effort
+    from .event_log_routes import _json_body
+    from .event_log_workspace import EventLogWorkspaceError
+    from starlette.concurrency import run_in_threadpool
+    _require_dashboard(request)
+    body = await _json_body(request, "retained effort measurement", strict=True, limit=16384)
+    _require_dashboard(request)
+    try:
+        return await run_in_threadpool(_benefit, effort.record, idea_id, body)
+    except EventLogWorkspaceError:
+        raise HTTPException(422, "retained log or case notion unavailable") from None
 
 
 @router.post("/v1/automation-pipeline/{idea_id}/measurements")

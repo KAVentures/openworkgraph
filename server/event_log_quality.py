@@ -76,6 +76,9 @@ def transform(source_format: str, mapping: dict[str, Any] | None) -> dict[str, A
             "xes": "XES concept:name / time:timestamp / org:resource; trace concept:name as case",
             "ocel": "OCEL 2.0 JSON event types, objects and qualified relationships",
             "ocelxml": "OCEL 2.0 XML event types, objects and qualified relationships"}[source_format]}
+        if mapping and mapping.get("naive_timestamp_offset"):
+            # An explicit decision changes what is stored, so it is part of the transform.
+            declared["mapping"]["naive_timestamp_offset"] = mapping["naive_timestamp_offset"]
     return {**declared, "transform_sha256": hashlib.sha256(_canonical(declared).encode()).hexdigest()}
 
 

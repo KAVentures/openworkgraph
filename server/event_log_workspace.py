@@ -32,7 +32,7 @@ from shared.event_log_formats import (
     CASE_TYPE, RESOURCE_PRESENCE_WHITESPACE, MAX_ATTRIBUTE_VALUE, MAX_ATTRIBUTES, MAX_OBJECT_ATTRIBUTE_VALUES,
     EventLogFormatError, EventRecord,
     ObjectRecord, ReadStats,
-    read_csv, read_csv_header, read_ocel_json, read_ocel_xml, read_xes, write_csv, write_ocel_json,
+    read_csv, read_csv_header, read_ocel_json, read_ocel_xml, read_xes, write_csv, write_csv_attributes, write_jsonl, write_ocel_json,
     write_ocel_xml, write_xes,
 )
 
@@ -42,6 +42,24 @@ from . import event_log_source_identity as source_identity
 from . import event_log_object_relationships as object_relationships
 from . import event_log_timestamp_formats as timestamp_formats
 from . import event_log_same_source as same_source
+
+
+def _remember_missing_pandas() -> None:
+    """Make a missing pandas fail fast for DuckDB.
+
+    When a query binds a Python list (``unnest(?)``), DuckDB tries ``import pandas`` once per
+    value. Without pandas installed, each attempt searches every import path again: on a
+    1.2-million-event log, trace clustering spent five of every six seconds in failed imports.
+    Recording the module as absent makes those attempts fail immediately. Nothing changes when
+    pandas is installed.
+    """
+    import importlib.util
+    import sys
+    if "pandas" not in sys.modules and importlib.util.find_spec("pandas") is None:
+        sys.modules["pandas"] = None  # type: ignore[assignment]
+
+
+_remember_missing_pandas()
 
 MAX_LOGS = 50
 MAX_IMPORT_BYTES = 4 * 1024 * 1024 * 1024
@@ -542,11 +560,10 @@ def _ingest(conn: duckdb.DuckDBPyConnection, log_id: str, upload: Path, folder: 
     if source_format == "csv":
         return _load_csv_fast(conn, log_id, upload, mapping or {}, reasons, keep_rejected)
     if source_identity.settings(mapping):raise EventLogFormatError('Supplied source event identity mode is supported only for CSV')
-    if (mapping or {}).get("keep_rejected") or (mapping or {}).get("naive_timestamp_offset") \
-            or (mapping or {}).get("timestamp_format"):
-        raise EventLogWorkspaceError("keeping rejected rows, assuming an offset and declaring a timestamp format "
-                                     "are available for CSV only")
-    stats = ReadStats()
+    if (mapping or {}).get("keep_rejected") or (mapping or {}).get("timestamp_format"):
+        raise EventLogWorkspaceError("keeping rejected rows and declaring a timestamp format are available for CSV only")
+    # An explicit offset decision also reads XES/OCEL times written without one (as PM4Py writes naive times).
+    stats = ReadStats(assumed_offset=naive_offset(mapping))
     with upload.open("rb") as raw:
         reader = {"xes": read_xes, "ocel": read_ocel_json, "ocelxml": read_ocel_xml}[source_format](raw, stats=stats)
         paths = _stage(reader, folder)
@@ -614,6 +631,9 @@ def import_log(source: IO[bytes], *, name: str, source_format: str, mapping: dic
                 kept = {} if (mapping or {}).get("keep_rejected") else None
                 stats = _ingest(conn, log_id, upload, folder, source_format, mapping, reasons, kept)
                 if stats.events == 0:
+                    if getattr(stats, "timestamps_without_offset", 0):
+                        raise EventLogWorkspaceError(
+                            "the file's times have no UTC offset; choose the offset they use (naive_timestamp_offset)")
                     raise EventLogWorkspaceError("no events with a case, activity and timezone-qualified time")
                 _store_rejected(conn, log_id, 0, kept)
                 conn.execute("INSERT INTO logs VALUES (?, ?, ?, ?, ?, ?, ?)",
@@ -798,9 +818,14 @@ def _append_values(conn: duckdb.DuckDBPyConnection, log_id: str, staging: str) -
 
 def _history_counts(source_format: str, stats: ReadStats, added: int | None = None,
                     over_limit: int = 0, over_names: int = 0) -> dict[str, Any]:
-    """Counts of timed object attribute values read from an OCEL file (other formats have none)."""
+    """Counts of timed object attribute values read from an OCEL file (other formats have none), and how many
+    XES/OCEL times were read with an explicitly assumed offset."""
+    assumed = ({"timestamps_with_assumed_offset": stats.timestamps_with_assumed_offset}
+               if source_format != "csv" and getattr(stats, "assumed_offset", "") else
+               {"timestamps_without_offset": stats.timestamps_without_offset}
+               if source_format != "csv" and getattr(stats, "timestamps_without_offset", 0) else {})
     if source_format not in ("ocel", "ocelxml"):
-        return {}
+        return assumed
     counts = {"read": stats.object_attribute_values,
               "without_timezone_qualified_time": stats.object_attribute_values_without_time,
               "over_per_object_limit": stats.object_attribute_values_over_limit + over_limit,
@@ -810,7 +835,7 @@ def _history_counts(source_format: str, stats: ReadStats, added: int | None = No
         counts["added"] = added
         counts["over_attribute_name_limit"] = over_names
         counts["attribute_name_limit"] = MAX_ATTRIBUTES
-    return {"object_attribute_values": counts}
+    return {"object_attribute_values": counts, **assumed}
 
 
 def _store_rejected(conn: duckdb.DuckDBPyConnection, log_id: str, batch: int, kept: dict[str, int] | None) -> None:
@@ -1127,6 +1152,12 @@ def _case_export_rows(log_id, case_type, *, include_trace_attributes=False):
             conn.close()
 
 
+def _event_attribute_names(conn, source: str, params: list[Any]) -> list[str]:
+    """Sorted distinct event attribute names of the events in ``source`` (a parenthesised query)."""
+    return [row[0] for row in conn.execute(f"""SELECT DISTINCT unnest(json_keys(attributes)) AS name
+        FROM {source} source WHERE attributes IS NOT NULL ORDER BY name""", params).fetchall()]
+
+
 def _group_export_cursor(cursor):
     """Read an ordered event projection one case at a time."""
     current, bucket, trace_attributes = None, [], {}
@@ -1185,10 +1216,10 @@ def _ocel_export_projection(conn, log_id, *, matching=False):
             f"SELECT event_id, object_id, qualifier FROM event_objects WHERE log_id = ? {event_filter} ORDER BY 1, 2",
             [log_id]).fetchall():
         links.setdefault(event_id, []).append((object_id, qualifier))
-    events = [{"event_id": i, "activity": a, "timestamp": ts.replace(tzinfo=timezone.utc),
+    events = [{"event_id": i, "activity": a, "timestamp": ts.replace(tzinfo=timezone.utc), "resource": r or "",
                "attributes": json.loads(attr or "{}"), "objects": links.get(i, [])}
-              for i, a, ts, attr in conn.execute(
-                  "SELECT event_id, activity, ts, attributes FROM events WHERE log_id = ? "
+              for i, a, ts, r, attr in conn.execute(
+                  "SELECT event_id, activity, ts, resource, attributes FROM events WHERE log_id = ? "
                   f"{event_filter} ORDER BY ts, event_id", [log_id]).fetchall()]
     return objects, events
 
@@ -1215,6 +1246,23 @@ def export_log(log_id: str, export_format: str, out: IO[str], case_type: str | N
     elif export_format in ("csv", "csv-review"):
         write_csv((event for _, events in case_events(log_id, case_type) for event in events), out,
                   spreadsheet_review=export_format == "csv-review")
+    elif export_format == "csv-attributes":
+        with _LOCK:
+            conn = _connect()
+            try:
+                _check_log(conn, log_id)
+                names = _event_attribute_names(conn, f"({_CASE_EVENTS})", [log_id, _case_type(conn, log_id, case_type)])
+            finally:
+                conn.close()
+        rows = _case_export_rows(log_id, case_type)
+        try:
+            write_csv_attributes((event for _, events, _ in rows for event in events), names, out)
+        except EventLogFormatError as exc:
+            raise EventLogWorkspaceError(str(exc)) from None
+        finally:
+            rows.close()
+    elif export_format == "jsonl":
+        write_jsonl((event for _, events in case_events(log_id, case_type) for event in events), out)
     elif export_format in ("ocel", "ocelxml"):
         with _LOCK:
             conn = _connect()
@@ -1225,7 +1273,7 @@ def export_log(log_id: str, export_format: str, out: IO[str], case_type: str | N
                 conn.close()
         (write_ocel_json if export_format == "ocel" else write_ocel_xml)(objects, events, out)
     else:
-        raise EventLogWorkspaceError("export format must be csv, xes, ocel or ocelxml")
+        raise EventLogWorkspaceError("export format must be csv, csv-attributes, jsonl, xes, ocel or ocelxml")
 
 
 __all__ = [

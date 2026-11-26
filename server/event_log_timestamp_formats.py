@@ -60,6 +60,8 @@ def _unix_regex(pattern: str) -> str:
 
 # (pattern, order); listed most specific first so the suggestion prefers the fuller pattern.
 KNOWN: list[tuple[str, str]] = [
+    ("%d/%m/%Y %H:%M:%S.%f", "day-first"), ("%d.%m.%Y %H:%M:%S,%f", "day-first"),
+    ("%d-%m-%Y %H:%M:%S.%f", "day-first"), ("%m/%d/%Y %H:%M:%S.%f", "month-first"),
     ("%d/%m/%Y %H:%M:%S", "day-first"), ("%d/%m/%Y %H:%M", "day-first"),
     ("%d.%m.%Y %H:%M:%S.%f", "day-first"), ("%d.%m.%Y %H:%M:%S", "day-first"), ("%d.%m.%Y %H:%M", "day-first"),
     ("%d-%m-%Y %H:%M:%S", "day-first"), ("%d-%m-%Y %H:%M", "day-first"),
