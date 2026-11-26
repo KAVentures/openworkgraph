@@ -115,6 +115,36 @@ def verify(document, pins, *, expected_dossier_sha256):
             "execution_authorized": False}
 
 
+
+def freeze_inbox(document, *, now=None):
+    """Export a complete signed cohort without advancing acceptance pins.
+
+    This is deliberately separate from registered review. Retained historical
+    incident signals are not represented in the dossier; export the inbox
+    status separately. The review is reproducible with external trust keys.
+    """
+    from . import agent_procurement_workforce_inbox as inbox
+    from . import agent_procurement_monitor_journal as journal
+    from . import db
+
+    req = inbox.Scope.model_validate(document)
+    now = int(time.time()*1000) if now is None else now
+    ns = req.correlation_namespace_sha256
+    with db.connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        inbox._schema(conn)
+        inbox._check(conn, req)
+        inventory = inbox._inventory(conn, ns, now, req.maximum_packet_age_ms)
+        if not inventory["ready_for_complete_review"]:
+            raise journal.JournalError("Fresh verified packets required for every active installation", 409)
+        active = inbox._active(conn, ns)
+        stored = inbox._stored(conn, ns)
+        packets = [inbox._decode(stored[a], ns, a).model_dump() for a in sorted(active)]
+        keys = [{"installation_alias": a, "public_key_hex": v["public_key_hex"],
+                 "correlation_namespace_sha256": ns} for a,v in sorted(active.items())]
+        return freeze(_request(ns, req.maximum_packet_age_ms, packets, keys), now=now)
+
+
 def _row_index(dossier):
     return {(p["packet"]["installation_alias"], r["journal_tag"]): r
             for p in dossier["packets"] for r in p["packet"]["rows"]}
