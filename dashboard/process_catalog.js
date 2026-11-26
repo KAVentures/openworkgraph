@@ -1378,14 +1378,44 @@
           const box=el('section');box.append(el('h6',c.candidate_id+' · trial gates: '+c.trial_gate_status),
             el('p','All-attempt operating cost: '+range(c.candidate.total_cost)),
             el('p','Paired savings versus manual: '+range(c.paired_trial_savings)),
-            el('p','Recurring annual savings scenario: '+range(c.annual_recurring_savings_scenario)),
-            el('p','First-year savings scenario: '+range(c.first_year_savings_scenario)),
+            el('p','Full-replacement recurring savings (all manual fixed cost removed): '+range(c.annual_recurring_savings_scenario)),
+            el('p','Full-replacement first-year savings: '+range(c.first_year_savings_scenario)),
             el('p',human(c.candidate)));
           const categories=el('ul');
           for(const [key,value] of Object.entries(c.candidate.human_time_by_category)){
             categories.appendChild(el('li',key+': '+value.lower_person_ms+' to '+(value.upper_person_ms==null?'unbounded':value.upper_person_ms)+' person-ms · '+value.known_attempts+' measured attempts'));
           }
-          box.appendChild(categories);output.appendChild(box);
+          box.appendChild(categories);
+          const quality=c.declared_outcome_review,adopt=c.conditional_adoption;
+          box.append(el('h6','Declared outcome risk: '+quality.status),
+            el('p','Paired outcome regressions: '+quality.regression_count.lower+'–'+quality.regression_count.upper+' of '+quality.paired_attempts+
+              ' · success-count change: '+quality.success_count_change.lower+' to '+quality.success_count_change.upper),
+            el('p','Declared outcome checks are not independent outcome verification.'));
+          const checks=el('ul');for(const [key,value] of Object.entries(quality.checks))checks.appendChild(el('li',key.replaceAll('_',' ')+': '+value));
+          box.appendChild(checks);
+          const volumeText=v=>v==null?'unknown':v.empty?'none':v.minimum_cases+'–'+v.maximum_cases+' cases';
+          const yesNo=v=>v==null?'unknown':v?'yes':'no';
+          const frontier=adopt.first_year_positive_volume;
+          box.append(el('h6','Mixed-adoption economics'),
+            el('p','Manual fixed costs remain during partial adoption. Only the declared avoidable amount is removed at full adoption.'),
+            el('p','First-year positive lower-bound partial volume: '+volumeText(frontier.partial_guaranteed_positive)+
+              ' · positive upper-bound partial volume: '+volumeText(frontier.partial_possible_positive)),
+            el('p','Full adoption positive lower bound: '+yesNo(frontier.full_guaranteed_positive)+' · positive upper bound: '+yesNo(frontier.full_possible_positive)));
+          const volumeList=el('ul');
+          for(const row of adopt.rows){
+            const item=el('li',row.adopted_cases+' adopted / '+row.manual_cases_remaining+' manual cases');
+            item.append(el('p','Recurring savings: '+range(row.annual_recurring_savings)),
+              el('p','First-year savings: '+range(row.first_year_savings)));
+            const hours=v=>{
+              if(v==null)return 'unbounded';
+              // Exact report retains person-ms; display rounds to nearest whole person-hour.
+              const n=BigInt(v.numerator),d=BigInt(v.denominator)*3600000n,a=n<0n?-n:n;
+              return (a%d!==0n?'≈ ':'')+(n<0n?'-':'')+String((a*2n+d)/(2n*d))+' h';
+            };
+            item.appendChild(el('p','Conditional released capacity: '+hours(row.annual_released_person_ms.lower)+' to '+hours(row.annual_released_person_ms.upper)+' (not cash savings)'));
+            volumeList.appendChild(item);
+          }
+          box.appendChild(volumeList);output.appendChild(box);
         }
         const picker=el('select');picker.setAttribute('aria-label','Operating cost candidate');
         for(const c of result.candidates){const option=el('option',c.candidate_id);option.value=c.candidate_id;picker.appendChild(option);}
@@ -1399,7 +1429,7 @@
           for(const r of rows.slice(offset,offset+25)){
             const line=el('li',r.case_id+' · repeat '+r.repeat+' · '+r.trial_status+' · savings: '+range(r.paired_savings));
             line.appendChild(el('p','Manual missing: '+(r.manual_missing.join(', ')||'none')+' · AI missing: '+(r.candidate_missing.join(', ')||'none')));
-            line.appendChild(el('p','Declared outcomes: '+(r.manual_declared_outcome||'unknown')+' → '+(r.candidate_declared_outcome||'unknown')));
+            line.appendChild(el('p','Declared outcomes: '+(r.manual_declared_outcome||'unknown')+' → '+(r.candidate_declared_outcome||'unknown')+' · regression '+r.declared_outcome_comparison.regression.lower+'–'+r.declared_outcome_comparison.regression.upper));
             list.appendChild(line);
           }
           const nav=el('div');

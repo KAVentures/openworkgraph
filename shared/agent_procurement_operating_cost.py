@@ -16,6 +16,7 @@ from pydantic import Field, StrictBool, StrictInt, model_validator
 
 from .agent_procurement import Alias, CaseId, Cost, Duration, Strict, _load, digest
 from .agent_procurement_trials import review as review_trial
+from .agent_procurement_adoption import adoption, paired_outcomes, released_time
 from .process_shadow_review import Hash
 
 FORMAT = "openworkgraph.procurement-operating-cost.v1"
@@ -61,10 +62,29 @@ class FixedCost(Strict):
     one_time_microunits: AnnualCost
 
 
+class AdoptionPolicy(Strict):
+    # No fixed manual cost is assumed avoidable unless explicitly declared.
+    avoidable_manual_annual_microunits: AnnualCost = 0
+    adoption_case_counts: list[Annotated[StrictInt, Field(ge=0, le=1_000_000_000)]] = Field(min_length=1,max_length=21)
+    minimum_declared_success_basis_points: Annotated[StrictInt,Field(ge=0,le=10000)] = 9000
+    maximum_declared_regression_basis_points: Annotated[StrictInt,Field(ge=0,le=10000)] = 0
+
+
 class Scenario(Strict):
     annual_cases: Volume
     manual_annual_microunits: AnnualCost
     candidate_fixed_costs: list[FixedCost] = Field(min_length=2, max_length=10)
+    adoption: AdoptionPolicy | None = None
+
+    @model_validator(mode="after")
+    def valid_adoption(self):
+        if self.adoption is not None:
+            a=self.adoption
+            if a.avoidable_manual_annual_microunits>self.manual_annual_microunits:
+                raise ValueError("avoidable manual fixed cost exceeds total manual fixed cost")
+            if len(set(a.adoption_case_counts))!=len(a.adoption_case_counts) or max(a.adoption_case_counts)>self.annual_cases:
+                raise ValueError("adoption volumes must be unique and within annual volume")
+        return self
 
 
 class Request(Strict):
@@ -227,18 +247,38 @@ def assess(packet, plan, captures, request):
         annual=_scaled(delta,req.scenario.annual_cases,n,recurring_fixed)
         first_year=tuple(x-fixed[cid].one_time_microunits if x is not None else None for x in annual)
         gates=candidates[cid]["gate_status"]
+        policy=req.scenario.adoption
+        if policy is None:
+            # Backward-compatible full-replacement figures above are retained.
+            # The new mixed-operation analysis is conservative by default.
+            policy=AdoptionPolicy(adoption_case_counts=sorted({0,req.scenario.annual_cases//4,
+                req.scenario.annual_cases//2,req.scenario.annual_cases*3//4,req.scenario.annual_cases}))
+        volumes=sorted(set(policy.adoption_case_counts)|{0,req.scenario.annual_cases})
+        quality=paired_outcomes([x["outcome"] for x in left],[x["outcome"] for x in right],
+                                policy.minimum_declared_success_basis_points,policy.maximum_declared_regression_basis_points)
+        quality_rows=quality.pop("rows")
+        capacity=released_time(left,right)
+        rollout=adoption(delta,capacity,n,req.scenario.annual_cases,volumes,
+                         policy.avoidable_manual_annual_microunits,fixed[cid].annual_microunits,
+                         fixed[cid].one_time_microunits,_money)
+        paired_rows=[{**_row(*x),"declared_outcome_comparison":q} for x,q in zip(entries,quality_rows)]
         summaries.append({"candidate_id":cid,"configuration_sha256":candidates[cid]["configuration_sha256"],
                           "trial_gate_status":gates,"candidate":_summary(right),
                           "paired_trial_savings":_bounds(*delta),
                           "annual_recurring_savings_scenario":_bounds(*annual),
                           "first_year_savings_scenario":_bounds(*first_year),
                           "positive_first_year_lower_bound":first_year[0]>0 if first_year[0] is not None else None,
-                          "rows":[_row(*x) for x in entries]})
+                          "declared_outcome_review":quality,"conditional_adoption":rollout,
+                          "paired_released_person_ms":{"lower":_money(capacity[0]),"upper":_money(capacity[1])},
+                          "rows":paired_rows})
     result={"format":REPORT,"process_reference":trial["process_reference"],"spec_sha256":trial["spec_sha256"],
             "plan_sha256":trial["plan_sha256"],"ledger_sha256":trial["ledger_sha256"],
             "trial_review_sha256":digest(trial),"request_sha256":digest(req.model_dump()),"currency":req.currency,
             "manual_baseline":_summary(list(manual_parts.values())),
             "scenario":{"annual_cases":req.scenario.annual_cases,
+                        "adoption_policy":None if req.scenario.adoption is None else {
+                            **req.scenario.adoption.model_dump(),
+                            "avoidable_manual_annual_microunits":str(req.scenario.adoption.avoidable_manual_annual_microunits)},
                         "manual_annual_microunits":str(req.scenario.manual_annual_microunits),
                         "candidate_fixed_costs":[{"candidate_id":x.candidate_id,
                             "annual_microunits":str(x.annual_microunits),"one_time_microunits":str(x.one_time_microunits)}
@@ -253,6 +293,8 @@ def assess(packet, plan, captures, request):
                            "Business outcomes and cost measurements are declarations; no invoices or source-system outcomes were authenticated.",
                            "Annual figures are conditional scenarios assuming the observed enrolled-case mix and per-attempt costs transfer to the declared annual volume.",
                            "Fixed cost assumptions must cover incremental infrastructure, licensing and implementation costs without overlapping observed variable costs.",
+                           "Full-replacement figures assume all declared manual fixed cost is eliminated; the separate mixed-adoption scenarios retain it until an explicitly declared avoidable amount at full adoption.",
+                           "Released person-time is conditional capacity, not cash savings or verified staff reduction. Outcome gates refer only to declared observations.",
                            "Savings do not establish deployment eligibility; no provider call, business write, or selection is performed."]}
     return {**result,"report_sha256":digest(result)}
 

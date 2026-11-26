@@ -64,3 +64,38 @@ declared annual volume. They are not verified realized savings or statistical
 confidence intervals. Quality gates are reported alongside cost but do not
 make any selection or change execution rights. No provider, business system
 or external service is contacted.
+
+
+## Partial adoption, break-even and declared outcome risk
+
+The optional scenario.adoption object accepts adoption_case_counts (1–21
+unique whole numbers from zero through annual_cases),
+avoidable_manual_annual_microunits (default zero, at most the total manual
+annual fixed cost), minimum_declared_success_basis_points (default 9000),
+and maximum_declared_regression_basis_points (default zero).
+If omitted, the workbench uses zero, quarter, half, three-quarter and full
+volume (deduplicated); zero and full are always included for custom grids.
+
+The mixed-adoption view keeps existing manual fixed costs during partial
+adoption, adds the full alternative fixed cost on any positive adoption,
+and removes only the explicitly declared avoidable manual fixed cost at
+full adoption. No-adoption savings are exactly zero. The earlier full-
+replacement scenario is displayed separately and assumes all manual fixed
+costs disappear. Neither assumes real-world volume or capacity transfer is
+verified. Candidate variable costs scale linearly at the enrolled case mix.
+
+Exact integer break-even frontiers report inclusive partial-adoption volume
+ranges with strictly positive lower/upper savings bounds (not statistical
+confidence), and a separate full-adoption point because fixed-cost removal
+can cause a discontinuity. Null means no finite bound was established;
+empty means a known bound never becomes strictly positive in that domain.
+A negative variable saving can produce a maximum rather than minimum
+profitable volume. Zero adoption is not a profitable deployment.
+
+Paired declared outcome review reports candidate success, success-count
+change, regression and improvement bounds across every enrolled case/repeat.
+Missing or unresolved outcomes are not assumed good or bad. The gates
+operate on declared outcomes, not independent source-system evidence.
+A low-cost candidate can fail outcome gates, and no gate grants rollout
+permission. Released person-time bounds are separate conditional capacity
+estimates, not realized financial savings or headcount reductions.

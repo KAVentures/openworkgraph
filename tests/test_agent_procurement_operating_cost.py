@@ -133,3 +133,65 @@ def test_exact_money_encoding_survives_browser_json_integer_limits(trial):
     value=candidate(result)["annual_recurring_savings_scenario"]["lower_microunits"]
     assert isinstance(value["numerator"],str) and isinstance(value["denominator"],str)
     assert amount(value)==9007199254743493
+
+
+def test_mixed_adoption_charges_full_incremental_cost_and_preserves_manual_fixed(trial):
+    packet,plan,captures,req=baseline(trial)
+    req["scenario"]["adoption"]={"adoption_case_counts":[30,60],"avoidable_manual_annual_microunits":100}
+    cheap=candidate(assess(packet,plan,captures,req))
+    a=cheap["conditional_adoption"];rows={x["adopted_cases"]:x for x in a["rows"]}
+    assert amount(rows[0]["first_year_savings"]["lower_microunits"])==0
+    assert amount(rows[30]["first_year_savings"]["lower_microunits"])==1100
+    assert amount(rows[60]["first_year_savings"]["lower_microunits"])==2550
+    assert rows[30]["manual_cases_remaining"]==30
+    assert amount(rows[30]["annual_released_person_ms"]["lower"])==54000000
+    assert a["first_year_positive_volume"]["partial_guaranteed_positive"]=={
+        "empty":False,"minimum_cases":6,"maximum_cases":59}
+    assert a["first_year_positive_volume"]["full_guaranteed_positive"] is True
+    assert cheap["declared_outcome_review"]["status"]=="pass"
+
+
+def test_default_adoption_does_not_assume_fixed_manual_savings(trial):
+    packet,plan,captures,req=baseline(trial)
+    cheap=candidate(assess(packet,plan,captures,req))
+    a=cheap["conditional_adoption"]
+    assert a["avoidable_manual_fixed_at_full_adoption_microunits"]=="0"
+    assert amount(a["rows"][-1]["first_year_savings"]["lower_microunits"])==2450
+    assert amount(cheap["first_year_savings_scenario"]["lower_microunits"])==2550
+
+
+def test_outcome_regression_cannot_be_hidden_by_cost_savings(trial):
+    packet,plan,captures,req=baseline(trial)
+    slots={s["slot_id"]:s for s in plan["slots"]}
+    selected=[x for x in req["interventions"] if slots[x["slot_id"]]["candidate_id"]=="cheap"]
+    selected[0]["observed_business_outcome"]="failure"
+    selected[1]["observed_business_outcome"]=None
+    cheap=candidate(assess(packet,plan,captures,req))
+    q=cheap["declared_outcome_review"]
+    assert q["regression_count"]=={"lower":1,"upper":2}
+    assert q["success_count_change"]=={"lower":-2,"upper":-1}
+    assert q["status"]=="fail"
+    assert q["checks"]["declared_paired_regressions"]=="fail"
+    assert cheap["positive_first_year_lower_bound"] is True
+    assert any(r["declared_outcome_comparison"]["regression"]["lower"] for r in cheap["rows"])
+
+
+def test_partial_adoption_unknown_cost_and_capacity_not_zero(trial):
+    packet,plan,captures,req=baseline(trial)
+    req["interventions"].pop()
+    result=assess(packet,plan,captures,req)
+    affected=next(c for c in result["candidates"] if c["candidate"]["complete_cost_attempts"]==5)
+    assert affected["conditional_adoption"]["first_year_positive_volume"]["partial_guaranteed_positive"] is None
+    assert affected["conditional_adoption"]["rows"][-1]["annual_released_person_ms"]["lower"] is None
+    assert affected["declared_outcome_review"]["status"]=="unknown"
+
+
+@pytest.mark.parametrize("policy",[
+    {"adoption_case_counts":[61]}, {"adoption_case_counts":[30,30]},
+    {"adoption_case_counts":[30],"avoidable_manual_annual_microunits":101},
+    {"adoption_case_counts":[True]}, {"adoption_case_counts":[30],"minimum_declared_success_basis_points":10001},
+])
+def test_bad_adoption_policy_refused(trial,policy):
+    packet,plan,captures,req=baseline(trial)
+    req["scenario"]["adoption"]=policy
+    with pytest.raises(ValueError):assess(packet,plan,captures,req)
