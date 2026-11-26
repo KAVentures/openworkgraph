@@ -1,6 +1,7 @@
 """As-of attribute checks against real retained OCEL fixtures."""
 from copy import deepcopy
-from io import BytesIO
+import csv
+from io import BytesIO, StringIO
 import json
 import os
 from pathlib import Path
@@ -147,6 +148,72 @@ def test_state_check_reads_one_snapshot_during_append(monkeypatch):
     assert s.analyze(log,spec())['selected_events']==9
 
 
+def test_complete_review_csv_exports_all_events_and_objects(monkeypatch):
+    objects=[]
+    for n in range(120):
+        values=[] if n==2 else [{'name':'=status','time':'1970-01-01T00:00:00Z','value': '=value' if n%2==0 else ''}]
+        objects.append({'id':f'+o{n:03}','type':'order','attributes':values})
+    objects.append({'id':'item','type':'item'})
+    events=[{'id':f'=e{n:03}','type':'=Pay','time':'2024-01-01T00:00:00Z',
+             'relationships':[{'objectId':f'+o{n:03}','qualifier':''},{'objectId':f'+o{n:03}','qualifier':'@other'}]}
+            for n in range(120)]
+    events.append({'id':'=no-object','type':'=Pay','time':'2024-01-01T00:00:00Z',
+                   'relationships':[{'objectId':'item','qualifier':''}]})
+    log=w.import_log(BytesIO(json.dumps({'objectTypes':[],'eventTypes':[],'objects':objects,'events':events}).encode()),
+                     name='many',source_format='ocel')['log_id']
+    settings={'activity':'=Pay','object_type':'order','attribute':'=status','expected_value':'=value','event_qualifier':''}
+    report=s.analyze(log,settings);revision=report['revision']
+    for kind in ('events','objects'):
+        output=StringIO(newline='')
+        meta=s.export_worklist(log,{**settings,'expected_revision':revision,'kind':kind},output)
+        rows=list(csv.DictReader(StringIO(output.getvalue())))
+        check=rows.pop(0)
+        assert check['record_type']=='check' and check['log_revision']==str(revision)
+        assert None not in check and check['recorded_value_present']=='false'
+        assert meta['rows']==len(rows)==121
+        assert rows[0]['event_id_review']=="'=e000" and rows[0]['activity_review']=="'=Pay"
+        assert rows[0]['attribute_review']=="'=status" and rows[0]['expected_value_review']=="'=value"
+        assert rows[0]['qualifier_present']=='true' and rows[0]['qualifier_review']==''
+        if kind=='objects':
+            assert rows[0]['object_id_review']=="'+o000" and rows[0]['recorded_value_review']=="'=value"
+            assert rows[1]['recorded_value_review']=='' and rows[1]['recorded_value_present']=='true'
+            assert rows[2]['object_result']=='missing_history' and rows[2]['recorded_value_present']=='false'
+            assert rows[-1]['record_type']=='event_without_object' and rows[-1]['event_result']=='no_linked_object'
+    filtered=StringIO(newline='')
+    assert s.export_worklist(log,{**settings,'status':'unknown','expected_revision':revision,'kind':'objects'},filtered)['rows']==1
+    assert list(csv.DictReader(StringIO(filtered.getvalue())))[1]['object_result']=='missing_history'
+    empty=StringIO(newline='')
+    empty_settings={**settings,'expected_value':'absent','status':'matched','expected_revision':revision,'kind':'events'}
+    assert s.export_worklist(log,empty_settings,empty)['rows']==0
+    empty_rows=list(csv.DictReader(StringIO(empty.getvalue())))
+    assert len(empty_rows)==1 and empty_rows[0]['record_type']=='check' and empty_rows[0]['result_filter']=='matched'
+    monkeypatch.setattr(s,'MAX_WORKLIST_BYTES',1)
+    too_large=StringIO()
+    with pytest.raises(w.EventLogWorkspaceError,match='file limit'):
+        s.export_worklist(log,{**settings,'expected_revision':revision,'kind':'events'},too_large)
+    assert too_large.getvalue()==''
+    monkeypatch.setattr(s,'MAX_WORKLIST_BYTES',512*1024*1024)
+    for bad in ({'kind':'events'},{'kind':'other','expected_revision':revision},
+                {'kind':'events','expected_revision':revision,'offset':1}):
+        out=StringIO()
+        with pytest.raises(w.EventLogWorkspaceError):s.export_worklist(log,{**settings,**bad},out)
+        assert out.getvalue()==''
+    monkeypatch.setattr(s,'MAX_EVENTS',1)
+    out=StringIO()
+    with pytest.raises(w.EventLogWorkspaceError,match='event bound'):
+        s.export_worklist(log,{**settings,'expected_revision':revision,'kind':'events'},out)
+    assert out.getvalue()==''
+    monkeypatch.setattr(s,'MAX_EVENTS',200_000)
+    newer={'objectTypes':[],'eventTypes':[],'objects':[{'id':'+o000','type':'order'}],
+           'events':[{'id':'new-event','type':'=Pay','time':'2024-01-02T00:00:00Z',
+                      'relationships':[{'objectId':'+o000','qualifier':''}]}]}
+    w.append_log(log,BytesIO(json.dumps(newer).encode()),source_format='ocel')
+    out=StringIO()
+    with pytest.raises(w.EventLogWorkspaceError,match='changed'):
+        s.export_worklist(log,{**settings,'expected_revision':revision,'kind':'events'},out)
+    assert out.getvalue()==''
+
+
 @pytest.mark.parametrize("bad",[{"limit":True},{"quantifier":"none"},{"operator":"gt"},{"extra":1},
                               {"activity":""},{"offset":1}])
 def test_invalid_requests(bad):
@@ -187,6 +254,18 @@ with TestClient(app) as c:
     assert witness.status_code==200 and witness.headers['cache-control']=='no-store',witness.text
     assert witness.json()['witnesses'][0]['status']=='ambiguous_value'
     assert c.post(witness_url,json=spec(event_id='e4'),headers=h).status_code==422
+    export_url=url+'/export';export_spec=spec(expected_revision=r.json()['revision'],kind='events')
+    assert c.post(export_url,json=export_spec,headers=bearer).status_code in (401,403)
+    exported=c.post(export_url,json=export_spec,headers=h)
+    assert exported.status_code==200 and exported.headers['cache-control']=='no-store',exported.text
+    assert exported.headers['x-owg-rows']=='8' and exported.headers['content-type'].startswith('text/csv')
+    assert 'event_id_review' in exported.text
+    assert c.post(export_url,json=spec(kind='events'),headers=h).status_code==422
+    from server import event_log_workspace as w
+    from server import event_log_object_state_check as state
+    state.MAX_WORKLIST_BYTES=1
+    assert c.post(export_url,json=export_spec,headers=h).status_code==422
+    assert not list(w.DATA_DIR.glob('*.review.csv'))
     assert c.post(url,content=b'{"limit":1,"limit":2}',headers={**h,"Content-Type":"application/json"}).status_code==422
 """
     env={**os.environ,"WORKFLOW_OBSERVER_DATA":str(tmp_path/"data"),

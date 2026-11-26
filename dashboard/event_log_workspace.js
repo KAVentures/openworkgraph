@@ -4254,13 +4254,17 @@
     const resultFilter=select('owgObjectStateResultFilter',[['','All results'],['matched','Matched'],['not_matched','Not matched'],['unknown','Unknown'],['no_linked_object','No linked object']]);
     const resultControls=el('div',null,'row'),previous=button('Previous state results','secondary'),next=button('Next state results','secondary');
     resultControls.append(field('Result status',resultFilter),previous,next);show(resultControls,false);
+    const exportBar=el('div');exportBar.id='owgObjectStateExports';
+    const exportEvents=button('Download event results (CSV)','secondary'),exportObjects=button('Download object evidence (CSV)','secondary');
+    const exportStatus=el('div',null,'muted');exportStatus.setAttribute('role','status');
+    exportBar.append(el('p','Downloads cover the entire selected result status and include event or object IDs and recorded values. Formula-like cells are escaped for spreadsheet review.','muted'),exportEvents,exportObjects,exportStatus);show(exportBar,false);
     const results=el('div');results.id='owgObjectStateResults';
     const witness=el('div');witness.id='owgObjectStateWitness';
-    box.append(form,notice,summary,resultControls,results,witness);
+    box.append(form,notice,summary,resultControls,exportBar,results,witness);
     const generation=state.generation,logId=state.logId,base='/v1/event-logs/'+encodeURIComponent(logId)+'/object-state-check';
-    let turn=0,witnessTurn=0,settings=null,revision=null,offset=0,following=null;
+    let turn=0,witnessTurn=0,exportTurn=0,settings=null,revision=null,offset=0,following=null;
     const current=t=>generation===state.generation&&box.isConnected&&t===turn;
-    const clear=()=>{++turn;settings=null;revision=null;offset=0;following=null;run.disabled=false;notice.textContent='';summary.replaceChildren();results.replaceChildren();witness.replaceChildren();show(resultControls,false);};
+    const clear=()=>{++turn;++exportTurn;settings=null;revision=null;offset=0;following=null;run.disabled=false;notice.textContent='';exportStatus.textContent='';summary.replaceChildren();results.replaceChildren();witness.replaceChildren();show(resultControls,false);show(exportBar,false);};
     form.addEventListener('input',clear);form.addEventListener('change',clear);
     exact.addEventListener('change',()=>show(qualifierField,exact.checked));
     const statusLabel={matched:'Matched',not_matched:'Not matched',unknown:'Unknown',no_linked_object:'No linked object',missing_history:'No timed history',before_first_value:'Before first value',ambiguous_value:'Conflicting values'};
@@ -4297,7 +4301,7 @@
       prev.onclick=()=>page(index-1);nextPage.onclick=()=>{cursors[index+1]=following;page(index+1);};page(0);
     }
     async function load(spec,start,filter,pin){
-      const request=++turn;run.disabled=true;resultFilter.disabled=previous.disabled=next.disabled=true;
+      const request=++turn;++exportTurn;run.disabled=true;resultFilter.disabled=previous.disabled=next.disabled=true;show(exportBar,false);exportStatus.textContent='';
       notice.textContent='Checking recorded state…';summary.replaceChildren();results.replaceChildren();witness.replaceChildren();
       try{
         const payload={...spec,offset:start,limit:30,...(filter?{status:filter}:{}),...(pin!==null?{expected_revision:pin}:{})};
@@ -4315,6 +4319,7 @@
           return [item.event_id,item.at,statusLabel[item.status]||item.status,Number(item.linked_objects).toLocaleString(),Number(item.matched_objects).toLocaleString(),Number(item.not_matched_objects).toLocaleString(),Number(item.unknown_objects).toLocaleString(),inspect];
         })):el('p','No events match this result filter.','muted'));
         show(resultControls,true);resultFilter.disabled=false;previous.disabled=offset===0;next.disabled=following===null;
+        exportEvents.disabled=exportObjects.disabled=false;show(exportBar,true);
       }catch(error){if(current(request)){settings=null;revision=null;notice.textContent=error.message;show(resultControls,false);}}
       finally{if(current(request))run.disabled=false;}
     }
@@ -4322,6 +4327,21 @@
     resultFilter.onchange=()=>{if(settings)load(settings,0,resultFilter.value,revision);};
     previous.onclick=()=>{if(settings)load(settings,Math.max(0,offset-30),resultFilter.value,revision);};
     next.onclick=()=>{if(settings&&following!==null)load(settings,following,resultFilter.value,revision);};
+    async function downloadWorklist(kind){
+      if(!settings||revision===null)return;
+      const request=turn,ticket=++exportTurn,active=()=>current(request)&&ticket===exportTurn;
+      const payload={...settings,expected_revision:revision,kind,...(resultFilter.value?{status:resultFilter.value}:{})};
+      exportEvents.disabled=exportObjects.disabled=true;exportStatus.textContent='Preparing the complete worklist…';
+      let success=false;
+      try{
+        const response=await api(base+'/export',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+        const blob=await response.blob();if(!active())return;
+        downloadBlob(blob,logId+'-object-state-'+kind+'.review.csv');
+        exportStatus.textContent='Downloaded '+(response.headers.get('X-OWG-Rows')||'the matching')+' evidence rows.';success=true;
+      }catch(error){if(active())exportStatus.textContent=error.message+' Rerun the check to retry.';}
+      finally{if(active()&&success)exportEvents.disabled=exportObjects.disabled=false;}
+    }
+    exportEvents.onclick=()=>downloadWorklist('events');exportObjects.onclick=()=>downloadWorklist('objects');
     return box;
   }
 

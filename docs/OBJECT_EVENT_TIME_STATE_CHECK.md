@@ -69,6 +69,31 @@ another page. A result status filter, if supplied, must include the event;
 the endpoint refuses stale revisions and unrelated events. Witness requests
 recompute the same bounded check and can therefore take time on large logs.
 
+## Complete review worklists
+
+The object-map checker can download all events in the chosen result status or
+all corresponding event-object outcomes. Both CSVs cover the entire filtered
+selection, not just the current page, and include the exact check settings and
+reviewed append revision in a `check` metadata row, including when no events
+match. `X-OWG-Rows` counts evidence rows and excludes that metadata row. The
+object worklist includes an
+`event_without_object` row for each event with no selected object. Its
+`recorded_value_present` field distinguishes an empty recorded value from an
+unknown value; `qualifier_present` distinguishes an empty exact qualifier
+from no qualifier restriction.
+
+These are spreadsheet-review files: formula-like cells are escaped, so they
+are not a lossless interchange format. They contain event and object IDs and
+recorded values. A stale revision or an exceeded analysis bound fails the
+download rather than producing partial results. A worklist is limited to
+512 MiB of UTF-8 CSV; exceeding the limit also fails without a download.
+Files are prepared locally and the temporary file is removed after the response.
+
+The owner-only POST endpoint is
+`/v1/event-logs/{log_id}/object-state-check/export`, using the check settings,
+reviewed `expected_revision`, optional `status`, and `kind` of `events` or
+`objects`. An export always covers the full filtered selection.
+
 The test fixture covers exact-time updates, conflicts and later resolution,
 missing attributes and objects, duplicate qualifier associations, all/any
 semantics, pagination and authentication. Real customer acceptance and
