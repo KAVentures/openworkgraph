@@ -46,6 +46,13 @@ class Revoke(Strict):
     confirmed: StrictBool
 
 
+class ManifestRequest(Strict):
+    monitor_id: Alias
+    expected_head_sha256: Hash
+    grant_id: GrantID
+    confirmed: StrictBool
+
+
 class Batch(Strict):
     format: Literal["openworkgraph.procurement-monitor-producer-batch.v1"]
     batch_id: Alias
@@ -150,6 +157,38 @@ def revoke(workflow_id,revision,doc):
         result=journal._save(conn,key,state,history,"producer_revoke",{"grant_id":req.grant_id})
         return {"grant_id":req.grant_id,"revoked":True,"head_sha256":result["head_sha256"],
                 "result_persisted":True,"execution_authorized":False}
+
+
+def manifest(workflow_id,revision,doc):
+    """Explicit operator-only assignment export, not a producer read capability."""
+    req=ManifestRequest.model_validate(doc)
+    if not req.confirmed:raise journal.JournalError("Explicit assignment export confirmation required",403)
+    key=journal._key(workflow_id,revision,req.monitor_id)
+    with db.connect() as conn:
+        conn.execute("BEGIN");_schema(conn)
+        state,history=journal._read(conn,key)
+        if state is None:raise journal.JournalError("Monitoring journal not found",404)
+        journal._check_head(history,req.expected_head_sha256);journal._require_current(conn,workflow_id,revision)
+        g=conn.execute("""SELECT plan_sha256,producer_alias,window_id,arm,expires_ms,revoked
+            FROM procurement_monitor_producers WHERE grant_id=? AND workflow_id=? AND revision=? AND monitor_id=?""",
+            (req.grant_id,*key)).fetchone()
+        if g is None or g[5] or _now()>=g[4] or g[0]!=state["plan_sha256"]:
+            raise journal.JournalError("Active scoped producer grant required",409)
+        child=next(w["plan"] for w in state["monitor_plan"]["windows"] if w["window_id"]==g[2])
+        recorded={o["slot_id"] for w in state["snapshot"]["windows"] for o in w["observations"]}
+        slots=[{"slot_id":s["slot_id"],"case_token_sha256":s["case_token_sha256"],
+                "expected_router_configuration_sha256":s["expected_router_configuration_sha256"],
+                "already_recorded":s["slot_id"] in recorded}
+               for s in child["slots"] if s["arm"]==g[3]]
+        result={"format":"openworkgraph.procurement-monitor-producer-assignment.v1",
+            "grant_id":req.grant_id,"producer_alias":g[1],"window_id":g[2],"arm":g[3],
+            "expires_ms":g[4],"window_start_ms":child["request"]["window_start_ms"],
+            "window_end_exclusive_ms":child["request"]["window_end_exclusive_ms"],
+            "ingest_path":"/v1/process-catalog/procurement-producer/ingest",
+            "batch_format":"openworkgraph.procurement-monitor-producer-batch.v1",
+            "maximum_batch_observations":MAX_BATCH,"slots":slots,
+            "execution_authorized":False,"credential_included":False}
+        return {**result,"assignment_sha256":digest(result)}
 
 
 def _receipt(grant_id,batch_id,count,replay=False):

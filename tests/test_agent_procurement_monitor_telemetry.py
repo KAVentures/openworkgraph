@@ -156,3 +156,25 @@ def test_failed_grant_reservation_rolls_back_credential(producer,local_db,monkey
     with local_db() as conn:
         assert conn.execute("SELECT COUNT(*) FROM procurement_monitor_producers").fetchone()[0]==1
     assert journal.detail("process_1",1,{"monitor_id":"monitor-1"})==detail
+
+
+def test_operator_manifest_is_exact_scope_and_no_secret(producer):
+    grant,batch,clock,final=producer
+    req={"monitor_id":"monitor-1","expected_head_sha256":grant["head_sha256"],
+         "grant_id":grant["grant"]["grant_id"],"confirmed":True}
+    value=telemetry.manifest("process_1",1,req)
+    assert {s["slot_id"] for s in value["slots"]}=={o["slot_id"] for o in batch["observations"]}
+    assert all(not s["already_recorded"] for s in value["slots"])
+    assert grant["producer_token"] not in str(value)
+    assert all(set(s)=={"slot_id","case_token_sha256","expected_router_configuration_sha256","already_recorded"} for s in value["slots"])
+    assert not value["credential_included"] and not value["execution_authorized"]
+    assert value["assignment_sha256"]==digest({k:v for k,v in value.items() if k!="assignment_sha256"})
+    telemetry.ingest(credential(grant),batch)
+    with pytest.raises(journal.JournalError,match="head changed"):
+        telemetry.manifest("process_1",1,req)
+    detail=journal.detail("process_1",1,{"monitor_id":"monitor-1"})
+    req["expected_head_sha256"]=detail["head_sha256"]
+    assert all(s["already_recorded"] for s in telemetry.manifest("process_1",1,req)["slots"])
+    clock[0]=grant["grant"]["expires_ms"]
+    with pytest.raises(journal.JournalError,match="Active scoped"):
+        telemetry.manifest("process_1",1,req)

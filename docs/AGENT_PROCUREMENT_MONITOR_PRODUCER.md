@@ -74,3 +74,13 @@ these reservations; failed writes roll back atomically. Journal detail exposes
 reserved_disable_entries and ordinary_entries_remaining. For legacy journals
 already beyond the new reservation invariant, explicit journal removal remains
 available and removes associated credentials.
+
+The direct journal workbench can prepare a producer assignment manifest via
+router-producer-manifest. The operator supplies monitor_id, expected_head_sha256,
+grant_id and confirmed=true. The read-only manifest lists only that active
+window/arm's opaque case tokens, slot IDs, expected router configuration hash,
+recorded flags, timing and batch contract, with a content digest. It contains
+no bearer secret, reviewed category, intended destination, other-arm slots,
+raw inputs or outcomes. Send it separately from the producer credential over
+an approved channel. It is not proof of actual execution or authorization to
+run an agent. The producer endpoint itself still has no manifest/read access.

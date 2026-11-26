@@ -1963,6 +1963,12 @@
       for(const g of value.producer_grants){
         const row=el('div');row.appendChild(el('p',g.producer_alias+' · '+g.window_id+' / '+g.arm+' · '+(g.revoked?'revoked':g.expires_ms<=Date.now()?'expired':'active')));
         if(!g.revoked)row.appendChild(button('Revoke '+g.grant_id,()=>change('router-producer-revoke',{grant_id:g.grant_id},'Revoke this producer credential? Previously accepted evidence remains retained.')));
+        if(!g.revoked&&g.expires_ms>Date.now())row.appendChild(button('Prepare assignment manifest for '+g.grant_id,()=>perform(async()=>{
+          if(!window.confirm('Export the assigned opaque case and slot references for this producer?'))return;
+          const attempt=++serial;
+          const manifest=await call('router-producer-manifest',{...base,grant_id:g.grant_id});
+          if(valid(attempt))row.appendChild(download(manifest,'owg-producer-assignment-'+g.grant_id));
+        })));
         output.appendChild(row);
       }
       const name=el('input');name.maxLength=80;name.setAttribute('aria-label','Producer alias');
