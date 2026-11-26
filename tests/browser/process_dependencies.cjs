@@ -46,6 +46,20 @@ const path=require('node:path');
   const node=page.locator('svg').getByRole('button',{name:'Inspect impact of Account setup',exact:true});await node.focus();await node.press('Enter');await page.waitForFunction(id=>document.querySelector('#dependencyFocus').value===id,b.workflow_id);
   const [download]=await Promise.all([page.waitForEvent('download'),page.locator('#dependencyGraphExport').click()]);const report=JSON.parse(await fs.readFile(await download.path(),'utf8'));
   assert.equal(report.impact.focus,b.workflow_id);assert.equal(report.graph.edges.length,3);assert.equal(report.impact.declared_paths.permissions_granted,false);assert.ok(report.impact.declared_paths.potential_consumers.paths.length);assert.equal(report.current_basis,true);assert.equal(report.business_dependency_completeness_verified,false);assert.equal(JSON.stringify(report).includes('<script>'),false);
+  const basis=report.focused_build_basis;
+  assert.equal(basis.root_workflow_id,b.workflow_id);
+  assert.equal(basis.process_count,2);assert.ok(basis.all_declared_prerequisites_current);
+  assert.match(await page.locator('#dependencyFocusedBuildBasis').textContent(),/All declared prerequisites/);
+  const buildButton=page.locator('#dependencyBuildExport');
+  assert.equal(await buildButton.isEnabled(),true);
+  const [starter]=await Promise.all([page.waitForEvent('download'),buildButton.click()]);
+  assert.equal(starter.suggestedFilename(),'owg-dependency-starter-r1.zip');
+  const bytes=await fs.readFile(await starter.path());
+  assert.equal(bytes.subarray(0,4).toString('hex'),'504b0304');
+  const buildStatus=route(b)+'/dependencies/build-status?'+new URLSearchParams({revision:'1',basis_sha256:basis.basis_sha256});
+  assert.equal((await api(buildStatus)).current_exact_reviewed_basis,true);
+  const denied=await fetch(base+buildStatus,{headers:{Authorization:'Bearer foreign'}});
+  assert.equal(denied.ok,false);
   // Drafts clear sharing and graph/export state; exact history retains the earlier reason.
   await reason.fill('Updated relationship explanation');assert.equal(await page.locator('#dependencyExport').isDisabled(),true);assert.equal(await page.locator('#dependencyGraphResult').textContent(),'');await save();
   await page.locator('#dependencyRevision').selectOption('1');await page.locator('#dependencyHistory').click();await page.locator('#dependencyStatus').filter({hasText:'Opened dependency revision 1.'}).waitFor();
@@ -68,6 +82,11 @@ const path=require('node:path');
   assert.match(await worklist.textContent(),/0 matching processes/);
   await page.locator('#dependencyFocus').selectOption(b.workflow_id);await page.locator('#dependencyInspect').click();await page.locator('#dependencyGraphResult section').filter({hasText:'Potential consumers to review'}).waitFor();
   assert.match(await page.locator('#dependencyGraphResult').textContent(),/pins need reassessment/);
+  assert.equal(await page.locator('#dependencyBuildExport').isDisabled(),true);
+  assert.equal((await api(buildStatus)).current_exact_reviewed_basis,false);
+  const outdated=await fetch(base+route(b)+'/dependencies/build?'+new URLSearchParams({revision:'1',basis_sha256:basis.basis_sha256}),{headers:{Authorization:'Bearer alice'}});
+  assert.equal(outdated.status,409);
+
   // Refresh each exact saved basis explicitly; reviews do not propagate.
   await api(route(b)+'/dependencies',deps(revised,[c],1));await api(route(d)+'/dependencies',deps(d,[revised],1));
   await page.locator('#disconnect').click();await login('alice');await open('Customer activation');await page.getByRole('button',{name:'Refresh prerequisite dependency_1',exact:true}).click();await page.locator('#dependencyStatus').filter({hasText:'Reference refreshed in the draft'}).waitFor();await save();

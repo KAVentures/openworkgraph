@@ -14,6 +14,7 @@ import math
 from . import communications_learning as learning
 from . import communications_mining as mining
 from . import communications_holdout_overlap as overlap
+from . import communications_probability_reliability as reliability
 
 FORMAT = "openworkgraph.communications-paired-evaluation.v1"
 MAX_EXAMPLES = 2000
@@ -105,7 +106,7 @@ def _summarize(rows,names):
     messages=Counter()
     full=Counter()
     for row in rows:
-        truth,kw,lr=row
+        truth,kw,lr,_probabilities=row
         kw_states=[];lr_states=[]
         for name in names:
             item=groups.setdefault(name,{"keyword":Counter(),"learned":Counter(),"paired":Counter()})
@@ -172,22 +173,27 @@ def evaluate(model,training,holdout,taxonomy,names):
             raise learning.LearningError("learned probabilities are not finite and bounded")
         raw=learning.decide(probabilities)
         lr={name:raw.get(name,"uncertain") for name in names}
-        row=(truth,kw,lr)
+        row=(truth,kw,lr,probabilities)
         full.append(row)
         language=e.get("language") or "und"
         languages[language].append(row)
         if e["example_id"] in screened_ids:
             clean.append(row);clean_languages[language].append(row)
+    def summary(rows):
+        result = _summarize(rows,names)
+        result['probability_reliability'] = reliability.summarize(rows,names,model['intents'],training)
+        return result
+
     # Bound the subgroup response explicitly without altering aggregate counts.
     selected=sorted(languages,key=lambda code:(-len(languages[code]),code))[:MAX_LANGUAGE_GROUPS]
     return {"format":FORMAT,"taxonomy_sha256":digest(taxonomy),
             "keyword_projection":"unique_winner_present_tied_winners_abstain_others_absent",
             "learned_untrained_intents_are_abstentions":True,
-            "all_holdout":_summarize(full,names),
-            "without_detected_lexical_overlap":_summarize(clean,names) if diagnostic["complete"] else None,
+            "all_holdout":summary(full),
+            "without_detected_lexical_overlap":summary(clean) if diagnostic["complete"] else None,
             "lexical_overlap":diagnostic,
-            "by_language":[{"language":code,"all_holdout":_summarize(languages[code],names),
-                           "without_detected_lexical_overlap":_summarize(clean_languages[code],names)
+            "by_language":[{"language":code,"all_holdout":summary(languages[code]),
+                           "without_detected_lexical_overlap":summary(clean_languages[code])
                            if diagnostic["complete"] else None} for code in selected],
             "language_groups_total":len(languages),"language_groups_displayed":len(selected),
             "trained_intents":sorted(model["intents"]),

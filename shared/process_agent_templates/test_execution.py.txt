@@ -220,6 +220,55 @@ class ImplementationCases(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(checks,[0,0,1,2,2])
         self.assertTrue(result['all_tool_results_matched'])
         self.assertTrue(result['catalog_current_at_last_check'])
+    async def test_dependency_basis_drift_before_write_and_at_completion(self):
+        for threshold,expected in [(0,[]),(1,['read_case']),(3,['read_case','resolve_case','read_case'])]:
+            data=self.shared_fixture();self.tools.calls.clear()
+            data[0]['dependency_build_basis_sha256']='d'*64
+            data[4].update(review_template(data[0],prepare(*data[:4]),data[2],data[3]))
+            data[4].update(customer_authorization_confirmed=True,source_reads_confirmed=True,
+                expires_at=(datetime.now(timezone.utc)+timedelta(minutes=10)).isoformat())
+            async def catalog(base,token,spec):
+                return {'format':'openworkgraph.dependency-build-basis-status.v1',
+                    'organization_id':'synthetic-org','workflow_id':spec['workflow_id'],
+                    'requested_revision':spec['revision'],'requested_basis_sha256':spec['dependency_build_basis_sha256'],
+                    'process_reference':self.catalog_state(spec)['process_reference'],
+                    'process_model_sha256':spec['process_model_sha256'],
+                    'status':'current' if len(self.tools.calls)<threshold else 'changed_or_unreviewed',
+                    'current_exact_reviewed_basis':len(self.tools.calls)<threshold,
+                    'read_only':True,'execution_authorized':False,'business_outcomes_verified':False}
+            with TemporaryDirectory() as folder,patch.dict('os.environ',{'OWG_EXECUTION_CATALOG_READ_TOKEN':'SYNTHETIC_CATALOG_SECRET'}):
+                result=await execute_approved(*data,journal_directory=folder,
+                    client_factory=lambda *args:self.tools,receipt_reader=self.source,catalog_reader=catalog)
+            self.assertEqual([c[0] for c in self.tools.calls],expected)
+            self.assertFalse(result['catalog_current_at_last_check'])
+            self.assertFalse(result.get('declared_route_checks_satisfied',False))
+
+    async def test_dependency_runtime_journal_projects_success_and_rejects_action_omission(self):
+        from monitor import read_journal, report
+        data=self.shared_fixture()
+        spec=data[0];spec['dependency_build_basis_sha256']='d'*64
+        data[4].update(review_template(spec,prepare(*data[:4]),data[2],data[3]))
+        data[4].update(customer_authorization_confirmed=True,source_reads_confirmed=True,
+            expires_at=(datetime.now(timezone.utc)+timedelta(minutes=10)).isoformat())
+        async def catalog(base,token,spec):
+            return {'format':'openworkgraph.dependency-build-basis-status.v1',
+                'organization_id':'synthetic-org','workflow_id':spec['workflow_id'],
+                'requested_revision':spec['revision'],'requested_basis_sha256':spec['dependency_build_basis_sha256'],
+                'process_reference':self.catalog_state(spec)['process_reference'],
+                'process_model_sha256':spec['process_model_sha256'],'status':'current',
+                'current_exact_reviewed_basis':True,'read_only':True,
+                'execution_authorized':False,'business_outcomes_verified':False}
+        with TemporaryDirectory() as folder,patch.dict('os.environ',{'OWG_EXECUTION_CATALOG_READ_TOKEN':'SYNTHETIC_CATALOG_SECRET'}):
+            result=await execute_approved(*data,journal_directory=folder,
+                client_factory=lambda *args:self.tools,receipt_reader=self.source,catalog_reader=catalog)
+            records=read_journal(next(Path(folder).glob('*.jsonl')))
+        self.assertTrue(result['declared_route_checks_satisfied'])
+        self.assertEqual(report(spec,records,'Run')['runs'][0]['status'],'succeeded')
+        incomplete=[r for r in records if r.get('attempt')!=2 and r.get('dependency_check_attempt')!=2]
+        for number,r in enumerate((r for r in incomplete if r['phase']=='catalog_checked'),1):
+            r['dependency_check_number']=number
+        with self.assertRaises(ImplementationError):report(spec,incomplete,'Missing action')
+
     async def test_shared_design_revoked_during_precondition_stops_write(self):
         data=self.shared_fixture()
         async def catalog(base,token,spec):

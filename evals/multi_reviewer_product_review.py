@@ -183,6 +183,9 @@ def score_adjudicated(episodes, packet, key, first_review, second_review,
         resolved.append({f: item[f] for f in ("review_id", "reviewer_id", *REVIEW_FIELDS)})
     # The canonical scorer retains every original gate and paired comparison.
     result = reconcile(episodes, packet, key, resolved)
+    from .reviewer_choice_sensitivity import review_sensitivity
+    final_by_id={row["review_id"]:row for row in resolved}
+    result["reviewer_choice_sensitivity"]=review_sensitivity(episodes,key["mapping"],first,second,final_by_id)
     result["multi_reviewer_review"] = {
         "schema": FORMAT, "agreement_before_adjudication": agreement,
         "resolved_disagreement_entries": len(final), "all_entries_resolved": True,
