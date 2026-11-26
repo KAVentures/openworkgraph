@@ -83,6 +83,19 @@ const path=require('node:path');
   const trialRes=await pendingTrial;assert.equal(trialRes.status(),200,await trialRes.text());
   const trialReview=(await trialRes.json()).result;
   await page.locator('#owgCatalogProcurementResult h5').first().waitFor();
+  const robust=await submit('case-robustness',{format:'openworkgraph.procurement-case-robustness.v1',
+    expected_plan_sha256:discovery.plan_sha256,expected_ledger_sha256:trialReview.ledger_sha256,
+    plan:discovery,captures:costCaptures,policy:{require_all_categories:false},confirmed:true});
+  assert.equal(robust.distinct_cases,1);
+  assert.equal(robust.repeats,2);
+  assert.equal(robust.comparisons[0].deletion_coverage,'unknown');
+  assert.equal(robust.execution_authorized,false);
+  await page.getByText('Paired case-cluster robustness review',{exact:true}).waitFor();
+  await page.getByText('Whole-case deletion stress tests',{exact:true}).click();
+  await page.getByText(/Requested 1 deletions; evaluated through 0 · coverage unknown/).waitFor();
+  await page.getByText(/Delete 0 · keep 1 cases/).click();
+  assert.match(await page.locator('#owgCatalogProcurementResult').textContent(),/Lower witness removes: none/);
+
   const times={routine_ms:3600000,review_ms:0,rework_ms:0,fallback_ms:0,escalation_ms:0,other_direct_cost_microunits:0,observed_business_outcome:'success'};
   const categories=['normal','exception','missing_facts'];
   const actualCategory=discovery.basis.reference_report.cases[0].category;
