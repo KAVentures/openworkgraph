@@ -1902,7 +1902,7 @@
     host.appendChild(section);
   }
   function installJournalWorkbench(host,scope,initialId=''){
-    const section=el('details');section.open=Boolean(initialId);
+    const section=el('details');
     section.append(el('summary','Manage retained monitoring journals'),
       el('p','Exact saved revision '+scope.revision+'. Actions use the latest explicitly displayed audit head. No provider, deployment or business operation is performed.'));
     const output=el('div');output.setAttribute('aria-live','polite');
@@ -1999,9 +1999,9 @@
         if(valid(attempt))await loadList();
       })));
     };
-    section.append(button('List retained journals',()=>perform(loadList)),output);
+    section.append(button(initialId?'Open journal '+initialId:'List retained journals',()=>perform(initialId?()=>loadDetail(initialId):loadList)),output);
     host.appendChild(section);
-    if(initialId)perform(()=>loadDetail(initialId));
+
   }
   function installWorkforceExchange(host){
     const section=el('details');section.append(el('summary','Exchange minimized monitoring summaries across installations'),
@@ -2217,7 +2217,7 @@
             el('p','Rollback referral: '+(r.rollback_referral_recorded?'recorded':'not recorded')+' · due for review: '+(r.due_for_review_windows.join(', ')||'none')),
             el('p','Declared finance statements: '+(r.finance_reconciled_windows.join(', ')||'none')+' · scheduled review consent '+(r.scheduled_deadline_review_enabled?'enabled':'disabled')),
             button('Open saved revision',()=>load(r.workflow_id,r.revision)));
-          installJournalWorkbench(section,{workflow_id:r.workflow_id,revision:r.revision});
+          installJournalWorkbench(section,{workflow_id:r.workflow_id,revision:r.revision},r.monitor_id);
           for(const [name,a] of Object.entries(r.arms))section.appendChild(armLine(name,a,r.currency));
           list.appendChild(section);
         }
