@@ -34,6 +34,7 @@ from . import agent_procurement_workforce_inbox as inbox
 from . import agent_procurement_workforce_dossier as dossier
 from . import agent_procurement_workforce_audit_review as audit_review
 from . import agent_procurement_workforce_remediation as remediation
+from . import agent_procurement_workforce_remediation_tickets as remediation_tickets
 from . import agent_procurement_monitor_schedule as monitor_schedule
 from .local_auth import dashboard_session_valid
 from .local_process_catalog import catalog
@@ -237,7 +238,7 @@ async def workforce_allocation(request: Request):
 
 
 @router.post("/v1/process-catalog/procurement-workforce/exchange/{action}")
-async def workforce_exchange(request: Request,action: Literal["export","review","identity","signed-export","signed-review","trust-status","trust-configure","registered-review","inbox-status","inbox-admit","inbox-review","inbox-forget","inbox-retire","inbox-dossier","audit-verify","audit-timeline","audit-triage","audit-reconcile","remediation-create","remediation-list","remediation-status","remediation-change","remediation-forget","remediation-continuity-preview","remediation-continuity-carry"]):
+async def workforce_exchange(request: Request,action: Literal["export","review","identity","signed-export","signed-review","trust-status","trust-configure","registered-review","inbox-status","inbox-admit","inbox-review","inbox-forget","inbox-retire","inbox-dossier","audit-verify","audit-timeline","audit-triage","audit-reconcile","remediation-create","remediation-list","remediation-status","remediation-change","remediation-forget","remediation-continuity-preview","remediation-continuity-carry","remediation-ticket-status","remediation-ticket-bind","remediation-ticket-check"]):
     _require_dashboard(request)
     if str(request.headers.get("X-OpenWorkGraph-Context") or "").strip().lower()=="ai":
         raise HTTPException(403,"Exchange requires explicit dashboard operator")
@@ -258,7 +259,10 @@ async def workforce_exchange(request: Request,action: Literal["export","review",
             "remediation-status":remediation.status,"remediation-change":remediation.change,
             "remediation-forget":remediation.forget,
             "remediation-continuity-preview":audit_review.preview_continuity,
-            "remediation-continuity-carry":audit_review.carry_continuity}[action]
+            "remediation-continuity-carry":audit_review.carry_continuity,
+            "remediation-ticket-status":remediation_tickets.status,
+            "remediation-ticket-bind":remediation_tickets.bind,
+            "remediation-ticket-check":remediation_tickets.check}[action]
         result=await run_in_threadpool(fn,document)
         return JSONResponse(result,headers={"Cache-Control":"no-store"})
     except journal.JournalError as exc:
