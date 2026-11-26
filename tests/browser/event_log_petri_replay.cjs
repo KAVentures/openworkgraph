@@ -148,6 +148,17 @@ const path=require('node:path');
    assert.equal(await page.locator('#owgPetriBpmnConversion').textContent(),'');
    await page.locator('#owgPetriRun').click();
    await page.locator('#owgPetriStatus').filter({hasText:'unsupported task, gateway or event semantics'}).waitFor();
+   const nestedBpmn='<definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL"><process id="orders"><startEvent id="s"/><task id="register" name="Register"/><subProcess id="approval"><startEvent id="ss"/><task id="check" name="Check"/><task id="pay" name="Pay"/><endEvent id="se"/><sequenceFlow id="sf1" sourceRef="ss" targetRef="check"/><sequenceFlow id="sf2" sourceRef="check" targetRef="pay"/><sequenceFlow id="sf3" sourceRef="pay" targetRef="se"/></subProcess><task id="close" name="Close"/><endEvent id="e"/><sequenceFlow id="f1" sourceRef="s" targetRef="register"/><sequenceFlow id="f2" sourceRef="register" targetRef="approval"/><sequenceFlow id="f3" sourceRef="approval" targetRef="close"/><sequenceFlow id="f4" sourceRef="close" targetRef="e"/></process></definitions>';
+   await page.locator('#owgPetriFile').setInputFiles({name:'nested.bpmn',mimeType:'application/xml',buffer:Buffer.from(nestedBpmn)});
+   await page.locator('#owgPetriRun').click();
+   await page.locator('#owgPetriStatus').filter({hasText:'on nested.bpmn (BPMN control flow): 24 of 30 cases'}).waitFor();
+   await page.locator('#owgPetriBpmnConversion').filter({hasText:'1 embedded subprocesses'}).waitFor();
+   const [nestedDownload]=await Promise.all([page.waitForEvent('download'),page.getByRole('button',{name:'Download BPMN conversion evidence (JSON)',exact:true}).click()]);
+   const nestedEvidence=JSON.parse(await fs.readFile(await nestedDownload.path(),'utf8'));
+   assert.equal(nestedEvidence.scope_by_node.check,'approval');
+   assert.equal(nestedEvidence.scope_by_node.approval,'orders');
+   assert.equal(nestedEvidence.node_transition_ids.approval.length,2);
+   assert(nestedEvidence.subprocess_boundaries.approval);
    // The most common path (Register, Check, Pay, Close; 24 of 30 cases) as the reference model.
    await page.locator('#owgPetriHappy').click();
    await page.locator('#owgPetriStatus').filter({hasText:'on the most common path (followed by 80% of cases): 24 of 30 cases'}).waitFor();
