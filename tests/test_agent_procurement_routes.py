@@ -141,6 +141,13 @@ with TestClient(app) as client:
     assert updated.status_code==200,updated.text
     assert updated.json()["revision"]==1
     assert audit_call("remediation-change",cmd).status_code==409
+    ticket=audit_call("remediation-ticket-status",scope)
+    assert ticket.status_code==200,ticket.text
+    assert ticket.headers["cache-control"]=="no-store"
+    assert ticket.json()["ticket_revision"]==0 and ticket.json()["bindings"]==[]
+    assert audit_call("remediation-ticket-bind",{"resource_ref":"ABC-123"}).status_code==422
+    assert audit_call("remediation-ticket-check",{}).status_code==422
+
     z=snapshot({"site":(key,[row("site")])},140)
     successor_manifest=manifest(x,y,z)
     successor_body={"confirmed":True,"expected_manifest_sha256":digest(successor_manifest),
@@ -168,7 +175,7 @@ with TestClient(app) as client:
                        "expected_history_sha256":updated.json()["history_sha256"],"confirmed_exported":True})
     assert removed.status_code==200,removed.text
     assert audit_call("remediation-status",scope).status_code==404
-    for action in ("remediation-create","remediation-list","remediation-status","remediation-change","remediation-forget","remediation-continuity-preview","remediation-continuity-carry"):
+    for action in ("remediation-create","remediation-list","remediation-status","remediation-change","remediation-forget","remediation-continuity-preview","remediation-continuity-carry","remediation-ticket-status","remediation-ticket-bind","remediation-ticket-check"):
         path="/v1/process-catalog/procurement-workforce/exchange/"+action
         assert client.post(path,json={"document":"{}"}).status_code==401
         assert client.post(path,json={"document":"{}"},headers=bearer).status_code==403
