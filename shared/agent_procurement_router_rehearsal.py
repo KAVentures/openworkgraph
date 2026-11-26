@@ -235,7 +235,7 @@ def _slot(slot,category,pred,assignments,paths,labor_rate):
             "intended_candidate_id":expected,"possible_candidate_ids":sorted(c for c in destinations if c is not None),
             "manual_path_possible":None in destinations,"route_unresolved":unresolved,
             "router_elapsed_ms":pred.elapsed_ms if pred else None,
-            "router_cost":_money_bounds(overhead),"routed_cost":_money_bounds(cost),
+            "router_cost":_money_bounds(overhead),"router_person_ms":_rational(time),"routed_cost":_money_bounds(cost),
             "paired_savings":_money_bounds(saving),"released_person_ms":_rational(capacity),
             "cost_difference_from_ideal_path":_money_bounds(route_delta),
             "cost_difference_from_ideal_including_router":_money_bounds(total_routing_delta),
