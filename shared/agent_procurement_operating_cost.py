@@ -223,6 +223,9 @@ def _row(slot, manual, alternative):
     lo,hi=_delta([manual],[alternative])
     return {"slot_id":slot["slot_id"],"case_id":slot["case_id"],"repeat":slot["repeat"],
             "trial_status":slot["status"],"shadow_match":slot["match"],
+            "shadow_critical":slot["critical"],"shadow_non_delivery":slot["non_delivery"],
+            "manual_person_ms":{"lower":manual["time_known"],"upper":manual["time_known"] if manual["time_complete"] else None},
+            "candidate_person_ms":{"lower":alternative["time_known"],"upper":alternative["time_known"] if alternative["time_complete"] else None},
             "manual_cost":_bounds(manual["known"],manual["known"] if manual["complete"] else None),
             "candidate_cost":_bounds(alternative["known"],alternative["known"] if alternative["complete"] else None),
             "manual_missing":manual["missing"],"candidate_missing":alternative["missing"],

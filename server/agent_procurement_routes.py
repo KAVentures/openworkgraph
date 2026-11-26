@@ -13,6 +13,7 @@ from shared import agent_procurement_trials as trials
 from shared import agent_procurement_selection as selection
 from shared import agent_procurement_outcomes as outcomes
 from shared import agent_procurement_operating_cost as economics
+from shared import agent_procurement_router_rehearsal as routing
 from . import agent_procurement_deployment as deployment
 from .local_auth import dashboard_session_valid
 from .local_process_catalog import catalog
@@ -66,6 +67,10 @@ def _inspect(operation, workflow_id, revision, payload):
             result=trials.review(packet,single.loads(payload["plan"]),document)
         elif operation=="operating-cost":
             result=economics.operation(packet,document)
+        elif operation in ("router-freeze","router-review"):
+            if operation=="router-freeze" and catalog.get(workflow_id)["revision"]!=revision:
+                raise HTTPException(409,"Open the latest saved process revision before freezing router rehearsal")
+            result=routing.operation(packet,operation,document)
         elif operation in ("deployment-review","deployment-decide"):
             if catalog.get(workflow_id)["revision"]!=revision:
                 raise HTTPException(409,"Open the latest saved process revision before deployment review")
@@ -85,7 +90,7 @@ def _inspect(operation, workflow_id, revision, payload):
                 raise HTTPException(409,"Open the latest saved process revision before nomination or decision")
             result=selection.operation(packet,operation,document)
         latest=catalog.get(workflow_id)["revision"]
-        if operation in ("nominate","decide","rollout-review","deployment-review","deployment-decide") and latest!=revision:
+        if operation in ("nominate","decide","rollout-review","deployment-review","deployment-decide","router-freeze") and latest!=revision:
             raise HTTPException(409,"Saved process revision changed during review; reopen the latest revision")
     except LookupError:
         raise HTTPException(404,"Saved process revision not found") from None
@@ -102,7 +107,7 @@ def _inspect(operation, workflow_id, revision, payload):
 
 
 @router.post("/v1/process-catalog/procurement/{operation}")
-async def inspect_procurement(request: Request, operation: Literal["compare","freeze","review","nominate","assess","decide","outcome-review","rollout-review","deployment-review","deployment-decide","operating-cost"],
+async def inspect_procurement(request: Request, operation: Literal["compare","freeze","review","nominate","assess","decide","outcome-review","rollout-review","deployment-review","deployment-decide","operating-cost","router-freeze","router-review"],
                               workflow_id: str = Query(pattern=r"^[A-Za-z0-9_-]{1,80}$"),
                               revision: int = Query(ge=1,le=2**31-1)):
     _require_dashboard(request)
