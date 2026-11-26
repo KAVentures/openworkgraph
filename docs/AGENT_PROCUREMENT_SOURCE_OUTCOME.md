@@ -106,3 +106,20 @@ confirmed=true, confirm_source_amount_read=true,
 confirm_gross_invoice_amount_not_booked_revenue=true, and rows (1–10 objects
 with slot_id and declared_amount_paid_minor_units, a nonnegative integer up to
 10^18). No new source credential or write access is needed.
+
+## GitHub pull request merge predicate
+
+The same explicit closed-window binding and check API supports
+`github_pr_merged_in_window`. The opaque reference must resolve to an exact
+observed github.com pull request, and the existing GitHub outcome tracking
+opt-in and authenticated local GitHub CLI must be available. The retained
+record graph guard still rejects missing, conflicting or truncated evidence.
+The HMAC pins the normalized owner/repository/pull-number locator. The read
+uses the same pinned resolver snapshot, not a second mutable lookup.
+Repository rename, transfer, deletion or locator reuse are not independently
+attested by an immutable GitHub object ID. A source-reported merged state and
+exactly one merge lifecycle timestamp wholly inside the closed window are
+required. Closed-unmerged, missing merge timestamp, conflicting lifecycle,
+and ambiguous boundaries remain unknown. Merge is not proof of CI success,
+production deployment, work quality, customer acceptance or business success.
+No writes or new credentials are requested.

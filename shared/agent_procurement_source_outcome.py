@@ -81,6 +81,37 @@ def project_jira(receipt,start,end,now):
     return {**result,"status":"confirmed","reason":"resolution_timestamp_in_window"}
 
 
+def project_github(receipt,start,end,now):
+    """Confirm a merged PR lifecycle timestamp; never infer deployment."""
+    result={"provider":"github","predicate":"github_pr_merged_in_window",
+            "status":"unknown","reason":"source_unavailable","merged_at_ms":None,
+            "source_read_at_ms":None}
+    if not isinstance(receipt,dict) or receipt.get("provider")!="github" or receipt.get("availability")!="source_reported":
+        return result
+    at=_ms(receipt.get("verified_at"))
+    if at is None or not end<=at<=now:
+        return {**result,"reason":"invalid_source_read_time"}
+    result["source_read_at_ms"]=at
+    if (receipt.get("verification_method")!="explicit_opt_in_authenticated_local_github_cli_read"
+            or receipt.get("source_state_reported") is not True or receipt.get("object_type")!="pull_request"):
+        return {**result,"reason":"unrecognized_source_provenance"}
+    if receipt.get("source_state")!="merged":
+        return {**result,"reason":"merged_state_not_established"}
+    events=receipt.get("process_audit_events")
+    if not isinstance(events,list) or len(events)>41 or any(not isinstance(x,dict) for x in events):
+        return {**result,"reason":"invalid_lifecycle"}
+    if any(x.get("action")=="pull_request_closed_unmerged" for x in events):
+        return {**result,"reason":"conflicting_lifecycle"}
+    merged=[_ms(x.get("observed_at")) for x in events if x.get("action")=="pull_request_merged"]
+    if len(merged)!=1 or merged[0] is None or merged[0]>at:
+        return {**result,"reason":"merge_timestamp_not_established"}
+    result["merged_at_ms"]=merged[0]
+    second=merged[0]//1000*1000
+    if second<start or second+999>=end:
+        return {**result,"reason":"merge_timestamp_outside_window"}
+    return {**result,"status":"confirmed","reason":"merge_timestamp_in_window"}
+
+
 def summarize(state):
     bindings=state.get("source_outcome_bindings",[])
     results=state.get("source_outcome_checks",[])

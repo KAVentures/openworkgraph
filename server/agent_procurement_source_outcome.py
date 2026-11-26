@@ -14,12 +14,12 @@ from typing import Annotated, Literal
 from pydantic import Field, StrictBool, model_validator
 
 from shared.agent_procurement import Strict,digest
-from shared.agent_procurement_source_outcome import project, project_jira
+from shared.agent_procurement_source_outcome import project, project_jira, project_github
 from shared.process_shadow_review import Hash
 from . import agent_procurement_monitor_journal as journal
 from . import agent_procurement_corroboration as corroboration
 from . import stripe_source_evidence, jira_source_evidence
-from .record_graph import record_graph
+from .record_graph import record_graph, _gh_pr_snapshot
 from .local_reference_lookup import resolve_resource_reference
 from .local_auth import ensure_api_token
 from . import db
@@ -33,7 +33,7 @@ class Binding(Strict):
     slot_id: Hash
     case_token_sha256: Hash
     resource_ref: Ref
-    predicate: Literal["invoice_paid_in_window","jira_issue_resolved_in_window"]
+    predicate: Literal["invoice_paid_in_window","jira_issue_resolved_in_window","github_pr_merged_in_window"]
 
 
 class Bind(corroboration.WindowRequest):
@@ -76,6 +76,13 @@ def _identity(record,predicate="invoice_paid_in_window"):
         if not isinstance(locator,str) or not re.fullmatch(r"[A-Z][A-Z0-9]{1,20}-[1-9][0-9]{0,10}",locator):
             raise ValueError("invalid observed Jira issue locator")
         value="owg-source-jira-issue-v1:"+host+":"+locator
+    elif predicate=="github_pr_merged_in_window":
+        if (record.get("provider"),record.get("resource_kind"),host)!=("github","pull_request","github.com"):
+            raise ValueError("observed GitHub pull request reference required")
+        match=re.fullmatch(r"([A-Za-z0-9_.-]{1,100})/([A-Za-z0-9_.-]{1,100})/pull/([1-9][0-9]{0,9})",locator) if isinstance(locator,str) else None
+        if match is None or any(part in {".",".."} or part.startswith("-") or part.endswith(".") for part in match.groups()[:2]):
+            raise ValueError("invalid observed GitHub pull request locator")
+        value="owg-source-github-pr-v1:"+locator.lower()
     else:raise ValueError("unsupported source predicate")
     return hmac.new(ensure_api_token().encode("utf-8"),value.encode("ascii"),hashlib.sha256).hexdigest()
 
@@ -90,9 +97,13 @@ def _read_source(ref,resolved,predicate,*,include_invoice_amounts=False):
             kwargs={"include_lifecycle":include_lifecycle,"resolver":resolver}
             if include_invoice_amounts is True:kwargs["include_invoice_amounts"]=True
             return stripe_source_evidence.stripe_record_receipt(requested,**kwargs)
-    else:
+    elif predicate=="jira_issue_resolved_in_window":
         def reader(requested):
             return jira_source_evidence.jira_issue_receipt(requested,resolver=resolver)
+    elif predicate=="github_pr_merged_in_window":
+        def reader(requested):
+            return _gh_pr_snapshot(requested,resolver=resolver)
+    else:raise ValueError("unsupported source predicate")
     graph=record_graph(ref,include_source_status=True,include_source_lifecycle=predicate=="invoice_paid_in_window",
                        required_source_type=identity,source_reader=reader)
     return graph["source_evidence"]
@@ -156,7 +167,8 @@ def check(workflow_id,revision,document):
         binding=bindings[sid];predicate=binding["predicate"]
         receipt=_read_source(binding["resource_ref"],resolved_records[sid],predicate)
         now=int(time.time()*1000)
-        projector=project if predicate=="invoice_paid_in_window" else project_jira
+        projector={"invoice_paid_in_window":project,"jira_issue_resolved_in_window":project_jira,
+                   "github_pr_merged_in_window":project_github}[predicate]
         rows.append({"slot_id":sid,"window_id":req.window_id,"checked_at_ms":now,
                      "report_sha256":req.expected_report_sha256,**projector(receipt,start,end,now)})
     with db.connect() as conn:

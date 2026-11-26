@@ -2001,7 +2001,7 @@
       const source=value.source_outcomes;
       const sourceSection=el('details');sourceSection.append(el('summary','Read-only source outcome checks'),
         el('p',source.confirmed+'/'+source.bound+' linked source predicates confirmed · '+source.unknown+' unknown · '+source.conflicts.length+' discrepancies'),
-        el('p','Supports Stripe invoice payment and Jira issue resolution in the closed window. Each requires a separately enabled read-only source connection, retained record evidence and explicit case mapping. No source changes are made.'));
+        el('p','Supports Stripe invoice payment, Jira issue resolution and GitHub pull request merge in the closed window. Each requires a separately enabled read-only source connection, retained record evidence and explicit case mapping. No source changes are made.'));
       const sourceWindow=el('select');sourceWindow.setAttribute('aria-label','Closed source outcome window');
       for(const w of value.latest_report.windows){
         if(w.end_exclusive_ms<=value.latest_report.as_of_ms&&w.end_exclusive_ms<=Date.now()){
@@ -2010,7 +2010,7 @@
       }
       const sourceWindowLabel=el('label','Closed window ');sourceWindowLabel.appendChild(sourceWindow);
       const mappingFile=el('input');mappingFile.type='file';mappingFile.accept='.json,application/json';mappingFile.setAttribute('aria-label','Source outcome bindings JSON');
-      sourceSection.append(sourceWindowLabel,el('p','Use the blind case manifest above to prepare an array of slot_id, case_token_sha256, observed opaque resource_ref and predicate (invoice_paid_in_window or jira_issue_resolved_in_window).'),mappingFile,
+      sourceSection.append(sourceWindowLabel,el('p','Use the blind case manifest above to prepare an array of slot_id, case_token_sha256, observed opaque resource_ref and predicate (invoice_paid_in_window, jira_issue_resolved_in_window or github_pr_merged_in_window).'),mappingFile,
         button('Retain source outcome bindings',()=>perform(async()=>{
           const file=mappingFile.files?.[0];if(!sourceWindow.value||!file||file.size>128*1024)throw new Error('Choose a closed window and bindings JSON up to 128 KiB.');
           const raw=await file.text();
@@ -2023,7 +2023,7 @@
       for(const b of value.source_outcome_bindings){
         const result=[...value.source_outcome_checks].reverse().find(x=>x.slot_id===b.slot_id);
         const row=el('div');row.appendChild(el('p',b.window_id+' · '+b.slot_id.slice(0,12)+' · '+b.predicate+' · '+(result?result.status+' / '+result.reason:'not checked')));
-        if(result?.status!=='confirmed')row.appendChild(button(b.predicate==='jira_issue_resolved_in_window'?'Check linked Jira issue':'Check linked Stripe invoice',()=>change('router-source-outcome-check',{
+        if(result?.status!=='confirmed')row.appendChild(button(b.predicate==='jira_issue_resolved_in_window'?'Check linked Jira issue':b.predicate==='github_pr_merged_in_window'?'Check linked GitHub pull request':'Check linked Stripe invoice',()=>change('router-source-outcome-check',{
           expected_report_sha256:value.latest_report.report_sha256,window_id:b.window_id,slot_ids:[b.slot_id],confirm_source_read:true
         },'Perform an explicitly authorized read-only check of the linked source record?')));
         sourceSection.appendChild(row);
