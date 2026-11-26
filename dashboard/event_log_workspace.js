@@ -5188,7 +5188,7 @@
               const r=await (await api(base+'/'+pack.pack_id+'?expected_installation='+encodeURIComponent(basis.installation_token),{method:'DELETE'})).json();
               if(!current(t2))return;
               installs.installs=installs.installs.filter(i=>i.pack_id!==pack.pack_id);
-            run.disabled=reviewHistory.disabled=true;out.replaceChildren();status.textContent='Uninstalled '+r.version+'; '+r.metrics_removed+' pack case metrics were removed.';
+            run.disabled=reviewHistory.disabled=exportTemplate.disabled=true;out.replaceChildren();status.textContent='Uninstalled '+r.version+'; '+r.metrics_removed+' pack case metrics were removed.';
             }catch(error){if(current(t2)){status.textContent=error.message;remove.disabled=false;}}
           };
         };
