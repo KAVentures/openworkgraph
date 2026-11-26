@@ -6,6 +6,7 @@ from telemetry. No invoice or financial source system is fetched.
 from __future__ import annotations
 
 from fractions import Fraction
+import time
 from typing import Annotated, Literal
 
 from pydantic import Field, StrictBool, StrictInt, model_validator
@@ -37,6 +38,7 @@ class FinanceRequest(Strict):
     expected_report_sha256: Hash
     currency: Annotated[str,Field(pattern=r"^[A-Z]{3}$")]
     reviewer_alias: Alias
+    accounting_basis: Literal["cash","accrual"]
     period_start_ms: Annotated[StrictInt,Field(ge=0)]
     period_end_exclusive_ms: Annotated[StrictInt,Field(ge=1)]
     booked: list[Booked]=Field(min_length=12,max_length=12)
@@ -125,7 +127,7 @@ def record(workflow_id,revision,document):
         bounds=window["plan"]["request"]
         if (req.period_start_ms,req.period_end_exclusive_ms)!=(bounds["window_start_ms"],bounds["window_end_exclusive_ms"]):
             raise ValueError("finance period must match frozen window")
-        if report["as_of_ms"]<req.period_end_exclusive_ms:
+        if min(report["as_of_ms"],int(time.time()*1000))<req.period_end_exclusive_ms:
             raise ValueError("finance reconciliation requires closed window")
         if req.reviewer_alias.casefold()==state["coordinator_alias"].casefold():
             raise ValueError("distinct finance reviewer alias required")
@@ -147,6 +149,7 @@ def record(workflow_id,revision,document):
         arms,delta=_calculate(req,window,obs)
         result={"format":FORMAT,"window_id":req.window_id,"currency":req.currency,
             "period_start_ms":req.period_start_ms,"period_end_exclusive_ms":req.period_end_exclusive_ms,
+            "accounting_basis":req.accounting_basis,
             "monitor_report_sha256":report["report_sha256"],"snapshot_sha256":report["snapshot_sha256"],
             "request_sha256":digest(req.model_dump()),"reviewer_alias":req.reviewer_alias,
             "source_reference_sha256":sorted(refs),"booked_declarations":[{**b.model_dump(),
@@ -157,7 +160,7 @@ def record(workflow_id,revision,document):
             "source_financial_documents_verified":False,"reviewer_identity_verified":False,
             "causal_savings_verified":False,"realized_roi_verified":False,"execution_authorized":False,
             "limitations":["Amounts are explicit reviewer declarations, including zero amounts; no invoice or payroll source is authenticated.",
-                "Booked cash/accrual costs exclude imputed person-time; telemetry is a separate diagnostic and never added to booked costs.",
+                "Booked amounts on the declared accounting basis exclude imputed person-time; telemetry is a separate diagnostic and never added to booked costs.",
                 "Arms have disjoint enrolled populations. Per-case net differences are descriptive, not causal or annualized savings.",
                 "A later monitor snapshot does not rewrite this historical financial reconciliation; current incident status is separate."]}
         result["reconciliation_sha256"]=digest(result)

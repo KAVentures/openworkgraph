@@ -56,3 +56,5 @@ production execution, causal benefit, or rollback authority is established.
 The optional [scoped producer interface](AGENT_PROCUREMENT_MONITOR_PRODUCER.md) adds credential-authenticated observation batches to the retained journal. New checkpoints can retain the verified monitor plan and initial source-reference hashes (no raw trial inputs), enabling incremental evaluation without resupplying the upstream bundle. Grant secrets are never retained in journal history or report exports.
 
 The [local workforce overview](AGENT_PROCUREMENT_WORKFORCE_OVERVIEW.md) aggregates retained journals across saved workflows without combining currencies or counting exact overlapping cohorts. It also exposes a prioritized incident and deadline queue.
+
+For closed-window declarations of booked revenue, expenses and telemetry reconciliation, see [finance reconciliation](AGENT_PROCUREMENT_FINANCE.md). Booked figures are not added to modeled savings or imputed labor.
