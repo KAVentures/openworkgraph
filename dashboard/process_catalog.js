@@ -2260,7 +2260,10 @@
       inboxOutput.append(el('h5','Historical signed audit dossier'),
         el('p','Dossier SHA-256: '+result.dossier_sha256),
         el('p','This does not advance accepted registry pins or establish current authorization. Use separately obtained trust keys and digest to recompute the report offline.'),
-        download(result,'owg-workforce-audit-dossier'));
+        button('Download signed audit dossier',()=>{
+          const url=URL.createObjectURL(new Blob([JSON.stringify(result)],{type:'application/json'}));
+          const link=el('a');link.href=url;link.download='owg-workforce-audit-dossier.json';link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
+        }));
     }));
     const forgetInbox=button('Remove retained packets in namespace',()=>inboxPerform(async()=>{
       const scope=pinnedScope();delete scope.maximum_packet_age_ms;
