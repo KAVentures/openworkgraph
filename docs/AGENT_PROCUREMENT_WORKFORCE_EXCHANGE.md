@@ -104,3 +104,34 @@ no global trust registry, credential revocation propagation, authenticated
 live transport or persistent anti-replay history is provided. A still-fresh
 signed packet can be reviewed again; it is not counted twice within a single
 review. Trust only keys whose operator ownership you have established.
+
+## Retained local trust registry
+
+The default signed review mode can use a retained local registry rather than
+supplying trust keys on every review. Load local trust registry in the
+exchange dashboard. Enroll a separately verified public key for an exact
+alias and correlation namespace; rotation retires the previous key and
+preserves the latest accepted packet watermark. Revocation disables the
+alias and never implicitly re-enables it. Revoked aliases can only be
+reactivated by explicit rotation to a new key. Retired keys cannot be
+reused within their namespace. This local registry is not an organization
+identity provider or remote revocation service.
+
+The dashboard-only exchange/trust-status accepts document {}.
+exchange/trust-configure accepts expected_revision, installation_alias,
+correlation_namespace_sha256, action (enroll, rotate, revoke), public_key_hex
+(null for revoke), confirmed=true. Mutations require the latest registry
+revision; the registry is bounded to 100 aliases, 20 active per namespace
+and 1,000 retired keys. No silent pruning or destructive reset is provided.
+
+exchange/registered-review accepts expected_revision instead of trust,
+expected_correlation_namespace_sha256, maximum_packet_age_ms, signed packets
+and confirmed=true. It requires exactly one fresh signed packet from every
+active registered alias in the namespace. Each timestamp must advance the
+retained watermark or exactly repeat the same content digest at that timestamp.
+Older/conflicting snapshots are rejected, including after key rotation. A
+successful batch atomically advances all new pins; exact repeat reviews do
+not mutate the registry. Only public keys, aliases, namespace and latest
+accepted timestamps/digests are retained, not packet contents. A restored
+or administrator-modified database can bypass these local watermarks.
+No external synchronization or proof of signer identity is established.

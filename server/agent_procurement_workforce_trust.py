@@ -114,6 +114,8 @@ def configure(document):
                 raise ValueError("retired signing key cannot be enrolled again")
             if conn.execute("SELECT 1 FROM procurement_workforce_trust WHERE namespace=? AND public_key=?",(ns,key)).fetchone():
                 raise ValueError("signing key already enrolled")
+            if (old is None or not old["active"]) and sum(x["active"] for x in _entries(conn) if x["correlation_namespace_sha256"]==ns)>=signing.exchange.MAX_SITES:
+                raise journal.JournalError("Namespace active installation capacity reached",409)
             if old is None:
                 if len(_entries(conn))>=MAX_ENTRIES:raise journal.JournalError("Trust registry capacity reached",409)
                 conn.execute("INSERT INTO procurement_workforce_trust VALUES (?,?,?,?,1,NULL,NULL)",(ns,fold,alias,key))

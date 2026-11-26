@@ -1923,6 +1923,28 @@
         output.append(el('p','Public key: '+value.public_key_hex),el('p','Fingerprint: '+value.public_key_sha256),download(value,'owg-workforce-public-identity'),el('p','Verify this fingerprint through a separate trusted channel. No private key is exported.'));
       }catch(error){if(attempt===generation)output.replaceChildren(el('p',error.message));}
     });
+    const registered=el('input');registered.type='checkbox';registered.checked=true;
+    const registeredLabel=el('label','Review against retained local trust registry ');registeredLabel.append(registered);
+    const trustPanel=el('div');let trustRevision=null;
+    const refreshTrust=async()=>{
+      const value=await request('/v1/process-catalog/procurement-workforce/exchange/trust-status',{document:'{}'});
+      if(!trustPanel.isConnected)return;
+      trustRevision=value.revision;trustPanel.replaceChildren(el('p','Registry revision '+value.revision+' · '+value.entries.length+' enrolled or revoked identities'));
+      const list=el('ul');for(const entry of value.entries){
+        const item=el('li',entry.installation_alias+' · '+(entry.active?'active':'revoked')+' · namespace '+entry.correlation_namespace_sha256);
+        item.append(el('p','Public key: '+entry.public_key_hex),el('p','Latest accepted packet: '+(entry.accepted_packet_sha256||'none')));list.appendChild(item);
+      }trustPanel.appendChild(list);
+      const ns=el('input');ns.setAttribute('aria-label','Trust correlation namespace');ns.maxLength=64;
+      const name=el('input');name.setAttribute('aria-label','Trusted installation alias');name.maxLength=80;
+      const key=el('input');key.setAttribute('aria-label','Separately verified public key');key.maxLength=64;
+      const action=el('select');action.setAttribute('aria-label','Trust registry action');for(const v of ['enroll','rotate','revoke']){const opt=el('option',v);opt.value=v;action.appendChild(opt);}
+      for(const [label,input] of [['Namespace',ns],['Installation alias',name],['Public key (ignored for revoke)',key],['Action',action]]){const l=el('label',label+' ');l.appendChild(input);trustPanel.appendChild(l);}
+      trustPanel.appendChild(button('Apply trust registry change',async()=>{
+        if(!window.confirm('Apply '+action.value+' for this exact alias and namespace? Verify key ownership separately.'))return;
+        await request('/v1/process-catalog/procurement-workforce/exchange/trust-configure',{document:JSON.stringify({expected_revision:trustRevision,installation_alias:name.value,correlation_namespace_sha256:ns.value,action:action.value,public_key_hex:action.value==='revoke'?null:key.value,confirmed:true})});
+        await refreshTrust();
+      }));
+    };
     const runExport=button('Create minimized exchange packet',async()=>{
       const attempt=++generation;output.replaceChildren();
       try{
@@ -1947,12 +1969,13 @@
         const selected=file.files?.[0];if(!selected||selected.size>8*1024*1024)throw new Error('Choose a review bundle of at most 8 MiB.');
         if(!window.confirm('Review these explicitly selected offline installation packets?'))return;
         const signed=signingMode.checked;
-        const result=await request('/v1/process-catalog/procurement-workforce/exchange/'+(signed?'signed-review':'review'),{document:await selected.text()});
+        const result=await request('/v1/process-catalog/procurement-workforce/exchange/'+(signed?(registered.checked?'registered-review':'signed-review'):'review'),{document:await selected.text()});
         if(attempt!==generation||!output.isConnected)return;
         output.append(el('h4','Multi-installation review'),el('p',result.installations.length+' declared installations · '+result.included_journals+' included journals · '+result.excluded_journals+' excluded · '+result.unreadable_journals+' unreadable'),
           el('p',result.totals_may_be_incomplete?'Totals may be incomplete.':'No exclusions identified in the supplied packets; completeness is not independently verified.'));
         output.appendChild(el('p',result.all_packet_signatures_verified_against_operator_pins?'All signatures verified against explicit operator-pinned keys.':'Unsigned content-digest review only.'));
         for(const pin of result.trusted_key_fingerprints||[])output.appendChild(el('p',pin.installation_alias+' · key fingerprint '+pin.public_key_sha256));
+        if(result.local_monotonic_packet_pins_checked)output.appendChild(el('p','Registry revision '+result.registry_revision+' · '+result.accepted_new_packets+' new packets · '+result.exact_repeated_packets+' exact repeats'));
         const money=(v,c)=>{
           if(v==null)return 'unbounded';
           const n=BigInt(v.numerator),d=BigInt(v.denominator),r=(2n*n+d)/(2n*d);
@@ -1970,7 +1993,8 @@
     });
     file.addEventListener('change',()=>{generation++;output.replaceChildren();});
     signingMode.addEventListener('change',()=>{generation++;output.replaceChildren();});
-    section.append(signingLabel,identity,aliasLabel,secretLabel,runExport,el('p','Review bundle: combine downloaded packets with separately obtained pins, the expected correlation namespace and (for signed review) an explicit public-key trust list (see AGENT_PROCUREMENT_WORKFORCE_EXCHANGE.md).'),file,runReview,output);host.appendChild(section);
+    registered.addEventListener('change',()=>{generation++;output.replaceChildren();});
+    section.append(signingLabel,registeredLabel,identity,button('Load local trust registry',refreshTrust),trustPanel,aliasLabel,secretLabel,runExport,el('p','Review bundle: combine downloaded packets with separately obtained pins, the expected correlation namespace and either the expected registry revision (registered review) or an explicit public-key trust list (stateless signed review) (see AGENT_PROCUREMENT_WORKFORCE_EXCHANGE.md).'),file,runReview,output);host.appendChild(section);
   }
   function installWorkforceSchedule(host){
     const section=el('details');section.append(el('summary','Schedule local workforce deadline reviews'),
