@@ -1300,11 +1300,14 @@ def rework(log_id: str, case_type: str | None = None, limit: int = 20) -> dict[s
     return {**rw.rework(log_id, spec), "format": FORMAT, "log_id": log_id}
 
 
-def waiting_times(log_id: str, case_type: str | None = None) -> dict[str, Any]:
-    """Processing and waiting time per activity from start/complete lifecycle data (aggregates level)."""
+def waiting_times(log_id: str, case_type: str | None = None,
+                  working_calendar: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Processing and waiting time per activity from start/complete lifecycle data (aggregates level). With a
+    working calendar (timezone, weekly hours, holidays) the same figures are also measured in working time."""
     require(log_id, "aggregates")
     from . import event_log_waiting as waiting
-    return {**waiting.waiting_time(log_id, case_type), "format": FORMAT, "log_id": log_id}
+    return {**waiting.waiting_time(log_id, case_type, working_calendar=working_calendar),
+            "format": FORMAT, "log_id": log_id}
 
 
 def drift(log_id: str, case_type: str | None = None, window: str = "month") -> dict[str, Any]:
