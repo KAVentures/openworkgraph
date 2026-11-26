@@ -100,7 +100,8 @@ def parse_timestamp(value: Any) -> datetime | None:
     if not raw:
         return None
     try:
-        stamp = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        # RFC 3339 also allows a lowercase "z" (and "t", which fromisoformat accepts).
+        stamp = datetime.fromisoformat(raw[:-1] + "+00:00" if raw[-1] in "Zz" else raw)
     except ValueError:
         return None
     if stamp.tzinfo is None or stamp.utcoffset() is None:

@@ -47,6 +47,12 @@ const path=require('node:path');
    await page.locator('#owgEventLogCasesStatus').getByText(/20 matching cases/).waitFor();
    await page.locator('#owgEventLogCasesList').getByRole('button',{name:'Open case b0',exact:true}).click();
    await page.locator('#owgEventLogCaseEvents').getByText(/Showing 5 of 5 events/).waitFor();
+   // Fewer activities shown is sent with the request and still compares the periods.
+   const [changeRequest]=await Promise.all([page.waitForRequest(r=>r.url().includes('/model-change?')),
+     page.locator('#owgModelChangeCoverage').selectOption('0.9').then(()=>page.locator('#owgModelChangeRun').click())]);
+   assert(changeRequest.url().includes('activities=0.9'),changeRequest.url());
+   await page.locator('#owgModelChangeStatus').filter({hasText:'Split at'}).waitFor();
+   await page.locator('#owgModelChangeCoverage').selectOption('1');
    await page.locator('#owgModelChangeSplit').fill('');await page.locator('#owgModelChangeRun').click();
    await page.locator('#owgModelChangeStatus').filter({hasText:'(median case start)'}).waitFor();
    // Two groups by the region column (event attribute): EU against US.
@@ -64,6 +70,6 @@ const path=require('node:path');
    const audit=await page.evaluate(async()=>window.axe.run(document.querySelector('#owgModelChange'),{runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21aa']}}));
    assert.deepEqual(audit.violations.map(v=>v.id+': '+v.nodes.map(n=>n.target).join(',')),[]);
    assert.deepEqual(errors,[]);
-   console.log('Model change browser acceptance passed: given split with new activity, changed orderings and lower cross-fit, median split, two regions compared, non-fitting variant evidence, WCAG audit.');
+   console.log('Model change browser acceptance passed: given split with new activity, changed orderings and lower cross-fit, fewer activities shown, median split, two regions compared, non-fitting variant evidence, WCAG audit.');
  }finally{if(browser)await browser.close();server.kill();}
 })().catch(error=>{console.error(error);process.exit(1);});
