@@ -193,8 +193,10 @@ from shared.agent_procurement import digest
 key=Ed25519PrivateKey.generate()
 a=snapshot({"site":(key,[row("site",incident=True)])},100)
 b=snapshot({"site":(key,[row("site")])},120)
+c=snapshot({"site":(key,[row("site")])},140)
 m=manifest(a,b)
-print(json.dumps({"a":a[0],"b":b[0],"trust":a[1]["trust"],"manifest":m,"pin":digest(m)}))
+extended=manifest(a,b,c)
+print(json.dumps({"a":a[0],"b":b[0],"c":c[0],"trust":a[1]["trust"],"manifest":m,"pin":digest(m),"extended":extended,"extended_pin":digest(extended)}))
 `],{encoding:'utf8'});
   assert.equal(auditFixture.status,0,auditFixture.stderr);
   const archives=JSON.parse(auditFixture.stdout);
@@ -273,21 +275,48 @@ print(json.dumps({"a":a[0],"b":b[0],"trust":a[1]["trust"],"manifest":m,"pin":dig
   await page.getByRole('button',{name:'Preview exact Jira handoff',exact:true}).click();
   await page.getByText(/Preview refused:/).waitFor();
   assert.equal(await page.getByRole('button',{name:'Confirm and send one Jira write',exact:true}).count(),0);
-  page.once('dialog',d=>d.accept());
-  await page.getByRole('button',{name:'Remove local remediation register',exact:true}).click();
-  await page.getByText('0 retained registers',{exact:true}).waitFor();
   await page.getByLabel('Historical journal review filter',{exact:true}).selectOption('rollback');
   await page.getByText('1 matching journals · page 1 of 1',{exact:true}).waitFor();
   await page.getByText(/site · .*rollback referral observed/).click();
   await page.getByText('Rollback referral snapshots: 1',{exact:true}).waitFor();
   await page.getByLabel('Search historical installation or journal tag',{exact:true}).fill('nonexistent');
   await page.getByText('0 matching journals · page 1 of 1',{exact:true}).waitFor();
+  await page.getByRole('button',{name:'Add next dossier',exact:true}).click();
+  await auditInput.setInputFiles(upload(archives.extended));
+  await auditPin.fill(archives.extended_pin);
+  await page.getByLabel('Historical dossier 3',{exact:true}).setInputFiles(upload(archives.c));
+  page.once('dialog',d=>d.accept());
+  await page.getByRole('button',{name:'Recompute selected historical audit evidence',exact:true}).click();
+  await page.getByText('Independently recomputed historical timeline',{exact:true}).waitFor();
+  await page.getByText('Carry remediation into an appended audit history',{exact:true}).click();
+  await page.getByRole('button',{name:'Load previous remediation registers',exact:true}).click();
+  await page.getByText(/1 candidate prior registers/).waitFor();
+  await page.getByLabel('Independently obtained previous manifest digest',{exact:true}).fill(archives.pin);
+  await page.getByLabel('Continuity reviewer alias',{exact:true}).fill('reviewer');
+  page.once('dialog',d=>d.accept());
+  await page.getByRole('button',{name:'Compare exact appended remediation history',exact:true}).click();
+  await page.getByText('Verified remediation continuity preview',{exact:true}).waitFor();
+  await page.getByText('2 verified prior snapshots · 1 eligible owner assignments',{exact:true}).waitFor();
+  await page.getByRole('checkbox',{name:/Carry owner /}).check();
+  page.once('dialog',d=>d.accept());
+  await page.getByRole('button',{name:'Create successor remediation register',exact:true}).click();
+  await page.getByText('Separate successor remediation register created.',{exact:true}).waitFor();
+  await page.getByText(/Successor of .*1 carried owner assignments/).waitFor();
+  await page.getByText('rollback referral · assigned',{exact:true}).waitFor();
+  page.once('dialog',d=>d.accept());
+  await page.getByRole('button',{name:'Remove local remediation register',exact:true}).click();
+  await page.getByText('1 retained registers',{exact:true}).waitFor();
+  await page.getByRole('button',{name:/Open remediation register /}).click();
+  await page.getByText('rollback referral · assigned',{exact:true}).waitFor();
+  page.once('dialog',d=>d.accept());
+  await page.getByRole('button',{name:'Remove local remediation register',exact:true}).click();
+  await page.getByText('0 retained registers',{exact:true}).waitFor();
   await page.getByLabel('Historical dossier 2',{exact:true}).setInputFiles(upload(archives.a));
   assert.equal(await page.getByText('Independently recomputed historical timeline',{exact:true}).count(),0);
   page.once('dialog',d=>d.accept());
   await page.getByRole('button',{name:'Recompute selected historical audit evidence',exact:true}).click();
   await page.getByText(/Historical review refused/).waitFor();
-  assert.equal(auditRequests,7);
+  assert.equal(auditRequests,8);
   await exchangePanel.click();
 
   await page.getByLabel('Business goal',{exact:true}).fill('Revised draft only');
