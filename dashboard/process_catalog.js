@@ -2558,6 +2558,54 @@
         investigating:['awaiting_evidence','follow_up_reported','assigned'],awaiting_evidence:['investigating','assigned'],
         follow_up_reported:['investigating','assigned']};
       const pins={worklist_sha256:value.worklist_sha256,expected_revision:value.revision,expected_history_sha256:value.history_sha256};
+      const ticketPanel=el('details');ticketPanel.append(el('summary','Read-only Jira ticket synchronization'),
+        el('p','Bind an exact locally observed Jira issue reference to an assigned finding. Existing Jira tenant/OAuth opt-in is required for reads. Ticket state does not establish work completion or clear findings.'));
+      const ticketOutput=el('div');ticketOutput.setAttribute('aria-live','polite');let ticketView=null,ticketSerial=0,ticketBusy=false;
+      const drawTickets=ledger=>{
+        ticketView=ledger;ticketOutput.replaceChildren(el('p',ledger.bindings.length+' retained Jira mappings · '+ledger.events.length+' ticket events'),
+          el('p','Ticket history: '+ledger.ticket_history_sha256));
+        const select=el('select');select.setAttribute('aria-label','Ticket synchronization finding');
+        const available=value.findings.filter(r=>r.state!=='unassigned');
+        for(const r of available){const option=el('option',r.kind.replaceAll('_',' ')+' · '+r.finding_id.slice(0,12));option.value=r.finding_id;select.appendChild(option);}
+        const ref=el('input');ref.maxLength=38;ref.setAttribute('aria-label','Observed Jira opaque record reference');
+        const detail=el('div');
+        const show=()=>{
+          detail.replaceChildren();const bound=ledger.bindings.find(r=>r.finding_id===select.value);
+          if(bound){
+            detail.append(el('p','Bound record: '+bound.resource_ref),el('p',bound.latest_check?
+              'Last source state: '+bound.latest_check.source_state+' · resolution reported: '+bound.latest_check.resolution_reported+' · '+bound.latest_check.reason+(bound.check_matches_current_register?'':' · prior register revision'):'No source read yet.'));
+          }
+          ref.disabled=!!bound;ref.value=bound?.resource_ref||'';
+        };
+        select.addEventListener('change',show);
+        const run=async action=>{
+          if(ticketBusy||attempt!==remediationGeneration)return;
+          try{
+            const row=available.find(r=>r.finding_id===select.value);
+            if(!row)throw new Error('Assign a finding first.');
+            if(action==='bind'&&!/^owg:r:[0-9a-f]{32}$/.test(ref.value))throw new Error('Use an exact opaque reference from local observed evidence, not a Jira URL or issue key.');
+            if(!window.confirm(action==='bind'?'Retain this exact declared Jira mapping locally?':'Read this exact observed Jira issue using the existing opt-in connector and retain minimized state?'))return;
+            ticketBusy=true;
+            const body={...pins,expected_ticket_revision:ledger.ticket_revision,expected_ticket_history_sha256:ledger.ticket_history_sha256,
+              finding_id:row.finding_id,expected_finding_sha256:row.finding_sha256};
+            const next=await remediationCall('ticket-'+action,action==='bind'?{...body,resource_ref:ref.value,confirm_operator_mapping:true,confirm_local_retention:true}:{...body,confirm_source_read:true});
+            if(attempt===remediationGeneration&&ticketOutput.isConnected)drawTickets(next);
+          }catch(e){if(attempt===remediationGeneration)message.replaceChildren(el('p','Ticket action refused: '+e.message+' · reload before retrying.'));}
+          finally{ticketBusy=false;}
+        };
+        const bind=button('Bind observed Jira issue',()=>run('bind')),check=button('Refresh Jira ticket state',()=>run('check'));
+        bind.disabled=!available.length;check.disabled=!available.length;
+        ticketOutput.append(auditLabel('Finding',select),auditLabel('Observed opaque Jira reference',ref),detail,bind,check,download(ledger,'owg-workforce-remediation-ticket-ledger'));show();
+      };
+      const loadTickets=async()=>{
+        const token=++ticketSerial;ticketOutput.replaceChildren();
+        try{const ledger=await remediationCall('ticket-status',{worklist_sha256:value.worklist_sha256});
+          if(token!==ticketSerial||attempt!==remediationGeneration)return;
+          if(ledger.register_history_sha256!==value.history_sha256)throw new Error('Register changed; reload it first.');
+          drawTickets(ledger);
+        }catch(e){if(token===ticketSerial&&attempt===remediationGeneration)ticketOutput.replaceChildren(el('p',e.message));}
+      };
+      ticketPanel.append(button('Load Jira ticket ledger',loadTickets),ticketOutput);
       const draw=()=>{
         const q=query.value.trim().toLowerCase();
         const matches=value.findings.filter(r=>(filter.value==='all'||r.state===filter.value)&&(!q||r.finding_id.includes(q)||String(r.scope.installation_alias||'').toLowerCase().includes(q)||String(r.scope.journal_tag||'').includes(q)));
@@ -2601,13 +2649,13 @@
         const next=button('Next history page',()=>{offset+=25;drawEvents();});
         prev.disabled=offset===0;next.disabled=offset+25>=value.events.length;events.append(prev,next);
       };history.appendChild(events);drawEvents();
-      remediationOutput.append(auditLabel('Declared reviewer',reviewer),auditLabel('Filter state',filter),auditLabel('Search',query),message,rows,history,
+      remediationOutput.append(auditLabel('Declared reviewer',reviewer),auditLabel('Filter state',filter),auditLabel('Search',query),message,rows,history,ticketPanel,
         download(value,'owg-workforce-remediation-register'),
         button('Reload register',async()=>{const token=++remediationGeneration;try{const current=await remediationCall('status',{worklist_sha256:value.worklist_sha256});if(token===remediationGeneration)showRemediation(current);}catch(e){if(token===remediationGeneration)remediationOutput.replaceChildren(el('p',e.message));}}),
         button('Remove local remediation register',async()=>{
           if(busy||attempt!==remediationGeneration)return;
-          if(!window.confirm('Confirm you exported this exact register history and want to remove its local records. Existing backups and exports are not erased.'))return;
-          busy=true;try{await remediationCall('forget',{...pins,confirmed_exported:true});if(attempt===remediationGeneration)await listRemediation();}
+          if(!window.confirm('Confirm you exported this exact register history and any loaded ticket ledger and want to remove their local records. Existing backups and exports are not erased.'))return;
+          busy=true;try{await remediationCall('forget',{...pins,confirmed_exported:true,...(ticketView?{expected_ticket_history_sha256:ticketView.ticket_history_sha256}:{})});if(attempt===remediationGeneration)await listRemediation();}
           catch(error){if(attempt===remediationGeneration)message.replaceChildren(el('p',error.message));}finally{busy=false;}
         }));draw();
     };
