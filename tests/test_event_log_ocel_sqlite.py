@@ -81,11 +81,7 @@ def test_sqlite_attribute_column_collisions_refuse_before_writing(tmp_path, monk
         doc["objects"] = [{"id": "o1", "type": "Order",
                             "attributes": attributes, "relationships": []}]
 
-    def export(_log_id, source_format, target):
-        assert source_format == "ocel"
-        target.write(json.dumps(doc))
-
-    monkeypatch.setattr(workspace, "export_log", export)
+    monkeypatch.setattr(ocel_sqlite, "_document", lambda _log_id: json.loads(json.dumps(doc)))
     path = tmp_path / "conflict.sqlite"
     with pytest.raises(workspace.EventLogWorkspaceError, match="OCEL SQLite attribute column"):
         ocel_sqlite.write("log_test", path)
@@ -99,11 +95,7 @@ def test_repeating_same_attribute_on_multiple_events_is_valid(tmp_path, monkeypa
         for event_id in ("e1", "e2")
     ]}
 
-    def export(_log_id, source_format, target):
-        assert source_format == "ocel"
-        target.write(json.dumps(doc))
-
-    monkeypatch.setattr(workspace, "export_log", export)
+    monkeypatch.setattr(ocel_sqlite, "_document", lambda _log_id: json.loads(json.dumps(doc)))
     path = tmp_path / "valid.sqlite"
     assert ocel_sqlite.write("log_test", path)["events"] == 2
     conn = sqlite3.connect(path)
