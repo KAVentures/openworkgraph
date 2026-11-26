@@ -99,7 +99,7 @@ restart. If every share is revoked, the tools stay listed but empty until that r
 | `compare_process_cases` | Two cases side by side: aligned steps (shared or only in one), hours from each start, and where the second fell furthest behind (cases level only). |
 | `get_process_activity_profile` | One activity from every side: share of cases, repeats, what comes before and after (with median gaps), time into the case, weekday and hour, and case durations with and without it (aggregates level). |
 | `get_process_rework` | Rework: share of cases that repeat an activity, the activities repeated most, loop patterns (self-loop, short, longer), and how long cases with rework take compared with cases without (median difference with a 95% interval). | aggregates |
-| `get_process_waiting_times` | Processing and waiting time per activity when the log records start/complete (lifecycle) or an end-time attribute; says so when it does not. | aggregates |
+| `get_process_waiting_times` | Processing and waiting time per activity when the log records start/complete (lifecycle) or an end-time attribute; says so when it does not. Optional `working_calendar` (timezone, weekly hours, holidays) adds the same figures in working time. | aggregates |
 | `get_process_drift` | Concept drift: cases grouped by start week or month, adjacent windows compared on their paths with a permutation test, and for each change point the paths whose share moved most. | aggregates |
 | `get_stuck_process_cases` | Open cases idle much longer than usual after their latest activity, with how many times the usual wait they exceed. | cases |
 | `get_process_signal_scorecard` | The owner's KPI, conformance and due-date signals month by month (by case start), with each month's value and whether the condition held; read-only (aggregates level). |
@@ -115,6 +115,14 @@ restart. If every share is revoked, the tools stay listed but empty until that r
 All tools except `tag_process_cases` are read-only. All are idempotent. Their answers repeat that
 durations are elapsed time between recorded events, that associations are not causes, and that
 nothing authorizes an action.
+
+### Prompt: `investigate_process`
+
+When a log is shared, the MCP server also offers the prompt `investigate_process(question, log_id)`. It gives the
+connected AI a step-by-step playbook: overview, data quality, variants, where time goes, why cases differ, change
+over time, then options and simulation. It sets the rules for reporting: associations rather than causes, withheld
+counts acknowledged, people never named, simulations as model outputs. It is plain text; every tool keeps its own
+sharing checks.
 
 ## HTTP
 

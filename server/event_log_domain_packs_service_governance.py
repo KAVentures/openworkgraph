@@ -22,7 +22,8 @@ def _pack(pack_id: str, title: str, description: str, case_role: str,
     """Build the existing pack schema without changing resolution or storage."""
     case_type = "@" + case_role
     prefix = {"change_control": "chg", "customer_complaints": "complaint",
-              "data_access_requests": "dar"}[pack_id]
+              "data_access_requests": "dar", "warehouse_fulfillment": "whf",
+              "sales_quote_approval": "sqa", "payment_disputes": "pdis"}[pack_id]
     def rule(template: str, **fields: Any) -> dict[str, Any]:
         return {"case_type": case_type, "rule": {"template": template, **fields}}
 
@@ -219,7 +220,141 @@ DATA_ACCESS_REQUESTS_1_0_0 = _pack(
     ],
 )
 
+WAREHOUSE_FULFILLMENT_1_0_0 = _pack(
+    "warehouse_fulfillment", "Warehouse outbound fulfillment",
+    "Review recorded release, picking, packing, shipment and carrier handoff "
+    "for selected outbound fulfillment records, including exception activity.",
+    "fulfillment", "Outbound fulfillment record",
+    [
+        ("released", "Release fulfillment", True),
+        ("picked", "Record picking complete", True),
+        ("packed", "Record packing complete", True),
+        ("shipment_recorded", "Record shipment", True),
+        ("carrier_handoff", "Record carrier handoff", True),
+        ("stock_exception", "Record stock exception", False),
+        ("repack", "Record repacking", False),
+        ("closed", "Close fulfillment", False),
+    ],
+    [
+        ("pick_hours", "Pick within (elapsed hours of release)", 24, .25, 8760, "hours"),
+        ("handoff_hours", "Handoff within (elapsed hours of release)", 48, .25, 8760, "hours"),
+    ],
+    [
+        ("release_to_pick", "released", "picked"),
+        ("pick_to_pack", "picked", "packed"),
+        ("pack_to_shipment", "packed", "shipment_recorded"),
+        ("shipment_to_handoff", "shipment_recorded", "carrier_handoff"),
+        ("release_to_handoff", "released", "carrier_handoff"),
+    ],
+    [("stock_exceptions", "stock_exception"), ("repacks", "repack")],
+    [("released", "picked"), ("picked", "packed"), ("packed", "shipment_recorded"),
+     ("shipment_recorded", "carrier_handoff"), ("carrier_handoff", "closed")],
+    [("released", "picked", "pick_hours"), ("released", "carrier_handoff", "handoff_hours")],
+    [("shipment_recorded", 0, 1)],
+    ["@released", "@picked", "@packed", "@shipment_recorded", "@carrier_handoff",
+     {"optional": "@closed"}],
+    [
+        "Use one outbound fulfillment or shipment record as the case, not an entire "
+        "order spanning several independently shipped parcels.",
+        "The reference sequence is illustrative; split shipments, backorders and "
+        "parallel pick tasks need separate models or object-centric review.",
+        "A recorded carrier handoff does not prove delivery, correct inventory, "
+        "physical custody or absence of damage.",
+    ],
+)
+
+SALES_QUOTE_APPROVAL_1_0_0 = _pack(
+    "sales_quote_approval", "Sales quote approval",
+    "Review preparation, commercial review, approval and recorded issue of "
+    "selected sales quotes, including revision and return-for-review activity.",
+    "quote", "Sales quote record",
+    [
+        ("requested", "Receive quote request", True),
+        ("prepared", "Prepare quote", True),
+        ("reviewed", "Record commercial review", True),
+        ("approved", "Record quote approval", True),
+        ("issued", "Record quote issued", True),
+        ("revised", "Revise quote", False),
+        ("returned", "Return for review", False),
+        ("closed", "Close quote record", False),
+    ],
+    [
+        ("preparation_hours", "Prepare within (elapsed hours of request)", 24, .25, 8760, "hours"),
+        ("issue_hours", "Issue within (elapsed hours of request)", 72, .25, 8760, "hours"),
+    ],
+    [
+        ("request_to_preparation", "requested", "prepared"),
+        ("preparation_to_review", "prepared", "reviewed"),
+        ("review_to_approval", "reviewed", "approved"),
+        ("approval_to_issue", "approved", "issued"),
+        ("request_to_issue", "requested", "issued"),
+    ],
+    [("revisions", "revised"), ("returns", "returned")],
+    [("requested", "prepared"), ("prepared", "reviewed"), ("reviewed", "approved"),
+     ("approved", "issued"), ("issued", "closed")],
+    [("requested", "prepared", "preparation_hours"), ("requested", "issued", "issue_hours")],
+    [("issued", 0, 1)],
+    ["@requested", "@prepared", "@reviewed", "@approved", "@issued",
+     {"optional": "@closed"}],
+    [
+        "Scope to quotes expected to use this approval lifecycle; declined, withdrawn, "
+        "automatically approved or revised quotes may need different reviewed definitions.",
+        "A recorded approval does not establish authorization limits, pricing correctness "
+        "or commercial validity, and issuance does not establish acceptance or revenue.",
+        "Separation of duties uses recorded resources; unknown resources do not prove independence.",
+    ],
+    segregation=[("prepared", "approved")],
+)
+
+PAYMENT_DISPUTES_1_0_0 = _pack(
+    "payment_disputes", "Payment dispute operations",
+    "Review recorded intake, triage, evidence preparation, response and outcome "
+    "for selected payment dispute cases without reading payment or customer details.",
+    "dispute", "Payment dispute case",
+    [
+        ("received", "Receive dispute", True),
+        ("triaged", "Record dispute triage", True),
+        ("evidence_prepared", "Record evidence preparation", True),
+        ("response_submitted", "Record response submission", True),
+        ("outcome_recorded", "Record dispute outcome", True),
+        ("escalated", "Escalate dispute", False),
+        ("reopened", "Reopen dispute", False),
+        ("closed", "Close dispute", False),
+    ],
+    [
+        ("triage_hours", "Triage within (elapsed hours of intake)", 24, .25, 8760, "hours"),
+        ("response_days", "Response target (elapsed days of intake)", 7, 1, 730, "days"),
+    ],
+    [
+        ("intake_to_triage", "received", "triaged"),
+        ("triage_to_evidence", "triaged", "evidence_prepared"),
+        ("evidence_to_response", "evidence_prepared", "response_submitted"),
+        ("response_to_outcome", "response_submitted", "outcome_recorded"),
+        ("intake_to_outcome", "received", "outcome_recorded"),
+    ],
+    [("escalations", "escalated"), ("reopens", "reopened")],
+    [("received", "triaged"), ("triaged", "evidence_prepared"),
+     ("evidence_prepared", "response_submitted"), ("response_submitted", "outcome_recorded"),
+     ("outcome_recorded", "closed")],
+    [("received", "triaged", "triage_hours"), ("received", "response_submitted", "response_days")],
+    [("reopened", 0, 0)],
+    ["@received", "@triaged", "@evidence_prepared", "@response_submitted", "@outcome_recorded",
+     {"optional": "@closed"}],
+    [
+        "Select cases expected to have a submitted response. Accepted disputes, "
+        "withdrawals, arbitration and exceptional paths need their own reviewed scope.",
+        "Illustrative elapsed targets are not card-network, bank, contractual or legal "
+        "deadlines. Determine applicable deadlines independently.",
+        "Recorded outcomes do not establish actual funds movement, fraud, liability "
+        "or recovery; no payment initiation or dispute submission is authorized.",
+        "Use pseudonymous case IDs and activity labels; do not import card numbers, "
+        "account details, customer communications or dispute evidence payloads.",
+    ],
+)
+
+
 SERVICE_GOVERNANCE_PACKS = {
     p["pack_id"]: {p["version"]: p}
-    for p in (CHANGE_CONTROL_1_0_0, CUSTOMER_COMPLAINTS_1_0_0, DATA_ACCESS_REQUESTS_1_0_0)
+    for p in (CHANGE_CONTROL_1_0_0, CUSTOMER_COMPLAINTS_1_0_0, DATA_ACCESS_REQUESTS_1_0_0,
+              WAREHOUSE_FULFILLMENT_1_0_0, SALES_QUOTE_APPROVAL_1_0_0, PAYMENT_DISPUTES_1_0_0)
 }

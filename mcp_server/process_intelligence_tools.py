@@ -19,6 +19,37 @@ _NOTE = ("Describes recorded events in an owner-shared event log. Durations are 
          "events; associations are not causes. Nothing here authorizes an action or changes the log.")
 
 
+def investigate_process_prompt(question: str = "", log_id: str = "") -> str:
+    """A step-by-step playbook for answering a process question from a shared log. Pure text: the AI still calls
+    each tool itself, and every tool keeps its own sharing checks."""
+    question = " ".join(str(question or "").split())[:500] or "How does this process perform, and where should we look first?"
+    log_id = str(log_id or "").strip()
+    target = (f"Use the shared log {log_id}." if _LOG_ID.fullmatch(log_id)
+              else "Start with list_process_logs and pick the log that matches the question; ask if it is unclear.")
+    return "\n".join([
+        f"Question: {question}",
+        target,
+        "",
+        "Work through these steps, skipping those the question does not need or whose tools are not listed, and cite "
+        "the tool behind each claim:",
+        "1. get_process_overview: size, durations, KPIs, weekly trend and automatic insights. Note the case notion.",
+        "2. get_process_data_quality: check timestamps and missing values before trusting durations.",
+        "3. get_process_variants and get_process_map: the main paths and how standardised the process is.",
+        "4. Where time goes: get_process_waiting_times (with a working_calendar for business hours where offered), "
+        "get_process_performance_spectrum and get_process_rework.",
+        "5. Why some cases differ: get_process_root_cause, get_process_decision_rules, and compare_process_cohorts "
+        "or get_process_overview_for_cases for a group named in the question.",
+        "6. Change over time: get_process_drift, relating change points to the owner's change markers when included.",
+        "7. Options: get_process_automation_candidates, then simulate_process_scenario or "
+        "compare_process_scenarios to estimate the effect of a change.",
+        "",
+        "Rules: report associations as associations, not causes; say when a result is withheld for small "
+        "counts rather than guessing; do not name people (resources are pseudonymous); a simulation is a model "
+        "output, not a forecast; nothing here authorises acting in a source system.",
+        "Finish with a short answer to the question, the evidence for it, and what remains uncertain.",
+    ])
+
+
 def register_process_intelligence_tools(mcp: Any, runtime_module: Any) -> None:
     sid = id(mcp)
     if sid in _REGISTERED:
@@ -48,6 +79,11 @@ def register_process_intelligence_tools(mcp: Any, runtime_module: Any) -> None:
         owner did not share are never listed.
         """
         return _get("list_process_logs", "/v1/process-intelligence/logs")
+
+    @mcp.prompt()
+    def investigate_process(question: str = "", log_id: str = "") -> str:
+        """Ask the connected AI to investigate a shared process log with the process tools, step by step."""
+        return investigate_process_prompt(question=question, log_id=log_id)
 
     @mcp.tool(annotations=_READ_ONLY)
     def get_process_brief(log_id: str, sla_hours: float | None = None, case_type: str | None = None) -> dict[str, Any]:
@@ -797,13 +833,22 @@ def register_process_intelligence_tools(mcp: Any, runtime_module: Any) -> None:
                     {"limit": limit, "case_type": case_type})
 
     @mcp.tool(annotations=_READ_ONLY)
-    def get_process_waiting_times(log_id: str, case_type: str | None = None) -> dict[str, Any]:
+    def get_process_waiting_times(log_id: str, case_type: str | None = None,
+                                  working_calendar: dict[str, Any] | None = None) -> dict[str, Any]:
         """Processing and waiting time per activity of a shared log, when the log records when work on an activity
         started and completed (lifecycle start/complete or an end-time attribute): how long each activity is
-        worked on and how long cases wait before it. Says so when the log has no such data. Aggregates only.
+        worked on and how long cases wait before it. Says so when the log has no such data. Optionally give a
+        working_calendar to also measure in working time, for example {"timezone": "Europe/Berlin", "hours":
+        {"mon": [["09:00", "17:00"]], "tue": [["09:00", "17:00"]]}, "holidays": ["2025-12-25"]} (days not listed
+        are closed). Aggregates only.
         """
-        return _get("get_process_waiting_times", f"/v1/process-intelligence/{_log(log_id)}/waiting-times",
-                    {"case_type": case_type})
+        params: dict[str, Any] = {"case_type": case_type}
+        if working_calendar is not None:
+            if not isinstance(working_calendar, dict):
+                raise ToolError("working_calendar must be an object with timezone, hours and optional holidays")
+            import json as _json
+            params["working_calendar"] = _json.dumps(working_calendar, separators=(",", ":"))
+        return _get("get_process_waiting_times", f"/v1/process-intelligence/{_log(log_id)}/waiting-times", params)
 
     @mcp.tool(annotations=_READ_ONLY)
     def get_process_drift(log_id: str, window: str = "month", case_type: str | None = None) -> dict[str, Any]:

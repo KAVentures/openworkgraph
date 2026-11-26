@@ -18,6 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictFloat, Valid
 
 from . import automation_benefits as benefits
 from . import automation_pipeline as pipeline
+from .automation_quality_population import quality_population_review
 
 FORMAT = "openworkgraph.quality-adjusted-benefit-scenario.v1"
 NUM = Annotated[StrictInt | StrictFloat, Field(ge=0, le=10**12)]
@@ -220,6 +221,7 @@ def analyze(idea_id, value):
                 "baseline":pool(b),"after":pool(a),"currency":spec.currency,
                 "financial_scenario":{k:_display(v) for k,v in financial.items()},
                 "review_gates":gates,"all_declared_gates_met":flags["pass"]==len(gates),
+                "whole_population_quality":quality_population_review(b,a,max_failure),
                 "quality_adjusted_financial_estimate":False,
                 "quality_is_separate_review_gate_not_monetized":True,
                 "statistical_uncertainty_estimated":False,"no_currency_conversion":True,

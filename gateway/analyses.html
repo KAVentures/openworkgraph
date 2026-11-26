@@ -27,6 +27,7 @@ body{font:16px/1.5 system-ui,sans-serif;max-width:1050px;margin:auto;padding:20p
 <h2>Compare authorized analysis publications</h2>
 <p>Open a publication and add an exact revision, then open other publications and add their revisions. Select two to eight distinct publications and a baseline. Group-coded rows are never joined; numerical changes are descriptive only.</p>
 <div id="portfolioSelections"></div>
+<label><input type="checkbox" id="portfolioPairwise"> Include all-pairs compatibility and exact comparisons (up to 28 pairs)</label>
 <button id="portfolioRun" disabled>Compare selected publications</button>
 <button id="portfolioDownload" disabled>Recheck access and download JSON</button>
 <button id="portfolioClear">Clear portfolio</button>
@@ -263,7 +264,7 @@ function invalidatePortfolio(){
  $('portfolioRun').disabled=portfolio.length<2;$('portfolioStatus').textContent='';
 }
 function clearPortfolio(){
- portfolio=[];portfolioBaseline=0;invalidatePortfolio();renderPortfolio();
+ portfolio=[];portfolioBaseline=0;$('portfolioPairwise').checked=false;invalidatePortfolio();renderPortfolio();
 }
 function renderPortfolio(){
  const root=$('portfolioSelections');root.replaceChildren();
@@ -291,8 +292,9 @@ $('portfolioAdd').onclick=()=>{
  invalidatePortfolio();renderPortfolio();$('portfolioStatus').textContent='Exact revision selected.';
 };
 $('portfolioClear').onclick=clearPortfolio;
+$('portfolioPairwise').onchange=invalidatePortfolio;
 function portfolioPayload(){
- return {baseline_index:portfolioBaseline,selections:portfolio.map(({title,...pin})=>pin)};
+ return {baseline_index:portfolioBaseline,include_pairwise:$('portfolioPairwise').checked,selections:portfolio.map(({title,...pin})=>pin)};
 }
 function renderPortfolioReport(report){
  const target=$('portfolioResult');target.replaceChildren();
@@ -326,6 +328,45 @@ function renderPortfolioReport(report){
      tbody.append(tr);
    }
    t.append(tbody);target.append(t);
+ }
+ const pw=report.pairwise_review;
+ if(pw){
+   const name=i=>report.selections[i].title+' · revision '+report.selections[i].revision;
+   const reason=r=>r==='portfolio_conflicting_claimed_basis'?'Conflicting report elsewhere in the selected portfolio':COMPARISON_REASONS[r]||r;
+   target.append(text('h3','All-pairs compatibility review'),
+     text('p',pw.comparable_pair_count+' comparable of '+pw.pair_count+' exact pairs; '+pw.withheld_pair_count+' withheld.'),
+     text('p',pw.interpretation));
+   const coverage=document.createElement('table'),head=document.createElement('thead'),tr=document.createElement('tr');
+   for(const h of ['Exact revision','Comparable neighbors','Withheld neighbors']){const th=text('th',h);th.scope='col';tr.append(th);}
+   head.append(tr);coverage.append(head);
+   const rows=document.createElement('tbody');
+   for(const c of pw.selection_coverage){const line=document.createElement('tr');line.append(text('td',name(c.selection_index)),text('td',String(c.comparable_neighbors)),text('td',String(c.withheld_neighbors)));rows.append(line);}
+   coverage.append(rows);target.append(coverage);
+   const sets=document.createElement('ul');
+   for(const set of pw.maximal_pairwise_compatible_sets)sets.append(text('li',set.map(name).join(' / ')));
+   target.append(text('h4','Directly compatible sets (may overlap)'),sets);
+   if(!sets.children.length)target.append(text('p','No directly compatible pairs.'));
+   if(pw.isolated_selection_indices.length)target.append(text('p','No comparable neighbor: '+pw.isolated_selection_indices.map(name).join('; ')));
+   if(pw.withheld_pair_count){
+     const reasons=document.createElement('ul');
+     for(const [key,count] of Object.entries(pw.refusal_reason_counts))reasons.append(text('li',reason(key)+' — '+count+' pairs'));
+     target.append(text('h4','Refusal reasons (can overlap)'),reasons);
+   }
+   const picker=document.createElement('select');picker.setAttribute('aria-label','Exact portfolio pair');
+   pw.pairs.forEach((p,i)=>{const o=text('option',name(p.left_index)+' versus '+name(p.right_index)+(p.comparable?'':' (withheld)'));o.value=String(i);picker.append(o);});
+   const label=text('label','Inspect exact pair ');label.append(picker);const body=document.createElement('div');body.setAttribute('aria-live','polite');
+   function inspect(){
+     const p=pw.pairs[Number(picker.value)];body.replaceChildren();
+     if(!p)return;
+     body.append(text('p','Left: '+name(p.left_index)+'; right: '+name(p.right_index)));
+     if(!p.comparable){const list=document.createElement('ul');p.refusal_reasons.forEach(r=>list.append(text('li',reason(r))));body.append(text('p','Comparison withheld.'),list);return;}
+     const table=document.createElement('table'),thd=document.createElement('thead'),header=document.createElement('tr'),tbd=document.createElement('tbody');
+     for(const h of ['Measure','Left','Right','Change (right − left)','Relative change']){const th=text('th',h);th.scope='col';header.append(th);}
+     thd.append(header);table.append(thd);
+     for(const c of p.changes){const row=document.createElement('tr');for(const v of [c.heading+(c.unit?' ('+c.unit+')':''),c.before,c.after,c.change_decimal,c.relative_percent_decimal===null?'—':c.relative_percent_decimal+'%'])row.append(text('td',String(v)));tbd.append(row);}
+     table.append(tbd);body.append(table);
+   }
+   picker.onchange=inspect;target.append(label,body);inspect();
  }
  const notes=document.createElement('ul');report.interpretation.forEach(n=>notes.append(text('li',n)));target.append(notes);
 }

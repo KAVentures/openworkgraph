@@ -193,6 +193,11 @@ with TestClient(app) as client:
     assert result.status_code==200,result.text
     assert result.headers["cache-control"]=="no-store"
     assert result.json()["filtered_union_count"]==10
+    pairs=client.post(url,json={**spec,"mode":"pairs"},headers=h)
+    assert pairs.status_code==200,pairs.text
+    assert pairs.json()["filtered_pair_union_count"]==8
+    assert client.post(url,json={**spec,"mode":"pairs"},headers=bearer).status_code in (401,403)
+    assert client.post(url,json={**spec,"mode":"pairs","qualifier":""},headers=h).status_code==422
     assert client.post(url,content=b'{"limit":1,"limit":2}',headers={**h,"Content-Type":"application/json"}).status_code==422
     assert client.post(url,json={**spec,"same_namespace_declared":False},headers=h).status_code==422
     page=client.get("/object-relationship-comparison")
@@ -205,3 +210,82 @@ with TestClient(app) as client:
     p=subprocess.run([sys.executable,"-c","import sys;sys.path.insert(0,'tests');"+code],
                      cwd=Path(__file__).resolve().parents[1],env=env,capture_output=True,text=True,timeout=120)
     assert p.returncode==0,p.stdout+p.stderr
+
+
+def test_directed_pair_counts_and_exact_qualifier_set_oracle():
+    l,r=pair()
+    spec=settings(l,r,mode="pairs",limit=2)
+    report=comparison.compare(l,spec)
+    assert report["pair_status_counts"]=={
+        "same_qualifier_set":2,"different_qualifier_set":1,"left_pair_only":1,
+        "right_pair_only":1,"left_endpoint_missing":1,"right_endpoint_missing":1,
+        "endpoint_type_conflict":1}
+    assert report["filtered_pair_union_count"]==8
+    assert report["comparable_pairs"]==5 and report["uncertain_pairs"]==3
+    assert report["comparable_pair_overlap"]==pytest.approx(3/5)
+    assert report["equal_qualifier_set_share_of_common_comparable_pairs"]==pytest.approx(2/3)
+    assert report["literal_assertion_counts"]=={"left":7,"right":7,"common":4,"left_only":3,"right_only":3}
+    rows=[]
+    while True:
+        rows.extend(report["rows"])
+        if report["next_offset"] is None:break
+        nxt=comparison.compare(l,{**spec,"offset":report["next_offset"]})
+        assert nxt["selection_sha256"]==report["selection_sha256"]
+        report=nxt
+    assert len(rows)==len({(x["source_id"],x["target_id"]) for x in rows})==8
+    def sets(doc):
+        result={}
+        for o in doc["objects"]:
+            for rel in o["relationships"]:
+                result.setdefault((o["id"],rel["objectId"]),set()).add(rel["qualifier"])
+        return result
+    left,right=sets(document("left")),sets(document("right"))
+    for row in rows:
+        key=(row["source_id"],row["target_id"])
+        a,b=left.get(key,set()),right.get(key,set())
+        assert (row["left_qualifiers"],row["right_qualifiers"],row["common_qualifiers"],
+                row["left_only_qualifiers"],row["right_only_qualifiers"])==(len(a),len(b),len(a&b),len(a-b),len(b-a))
+    assert not report["actual_relationship_changes_verified"]
+
+
+def test_pair_status_filter_does_not_change_population_and_exact_drilldown():
+    l,r=pair()
+    report=comparison.compare(l,settings(l,r,mode="pairs",pair_status="different_qualifier_set"))
+    assert report["page_count"]==1 and report["filtered_pair_union_count"]==8
+    row=report["rows"][0]
+    assert (row["source_id"],row["target_id"])==("o","j")
+    detail=comparison.compare(l,settings(l,r,source_id="o",target_id="j"))
+    assert detail["page_count"]==2
+    assert {x["qualifier"] for x in detail["rows"]}=={"left","right"}
+    reverse=comparison.compare(l,settings(l,r,source_id="j",target_id="o"))
+    assert reverse["page_count"]==1 and reverse["rows"][0]["qualifier"]=="new_direction"
+
+
+def test_pair_mode_rejects_incomplete_qualifier_sets_and_invalid_mode():
+    l,r=pair()
+    for patch in ({"mode":"pairs","qualifier":""},{"mode":"pairs","status":"both"},
+                  {"pair_status":"same_qualifier_set"},{"mode":"unknown"},{"source_id":""},
+                  {"target_id":"x"*201}):
+        with pytest.raises(workspace.EventLogWorkspaceError):
+            comparison.compare(l,settings(l,r,**patch))
+
+
+def test_pair_empty_and_reverse_symmetry():
+    l,r=pair()
+    a=comparison.compare(l,settings(l,r,mode="pairs"))
+    b=comparison.compare(r,settings(r,l,mode="pairs"))
+    swap={"left_pair_only":"right_pair_only","right_pair_only":"left_pair_only",
+          "left_endpoint_missing":"right_endpoint_missing","right_endpoint_missing":"left_endpoint_missing"}
+    assert {swap.get(k,k):v for k,v in a["pair_status_counts"].items()}==b["pair_status_counts"]
+    e=comparison.compare(l,settings(l,r,mode="pairs",source_id="absent"))
+    assert e["filtered_pair_union_count"]==0 and e["rows"]==[]
+    assert e["comparable_pair_overlap"] is None
+    assert e["equal_qualifier_set_share_of_common_comparable_pairs"] is None
+
+
+def test_pair_mode_stale_pins_refused():
+    l,r=pair()
+    spec=settings(l,r,mode="pairs")
+    workspace.append_log(r,BytesIO(json.dumps(document("right")).encode()),source_format="ocel")
+    with pytest.raises(workspace.EventLogWorkspaceError,match="snapshot changed"):
+        comparison.compare(l,spec)

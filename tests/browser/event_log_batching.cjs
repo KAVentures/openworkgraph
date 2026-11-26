@@ -39,6 +39,16 @@ const path=require('node:path');
    assert.match(text,/Approve100\.0% of 102/,text);
    assert.match(text,/size 5, wait up to/,text);
    assert.doesNotMatch(text,/Post\d/,'one-by-one work is not a batch');
+   // The per-activity summary downloads as CSV, including activities without batches.
+   const [batchCsv]=await Promise.all([page.waitForEvent('download'),page.locator('#owgBatchReportCsv').click()]);
+   const batchLines=(await fs.readFile(await batchCsv.path(),'utf8')).trim().split(/\r?\n/);
+   assert.match(batchLines[0],/^activity,events,batched_share,batches,simultaneous_batches,median_batch_size,/);
+   assert(batchLines.some(l=>/^Approve,10,1,2,0,5,5,5,/.test(l)),batchLines.join('|'));
+   assert(batchLines.some(l=>/^Post,\d+,0,0,/.test(l)),batchLines.join('|'));
+   await page.locator('#owgBatchGap').fill('61');
+   assert.equal(await page.locator('#owgBatchReportCsv').isDisabled(),true);
+   await page.locator('#owgBatchGap').fill('60');await page.locator('#owgBatchRun').click();
+   await page.locator('#owgBatchReportCsv:not([disabled])').waitFor();
    const batches=page.locator('#owgBatchList'),cases=page.locator('#owgBatchCases');
    await out.getByRole('button',{name:'View batches for Approve',exact:true}).click();
    await batches.getByRole('status').filter({hasText:'2 batches. Showing 2 on this page.'}).waitFor();
@@ -60,6 +70,6 @@ const path=require('node:path');
    assert.equal(await batches.getByRole('status').count(),0);
    await page.setViewportSize({width:390,height:844});assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+2));
    assert.deepEqual(errors,[]);
-   console.log('Batch detection browser acceptance passed: sequential batches, case evidence and event history, active cohort, WCAG audit, mobile width.');
+   console.log('Batch detection browser acceptance passed: sequential batches, case evidence and event history, active cohort, summary CSV, WCAG audit, mobile width.');
  }finally{if(browser)await browser.close();server.kill();}
 })().catch(e=>{console.error(e);process.exitCode=1;});

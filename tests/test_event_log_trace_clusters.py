@@ -13,6 +13,7 @@ import pytest
 
 from server import event_log_analytics as analytics
 from server import event_log_cohorts as cohorts
+from server import event_log_case_tags as tags
 from server import event_log_trace_clusters as trace_clusters
 from server import event_log_workspace as workspace
 
@@ -157,6 +158,80 @@ def test_case_membership_preserves_literal_activity_paths_and_rejects_stale_keys
         trace_clusters.cluster_cases(log, {**selection, "limit": True})
 
 
+def test_cluster_case_csv_respects_scope_limits_and_spreadsheet_safety(monkeypatch):
+    cases = {"=unsafe": (["+Start", "Finish"], 1), "normal": (["+Start", "Finish"], 1),
+             "other": (["Different", "End"], 2)}
+    log = _log(cases)
+    found = trace_clusters.clusters(log, {"k": 2})
+    cluster = next(c for c in found["clusters"] if c["cases"] == 2)
+    spec = {"k": 2, "cluster_key": cluster["cluster_key"]}
+    csv_text, info = trace_clusters.cluster_cases_csv(log, spec)
+    rows = list(csv.DictReader(StringIO(csv_text)))
+    assert [r["case_id"] for r in rows] == ["'=unsafe", "normal"]
+    assert all(r["first_activity"] == "'+Start" and r["last_activity"] == "Finish" for r in rows)
+    assert info["total"] == info["written"] == 2 and info["truncated"] is False
+    scoped_settings = {"cohort": {"activity": "+Start"}}
+    scoped_cluster = trace_clusters.clusters(log, scoped_settings)["clusters"][0]
+    scoped_text, scoped = trace_clusters.cluster_cases_csv(log, {**scoped_settings, "cluster_key": scoped_cluster["cluster_key"]})
+    assert scoped["total"] == 2 and {row["case_id"] for row in csv.DictReader(StringIO(scoped_text))} == {"'=unsafe", "normal"}
+    monkeypatch.setattr(trace_clusters, "MAX_EXPORT_CASES", 1)
+    limited, metadata = trace_clusters.cluster_cases_csv(log, spec)
+    assert len(list(csv.DictReader(StringIO(limited)))) == 1
+    assert metadata["total"] == 2 and metadata["written"] == 1 and metadata["truncated"] is True
+    assert metadata["next_after"]
+    next_text, last = trace_clusters.cluster_cases_csv(log, {**spec, "after": metadata["next_after"]})
+    assert [row["case_id"] for row in csv.DictReader(StringIO(next_text))] == ["normal"]
+    assert last["written"] == 1 and last["truncated"] is False and last["next_after"] is None
+    with pytest.raises(workspace.EventLogWorkspaceError, match="cursor"):
+        trace_clusters.cluster_cases_csv(log, {**spec, "after": "invalid"})
+    with pytest.raises(workspace.EventLogWorkspaceError, match="cursor"):
+        trace_clusters.cluster_cases_csv(log, {**spec, "after": metadata["next_after"], "max_activities": 3})
+    other_log = _log(cases)
+    with pytest.raises(workspace.EventLogWorkspaceError, match="cursor"):
+        trace_clusters.cluster_cases_csv(other_log, {**spec, "after": metadata["next_after"]})
+    with pytest.raises(workspace.EventLogWorkspaceError, match="cluster has changed"):
+        trace_clusters.cluster_cases_csv(log, {**spec, "cluster_key": "0" * 64})
+    with pytest.raises(workspace.EventLogWorkspaceError):
+        trace_clusters.cluster_cases_csv(log, {**spec, "after": "normal"})
+
+
+def test_export_cursor_detects_changed_membership_even_with_identical_variants(monkeypatch):
+    log = _log({"a": (["Open", "Close"], 1), "b": (["Open", "Close"], 1),
+                "c": (["Open", "Close"], 1)})
+    tags.add(log, {"tag": "review", "case_ids": ["a", "b"]})
+    settings = {"cohort": {"tag": "review"}}
+    original = trace_clusters.clusters(log, settings)["clusters"][0]
+    spec = {**settings, "cluster_key": original["cluster_key"]}
+    monkeypatch.setattr(trace_clusters, "MAX_EXPORT_CASES", 1)
+    _, first = trace_clusters.cluster_cases_csv(log, spec)
+    assert first["next_after"]
+    # Changing an exported duration without changing membership or variant counts also invalidates the next page.
+    with workspace._LOCK:
+        conn = workspace._connect()
+        try:
+            conn.execute("""UPDATE events SET ts=ts+INTERVAL '1 minute' WHERE log_id=? AND activity='Close'
+                AND event_id IN (SELECT event_id FROM event_objects WHERE log_id=? AND object_id='a')""", [log, log])
+        finally:
+            conn.close()
+    with pytest.raises(workspace.EventLogWorkspaceError, match="changed between pages"):
+        trace_clusters.cluster_cases_csv(log, {**spec, "after": first["next_after"]})
+    with workspace._LOCK:
+        conn = workspace._connect()
+        try:
+            conn.execute("""UPDATE events SET ts=ts-INTERVAL '1 minute' WHERE log_id=? AND activity='Close'
+                AND event_id IN (SELECT event_id FROM event_objects WHERE log_id=? AND object_id='a')""", [log, log])
+        finally:
+            conn.close()
+    tags.remove(log, {"tag": "review", "case_ids": ["b"]})
+    tags.add(log, {"tag": "review", "case_ids": ["c"]})
+    changed = trace_clusters.clusters(log, settings)["clusters"][0]
+    assert changed["cluster_key"] == original["cluster_key"], "variant composition and counts are unchanged"
+    with pytest.raises(workspace.EventLogWorkspaceError, match="changed between pages"):
+        trace_clusters.cluster_cases_csv(log, {**spec, "after": first["next_after"]})
+    restarted, info = trace_clusters.cluster_cases_csv(log, spec)
+    assert next(csv.DictReader(StringIO(restarted)))["case_id"] == "a" and info["total"] == 2
+
+
 def test_route_requires_the_dashboard(tmp_path):
     code = r'''
 from fastapi.testclient import TestClient
@@ -180,6 +255,13 @@ with TestClient(app) as client:
     assert [c["cases"] for c in found.json()["clusters"]] == [6, 6]
     selected = {"cluster_key": found.json()["clusters"][0]["cluster_key"], "limit": 1}
     assert client.post(path+"/cases", json=selected, headers=bearer).status_code == 403
+    export = {"cluster_key": selected["cluster_key"]}
+    assert client.post(path+"/cases.csv", json=export, headers=bearer).status_code == 403
+    result = client.post(path+"/cases.csv", json=export, headers=owner)
+    assert result.status_code == 200 and result.headers["cache-control"] == "no-store"
+    assert result.headers["x-owg-cluster-cases"] == "total=6; written=6; truncated=false"
+    assert len(result.text.splitlines()) == 7
+    assert client.post(path+"/cases.csv", json={"cluster_key":"0"*64}, headers=owner).status_code == 422
     cases = client.post(path+"/cases", json=selected, headers=owner)
     assert cases.status_code == 200 and cases.json()["total"] == 6 and len(cases.json()["cases"]) == 1, cases.text
     assert client.post(path, json={"k": 99}, headers=owner).status_code == 422

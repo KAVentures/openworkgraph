@@ -43,6 +43,12 @@ const path=require('node:path');
    assert(gates.includes('Join beforeCloseApprove, RejectXOR (choice)'),gates);
    await out.locator('details summary').click();
    assert((await out.locator('details tbody tr').count())>=6);
+   // The arrows download as CSV, one row per arrow in the table.
+   const [netCsv]=await Promise.all([page.waitForEvent('download'),page.locator('#owgHeuristicsReportCsv').click()]);
+   const netLines=(await fs.readFile(await netCsv.path(),'utf8')).trim().split(/\r?\n/);
+   assert.equal(netLines[0],'from,to,occurrences,dependency,kept_by');
+   assert.equal(netLines.length-1,await out.locator('details tbody tr').count());
+   assert(netLines.some(l=>/^Register,Check,\d+,0\.\d+,threshold$/.test(l)),netLines.join('|'));
    const review=page.locator('#owgHeuristicsCaseReview');
    await out.getByRole('button',{name:'Inspect cases for Check repeated',exact:true}).click();
    await review.getByRole('status').filter({hasText:'4 occurrences in 4 cases.'}).waitFor();
@@ -51,6 +57,7 @@ const path=require('node:path');
    await out.getByRole('button',{name:'Inspect cases for Start at Register',exact:true}).click();
    await review.getByRole('status').filter({hasText:'40 occurrences in 40 cases.'}).waitFor();
    await page.locator('#owgHeuristicsAnd').selectOption('1');
+   assert.equal(await page.locator('#owgHeuristicsReportCsv').isDisabled(),true);
    await page.locator('#owgHeuristicsLoop').selectOption('0.9');
    await page.locator('#owgHeuristicsConnected').uncheck();
    const [configured]=await Promise.all([page.waitForResponse(r=>new URL(r.url()).pathname.endsWith('/heuristics-net')),page.locator('#owgHeuristicsRun').click()]);
@@ -59,6 +66,6 @@ const path=require('node:path');
    const audit=await page.evaluate(async()=>window.axe.run(document.querySelector('#owgHeuristics'),{runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21aa']}}));
    assert.deepEqual(audit.violations.map(v=>v.id+': '+v.nodes.map(n=>n.target).join(',')),[]);
    assert.deepEqual(errors,[]);
-   console.log('Heuristics net browser acceptance passed: net and gateway labels, case evidence for loops and boundaries, event history, miner settings, WCAG audit.');
+   console.log('Heuristics net browser acceptance passed: net and gateway labels, case evidence for loops and boundaries, event history, miner settings, arrows CSV, WCAG audit.');
  }finally{if(browser)await browser.close();server.kill();}
 })().catch(error=>{console.error(error);process.exit(1);});
