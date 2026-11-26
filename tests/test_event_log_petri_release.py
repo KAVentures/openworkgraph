@@ -47,7 +47,7 @@ def test_same_model_meets_pinned_criteria_and_report_is_reproducible():
                                   "settings": {"max_mutants": 4}})
     result = assess(a, a, proposal)
     assert result["status"] == "model_criteria_met"
-    assert result["counts"] == {"passed": 8, "failed": 0, "inconclusive": 0}
+    assert result["counts"] == {"passed": 9, "failed": 0, "inconclusive": 0}
     assert result["execution_authorized"] is False
     assert result["real_world_outcomes_verified"] is False
     assert result["report_sha256"] == release._digest({k: v for k, v in result.items() if k != "report_sha256"})
