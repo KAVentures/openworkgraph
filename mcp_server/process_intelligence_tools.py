@@ -640,56 +640,83 @@ def register_process_intelligence_tools(mcp: Any, runtime_module: Any) -> None:
                     {"months": months})
 
     @mcp.tool(annotations=_READ_ONLY)
-    def get_process_variants(log_id: str, limit: int = 20, case_type: str | None = None) -> dict[str, Any]:
+    def get_process_variants(log_id: str, limit: int = 20, case_type: str | None = None,
+                             case_filter: dict[str, Any] | None = None) -> dict[str, Any]:
         """The most common paths (variants) of a shared log, most common first: the activities in order, how many
         cases follow each, their share and median duration, and how much of the log the listed variants cover.
-        Variants followed by fewer than 5 cases are withheld and only counted. Aggregates only.
+        Variants followed by fewer than 5 cases are withheld and only counted. case_filter (the same keys as insight
+        cohorts) lists the variants of one group of at least 5 cases. Aggregates only.
         """
         if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 100:
             raise ToolError("limit must be 1 to 100")
-        return _get("get_process_variants", f"/v1/process-intelligence/{_log(log_id)}/variants",
-                    {"limit": limit, "case_type": case_type})
+        params: dict[str, Any] = {"limit": limit, "case_type": case_type}
+        if case_filter is not None:
+            if not isinstance(case_filter, dict) or not case_filter:
+                raise ToolError("case_filter must be a non-empty object")
+            import json as _json
+            params["case_filter"] = _json.dumps(case_filter, separators=(",", ":"))
+        return _get("get_process_variants", f"/v1/process-intelligence/{_log(log_id)}/variants", params)
 
     @mcp.tool(annotations=_READ_ONLY)
     def get_process_map(log_id: str, activities: float = 1.0, paths: float = 1.0,
-                        case_type: str | None = None) -> dict[str, Any]:
+                        case_type: str | None = None, case_filter: dict[str, Any] | None = None) -> dict[str, Any]:
         """The process map of a shared log: activities with event and case counts, which activity directly
         follows which (with counts and median, mean and p90 gaps), start and end activities, and how much of the
         log the map shows. activities and paths (0 to 1) keep only the most frequent ones, like the map sliders.
-        Activities and transitions seen in fewer than 5 cases are withheld. Aggregates only.
+        Activities and transitions seen in fewer than 5 cases are withheld. case_filter (the same keys as insight
+        cohorts, for example {"attribute": "region=EU"}) draws the map of one group of at least 5 cases.
+        Aggregates only.
         """
         for name, value in (("activities", activities), ("paths", paths)):
             if isinstance(value, bool) or not isinstance(value, (int, float)) or not 0 < value <= 1:
                 raise ToolError(f"{name} must be above 0 and at most 1")
-        return _get("get_process_map", f"/v1/process-intelligence/{_log(log_id)}/process-map",
-                    {"activities": float(activities), "paths": float(paths), "case_type": case_type})
+        params: dict[str, Any] = {"activities": float(activities), "paths": float(paths), "case_type": case_type}
+        if case_filter is not None:
+            if not isinstance(case_filter, dict) or not case_filter:
+                raise ToolError("case_filter must be a non-empty object")
+            import json as _json
+            params["case_filter"] = _json.dumps(case_filter, separators=(",", ":"))
+        return _get("get_process_map", f"/v1/process-intelligence/{_log(log_id)}/process-map", params)
 
     @mcp.tool(annotations=_READ_ONLY)
     def get_process_duration_distribution(log_id: str, cutoffs_hours: list[float] | None = None,
-                                          case_type: str | None = None) -> dict[str, Any]:
+                                          case_type: str | None = None,
+                                          case_filter: dict[str, Any] | None = None) -> dict[str, Any]:
         """How case durations of a shared log are spread: the number and share of cases in each band between the
         given cut-offs (default 1 h, 4 h, 1 day, 3 days) and the median, p90 and p95 duration. Elapsed time between
-        first and last event, not work time. Aggregates only.
+        first and last event, not work time. case_filter (the same keys as insight cohorts) limits it to one group of
+        at least 5 cases. Aggregates only.
         """
         hours = list(cutoffs_hours or [1, 4, 24, 72])
         if not 1 <= len(hours) <= 10 or any(isinstance(h, bool) or not isinstance(h, (int, float)) or h <= 0 for h in hours):
             raise ToolError("cutoffs_hours must be 1 to 10 positive numbers")
         seconds = sorted({int(round(h * 3600)) for h in hours})
+        params: dict[str, Any] = {"cutoffs_seconds": ",".join(str(s) for s in seconds), "case_type": case_type}
+        if case_filter is not None:
+            if not isinstance(case_filter, dict) or not case_filter:
+                raise ToolError("case_filter must be a non-empty object")
+            import json as _json
+            params["case_filter"] = _json.dumps(case_filter, separators=(",", ":"))
         return _get("get_process_duration_distribution",
-                    f"/v1/process-intelligence/{_log(log_id)}/duration-distribution",
-                    {"cutoffs_seconds": ",".join(str(s) for s in seconds), "case_type": case_type})
+                    f"/v1/process-intelligence/{_log(log_id)}/duration-distribution", params)
 
     @mcp.tool(annotations=_READ_ONLY)
     def get_process_time_patterns(log_id: str, time_zone: str = "UTC", activity: str | None = None,
-                                  case_type: str | None = None) -> dict[str, Any]:
+                                  case_type: str | None = None,
+                                  case_filter: dict[str, Any] | None = None) -> dict[str, Any]:
         """When work happens in a shared log: events and case arrivals by weekday and hour in a time zone (an IANA
-        name such as Europe/Berlin), optionally for one activity, and the share outside working hours. Aggregates
-        only.
+        name such as Europe/Berlin), optionally for one activity, and the share outside working hours. case_filter
+        (the same keys as insight cohorts) limits it to one group of cases. Aggregates only.
         """
         if not isinstance(time_zone, str) or not 1 <= len(time_zone) <= 64:
             raise ToolError("time_zone must be an IANA time zone name")
-        return _get("get_process_time_patterns", f"/v1/process-intelligence/{_log(log_id)}/time-patterns",
-                    {"time_zone": time_zone, "activity": activity, "case_type": case_type})
+        params: dict[str, Any] = {"time_zone": time_zone, "activity": activity, "case_type": case_type}
+        if case_filter is not None:
+            if not isinstance(case_filter, dict) or not case_filter:
+                raise ToolError("case_filter must be a non-empty object")
+            import json as _json
+            params["case_filter"] = _json.dumps(case_filter, separators=(",", ":"))
+        return _get("get_process_time_patterns", f"/v1/process-intelligence/{_log(log_id)}/time-patterns", params)
 
     @mcp.tool(annotations=_READ_ONLY)
     def get_process_breakdown(log_id: str, rows: str, columns: str | None = None, with_activity: str | None = None,
