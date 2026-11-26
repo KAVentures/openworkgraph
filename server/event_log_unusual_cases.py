@@ -66,7 +66,11 @@ def _hours(seconds: float) -> float:
 
 
 def unusual_cases(log_id: str, case_type: str | None = None, *, limit: int = 25, include_case_ids: bool = True,
-                  cohort: dict[str, Any] | None = None, signal: str | None = None, offset: int = 0) -> dict[str, Any]:
+                  cohort: dict[str, Any] | None = None, signal: str | None = None, offset: int = 0,
+                  all_cases: bool = False) -> dict[str, Any]:
+    """``all_cases`` returns every scored case (for the CSV worklist) instead of one page."""
+    if all_cases:
+        limit, offset = MAX_LIMIT, 0
     if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= MAX_LIMIT:
         raise EventLogWorkspaceError(f"limit must be 1 to {MAX_LIMIT}")
     if signal is not None and (not isinstance(signal, str) or signal not in SIGNALS):
@@ -143,14 +147,14 @@ def unusual_cases(log_id: str, case_type: str | None = None, *, limit: int = 25,
                        "events": len(path), "hours": _hours(duration or 0.0), "path": list(path)[:50],
                        "path_truncated": len(path) > 50})
     scored.sort(key=lambda c: (-c["score"], str(c["case_id"])))
-    top = scored[offset:offset + limit]
+    top = scored if all_cases else scored[offset:offset + limit]
     if not include_case_ids:
         top = [{k: v for k, v in c.items() if k != "case_id"} for c in top]
     return {
         "format": FORMAT, "log_id": log_id, "case_notion": data.get("case_notion"),
         "cases": cases, "unusual_cases": unusual, "unusual_share": round(unusual / cases, 4),
         "page": {"signal": signal, "total": len(scored), "offset": offset, "limit": limit,
-                 "next_offset": offset + len(top) if offset + len(top) < len(scored) else None},
+                 "next_offset": None if all_cases else (offset + len(top) if offset + len(top) < len(scored) else None)},
         "by_signal": dict(sorted(reason_cases.items(), key=lambda kv: (-kv[1], kv[0]))),
         "baseline": {"median_hours": median_hours, "median_events": median_events,
                      "distinct_paths": len(variants)},
@@ -165,4 +169,25 @@ def unusual_cases(log_id: str, case_type: str | None = None, *, limit: int = 25,
     }
 
 
-__all__ = ["unusual_cases", "FORMAT"]
+CSV_COLUMNS = ["case_id", "score", "signals", "reasons", "events", "hours", "path", "path_truncated"]
+
+
+def unusual_cases_csv(log_id: str, case_type: str | None = None, *, cohort: dict[str, Any] | None = None,
+                      signal: str | None = None) -> tuple[str, dict[str, Any]]:
+    """Every unusual case as a CSV worklist, highest score first, with formula-like cells neutralized."""
+    import csv
+    import io
+    from .event_log_variant_export import _cell
+    result = unusual_cases(log_id, case_type, cohort=cohort, signal=signal, all_cases=True)
+    out = io.StringIO()
+    writer = csv.writer(out)
+    writer.writerow(CSV_COLUMNS)
+    for c in result["top"]:
+        writer.writerow([_cell(c["case_id"]), c["score"], ";".join(r["signal"] for r in c["reasons"]),
+                         _cell(" | ".join(r["detail"] for r in c["reasons"])), c["events"], c["hours"],
+                         _cell(" → ".join(c["path"])), c["path_truncated"]])
+    return out.getvalue(), {"cases": result["cases"], "unusual_cases": result["unusual_cases"],
+                            "rows": len(result["top"]), "signal": signal}
+
+
+__all__ = ["unusual_cases", "unusual_cases_csv", "CSV_COLUMNS", "FORMAT"]

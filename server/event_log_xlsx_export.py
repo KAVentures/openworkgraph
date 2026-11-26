@@ -6,7 +6,8 @@ activity, timestamp and resource, one row per event under the chosen case notion
 nothing is reinterpreted (no formulas, no dates guessed from text, IDs with leading zeros kept);
 the header row is frozen and has an auto-filter. A worksheet holds at most 1,048,576 rows, so a
 larger log is refused before anything is written. The workspace's own .xlsx reader reads the file
-back to the same CSV.
+back to the same CSV. ``write_matching`` writes the matching-case export's CSV rows (a case filter,
+one case or a time window) the same way.
 """
 from __future__ import annotations
 
@@ -59,9 +60,21 @@ def _column(index: int) -> str:
 def write(log_id: str, path: Path, case_type: str | None = None) -> dict[str, Any]:
     text = io.StringIO()
     workspace.export_log(log_id, "csv", text, case_type)
-    rows = list(csv.reader(io.StringIO(text.getvalue())))
+    return _write_csv_text(text.getvalue(), path, "the log has")
+
+
+def write_matching(log_id: str, spec: Any, path: Path) -> dict[str, Any]:
+    """The matching-case export's CSV rows (filter, case, time window) as a workbook."""
+    from .event_log_cohort_export import export_matching_cases
+    text = io.StringIO()
+    export_matching_cases(log_id, spec, text, export_format="csv")
+    return _write_csv_text(text.getvalue(), path, "the matching cases have")
+
+
+def _write_csv_text(text: str, path: Path, subject: str) -> dict[str, Any]:
+    rows = list(csv.reader(io.StringIO(text)))
     if len(rows) > MAX_ROWS:
-        raise EventLogWorkspaceError(f"the log has more than {MAX_ROWS - 1:,} events, more than one Excel worksheet holds")
+        raise EventLogWorkspaceError(f"{subject} more than {MAX_ROWS - 1:,} events, more than one Excel worksheet holds")
     width = max((len(r) for r in rows), default=0)
     dropped = 0
     with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as book:
@@ -88,4 +101,4 @@ def write(log_id: str, path: Path, case_type: str | None = None) -> dict[str, An
     return {"format": FORMAT, "rows": max(len(rows) - 1, 0), "columns": width, "control_characters_dropped": dropped}
 
 
-__all__ = ["write", "FORMAT", "MAX_ROWS"]
+__all__ = ["write", "write_matching", "FORMAT", "MAX_ROWS"]

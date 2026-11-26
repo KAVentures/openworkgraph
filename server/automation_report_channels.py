@@ -84,7 +84,16 @@ def _write(data: dict[str, Any]) -> None:
             pass
 
 
+MAX_VISIBLE_RECEIPTS = 50
+
+
 def _public(channel: dict[str, Any]) -> dict[str, Any]:
+    received = channel["received"]
+    # Sequence order is not arrival or execution order. Show the highest
+    # retained sequences, with actual receipt time and original disposition.
+    recent = [{"sequence": key, "received_at": received[key]["at"],
+               "outcome": received[key]["outcome"], "original_status": received[key]["status"]}
+              for key in sorted(received, key=int, reverse=True)[:MAX_VISIBLE_RECEIPTS]]
     return {"channel_id": channel["channel_id"], "deployment_id": channel["deployment_id"],
             "created_at": channel["created_at"], "rotated_at": channel.get("rotated_at"),
             "revoked_at": channel.get("revoked_at"), "highest_sequence": channel["highest_sequence"],
@@ -92,6 +101,8 @@ def _public(channel: dict[str, Any]) -> dict[str, Any]:
             "missing_truncated": channel.get("missing_truncated", False),
             "versions": sorted(channel["versions"].values(), key=lambda v: v["first_seen"]),
             "accepted_reports": channel.get("accepted_reports", 0), "refused_reports": channel.get("refused_reports", 0),
+            "recent_sequence_receipts": recent, "retained_receipt_count": len(received),
+            "receipt_list_truncated": len(received) > len(recent),
             "secret_shown_again": False}
 
 
@@ -245,7 +256,22 @@ def ingest(channel_id: str, timestamp: str, sequence_header: str, signature: str
             _write(data)
             raise ChannelError(f"the body must be a valid {ENVELOPE} envelope") from None
         try:
-            result = monitoring.import_report(envelope["report"], deployment_id)
+            result = monitoring.import_report(envelope["report"], deployment_id, protect_signed_revisions=True)
+        except monitoring.RunRevisionConflict as exc:
+            # The refusal receipt is the primary durable evidence. A full or
+            # unavailable incident ledger must not lose the sequence outcome.
+            _outcome(channel, sequence, digest, "refused_run_revision_conflict", 409, str(exc))
+            channel["refused_reports"] = channel.get("refused_reports", 0) + 1
+            _track_sequence(channel, sequence)
+            _write(data)
+            try:
+                incidents.record(deployment_id, "run_revision_conflict", f"channel:{channel_id}",
+                                 count=sum(exc.counts.values()),
+                                 detail={"channel_id": channel_id, "conflict_counts": exc.counts})
+            except (incidents.IncidentError, OSError):
+                # The signed refusal remains visible in channel history.
+                raise ChannelError("signed report conflicts with retained run evidence; incident recording unavailable", 409) from None
+            raise ChannelError(str(exc), 409) from None
         except monitoring.MonitoringError as exc:
             drift = "different workflow spec" in str(exc)
             if drift:
@@ -273,6 +299,7 @@ def ingest(channel_id: str, timestamp: str, sequence_header: str, signature: str
                          detail={"channel_id": channel_id})
     touched = incidents.reconcile_deployment(deployment_id)
     return {"duplicate": False, "sequence": sequence, "outcome": "imported", "runs_imported": result["runs_imported"],
+            "revision_counts": result["revision_counts"],
             "new_missing_sequences": gaps, "incidents_updated": touched, **incidents.CLAIMS}
 
 

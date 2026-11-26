@@ -14,6 +14,7 @@ body{font:16px/1.5 system-ui,sans-serif;max-width:1050px;margin:auto;padding:20p
 <section><h2>Your authorized publications</h2><button id="refresh">Refresh</button><button id="new">New publication</button><div id="inventory"></div><button id="more" hidden>More publications</button></section>
 <section id="detail" hidden><h2 id="viewTitle"></h2><p id="basis"></p><div class="scroll" id="table"></div><div id="coverage"></div>
 <label>Revision <input id="revision" type="number" min="1" step="1"></label><button id="openRevision">Open revision</button><button id="export">Download this revision</button>
+<button id="portfolioAdd">Add this exact revision to portfolio</button>
 <div id="revisionCompare" hidden>
 <h3>Compare retained revisions</h3>
 <p>This review compares only two authorized revisions of the same publication. It shows arithmetic changes only for complete, ungrouped, identically defined numeric snapshots. Export-specific group codes cannot be matched across files. Publisher-supplied values are not independently verified.</p>
@@ -21,6 +22,17 @@ body{font:16px/1.5 system-ui,sans-serif;max-width:1050px;margin:auto;padding:20p
 <button id="compareRun">Compare revisions</button>
 <div id="compareResult" role="status" aria-live="polite"></div>
 </div>
+</section>
+<section id="portfolioReview" hidden>
+<h2>Compare authorized analysis publications</h2>
+<p>Open a publication and add an exact revision, then open other publications and add their revisions. Select two to eight distinct publications and a baseline. Group-coded rows are never joined; numerical changes are descriptive only.</p>
+<div id="portfolioSelections"></div>
+<label><input type="checkbox" id="portfolioPairwise"> Include all-pairs compatibility and exact comparisons (up to 28 pairs)</label>
+<button id="portfolioRun" disabled>Compare selected publications</button>
+<button id="portfolioDownload" disabled>Recheck access and download JSON</button>
+<button id="portfolioClear">Clear portfolio</button>
+<div id="portfolioStatus" role="status" aria-live="polite"></div>
+<div id="portfolioResult" class="scroll"></div>
 </section>
 <section id="publisher" hidden><h2>Publish a reviewed snapshot</h2><p>In the local event-log workspace, run an analysis, select “Prepare sharing snapshot” or “Prepare paired company handoff”, review each selected disclosure, then download it. A paired handoff can stage case data in this browser after aggregate publication, but does NOT attach cases until a separate confirmation. Group codes have meaning only within their file. Numeric values, units and your title may still be sensitive. Every permitted member can read all retained revisions; publishing a new revision does not hide an old one.</p>
 <label>Reviewed snapshot or paired company handoff file <input id="file" type="file" accept="application/json,.json"></label><div id="preview" class="scroll"></div>
@@ -53,6 +65,7 @@ body{font:16px/1.5 system-ui,sans-serif;max-width:1050px;margin:auto;padding:20p
 const $=id=>document.getElementById(id),base='/v1/human/analyses';
 let identityScopes=[],identityActor='';
 let credential='',credentialScheme='Bearer',epoch=0,selected=null,snapshot=null,pairedCase=null,caseDataset=null,canPublish=false,next=null,fileAttempt=0,pairedCaseFileAttempt=0,viewAttempt=0,listAttempt=0;
+let portfolio=[],portfolioBaseline=0,portfolioTurn=0,portfolioReport=null;
 const text=(tag,value)=>{const n=document.createElement(tag);n.textContent=value;return n;};
 function table(node,doc){
  node.replaceChildren();const t=document.createElement('table'),head=document.createElement('tr');
@@ -64,6 +77,7 @@ function clearCaseFile(){pairedCaseFileAttempt++;caseDataset=null;$('pairedCaseF
 function clearFile(){fileAttempt++;snapshot=null;pairedCase=null;$('file').value='';$('preview').replaceChildren();$('confirm').checked=false;clearCaseFile();sync();}
 function clearSelection(){caseUI.clear();viewAttempt++;selected=null;$('revisionCompare').hidden=true;$('compareResult').replaceChildren();$('compareOther').value='';$('table').replaceChildren();$('coverage').replaceChildren();$('viewTitle').textContent='';$('basis').textContent='';$('revision').value='';$('detail').hidden=true;$('access').hidden=true;$('members').replaceChildren();$('renew').value='';$('title').value='';clearFile();}
 function sync(){
+ $('portfolioReview').hidden=!credential;
  $('publisher').hidden=!credential||!canPublish;
  $('publish').disabled=!snapshot||!$('confirm').checked||!!(selected&&!selected.permissions.edit);
  const canShareCases=identityScopes.includes('org:analysis:cases:read')&&identityScopes.includes('org:analysis:cases:write');
@@ -76,13 +90,13 @@ function sync(){
  $('days').disabled=!!selected;
  $('saveAccess').disabled=!$('accessConfirm').checked;$('delete').disabled=!$('deleteConfirm').checked;
 }
-function disconnect(){identityScopes=[];identityActor='';epoch++;credential='';credentialScheme='Bearer';canPublish=false;listAttempt++;next=null;$('more').hidden=true;$('identity').textContent='Not connected.';clearSelection();$('workspace').hidden=true;$('inventory').replaceChildren();$('token').value='';$('status').textContent='Disconnected; page data cleared.';}
+function disconnect(){clearPortfolio();identityScopes=[];identityActor='';epoch++;credential='';credentialScheme='Bearer';canPublish=false;listAttempt++;next=null;$('more').hidden=true;$('identity').textContent='Not connected.';clearSelection();$('workspace').hidden=true;$('inventory').replaceChildren();$('token').value='';$('status').textContent='Disconnected; page data cleared.';}
 async function api(path,options={}){
  const attempt=epoch,token=credential;
  const {preserveSelectionOnDenied=false,...requestOptions}=options;
  const r=await fetch(path,{...requestOptions,credentials:'omit',cache:'no-store',headers:{...options.headers,Authorization:credentialScheme+' '+token}});
  const value=await r.json().catch(error=>{if(r.ok)throw error;return {};});if(attempt!==epoch)throw new Error('Identity changed; response discarded.');
- if(!r.ok){if(r.status===401){disconnect();$('status').textContent='Sign-in expired or access changed. Page data cleared; sign in again.';}else if(!preserveSelectionOnDenied&&[403,404].includes(r.status))clearSelection();const error=new Error(value.detail||'Request failed');error.status=r.status;throw error;}return value;
+ if(!r.ok){if(r.status===401){disconnect();$('status').textContent='Sign-in expired or access changed. Page data cleared; sign in again.';}else if(!preserveSelectionOnDenied&&[403,404].includes(r.status)){clearSelection();clearPortfolio();}const error=new Error(value.detail||'Request failed');error.status=r.status;throw error;}return value;
 }
 async function run(operation){const attempt=epoch;try{await operation();}catch(e){if(attempt===epoch)$('status').textContent=e.message;}}
 const post=(path,value)=>api(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(value)});
@@ -245,6 +259,141 @@ const COMPARISON_REASONS={
   missing_numeric_measure:'Some numeric cells are missing or not numbers',
   same_fingerprint_but_different_values:'Identical claimed source fingerprints disagree about values',
 };
+function invalidatePortfolio(){
+ portfolioTurn++;portfolioReport=null;$('portfolioResult').replaceChildren();$('portfolioDownload').disabled=true;
+ $('portfolioRun').disabled=portfolio.length<2;$('portfolioStatus').textContent='';
+}
+function clearPortfolio(){
+ portfolio=[];portfolioBaseline=0;$('portfolioPairwise').checked=false;invalidatePortfolio();renderPortfolio();
+}
+function renderPortfolio(){
+ const root=$('portfolioSelections');root.replaceChildren();
+ if(!portfolio.length){root.append(text('p','No revisions selected.'));return;}
+ portfolio.forEach((item,i)=>{
+   const row=document.createElement('div');const label=document.createElement('label'),radio=document.createElement('input');
+   radio.type='radio';radio.name='portfolioBaseline';radio.checked=i===portfolioBaseline;
+   radio.setAttribute('aria-label','Use '+item.title+' as baseline');
+   radio.onchange=()=>{portfolioBaseline=i;invalidatePortfolio();};
+   label.append(radio,document.createTextNode(item.title+' · revision '+item.revision+' · '+item.expected_content_sha256));
+   const remove=text('button','Remove');remove.setAttribute('aria-label','Remove '+item.title+' from portfolio');
+   remove.onclick=()=>{portfolio.splice(i,1);portfolioBaseline=portfolioBaseline===i?0:portfolioBaseline>i?portfolioBaseline-1:portfolioBaseline;
+     invalidatePortfolio();renderPortfolio();};
+   row.append(label,remove);root.append(row);
+ });
+}
+$('portfolioAdd').onclick=()=>{
+ if(!credential||!selected)return;
+ const item={view_id:selected.view_id,revision:selected.viewing_revision,
+   expected_content_sha256:selected.content_sha256,title:selected.title};
+ const index=portfolio.findIndex(s=>s.view_id===item.view_id);
+ if(index>=0)portfolio[index]=item;
+ else if(portfolio.length<8)portfolio.push(item);
+ else{$('portfolioStatus').textContent='Choose at most eight distinct publications.';return;}
+ invalidatePortfolio();renderPortfolio();$('portfolioStatus').textContent='Exact revision selected.';
+};
+$('portfolioClear').onclick=clearPortfolio;
+$('portfolioPairwise').onchange=invalidatePortfolio;
+function portfolioPayload(){
+ return {baseline_index:portfolioBaseline,include_pairwise:$('portfolioPairwise').checked,selections:portfolio.map(({title,...pin})=>pin)};
+}
+function renderPortfolioReport(report){
+ const target=$('portfolioResult');target.replaceChildren();
+ target.append(text('p',report.comparable_count+' comparable and '+report.incomparable_count+' withheld comparisons. Report digest '+report.report_sha256));
+ if(report.conflicting_claimed_basis_pairs.length){
+   const list=document.createElement('ul');
+   for(const pair of report.conflicting_claimed_basis_pairs){
+     const names=pair.selection_indices.map(i=>report.selections[i].title+' · revision '+report.selections[i].revision);
+     list.append(text('li',names.join(' versus ')+' — same claimed analysis/source basis, conflicting values.'));
+   }
+   target.append(text('p','Conflicting publications detected; comparisons involving these selections are withheld.'),list);
+ }
+ const base=report.selections[report.baseline_index];
+ target.append(text('p','Baseline: '+base.title+' · revision '+base.revision+' · '+base.matching_cases+' selected cases'));
+ for(const pair of report.comparisons){
+   const item=report.selections[pair.selection_index];
+   target.append(text('h3',item.title+' · revision '+item.revision));
+   target.append(text('p',item.matching_cases+' selected cases; '+item.matching_rows+' matching rows. '+(pair.same_claimed_source?'Same':'Different')+' claimed source fingerprint.'));
+   if(!pair.comparable){
+     const reasons=document.createElement('ul');pair.refusal_reasons.forEach(r=>reasons.append(text('li',(r==='portfolio_conflicting_claimed_basis'?'Conflicting report elsewhere in the selected portfolio':COMPARISON_REASONS[r]||r))));
+     target.append(text('p','Numeric comparison withheld.'),reasons);continue;
+   }
+   const t=document.createElement('table'),head=document.createElement('tr'),thead=document.createElement('thead'),tbody=document.createElement('tbody');
+   for(const h of ['Measure','Baseline','Comparison','Change','Relative change']){
+     const th=text('th',h);th.scope='col';head.append(th);}
+   thead.append(head);t.append(thead);
+   for(const c of pair.changes){
+     const tr=document.createElement('tr');
+     for(const v of [c.heading+(c.unit?' ('+c.unit+')':''),c.before,c.after,c.change_decimal,
+       c.relative_percent_decimal===null?'—':c.relative_percent_decimal+'%'])tr.append(text('td',String(v)));
+     tbody.append(tr);
+   }
+   t.append(tbody);target.append(t);
+ }
+ const pw=report.pairwise_review;
+ if(pw){
+   const name=i=>report.selections[i].title+' · revision '+report.selections[i].revision;
+   const reason=r=>r==='portfolio_conflicting_claimed_basis'?'Conflicting report elsewhere in the selected portfolio':COMPARISON_REASONS[r]||r;
+   target.append(text('h3','All-pairs compatibility review'),
+     text('p',pw.comparable_pair_count+' comparable of '+pw.pair_count+' exact pairs; '+pw.withheld_pair_count+' withheld.'),
+     text('p',pw.interpretation));
+   const coverage=document.createElement('table'),head=document.createElement('thead'),tr=document.createElement('tr');
+   for(const h of ['Exact revision','Comparable neighbors','Withheld neighbors']){const th=text('th',h);th.scope='col';tr.append(th);}
+   head.append(tr);coverage.append(head);
+   const rows=document.createElement('tbody');
+   for(const c of pw.selection_coverage){const line=document.createElement('tr');line.append(text('td',name(c.selection_index)),text('td',String(c.comparable_neighbors)),text('td',String(c.withheld_neighbors)));rows.append(line);}
+   coverage.append(rows);target.append(coverage);
+   const sets=document.createElement('ul');
+   for(const set of pw.maximal_pairwise_compatible_sets)sets.append(text('li',set.map(name).join(' / ')));
+   target.append(text('h4','Directly compatible sets (may overlap)'),sets);
+   if(!sets.children.length)target.append(text('p','No directly compatible pairs.'));
+   if(pw.isolated_selection_indices.length)target.append(text('p','No comparable neighbor: '+pw.isolated_selection_indices.map(name).join('; ')));
+   if(pw.withheld_pair_count){
+     const reasons=document.createElement('ul');
+     for(const [key,count] of Object.entries(pw.refusal_reason_counts))reasons.append(text('li',reason(key)+' — '+count+' pairs'));
+     target.append(text('h4','Refusal reasons (can overlap)'),reasons);
+   }
+   const picker=document.createElement('select');picker.setAttribute('aria-label','Exact portfolio pair');
+   pw.pairs.forEach((p,i)=>{const o=text('option',name(p.left_index)+' versus '+name(p.right_index)+(p.comparable?'':' (withheld)'));o.value=String(i);picker.append(o);});
+   const label=text('label','Inspect exact pair ');label.append(picker);const body=document.createElement('div');body.setAttribute('aria-live','polite');
+   function inspect(){
+     const p=pw.pairs[Number(picker.value)];body.replaceChildren();
+     if(!p)return;
+     body.append(text('p','Left: '+name(p.left_index)+'; right: '+name(p.right_index)));
+     if(!p.comparable){const list=document.createElement('ul');p.refusal_reasons.forEach(r=>list.append(text('li',reason(r))));body.append(text('p','Comparison withheld.'),list);return;}
+     const table=document.createElement('table'),thd=document.createElement('thead'),header=document.createElement('tr'),tbd=document.createElement('tbody');
+     for(const h of ['Measure','Left','Right','Change (right − left)','Relative change']){const th=text('th',h);th.scope='col';header.append(th);}
+     thd.append(header);table.append(thd);
+     for(const c of p.changes){const row=document.createElement('tr');for(const v of [c.heading+(c.unit?' ('+c.unit+')':''),c.before,c.after,c.change_decimal,c.relative_percent_decimal===null?'—':c.relative_percent_decimal+'%'])row.append(text('td',String(v)));tbd.append(row);}
+     table.append(tbd);body.append(table);
+   }
+   picker.onchange=inspect;target.append(label,body);inspect();
+ }
+ const notes=document.createElement('ul');report.interpretation.forEach(n=>notes.append(text('li',n)));target.append(notes);
+}
+async function reviewPortfolio(download=false){
+ if(!credential||portfolio.length<2)return;
+ const turn=++portfolioTurn,identity=epoch,payload=portfolioPayload();
+ portfolioReport=null;$('portfolioResult').replaceChildren();$('portfolioRun').disabled=true;$('portfolioDownload').disabled=true;
+ $('portfolioStatus').textContent=download?'Rechecking all selected permissions…':'Reviewing selected revisions…';
+ try{
+   const result=await post('/v1/human/analysis-portfolio/compare',payload);
+   if(turn!==portfolioTurn||identity!==epoch)return;
+   portfolioReport=result;renderPortfolioReport(result);
+   $('portfolioStatus').textContent='Portfolio comparison complete.';
+   if(download){
+     const url=URL.createObjectURL(new Blob([JSON.stringify(result,null,2)],{type:'application/json'}));
+     try{const a=document.createElement('a');a.href=url;a.download='owg-analysis-portfolio.json';a.click();}
+     finally{URL.revokeObjectURL(url);}
+   }
+ }catch(error){
+   if(turn===portfolioTurn&&identity===epoch){$('portfolioStatus').textContent=error.message;portfolioReport=null;}
+ }finally{
+   if(turn===portfolioTurn&&identity===epoch){$('portfolioRun').disabled=portfolio.length<2;$('portfolioDownload').disabled=!portfolioReport;}
+ }
+}
+$('portfolioRun').onclick=()=>reviewPortfolio(false);
+$('portfolioDownload').onclick=()=>reviewPortfolio(true);
+
 $('compareRun').onclick=()=>run(async()=>{
  if(!selected||selected.revision<2)return;
  const left=selected.viewing_revision,right=Number($('compareOther').value);

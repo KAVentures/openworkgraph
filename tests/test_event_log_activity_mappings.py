@@ -93,6 +93,28 @@ def test_validation_one_applied_at_a_time_delete_and_erase():
         mappings.listing(log)
 
 
+def test_portable_mapping_preview_does_not_save_or_apply():
+    source, destination = _log(), _log()
+    saved = mappings.create(source, ENTER)
+    definition = {key: saved[key] for key in ("name", "groups", "collapse_repeats")}
+    definition["groups"][0]["activities"].append("Type name ")
+    document = {"format": mappings.TEMPLATE_FORMAT, "mapping": definition}
+    preview = mappings.preview_template(destination, document)
+    assert preview["mapping"] == definition
+    assert preview["groups"] == [{"label": "Enter data", "activities": 3,
+                                  "matched_events": 4, "missing_activities": ["Type name "]}]
+    assert preview["applied"] is False
+    assert mappings.listing(destination)["mappings"] == []
+    assert "activity_mapping" not in workspace.variants(destination)
+    copied = mappings.create(destination, preview["mapping"])
+    assert copied["activities_not_in_log"] == ["Type name "]
+    assert copied["applied"] is False
+    assert "activity_mapping" not in workspace.variants(destination)
+    for bad in ({}, {**document, "extra": True}, {**document, "format": "other"}):
+        with pytest.raises(workspace.EventLogWorkspaceError):
+            mappings.preview_template(destination, bad)
+
+
 def test_routes_require_the_dashboard(tmp_path):
     import os
     import subprocess
@@ -112,6 +134,13 @@ with TestClient(app) as client:
     base = f"/v1/event-logs/{log}/activity-mappings"
     body = {"name": "B steps", "groups": [{"label": "B", "activities": ["B1", "B2"]}], "collapse_repeats": True}
     assert client.post(base, json=body, headers=bearer).status_code == 403
+    template = {"format": "openworkgraph.activity-mapping.v1", "mapping": body}
+    assert client.post(base + "/template/preview", json=template, headers=bearer).status_code == 403
+    preview = client.post(base + "/template/preview", json=template, headers=owner)
+    assert preview.status_code == 200, preview.text
+    assert preview.json()["groups"][0]["matched_events"] == 6
+    assert client.get(base, headers=owner).json()["mappings"] == []
+    assert client.post(base + "/template/preview", json={**template, "extra": 1}, headers=owner).status_code == 422
     made = client.post(base, json=body, headers=owner)
     assert made.status_code == 200, made.text
     mid = made.json()["mapping_id"]

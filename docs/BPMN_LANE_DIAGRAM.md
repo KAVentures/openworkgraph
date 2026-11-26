@@ -35,8 +35,9 @@ lane. The output is still a human-reviewed **non-executable** proposal.
 - The existing `BPMNEdge` sequence flows retain their original source
   and destination and deterministic orthogonal routing. Lines can traverse
   lane boundaries; that does not imply a verified cross-team handoff.
-- Models without a `laneSet` still use the original diagram path and
-  preserve its XML layout, IDs and behavior.
+- Models without a `laneSet` use the same deterministic graph layout without
+  inventing lanes. Semantic node IDs and sequence flows are preserved; the
+  geometry can differ from earlier exports.
 - Malformed DI source states such as duplicate membership, unknown
   `flowNodeRef`s, more than one laneSet or unsupported nested lanes fail
   explicitly rather than dropping assignments or inventing geometry.
@@ -68,3 +69,44 @@ This closes a specific R13 semantic-layout interoperability gap. It does
 not establish full Signavio or Celonis modeling parity, which still depends
 on broader customer acceptance, hierarchical process design and verifiable
 outcome workflows.
+
+
+## Branching and cyclic layout
+
+The exporter now ranks strongly connected components in prerequisite order
+on their acyclic condensation graph. A join after both a short and a long
+branch is placed after the longer branch, rather than being pulled earlier
+by a shortest-path shortcut. Loops retain deterministic local breadth-first
+positions; an exit from a loop is positioned after the entire component.
+Disconnected retained nodes still receive geometry.
+
+Orthogonal routes use the full column gaps, rather than the bounds of a
+narrow gateway or event. Non-adjacent and backward edges use separate upper
+tracks; self-loops return through the top port. This avoids traversing the
+interior of unrelated activity rectangles, including in other lanes. Edge
+crossings and shared segments, text-label collisions and optimal compactness
+are not solved; external editors may still improve the layout. The same
+120-node and 200-flow limits remain.
+
+Regression tests verify exact shape/flow coverage, boundary attachment,
+orthogonality, avoidance of activity interiors, semantic XML preservation,
+repeatable coordinates, branching joins, cyclic exits, and the maximum
+supported graph size. No executable semantics or permissions are introduced.
+
+## Dense branching and joining routes
+
+Column gaps now allocate a distinct vertical track per edge/gap occurrence.
+Only congested gaps expand; the minimum column separation is preserved.
+Adjacent forward edges use one track and other non-self edges use two,
+including a reserved gap before the first column when necessary. Tracks are
+integer coordinates and have six-unit separation. The existing distinct
+upper horizontal tracks remain for long and backward flows. Rectangular
+task side ports spread in the order of the opposite endpoint's position,
+with bounded integer spacing. Extremely high degree can share a task port;
+gateways and events retain center-side ports to avoid implying attachment
+to nonrectangular shape corners. Self-loop task return ports spread along
+the top side. No artificial node, semantic flow, responsibility, ordering
+or execution grant is introduced. Crossings and shared horizontal segments
+remain possible, and label positioning is not optimized. Regression tests
+cover 20-way fan-out/fan-in, dense cross-lane routing, backward and same-column
+tracks, port capacity, existing obstacle avoidance, and deterministic XML.

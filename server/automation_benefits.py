@@ -26,6 +26,7 @@ from typing import Annotated, Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, StrictFloat, StrictInt, ValidationError, model_validator
 
 from . import automation_pipeline as pipeline
+from .automation_benefit_sensitivity import review_sensitivity
 
 MAX_MEASUREMENTS_PER_IDEA = 48
 DAYS_PER_MONTH = 30.44
@@ -176,8 +177,15 @@ def _coverage_adjusted(rows: list[dict[str, Any]], modeled: float | None) -> dic
                     break
                 overlap_pairs.append({"period": kind, "first_id": first["measurement_id"],
                                       "second_id": second["measurement_id"]})
+    # Historical baseline rows can predate the implementation declaration.
+    # Refuse shared calendar days across the two comparison groups as well.
+    for first in cohorts["baseline"]:
+        for second in cohorts["after"]:
+            if first["start"] <= second["end"] and second["start"] <= first["end"]:
+                overlap_pairs.append({"period": "baseline_after", "first_id": first["measurement_id"],
+                                      "second_id": second["measurement_id"]})
     report = {
-        "status": "missing_periods", "coverage": coverage, "comparison": None,
+        "status": "missing_periods", "coverage": coverage, "comparison": None, "sensitivity": None,
         "overlap_pairs": overlap_pairs,
         "period_weighting": "pooled_hours_and_cases_over_nonoverlapping_calendar_days",
         "measurement_sources_independently_verified": False,
@@ -215,7 +223,8 @@ def _coverage_adjusted(rows: list[dict[str, Any]], modeled: float | None) -> dic
         "observed_vs_modeled_ratio": round(at_after_volume / modeled, 3) if modeled else None,
         "uncertainty_interval_available": False,
     }
-    return {**report, "status": "ready", "comparison": comparison}
+    return {**report, "status": "ready", "comparison": comparison,
+            "sensitivity": review_sensitivity(b, a, DAYS_PER_MONTH)}
 
 
 def report(idea_id: str) -> dict[str, Any]:

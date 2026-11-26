@@ -49,6 +49,15 @@ def test_snapshot_is_scored_after_newer_events_arrive():
     # Nothing has happened yet: every case is still open.
     first = snapshots.evaluate(log, snap["snapshot_id"])
     assert first["finished_cases"] == 0 and first["still_open_cases"] == 6 and first["remaining_time"] is None
+    bounds = first["frozen_population_bounds"]
+    assert bounds["eventual_range_coverage_lower"] == 0
+    assert bounds["eventual_range_coverage_upper"] == 1
+    assert bounds["eventual_mae_lower_bound_seconds"] == 0
+    assert bounds["eventual_mae_upper_bound_seconds"] is None
+    assert first["paired_remaining_time"] is None
+    assert first["paired_remaining_time_population"]["paired_cases"] == 6
+    assert first["proper_remaining_time_scores"]["interval_80"]["finished_cases"] == 0
+    assert first["proper_remaining_time_scores"]["interval_80"]["eventual_mean_interval_score_upper_seconds"] is None
     # Later: four cases close after 10 h (as predicted), one after 40 h, one stays open for 50 h.
     later = START + timedelta(days=30, hours=1)
     newer = [(f"o{i}", "Close", (later + timedelta(hours=10)).isoformat()) for i in range(4)]
@@ -63,6 +72,20 @@ def test_snapshot_is_scored_after_newer_events_arrive():
     # The open case has waited 50 h, past its 10 h 90th percentile: a known miss.
     assert t["still_open_known_misses"] == 1 and r["seconds_since_snapshot"] == 50 * 3600
     assert "lean towards short ones" in r["interpretation"]
+    bounds = r["frozen_population_bounds"]
+    assert bounds["known_inside_range"] == 4 and bounds["known_outside_range"] == 2
+    assert bounds["range_membership_unknown"] == 0
+    assert bounds["eventual_range_coverage_lower"] == bounds["eventual_range_coverage_upper"] == round(4/6, 4)
+    assert bounds["eventual_mae_lower_bound_seconds"] == round(70*3600/6, 3)
+    assert bounds["eventual_mae_upper_bound_seconds"] is None
+    assert r["paired_remaining_time"]["paired_cases"] == 5
+    population = r["paired_remaining_time_population"]
+    assert population["paired_cases"] == 6
+    assert population["paired_case_observation"]["still_open"] == 1
+    proper = r["proper_remaining_time_scores"]["interval_80"]
+    assert proper["finished_late_misses"] == proper["censored_known_late_misses"] == 1
+    assert proper["eventual_mean_interval_score_lower_seconds"] == pytest.approx(70*3600*10/6)
+    assert proper["eventual_mean_interval_score_upper_seconds"] is None
 
 
 def test_outcome_brier_and_validation():
@@ -77,6 +100,9 @@ def test_outcome_brier_and_validation():
     # History never ran over 20 h, so every frozen risk is 0; one case did run over.
     assert o["cases"] == 6 and o["observed_rate"] == round(1 / 6, 4) and o["mean_predicted"] == 0
     assert o["brier_score"] == round(1 / 6, 5)
+    paired = r["paired_outcome_bounds"]
+    assert paired["known_outcome_cases"] == 6 and paired["unknown_outcome_cases"] == 0
+    assert paired["eventual_model_brier_lower"] == paired["eventual_model_brier_upper"] == o["brier_score"]
     with pytest.raises(workspace.EventLogWorkspaceError, match="completed_cases"):
         snapshots.take(log, {**SPEC, "estimator": "survival"})
     with pytest.raises(workspace.EventLogWorkspaceError, match="unknown prediction snapshot"):
@@ -87,6 +113,24 @@ def test_outcome_brier_and_validation():
     workspace.delete_log(log)
     with pytest.raises(workspace.EventLogWorkspaceError):
         snapshots.evaluate(log, kept["snapshot_id"])
+
+
+def test_backfilled_pre_snapshot_completion_is_not_prospective_evidence():
+    rows = _history()
+    earlier = START + timedelta(days=29)
+    rows += [("backfill", "Receive", earlier.isoformat()),
+             ("backfill", "Check", (earlier + timedelta(hours=1)).isoformat())]
+    log = workspace.import_log(_csv(rows), name="orders", source_format="csv", mapping=MAPPING)["log_id"]
+    snap = snapshots.take(log, SPEC)
+    assert snap["predicted_cases"] == 7
+    workspace.append_log(log, _csv([("backfill", "Close", (earlier + timedelta(hours=11)).isoformat())]),
+                         source_format="csv", mapping=MAPPING)
+    result = snapshots.evaluate(log, snap["snapshot_id"])
+    assert result["finished_cases"] == 0
+    assert result["still_open_cases"] == 6
+    assert result["cases_with_inconsistent_observation"] == 1
+    assert result["frozen_population_bounds"]["frozen_cases"] == 7
+    assert result["frozen_population_bounds"]["range_membership_unknown"] == 7
 
 
 def test_routes_require_the_dashboard(tmp_path):

@@ -307,6 +307,35 @@ async def agent_model_quality(request: Request, log_id: str, levels: str | None 
     return await _answer(sharing.model_quality, log_id, case_type, levels)
 
 
+@router.get("/v1/process-intelligence/{log_id}/attributes")
+async def agent_attributes(request: Request, log_id: str, top_values: int = Query(default=10, ge=1, le=50),
+                           case_type: str | None = Query(default=None, max_length=200)):
+    _require_agent_access(request)
+    return await _answer(sharing.attributes, log_id, case_type, top_values)
+
+
+@router.post("/v1/process-intelligence/{log_id}/compare-logs")
+async def agent_compare_logs(request: Request, log_id: str):
+    """Compare this shared log (baseline) with another shared log (comparison), aggregates only."""
+    _require_agent_access(request)
+    body = await _json_body(request, "log comparison settings", strict=True, limit=16384)
+    allowed = {"comparison_log_id", "baseline_case_type", "comparison_case_type", "baseline_filter",
+               "comparison_filter", "limit"}
+    if not isinstance(body, dict) or set(body) - allowed or not isinstance(body.get("comparison_log_id"), str):
+        raise HTTPException(422, "send comparison_log_id and optional case types, filters and limit")
+    return await _answer(sharing.compare_logs, log_id, body["comparison_log_id"],
+                         baseline_case_type=body.get("baseline_case_type"),
+                         comparison_case_type=body.get("comparison_case_type"),
+                         baseline_filter=body.get("baseline_filter"), comparison_filter=body.get("comparison_filter"),
+                         limit=body.get("limit", 25))
+@router.get("/v1/process-intelligence/{log_id}/process-model")
+async def agent_process_model(request: Request, log_id: str, noise: float = Query(default=0.2, ge=0, lt=1),
+                              activities: float = Query(default=1.0, gt=0, le=1),
+                              case_type: str | None = Query(default=None, max_length=200)):
+    _require_agent_access(request)
+    return await _answer(sharing.process_model, log_id, case_type, noise, activities)
+
+
 @router.get("/v1/process-intelligence/{log_id}/model-deviations")
 async def agent_model_deviations(request: Request, log_id: str, noise: float = Query(default=0.2, ge=0, lt=1),
                                  case_type: str | None = Query(default=None, max_length=200)):
@@ -500,9 +529,19 @@ async def agent_rework(request: Request, log_id: str, limit: int = Query(default
 
 
 @router.get("/v1/process-intelligence/{log_id}/waiting-times")
-async def agent_waiting_times(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200)):
+async def agent_waiting_times(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
+                              working_calendar: str | None = Query(default=None, max_length=4096)):
     _require_agent_access(request)
-    return await _answer(sharing.waiting_times, log_id, case_type)
+    calendar = None
+    if working_calendar is not None:
+        import json
+        try:
+            calendar = json.loads(working_calendar)
+        except ValueError:
+            raise HTTPException(422, "working_calendar must be a JSON object") from None
+        if not isinstance(calendar, dict):
+            raise HTTPException(422, "working_calendar must be a JSON object")
+    return await _answer(sharing.waiting_times, log_id, case_type, calendar)
 
 
 @router.get("/v1/process-intelligence/{log_id}/drift")

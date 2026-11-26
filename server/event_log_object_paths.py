@@ -10,6 +10,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, ValidationError
 
 from shared.event_log_formats import _exact_key
+from shared.ocel_trace_route import explain
 from . import event_log_object_relationships as relationships
 from . import event_log_workspace as workspace
 
@@ -22,6 +23,7 @@ MAX_EDGES = 200
 class TraceSpec(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     object_id: str = Field(min_length=1, max_length=200)
+    target_object_id: str | None = Field(default=None, min_length=1, max_length=200)
     direction: Literal["both", "incoming", "outgoing"] = "both"
     max_hops: StrictInt = Field(default=2, ge=1, le=MAX_HOPS)
     max_nodes: StrictInt = Field(default=60, ge=2, le=MAX_NODES)
@@ -30,6 +32,8 @@ class TraceSpec(BaseModel):
 
     def model_post_init(self, __context: Any) -> None:
         _exact_key(self.object_id)
+        if self.target_object_id is not None:
+            _exact_key(self.target_object_id)
         if self.qualifier is not None:
             _exact_key(self.qualifier, 80)
 
@@ -77,6 +81,11 @@ def trace(log_id: str, spec: Any) -> dict[str, Any]:
         ).fetchone()
         if original is None:
             raise workspace.EventLogWorkspaceError("The selected object was not found in this log")
+        if settings.target_object_id is not None and conn.execute(
+            "SELECT 1 FROM objects WHERE log_id=? AND object_id=?",
+            [log_id, settings.target_object_id],
+        ).fetchone() is None:
+            raise workspace.EventLogWorkspaceError("The target object was not found in this log")
         total_assertions = relationships.count(conn, log_id)
         revision = relationships._revision(conn, log_id)
         seen_nodes: dict[str, dict[str, Any]] = {
@@ -94,9 +103,6 @@ def trace(log_id: str, spec: Any) -> dict[str, Any]:
             if not frontier:
                 break
             available = settings.max_edges - len(edges)
-            if available <= 0:
-                truncated_reason = "max_edges_reached"
-                break
             # With direction=both, later frontiers can revisit edges already
             # traversed. Fetch enough extra candidates to discard EVERY
             # previously seen edge without making a complete graph scan.
@@ -160,6 +166,9 @@ def trace(log_id: str, spec: Any) -> dict[str, Any]:
         "retained_assertions_in_log": int(total_assertions),
         "nodes": nodes,
         "edges": edges,
+        "target_route": explain(nodes, edges, settings.object_id, settings.target_object_id,
+                                settings.direction, truncated_reason is not None, settings.max_hops)
+                        if settings.target_object_id is not None else None,
         "shown_nodes": len(nodes),
         "shown_edges": len(edges),
         "truncated": truncated_reason is not None,
