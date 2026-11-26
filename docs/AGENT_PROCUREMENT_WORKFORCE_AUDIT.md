@@ -420,3 +420,54 @@ additional `expected_continuity_sha256`, `reviewer_alias`,
 Existing dashboard authentication, JSON-text and storage bounds apply.
 No actual remediation, incident clearance or external ticket action is
 verified by these operations.
+
+
+## Read-only Jira ticket synchronization
+
+An assigned local remediation finding can be explicitly mapped to an exact
+locally observed Jira Cloud issue. Open its register, expand **Read-only
+Jira ticket synchronization**, load the ledger, select the finding and
+enter the opaque `owg:r:` resource reference obtained from OWG's observed
+record evidence. Native Jira issue keys and URLs are not accepted. The
+mapping is immutable for that register; one resolved record identity cannot
+be bound to multiple findings in the same register. Mapping is an operator
+declaration, not independently established semantic equivalence.
+
+**Refresh Jira ticket state** explicitly uses OWG's existing default-off
+Jira source adapter. The exact observed-record guard, configured tenant,
+site authorization, read scope and OAuth controls remain in force. No
+network call occurs during binding. Reads are outside the database write
+transaction and the exact register and ticket ledger revisions are checked
+again before recording the result. A concurrent change discards the result.
+Unavailable or stale source data remains unknown, not resolved.
+
+The retained ledger contains opaque references, local keyed identity pins,
+source-reported state (new, indeterminate, done or unknown), resolution
+flag/timestamp where established, read time, bounded changelog completeness
+flag and hash-linked local history. No native ticket keys, provider URLs,
+tokens, comments, names, titles or raw source payloads are retained by this
+ledger. A check from a prior register revision is identified as historical.
+The read-only ledger never changes remediation state, infers reviewer or
+owner identity, creates tickets or establishes incident clearance.
+
+Export the ledger separately before removing a register with ticket history.
+Deletion requires the exact ticket history pin in addition to the register
+revision/history pin; the associated ledger is removed atomically with the
+register. Prior backups and exports are not erased. Successor registers do
+not automatically inherit ticket mappings. Caps are 200 mappings and 1,000
+checks per register and 16 MiB encoded ticket ledger storage in total.
+
+Dashboard-only POST actions under
+`/v1/process-catalog/procurement-workforce/exchange/`:
+- remediation-ticket-status: worklist_sha256.
+- remediation-ticket-bind: worklist_sha256, expected_revision,
+  expected_history_sha256, expected_ticket_revision,
+  expected_ticket_history_sha256, finding_id, expected_finding_sha256,
+  resource_ref, confirm_operator_mapping=true, confirm_local_retention=true.
+- remediation-ticket-check: the same register, ticket and finding pins,
+  plus confirm_source_read=true (no resource_ref in the check request).
+- remediation-forget additionally accepts expected_ticket_history_sha256,
+  required when a ticket ledger has retained events.
+
+Existing session-only, no-store and JSON-text request bounds apply.
+No automatic scheduled refresh or external write is introduced.
