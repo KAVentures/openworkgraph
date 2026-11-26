@@ -4921,6 +4921,107 @@
     return panel;
   }
 
+  function domainPackOverlapPanel(valid,logId){
+    const panel=el('details');panel.id='owgDomainPackOverlap';
+    const pack=select('owgOverlapPack',[['','Load installed packs']]);
+    const kind=select('owgOverlapType',[['','Choose object type']]);
+    const load=button('Load installed packs','secondary'),run=button('Review rule overlap');
+    const choices=el('fieldset');choices.append(el('legend','Select two to twelve rules'));
+    const status=el('p',null,'muted'),out=el('div'),evidenceOut=el('div');status.setAttribute('role','status');
+    let revision=0,groups=[],checks=[],report=null;
+    const active=t=>valid()&&panel.isConnected&&revision===t;
+    const selected=()=>checks.filter(c=>c.checked).map(c=>Number(c.value));
+    const endpoint=()=>'/v1/event-logs/'+encodeURIComponent(logId)+'/domain-packs/'+encodeURIComponent(pack.value)+'/overlap';
+    const post=async body=>(await api(endpoint(),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).json();
+    const ruleLabel=r=>r.index+1+': '+[r.rule.template,r.rule.a,r.rule.b].filter(Boolean).join(' · ');
+    const downloads=exportButtons('owg-domain-pack-overlap',()=>report,r=>[
+      ['Section','Rule index (zero based)','Second rule index','Confirmed violations','Possible violations incl unknown','Activated or confirmed union','Unknown or possible union','Basis digest'],
+      ...r.rules.map(x=>['rule',x.rule_index,'',x.violated,x.violated+x.unknown,x.activated,x.unknown,r.basis_sha256]),
+      ...r.pairs.map(x=>['pair',x.left_rule_index,x.right_rule_index,x.both_violated,x.possible_both_violated,x.either_violated,x.possible_either_violated,r.basis_sha256])]);
+    function clear(){revision++;report=null;out.replaceChildren();evidenceOut.replaceChildren();downloads.enable(false);run.disabled=selected().length<2||selected().length>12;}
+    function showRules(){
+      checks=[];choices.replaceChildren(el('legend','Select two to twelve rules'));
+      for(const rule of groups.find(g=>g.case_type===kind.value)?.rules||[]){
+        const c=el('input');c.type='checkbox';c.value=String(rule.index);c.checked=checks.length<12;
+        const label=el('label');label.append(c,document.createTextNode(' '+ruleLabel(rule)));
+        const line=el('div');line.append(label);choices.append(line);checks.push(c);
+        c.onchange=()=>{clear();status.textContent='Selection changed. Review again.';};
+      }
+      clear();
+    }
+    kind.onchange=showRules;
+    pack.onchange=async()=>{
+      groups=[];setOptions(kind,[['','Choose object type']]);showRules();
+      const t=revision;if(!pack.value)return;
+      status.textContent='Loading exact installed rules…';
+      try{
+        const r=await getJSON(endpoint());if(!active(t))return;
+        if(r.pack_id!==pack.value)throw new Error('Unexpected rule catalog.');
+        groups=r.groups;
+        setOptions(kind,groups.map(g=>[g.case_type,g.case_type+' ('+g.rules.length+' rules)']));
+        showRules();status.textContent=groups.length?'Choose rules for one object type.':'No object type has two mapped rules.';
+      }catch(error){if(active(t))status.textContent=error.message;}
+    };
+    load.onclick=async()=>{
+      groups=[];setOptions(kind,[]);showRules();setOptions(pack,[['','Choose installed pack']]);const t=revision;load.disabled=true;
+      try{
+        const r=await getJSON('/v1/event-logs/'+encodeURIComponent(logId)+'/domain-packs');
+        if(!active(t))return;
+        setOptions(pack,[['','Choose installed pack'],...r.installs.map(i=>[i.pack_id,i.pack_id+' · '+i.version])]);
+        status.textContent=r.installs.length?'Choose an installed pack.':'Install a pack first.';
+      }catch(error){if(active(t))status.textContent=error.message;}
+      finally{if(panel.isConnected)load.disabled=false;}
+    };
+    run.onclick=async()=>{
+      clear();const t=revision;run.disabled=true;
+      const request={case_type:kind.value,rule_indices:selected()};
+      status.textContent='Reviewing the complete case population…';
+      try{
+        const r=await post(request);if(!active(t))return;
+        if(r.basis.case_type!==kind.value||r.basis.pack_id!==pack.value||!/^[a-f0-9]{64}$/.test(r.basis_sha256||''))throw new Error('Unexpected overlap report.');
+        report=r;
+        const label=i=>ruleLabel(r.basis.rules.find(x=>x.index===i));
+        const first=select('owgOverlapFirst',r.basis.rules.map(x=>[String(x.index),ruleLabel(x)]));
+        const second=select('owgOverlapSecond',[['','Only first rule'],...r.basis.rules.map(x=>[String(x.index),ruleLabel(x)])]);
+        const mode=select('owgOverlapMode',[['all_violated','All selected confirmed'],['any_violated','Any selected confirmed'],['possible_all','All selected confirmed or unknown']]);
+        const inspect=button('Inspect matching cases','secondary'),more=button('Next cases','secondary');more.hidden=true;
+        let eturn=0,cursor=null;
+        const reset=()=>{eturn++;cursor=null;more.hidden=true;inspect.disabled=false;evidenceOut.replaceChildren();};
+        first.onchange=second.onchange=mode.onchange=reset;
+        const page=async after=>{
+          const e=++eturn;inspect.disabled=true;more.hidden=true;
+          evidenceOut.textContent='Loading exact case evidence…';
+          try{
+            const ids=[Number(first.value),...(second.value&&second.value!==first.value?[Number(second.value)]:[])];
+            const p=await post({...request,expected_basis_sha256:r.basis_sha256,evidence:{rule_indices:ids,mode:mode.value,after,limit:50}});
+            if(!active(t)||e!==eturn)return;
+            if(p.basis_sha256!==r.basis_sha256)throw new Error('Reviewed basis changed.');
+            cursor=p.next_after;more.hidden=!cursor;
+            evidenceOut.replaceChildren(el('p',p.total+' matching cases; '+p.cases.length+' on this page.'),
+              table(['Case','Confirmed rule numbers','Unknown rule numbers','Activated rule numbers'],p.cases.map(c=>[
+                c.case_id,...[c.violated_rule_indices,c.unknown_rule_indices,c.activated_rule_indices].map(xs=>xs.map(i=>i+1).join(', ')||'—')])));
+          }catch(error){if(active(t)&&e===eturn)evidenceOut.textContent=error.message;}
+          finally{if(active(t)&&e===eturn)inspect.disabled=false;}
+        };
+        inspect.onclick=()=>page(null);more.onclick=()=>page(cursor);
+        out.replaceChildren(el('h4','Unique affected cases'),
+          el('p',r.unique_cases_with_confirmed_violation+' confirmed affected cases; up to '+r.unique_cases_with_confirmed_or_unknown_violation+' including unknowns, out of '+r.cases+' projected cases. '+r.rule_violation_instances+' rule-violation instances (not unique cases).'),
+          table(['Confirmed violated rules per case','Cases'],r.confirmed_violation_count_histogram.map(h=>[h.violated_rule_count,h.cases])),
+          el('h4','Rule outcomes'),table(['Rule','Activated','Confirmed violations','Unknown','Satisfied','Nonactivated'],r.rules.map(x=>[label(x.rule_index),x.activated,x.violated,x.unknown,x.satisfied,x.nonactivated])),
+          el('h4','Pairwise overlap'),table(['First rule','Second rule','Both confirmed','Both possible','Either confirmed','Either possible','Confirmed Jaccard'],r.pairs.map(x=>[
+            label(x.left_rule_index),label(x.right_rule_index),x.both_violated,x.possible_both_violated,x.either_violated,x.possible_either_violated,x.confirmed_jaccard==null?'—':pct(x.confirmed_jaccard)])),
+          el('p',r.interpretation,'muted'),el('h4','Inspect case evidence'),
+          field('First rule',first),field('Second rule',second),field('Match',mode),inspect,more);
+        downloads.enable(true);status.textContent='Overlap review complete. No configuration changed.';
+      }catch(error){if(active(t))status.textContent=error.message;}
+      finally{if(active(t))run.disabled=selected().length<2||selected().length>12;}
+    };
+    run.disabled=true;
+    panel.append(el('summary','Find overlapping compliance violations'),el('p','Count distinct cases and investigate overlapping rule violations within one object type. Unknown outcomes are not passes.','muted'),
+      load,field('Installed pack',pack),field('Object type',kind),choices,run,status,downloads.node,out,evidenceOut);
+    return panel;
+  }
+
   function domainPackSection(){
     const box=section('Domain packs');box.id='owgDomainPacks';
     box.appendChild(el('div','Apply ready-made definitions for a well-known process to this log: case metrics, compliance and object rules and a reference object model. Map each role to the names your log uses; the pack states its assumptions and is not validated against your source system.','muted'));
@@ -4934,6 +5035,7 @@
     const generation=state.generation,logId=state.logId,base='/v1/event-logs/'+encodeURIComponent(logId)+'/domain-packs';
     let turn=0;const current=t=>generation===state.generation&&box.isConnected&&t===turn;
     box.append(domainPackBenchmarkPanel(()=>generation===state.generation&&box.isConnected,logId));
+    box.append(domainPackOverlapPanel(()=>generation===state.generation&&box.isConnected,logId));
     const post=(url,body)=>api(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
     setup.onclick=async()=>{
       const t=++turn;setup.disabled=true;historyTurn++;historyOut.replaceChildren();form.replaceChildren();out.replaceChildren();status.textContent='Loading…';
