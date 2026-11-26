@@ -73,3 +73,28 @@ may be expensive for large logs and no latency certification is claimed.
 Synthetic fixtures exercise all statuses, symmetry, zero-assertion snapshots,
 literal filtering, pagination, stale/deleted pins and authorization. Real
 provider identity and temporal relationship validity remain external questions.
+
+## Directed endpoint-pair comparison
+
+Choose **Directed endpoint pairs (complete qualifier sets)**. The same pinned
+endpoint accepts optional `mode: "pairs"` (default is `"assertions"`), exact
+`source_id` and `target_id` filters in both modes, and optional `pair_status`
+in pair mode. Pair mode refuses qualifier and assertion-status filters so it
+cannot mistake a filtered subset for a complete qualifier set. Type filters
+match either retained endpoint type as before. Every literal directed pair
+is grouped once, including self-pairs and reversed directions. Endpoint type
+conflict and missing endpoint statuses take precedence over set comparison.
+Comparable pairs are partitioned into equal qualifier sets, different
+qualifier sets, left-only pairs and right-only pairs. Counts and overlap
+cover the filtered pair union before the pair-status page filter. Overlap is
+shared comparable pairs divided by the comparable union; qualifier agreement
+is equal sets divided by shared comparable pairs. Empty denominators return
+null. Literal assertion counts include uncertain pairs and are separately
+labelled. Exact per-pair counts show left/right/common and side-only qualifiers
+without materializing unbounded qualifier arrays. **Inspect assertions**
+reuses both pins and exact directed IDs, clears the qualifier/status filters,
+and returns the original literal assertion evidence with existing pagination.
+No inferred identity, actual relationship change, historical validity, or
+execution authority is claimed. The SQL aggregation uses temporary tables and
+existing OCEL limits; no new retained data. Full native/large-log performance
+and browser verification remain necessary.

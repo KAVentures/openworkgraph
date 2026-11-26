@@ -46,6 +46,14 @@ const path=require('node:path');
    assert(label.startsWith('Performance spectrum of Pick to Ship: 30 occurrences'),label);
    await out.locator('details summary').first().click();
    assert((await out.locator('details').first().locator('tbody tr').count())>=3);
+   // Segment figures and busy periods download as CSV; period counts add up to the segment.
+   const [spectrumCsv]=await Promise.all([page.waitForEvent('download'),page.locator('#owgSpectrumReportCsv').click()]);
+   const spectrumLines=(await fs.readFile(await spectrumCsv.path(),'utf8')).trim().split(/\r?\n/).map(l=>l.split(','));
+   assert.equal(spectrumLines[0].join(','),'kind,from,to,period_start_utc,occurrences,fast,normal,slow,very_slow,median_seconds,p25_seconds,p75_seconds,p95_seconds,fifo_share,batched_share');
+   const pickShip=spectrumLines.filter(l=>l[1]==='Pick'&&l[2]==='Ship');
+   assert.equal(pickShip[0][0],'segment');assert.equal(pickShip[0][4],'30');assert.equal(pickShip[0][14],'1');
+   assert.equal(pickShip.slice(1).reduce((n,l)=>n+Number(l[4]),0),30);
+   assert(pickShip.slice(1).every(l=>l[0]==='period'&&/^\d{4}-\d\d-\d\dT/.test(l[3])));
    const review=page.locator('#owgSpectrumCaseReview');
    await out.getByRole('button',{name:'Inspect cases from Pick to Ship',exact:true}).click();
    await review.getByRole('status').filter({hasText:'30 occurrences in 30 cases.'}).waitFor();
@@ -59,6 +67,6 @@ const path=require('node:path');
    const audit=await page.evaluate(async()=>window.axe.run(document.querySelector('#owgSpectrum'),{runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21aa']}}));
    assert.deepEqual(audit.violations.map(v=>v.id+': '+v.nodes.map(n=>n.target).join(',')),[]);
    assert.deepEqual(errors,[]);
-   console.log('Performance spectrum browser acceptance passed: both segments, per-period and segment case evidence, event history, WCAG audit.');
+   console.log('Performance spectrum browser acceptance passed: both segments, per-period and segment case evidence, event history, CSV download, WCAG audit.');
  }finally{if(browser)await browser.close();server.kill();}
 })().catch(error=>{console.error(error);process.exit(1);});

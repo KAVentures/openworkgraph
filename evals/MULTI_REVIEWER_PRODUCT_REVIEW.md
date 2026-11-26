@@ -85,3 +85,34 @@ Regression command:
     python -m unittest discover -s tests -p test_multi_reviewer_product_review.py
 
 Related: [#370 R25](https://github.com/KAVentures/openworkgraph/issues/370).
+
+## Reviewer-choice robustness after adjudication
+
+The final private score also contains `reviewer_choice_sensitivity`. For each
+entry, take the distinct complete six-dimensional decision-score vectors
+from both original reviews and the final adjudicated review. Different
+judgments with the same decision vector collapse to one alternative. Do not
+mix fields from different reviews or invent additional outcomes. The six
+metrics are recall, continuation success, clarification questions, wrong
+resource rate, wrong assumptions and consequential wrong action. Individual
+arm extrema and paired candidate-minus-baseline differences are reported
+using the existing scorer's per-episode and aggregate rounding.
+
+For each of the three canonical comparisons, evaluate the adverse and
+favorable corners of the marginal metric box using the unchanged canonical
+point gate. If the adverse corner passes, every allowed choice passes; if
+the favorable corner fails, none passes. The corners need not be jointly
+attainable. If the number of distinct joint score-vector assignments for
+that pair is at most 4,096, enumerate all complete row combinations and
+count the exact decisions. Otherwise use only those sufficient corner
+certificates or report unresolved. No random sampling or assignment
+probabilities are used. Even an all-choice pass does not change the
+canonical decision or bypass the 20-real-reviewed-episode requirement.
+
+This is a private post-unblinding sensitivity report, not a reviewer-facing
+packet. It has no reviewer IDs, episode IDs, source facts or model outputs.
+It quantifies sensitivity to submitted judgments, not all possible errors,
+statistical uncertainty, independence, or verified business impact. Tests
+include an independent canonical aggregate oracle, a case where a favorable
+marginal corner is unattainable, identical score vectors, bounded large
+choice spaces and missing review inputs.
