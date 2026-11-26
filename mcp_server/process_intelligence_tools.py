@@ -1016,6 +1016,15 @@ def register_process_intelligence_tools(mcp: Any, runtime_module: Any) -> None:
         return _get("get_process_activity_glossary", f"/v1/process-intelligence/{_log(log_id)}/activity-glossary", {})
 
     @mcp.tool(annotations=_READ_ONLY)
+    def list_process_filter_sets(log_id: str) -> dict[str, Any]:
+        """The owner's saved groups of cases (filter sets) for a shared log, each with its name, the case_filter to
+        pass to other process tools, and how many cases it matches now. Use it when a question names a group the
+        owner works with ("priority customers", "Q3 escalations"). Sets naming a person are withheld, and a set
+        matching fewer than 5 cases is marked not usable. Aggregates only.
+        """
+        return _get("list_process_filter_sets", f"/v1/process-intelligence/{_log(log_id)}/filter-sets", {})
+
+    @mcp.tool(annotations=_READ_ONLY)
     def get_process_signals(log_id: str) -> dict[str, Any]:
         """The owner's signal rules on a shared log (KPI thresholds, case and compliance conditions) and their
         last evaluated state: triggered or not, the measured value or matching cases, and whether the owner

@@ -603,6 +603,12 @@ async def agent_activity_glossary(request: Request, log_id: str):
     return await _answer(sharing.activity_glossary, log_id)
 
 
+@router.get("/v1/process-intelligence/{log_id}/filter-sets")
+async def agent_filter_sets(request: Request, log_id: str):
+    _require_agent_access(request)
+    return await _answer(sharing.filter_sets, log_id)
+
+
 @router.get("/v1/process-intelligence/{log_id}/signals")
 async def agent_signals(request: Request, log_id: str):
     _require_agent_access(request)
