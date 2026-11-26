@@ -795,11 +795,18 @@ def reference_deviations(log_id: str, net_id: str, case_type: str | None = None)
 
 
 def funnel(log_id: str, steps: list[str], case_type: str | None = None,
-           within_hours: float | None = None) -> dict[str, Any]:
-    """Milestone funnel over chosen activities (aggregates level: counts, timings, last activities)."""
+           within_hours: float | None = None, case_filter: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Milestone funnel over chosen activities (aggregates level: counts, timings, last activities). An optional
+    case filter (at least AGENT_MIN_FILTERED_CASES cases) runs the funnel for one group."""
     require(log_id, "aggregates")
     from . import event_log_funnel as fn
-    return {**fn.funnel(log_id, steps, case_type, within_hours=within_hours), "format": FORMAT, "log_id": log_id}
+    if case_filter is not None:
+        if not isinstance(case_filter, dict) or not case_filter:
+            raise EventLogWorkspaceError("case_filter must be a non-empty object of case-filter keys")
+        if workspace.summary(log_id, case_type, case_filter)["cases"] < AGENT_MIN_FILTERED_CASES:
+            raise EventLogWorkspaceError(f"fewer than {AGENT_MIN_FILTERED_CASES} cases match this filter; widen it")
+    result = fn.funnel(log_id, steps, case_type, within_hours=within_hours, cohort=case_filter)
+    return {**result, "format": FORMAT, "log_id": log_id}
 
 
 def unusual_cases(log_id: str, case_type: str | None = None, limit: int = 25,

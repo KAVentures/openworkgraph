@@ -435,11 +435,13 @@ def register_process_intelligence_tools(mcp: Any, runtime_module: Any) -> None:
 
     @mcp.tool(annotations=_READ_ONLY)
     def get_process_funnel(log_id: str, steps: list[str], within_hours: float | None = None,
-                           case_type: str | None = None) -> dict[str, Any]:
+                           case_type: str | None = None,
+                           case_filter: dict[str, Any] | None = None) -> dict[str, Any]:
         """Milestone funnel of a shared log: for 2 to 8 activities in order, how many cases reached each step
         after the previous ones, the conversion from the previous step, the hours between steps (median, p90),
         and what cases that stopped did last. within_hours optionally counts a step only within that many hours
-        of the previous one. Shows how far cases got, not why. Aggregates only, no case IDs.
+        of the previous one. Shows how far cases got, not why. Aggregates only, no case IDs. Optional case_filter
+        (see openworkgraph://process-case-filter) runs the funnel for one group of at least 5 cases.
         """
         if not isinstance(steps, list) or not 2 <= len(steps) <= 8 or any(not isinstance(s, str) or not s for s in steps):
             raise ToolError("steps must be 2 to 8 activity names")
@@ -449,6 +451,11 @@ def register_process_intelligence_tools(mcp: Any, runtime_module: Any) -> None:
         params: dict[str, Any] = {"step": steps, "case_type": case_type}
         if within_hours is not None:
             params["within_hours"] = float(within_hours)
+        if case_filter is not None:
+            if not isinstance(case_filter, dict) or not case_filter:
+                raise ToolError("case_filter must be a non-empty object")
+            import json as _json
+            params["case_filter"] = _json.dumps(case_filter, separators=(",", ":"))
         return _get("get_process_funnel", f"/v1/process-intelligence/{_log(log_id)}/funnel", params)
 
     @mcp.tool(annotations=_READ_ONLY)
