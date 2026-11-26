@@ -179,3 +179,47 @@ organization identity, completeness of historical custody or live rollout
 authority. Individual input files and the output are capped at 40 MiB;
 aggregate dossier input is capped at 160 MiB. Output is exclusive/private
 under the same conditions as the original audit CLI.
+
+
+## Local dashboard verification workbench
+
+The receiving auditor does not need to enroll keys in the local trust registry,
+retain packets or use the command line for smaller archives.
+
+1. Open **Process catalog → Exchange minimized monitoring summaries across
+   installations → Independently verify historical workforce audit evidence**.
+2. Select a single dossier or ordered timeline. Supply the separately obtained
+   expected SHA-256 digest (dossier digest for a single review, manifest digest
+   for a timeline), and the corresponding independent trust JSON or manifest.
+3. Select each dossier individually in exact manifest order. Confirm the
+   local recomputation. No requests are initiated solely by selecting files.
+4. Review the independently recomputed historical report, or inspect the
+   timeline snapshot summaries and filter/search/page through the complete
+   minimized journal queue. Download the minimized review for your records.
+   Changing an input clears the prior result and ignores a pending response.
+
+The browser enforces an 8 MiB combined original-text request limit, including
+the JSON wrapper; larger requests must use the offline CLI. Invalid UTF-8,
+non-object files, malformed/duplicate JSON, wrong pins, altered reports and
+out-of-order timelines are refused. Browser syntax checks do not replace the
+server's strict parser or cryptographic verification. Numeric text is not
+re-serialized by the browser before verification.
+
+The workbench does not retain dossiers, trust keys, manifest contents or
+reports in the local registry/database, and requires a dashboard session and
+explicit operator confirmation (AI-context and bearer-token requests are
+refused). The response contains only a minimized recomputed report/receipt
+or timeline, not the underlying signed packets. File selection and processing
+take place on the local installation. Browser downloads and any OS/browser
+caches remain the user's responsibility.
+
+API actions: POST
+/v1/process-catalog/procurement-workforce/exchange/audit-verify
+with the standard JSON-text document envelope containing
+`confirmed=true`, `expected_dossier_sha256`, `trust` and `dossier`;
+POST /v1/process-catalog/procurement-workforce/exchange/audit-timeline
+with `confirmed=true`, `expected_manifest_sha256`, `manifest` and
+the ordered `dossiers` array. The server requires the exact keys and
+strict confirmation, recomputes all reports, returns no-store responses,
+and does not consult the retained trust registry. Neither endpoint confers
+current trust, verified chronology, incident clearance or execution authority.
