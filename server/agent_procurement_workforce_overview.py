@@ -105,6 +105,7 @@ def _row(key,state,history,current,now,overlap):
         "recorded_cases":report["recorded_cases"],
         "credential_authenticated_observations":view["credential_authenticated_observations"],
         "finance_reconciled_windows":[r["window_id"] for r in state.get("finance_reconciliations",[])],
+        "scheduled_deadline_review_enabled":view["scheduled_deadline_review_enabled"],
         "sticky_rollback_triggers":sticky,"rollback_referral_recorded":view["rollback_referral_recorded"],
         "overdue_window_history":view["overdue_window_history"],"due_for_review_windows":due,
         "clock_refresh_needed":bool(due and report["as_of_ms"]<now),

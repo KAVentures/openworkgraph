@@ -104,7 +104,7 @@ def _read(conn,key):
 def _view(key,state,history):
     return {"format":FORMAT,"workflow_id":key[0],"revision":key[1],"monitor_id":key[2],
         "plan_sha256":state["plan_sha256"],"head_sha256":history[-1]["entry_sha256"],
-        "checkpoint_count":sum(e["kind"] in ("checkpoint","producer_checkpoint","clock_checkpoint") for e in history),"entry_count":len(history),
+        "checkpoint_count":sum(e["kind"] in ("checkpoint","producer_checkpoint","clock_checkpoint","scheduled_checkpoint") for e in history),"entry_count":len(history),
         "capacity":MAX_ENTRIES,"latest_report":state["report"],
         "sticky_rollback_triggers":state["sticky_rollback_triggers"],
         "rollback_referral_recorded":state["rollback_referral_recorded"],
@@ -116,6 +116,7 @@ def _view(key,state,history):
         "credential_authenticated_observations":len(state.get("producer_attribution",{})),
         "producer_attribution":state.get("producer_attribution",{}),
         "finance_reconciliations":state.get("finance_reconciliations",[]),
+        "scheduled_deadline_review_enabled":state.get("scheduled_deadline_review_enabled",False),
         "producer_grants":[{**e["details"],"revoked":any(x["kind"]=="producer_revoke" and x["details"]["grant_id"]==e["details"]["grant_id"] for x in history)} for e in history if e["kind"]=="producer_grant"],"tamper_resistant_against_database_owner":False,
         "deployment_changed":False,"execution_authorized":False}
 
@@ -178,7 +179,8 @@ def _next_state(state,plan,snapshot,report,initial_sources):
         "rollback_referral_recorded":state["rollback_referral_recorded"] if state else False,
         "monitor_plan":plan,"initial_sources":sorted(initial_sources),
         "producer_attribution":state.get("producer_attribution",{}) if state else {},
-        "finance_reconciliations":state.get("finance_reconciliations",[]) if state else []}
+        "finance_reconciliations":state.get("finance_reconciliations",[]) if state else [],
+        "scheduled_deadline_review_enabled":state.get("scheduled_deadline_review_enabled",False) if state else False}
 
 
 def append(packet,workflow_id,revision,doc):
@@ -225,16 +227,21 @@ def refresh(workflow_id,revision,doc):
         now=int(time.time()*1000)
         if now<=state["snapshot"]["as_of_ms"]:
             raise JournalError("Server clock has not advanced past retained cutoff",409)
-        plan=state["monitor_plan"];sources=set(state["initial_sources"])
-        snapshot=_normalize({**state["snapshot"],"as_of_ms":now})
-        report=_review_verified(plan,snapshot,sources,{"snapshot":state["snapshot"],
-            "expected_snapshot_sha256":state["report"]["snapshot_sha256"]})
-        updated=_next_state(state,plan,snapshot,report,sources)
-        return _save(conn,key,updated,history,"clock_checkpoint",{
-            "snapshot_sha256":report["snapshot_sha256"],"report_sha256":report["report_sha256"],
-            "as_of_ms":now,"recorded_cases":report["recorded_cases"],
-            "recommended_review":report["recommended_review"],"rollback_triggers":report["rollback_review_triggers"],
-            "overdue_windows":[w["window_id"] for w in report["windows"] if w["state"]=="overdue"]})
+        return _advance_clock(conn,key,state,history,now)
+
+
+def _advance_clock(conn,key,state,history,now,kind="clock_checkpoint",crossed_deadlines=None):
+    plan=state["monitor_plan"];sources=set(state["initial_sources"])
+    snapshot=_normalize({**state["snapshot"],"as_of_ms":now})
+    report=_review_verified(plan,snapshot,sources,{"snapshot":state["snapshot"],
+        "expected_snapshot_sha256":state["report"]["snapshot_sha256"]})
+    updated=_next_state(state,plan,snapshot,report,sources)
+    return _save(conn,key,updated,history,kind,{
+        "snapshot_sha256":report["snapshot_sha256"],"report_sha256":report["report_sha256"],
+        "as_of_ms":now,"recorded_cases":report["recorded_cases"],
+        "crossed_deadlines":crossed_deadlines or [],
+        "recommended_review":report["recommended_review"],"rollback_triggers":report["rollback_review_triggers"],
+        "overdue_windows":[w["window_id"] for w in report["windows"] if w["state"]=="overdue"]})
 
 
 def detail(workflow_id,revision,doc):
