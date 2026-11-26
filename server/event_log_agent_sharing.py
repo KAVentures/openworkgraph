@@ -832,7 +832,7 @@ def next_steps(log_id: str, steps: list[str] | None = None, case_type: str | Non
 
 
 def insights(log_id: str, case_type: str | None = None, sla_hours: float | None = None,
-             limit: int = 8) -> dict[str, Any]:
+             limit: int = 8, case_filter: dict[str, Any] | None = None) -> dict[str, Any]:
     """Where to look first: ranked automatic findings with the case filter that reproduces each (aggregates)."""
     require(log_id, "aggregates")
     from . import event_log_insights as log_insights
@@ -841,6 +841,12 @@ def insights(log_id: str, case_type: str | None = None, sla_hours: float | None 
         spec["case_type"] = case_type
     if sla_hours is not None:
         spec["sla_seconds"] = max(1, min(int(float(sla_hours) * 3600), 10 ** 9))
+    if case_filter is not None:
+        if not isinstance(case_filter, dict) or not case_filter:
+            raise EventLogWorkspaceError("case_filter must be a non-empty object of case-filter keys")
+        if workspace.summary(log_id, case_type, case_filter)["cases"] < AGENT_MIN_FILTERED_CASES:
+            raise EventLogWorkspaceError(f"fewer than {AGENT_MIN_FILTERED_CASES} cases match this filter; widen it")
+        spec["cohort"] = case_filter
     return {**log_insights.insights(log_id, spec), "format": FORMAT, "log_id": log_id}
 
 

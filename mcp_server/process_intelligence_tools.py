@@ -503,20 +503,27 @@ def register_process_intelligence_tools(mcp: Any, runtime_module: Any) -> None:
 
     @mcp.tool(annotations=_READ_ONLY)
     def get_process_insights(log_id: str, sla_hours: float | None = None, limit: int = 8,
-                             case_type: str | None = None) -> dict[str, Any]:
+                             case_type: str | None = None,
+                             case_filter: dict[str, Any] | None = None) -> dict[str, Any]:
         """Where to look first in a shared log: ranked automatic findings (slow step-to-step gaps, repeated
         activities, costly detours, the long tail of slow cases, how spread the paths are, whether newer cases
         are slower, and SLA breaches when sla_hours is given), each with its numbers, the share of cases it
         touches and the case filter that reproduces it. A good first call before the other process tools.
-        Descriptive pointers, not causes. Aggregates only, no case IDs.
+        Descriptive pointers, not causes. case_filter (the same keys as insight cohorts) looks for findings
+        within one group of at least 5 cases. Aggregates only, no case IDs.
         """
         if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 30:
             raise ToolError("limit must be 1 to 30")
         if sla_hours is not None and (isinstance(sla_hours, bool) or not isinstance(sla_hours, (int, float))
                                       or sla_hours <= 0):
             raise ToolError("sla_hours must be a positive number")
-        return _get("get_process_insights", f"/v1/process-intelligence/{_log(log_id)}/insights",
-                    {"sla_hours": sla_hours, "limit": limit, "case_type": case_type})
+        params: dict[str, Any] = {"sla_hours": sla_hours, "limit": limit, "case_type": case_type}
+        if case_filter is not None:
+            if not isinstance(case_filter, dict) or not case_filter:
+                raise ToolError("case_filter must be a non-empty object")
+            import json as _json
+            params["case_filter"] = _json.dumps(case_filter, separators=(",", ":"))
+        return _get("get_process_insights", f"/v1/process-intelligence/{_log(log_id)}/insights", params)
 
     @mcp.tool(annotations=_READ_ONLY)
     def get_process_deviation_causes(log_id: str, noise: float = 0.2, case_type: str | None = None) -> dict[str, Any]:
