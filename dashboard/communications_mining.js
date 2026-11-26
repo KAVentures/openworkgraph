@@ -324,7 +324,7 @@
         if(triageMode&&reviewOffset&&reviewOffset>=data.total){reviewOffset=0;return loadReview();}
         if(triageMode&&st.enabled){queuePin=data.queue_sha256;drawFacets(data);}
         renderExamples(data);
-        const fresh=await api('/v1/communications/review/model');if(current())renderModel(fresh);
+        const fresh=await api('/v1/communications/review/model');if(current()){renderModel(fresh);return fresh;}
       }catch(error){if(current()){examples.replaceChildren();queuePin=null;reviewOffset=0;reviewStatus.textContent=error.message;}}
     }
     prioritize.onclick=()=>{triageMode=true;triageOrder='priority';reviewOffset=0;queuePin=null;loadReview();};
@@ -338,7 +338,7 @@
       try{await api('/v1/communications/review/settings',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(reviewOn.checked?{enabled:true,acknowledgement_version:ackVersion,retention_days:Number(retention.value)}:{enabled:false})});await loadReview();}
       catch(error){reviewStatus.textContent=error.message;}
     };
-    train.onclick=async()=>{resetQueue();train.disabled=true;reviewStatus.textContent='Training on this computer…';try{await api('/v1/communications/review/train',{method:'POST'});resetQueue();await loadReview();}catch(error){resetQueue();reviewStatus.textContent=error.message;}finally{train.disabled=false;}};
+    train.onclick=async()=>{resetQueue();train.disabled=true;reviewStatus.textContent='Training on this computer…';try{await api('/v1/communications/review/train',{method:'POST'});resetQueue();const fresh=await loadReview();if(fresh?.trained)reviewStatus.textContent='Model trained. Choose "Learned model" above to use it.';}catch(error){resetQueue();reviewStatus.textContent=error.message;}finally{train.disabled=false;}};
     dropModel.onclick=async()=>{resetQueue();dropModel.disabled=true;try{await api('/v1/communications/review/model/delete',{method:'POST'});resetQueue();await loadReview();}catch(error){resetQueue();reviewStatus.textContent=error.message;}finally{dropModel.disabled=false;}};
     review.addEventListener('toggle',()=>{if(review.open)loadReview();});
 
