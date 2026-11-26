@@ -1372,7 +1372,7 @@
             ' · declared business outcomes: '+o.declared_success+' success, '+o.declared_failure+' failure, '+o.unresolved_or_missing+' unresolved/missing';
         };
         const manual=result.manual_baseline;
-        output.append(el('h6','Current human-led baseline'),el('p','Total enrolled cost: '+range(manual.total_cost)),el('p',human(manual)));
+        output.append(el('h6','Current human-led baseline'),el('p','Total enrolled cost: '+range(manual.total_cost)),el('p',human(manual)),el('p','Cost per declared successful task: '+(manual.cost_per_declared_success.status==='no_possible_success'?'undefined (no possible success)':range(manual.cost_per_declared_success))));
         output.appendChild(el('p','Annual scenario: '+result.scenario.annual_cases+' cases. Conditional estimate, not verified realized savings or deployment approval.'));
         for(const c of result.candidates){
           const box=el('section');box.append(el('h6',c.candidate_id+' · trial gates: '+c.trial_gate_status),
@@ -1380,7 +1380,7 @@
             el('p','Paired savings versus manual: '+range(c.paired_trial_savings)),
             el('p','Full-replacement recurring savings (all manual fixed cost removed): '+range(c.annual_recurring_savings_scenario)),
             el('p','Full-replacement first-year savings: '+range(c.first_year_savings_scenario)),
-            el('p',human(c.candidate)));
+            el('p',human(c.candidate)),el('p','Cost per declared successful task: '+(c.candidate.cost_per_declared_success.status==='no_possible_success'?'undefined (no possible success)':range(c.candidate.cost_per_declared_success))));
           const categories=el('ul');
           for(const [key,value] of Object.entries(c.candidate.human_time_by_category)){
             categories.appendChild(el('li',key+': '+value.lower_person_ms+' to '+(value.upper_person_ms==null?'unbounded':value.upper_person_ms)+' person-ms · '+value.known_attempts+' measured attempts'));
@@ -1390,9 +1390,17 @@
           box.append(el('h6','Declared outcome risk: '+quality.status),
             el('p','Paired outcome regressions: '+quality.regression_count.lower+'–'+quality.regression_count.upper+' of '+quality.paired_attempts+
               ' · success-count change: '+quality.success_count_change.lower+' to '+quality.success_count_change.upper),
-            el('p','Declared outcome checks are not independent outcome verification.'));
+            el('p','Declared outcome thresholds: minimum success '+(quality.minimum_declared_success_basis_points/100)+'%, maximum paired regression '+(quality.maximum_declared_regression_basis_points/100)+'%. Not independent outcome verification.'));
           const checks=el('ul');for(const [key,value] of Object.entries(quality.checks))checks.appendChild(el('li',key.replaceAll('_',' ')+': '+value));
           box.appendChild(checks);
+          const groups=el('ul');
+          for(const g of c.category_reviews){
+            const item=el('li',g.category.replaceAll('_',' ')+' · '+g.distinct_cases+' distinct cases · '+g.candidate.attempts+' enrolled attempts');
+            item.append(el('p','Paired savings: '+range(g.paired_savings)),
+              el('p','Declared outcome risk: '+g.declared_outcome_review.status+' · regressions '+g.declared_outcome_review.regression_count.lower+'–'+g.declared_outcome_review.regression_count.upper));
+            groups.appendChild(item);
+          }
+          box.append(el('h6','Normal, exception and missing-facts economics'),groups);
           const volumeText=v=>v==null?'unknown':v.empty?'none':v.minimum_cases+'–'+v.maximum_cases+' cases';
           const yesNo=v=>v==null?'unknown':v?'yes':'no';
           const frontier=adopt.first_year_positive_volume;
@@ -1427,7 +1435,7 @@
           const rows=filter.checked?candidate.rows.filter(r=>r.manual_missing.length||r.candidate_missing.length):candidate.rows;
           const list=el('ul');
           for(const r of rows.slice(offset,offset+25)){
-            const line=el('li',r.case_id+' · repeat '+r.repeat+' · '+r.trial_status+' · savings: '+range(r.paired_savings));
+            const line=el('li',r.case_id+' · '+r.case_category.replaceAll('_',' ')+' · repeat '+r.repeat+' · '+r.trial_status+' · savings: '+range(r.paired_savings));
             line.appendChild(el('p','Manual missing: '+(r.manual_missing.join(', ')||'none')+' · AI missing: '+(r.candidate_missing.join(', ')||'none')));
             line.appendChild(el('p','Declared outcomes: '+(r.manual_declared_outcome||'unknown')+' → '+(r.candidate_declared_outcome||'unknown')+' · regression '+r.declared_outcome_comparison.regression.lower+'–'+r.declared_outcome_comparison.regression.upper));
             list.appendChild(line);

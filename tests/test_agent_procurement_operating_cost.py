@@ -195,3 +195,35 @@ def test_bad_adoption_policy_refused(trial,policy):
     packet,plan,captures,req=baseline(trial)
     req["scenario"]["adoption"]=policy
     with pytest.raises(ValueError):assess(packet,plan,captures,req)
+
+
+def test_cost_per_declared_success_keeps_failed_attempt_costs(trial):
+    packet,plan,captures,req=baseline(trial)
+    slots={s["slot_id"]:s for s in plan["slots"]}
+    selected=[x for x in req["interventions"] if slots[x["slot_id"]]["candidate_id"]=="cheap"]
+    selected[0]["observed_business_outcome"]="failure"
+    selected[1]["observed_business_outcome"]=None
+    cheap=candidate(assess(packet,plan,captures,req))
+    metric=cheap["candidate"]["cost_per_declared_success"]
+    assert amount(metric["lower_microunits"])==66
+    assert amount(metric["upper_microunits"])==Fraction(165,2)
+    assert metric["status"]=="bounded_or_unresolved"
+    for row in selected:row["observed_business_outcome"]="failure"
+    metric=candidate(assess(packet,plan,captures,req))["candidate"]["cost_per_declared_success"]
+    assert metric=={"lower_microunits":None,"upper_microunits":None,"status":"no_possible_success"}
+    selected[0]["observed_business_outcome"]="unresolved"
+    metric=candidate(assess(packet,plan,captures,req))["candidate"]["cost_per_declared_success"]
+    assert amount(metric["lower_microunits"])==330
+    assert metric["upper_microunits"] is None
+
+
+def test_category_reviews_reconcile_population_without_cherry_picking(trial):
+    packet,plan,captures,req=baseline(trial)
+    cheap=candidate(assess(packet,plan,captures,req))
+    groups=cheap["category_reviews"]
+    assert {g["category"] for g in groups}=={"normal","exception","missing_facts"}
+    assert sum(g["distinct_cases"] for g in groups)==3
+    assert sum(g["candidate"]["attempts"] for g in groups)==6
+    assert sum(amount(g["paired_savings"]["lower_microunits"]) for g in groups)==270
+    assert {r["case_category"] for r in cheap["rows"]}=={"normal","exception","missing_facts"}
+    assert cheap["declared_outcome_review"]["minimum_declared_success_basis_points"]==9000

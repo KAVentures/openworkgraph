@@ -40,7 +40,8 @@ def paired_outcomes(left,right,minimum_success_bps,maximum_regression_bps):
             "declared_paired_regressions":maximum(regression,maximum_regression_bps)}
     return {"paired_attempts":n,"candidate_success_count":interval(success),
             "success_count_change":interval(change),"regression_count":interval(regression),
-            "improvement_count":interval(improvement),"checks":checks,
+            "improvement_count":interval(improvement),"minimum_declared_success_basis_points":minimum_success_bps,
+            "maximum_declared_regression_basis_points":maximum_regression_bps,"checks":checks,
             "status":"fail" if "fail" in checks.values() else "unknown" if "unknown" in checks.values() else "pass",
             "rows":rows}
 

@@ -172,6 +172,20 @@ def _outcomes(parts):
             "success_count_lower":success,"success_count_upper":success+unresolved}
 
 
+def _cost_per_success(lo,hi,outcomes):
+    """Conservative bounds over all cost and outcome completions.
+
+    No successful task is invented for an unsuccessful arm. If zero
+    successes remain possible, an upper cost per success is not finite.
+    """
+    smin=outcomes["success_count_lower"]
+    smax=outcomes["success_count_upper"]
+    if smax==0:
+        return {**_bounds(None,None),"status":"no_possible_success"}
+    return {**_bounds(lo/smax,hi/smin if hi is not None and smin else None),
+            "status":"complete" if hi is not None and smin==smax else "bounded_or_unresolved"}
+
+
 def _summary(parts):
     lo,hi,complete=_sum_bounds(parts)
     n=len(parts)
@@ -186,7 +200,9 @@ def _summary(parts):
         total=sum(v for v in vals if v is not None)
         categories[k]={"lower_person_ms":total,"upper_person_ms":total if None not in vals else None,
                        "known_attempts":sum(v is not None for v in vals)}
+    outcomes=_outcomes(parts)
     return {"attempts":n,"complete_cost_attempts":complete,"total_cost":_bounds(lo,hi),
+            "cost_per_declared_success":_cost_per_success(lo,hi,outcomes),
             "cost_per_enrolled_attempt":_bounds(lo/n,hi/n if hi is not None else None),
             "human_person_ms":{"lower":time_known,"upper":time_known if time_complete==n else None},
             "complete_person_time_attempts":time_complete,"human_touched_attempts":{"lower":touched,"upper":touched+touch_unknown},
@@ -194,7 +210,7 @@ def _summary(parts):
             "provider_runtime_cost_lower_microunits":sum(x["provider"] for x in parts if x["provider"] is not None),
             "other_direct_cost_lower_microunits":sum(x["extra"] for x in parts if x["extra"] is not None),
             "labor_cost_lower_microunits":_money(sum((x["labor"] for x in parts), Fraction(0))),
-            "declared_business_outcomes":_outcomes(parts)}
+            "declared_business_outcomes":outcomes}
 
 
 def _scaled(bounds, annual_cases, n, fixed):
@@ -238,6 +254,7 @@ def assess(packet, plan, captures, request):
                         provider_complete=slot["status"] not in ("not_recorded","withdrawn"))
         by_candidate[slot["candidate_id"]].append((slot,manual_parts[(slot["case_id"],slot["repeat"])],alt))
     n=len(keys)
+    categories={x["case_id"]:x["category"] for x in plan["basis"]["reference_report"]["cases"]}
     summaries=[]
     for cid in sorted(candidates):
         entries=sorted(by_candidate[cid],key=lambda t:(t[0]["case_id"],t[0]["repeat"]))
@@ -261,7 +278,18 @@ def assess(packet, plan, captures, request):
         rollout=adoption(delta,capacity,n,req.scenario.annual_cases,volumes,
                          policy.avoidable_manual_annual_microunits,fixed[cid].annual_microunits,
                          fixed[cid].one_time_microunits,_money)
-        paired_rows=[{**_row(*x),"declared_outcome_comparison":q} for x,q in zip(entries,quality_rows)]
+        paired_rows=[{**_row(*x),"case_category":categories[x[0]["case_id"]],
+                      "declared_outcome_comparison":q} for x,q in zip(entries,quality_rows)]
+        category_reviews=[]
+        for category in sorted(set(categories.values())):
+            group=[x for x in entries if categories[x[0]["case_id"]]==category]
+            a=[x[1] for x in group];b=[x[2] for x in group]
+            q=paired_outcomes([x["outcome"] for x in a],[x["outcome"] for x in b],
+                              policy.minimum_declared_success_basis_points,policy.maximum_declared_regression_basis_points)
+            q.pop("rows")
+            category_reviews.append({"category":category,"distinct_cases":len({x[0]["case_id"] for x in group}),
+                                     "manual":_summary(a),"candidate":_summary(b),
+                                     "paired_savings":_bounds(*_delta(a,b)),"declared_outcome_review":q})
         summaries.append({"candidate_id":cid,"configuration_sha256":candidates[cid]["configuration_sha256"],
                           "trial_gate_status":gates,"candidate":_summary(right),
                           "paired_trial_savings":_bounds(*delta),
@@ -269,6 +297,7 @@ def assess(packet, plan, captures, request):
                           "first_year_savings_scenario":_bounds(*first_year),
                           "positive_first_year_lower_bound":first_year[0]>0 if first_year[0] is not None else None,
                           "declared_outcome_review":quality,"conditional_adoption":rollout,
+                          "category_reviews":category_reviews,
                           "paired_released_person_ms":{"lower":_money(capacity[0]),"upper":_money(capacity[1])},
                           "rows":paired_rows})
     result={"format":REPORT,"process_reference":trial["process_reference"],"spec_sha256":trial["spec_sha256"],

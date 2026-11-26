@@ -99,3 +99,13 @@ operate on declared outcomes, not independent source-system evidence.
 A low-cost candidate can fail outcome gates, and no gate grants rollout
 permission. Released person-time bounds are separate conditional capacity
 estimates, not realized financial savings or headcount reductions.
+
+
+Cost per declared successful task divides the all-enrolled cost bounds
+(including failures) by the possible success-count bounds. No possible
+success makes the ratio undefined; a possible zero denominator makes the
+upper bound unbounded. It is not a verified cost per actual completed task.
+The report also disaggregates by the frozen suite's normal, exception and
+missing-facts categories with exact paired costs and declared outcome gates.
+Category results are descriptive and share the same repeated cohort; no
+annual category mix, independent sampling, or representativeness is inferred.
