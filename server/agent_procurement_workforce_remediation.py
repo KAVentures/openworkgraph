@@ -236,6 +236,13 @@ def forget(document):
     with db.connect() as conn:
         conn.execute("BEGIN IMMEDIATE");_schema(conn)
         value,_=_load(conn,req.worklist_sha256);_cas(value,req)
+        # A dispatch reservation is a duplicate-prevention tombstone. Do not
+        # remove it or its parent via the ordinary register deletion action.
+        from . import agent_procurement_workforce_jira_handoff as handoff
+        handoff._schema(conn)
+        if conn.execute("SELECT 1 FROM procurement_audit_jira_dispatch WHERE worklist_sha256=?",
+                        (req.worklist_sha256,)).fetchone():
+            raise journal.JournalError("Register has external write attempts; preserve its duplicate-prevention history",409)
         # Remove associated ticket bindings/checks atomically, never orphan them.
         from . import agent_procurement_workforce_remediation_tickets as tickets
         tickets._schema(conn)
