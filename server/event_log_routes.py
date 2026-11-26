@@ -2523,6 +2523,24 @@ def event_log_domain_pack_configurations(request: Request, log_id: str, pack_id:
     return _respond(domain_packs.configuration_history, log_id, pack_id)
 
 
+@router.get("/v1/event-logs/{log_id}/domain-packs/{pack_id}/template")
+def event_log_domain_pack_template_export(request: Request, log_id: str, pack_id: str = PathParam(pattern=_PACK_ID)):
+    from . import event_log_domain_pack_template as template
+    _require_dashboard(request)
+    return _respond(template.export_template, log_id, pack_id)
+
+
+@router.post("/v1/event-logs/{log_id}/domain-packs/{pack_id}/template/review")
+async def event_log_domain_pack_template_review(request: Request, log_id: str, pack_id: str = PathParam(pattern=_PACK_ID)):
+    from . import event_log_domain_pack_template as template
+    _require_dashboard(request)
+    spec = await _json_body(request, "portable domain pack setup", strict=True, limit=131072)
+    _require_dashboard(request)
+    response = await run_in_threadpool(_respond, template.review_template, log_id, pack_id, spec)
+    _require_dashboard(request)
+    return response
+
+
 @router.post("/v1/event-logs/{log_id}/domain-packs/{pack_id}/preflight")
 async def event_log_domain_pack_preflight(request: Request, log_id: str, pack_id: str = PathParam(pattern=_PACK_ID)):
     from . import event_log_domain_pack_preflight as preflight
