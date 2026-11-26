@@ -42,3 +42,5 @@ not raw business inputs, observation tokens or producer secrets. Treat the
 download as local business evidence. No automatic transfer or mutation is
 performed. Authentication is that of the local dashboard session, not
 an organization role system, and submitted outcomes remain unverified.
+
+For constrained comparison of multiple explicitly selected conditional operating portfolios, see [workforce allocation](AGENT_PROCUREMENT_WORKFORCE_ALLOCATION.md). This is a separate scenario-planning operation, not a financial inference from monitoring totals.

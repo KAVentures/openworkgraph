@@ -1876,6 +1876,50 @@
       button('Clear procurement review',()=>{documentFile.value='';planFile.value='';clearProcurementReview();}),output);
     host.appendChild(section);
   }
+  function installWorkforceAllocation(host){
+    const section=el('details');section.append(el('summary','Optimize selected workflow AI budget scenarios'),
+      el('p','Upload an exact allocation bundle (see AGENT_PROCUREMENT_WORKFORCE_ALLOCATION.md). This is a finite conditional comparison, not spending approval or an execution decision.'));
+    const file=el('input');file.type='file';file.accept='.json,application/json';file.setAttribute('aria-label','Workforce allocation bundle');
+    const output=el('div');let generation=0;
+    const run=button('Evaluate workforce allocation',async()=>{
+      const attempt=++generation;output.replaceChildren();
+      try{
+        const selected=file.files?.[0];
+        if(!selected||selected.size>8*1024*1024)throw new Error('Choose a JSON bundle of at most 8 MiB.');
+        const body=JSON.parse(await selected.text());
+        const result=await request('/v1/process-catalog/procurement-workforce/allocation',body);
+        if(attempt!==generation||!output.isConnected)return;
+        const amount=(v,unit)=>{
+          if(v==null)return 'unbounded';
+          const n=BigInt(v.numerator),d=BigInt(v.denominator),a=n<0n?-n:n;
+          const scale=unit==='money'?1000000n:3600000n;
+          const rounded=(2n*a*100n+d*scale)/(2n*d*scale);
+          return (n<0n?'-':'')+String(rounded/100n)+'.'+String(rounded%100n).padStart(2,'0')+' '+(unit==='money'?result.currency:'person-hours')+' (rounded)';
+        };
+        output.append(el('h4','Exact finite allocation for review'),
+          el('p',result.selected_workflows+' selected workflows · '+result.feasible_combinations+' feasible / '+result.evaluated_combinations+' combinations'),
+          el('p','Lower-bound first-year scenario savings: '+amount(result.first_year_savings_lower_microunits,'money')),
+          el('p','Upper gross AI cost: '+amount(result.first_year_gross_ai_cost_upper_microunits,'money')+' · remaining envelope '+amount(result.gross_ai_cost_headroom_microunits,'money')),
+          el('p',result.annual_ai_cases+' annual AI cases · '+result.ai_case_headroom+' remaining case capacity'),
+          el('p','Worst-case additional person-time: '+amount(result.annual_additional_person_ms_upper,'time')+' · remaining envelope '+amount(result.additional_person_ms_headroom,'time')));
+        for(const row of result.rows){
+          const group=el('section');group.append(el('h5',row.title+' · r'+row.revision),
+            el('p','Selected for review: '+(row.selected_for_review.portfolio_id||'defer')),
+            button('Open allocation process revision',()=>load(row.workflow_id,row.revision)));
+          const ul=el('ul');
+          for(const o of row.options)ul.appendChild(el('li',(o.portfolio_id||'defer')+' · '+(o.eligible?'eligible scenario; lower savings '+amount(o.first_year_savings_lower_microunits,'money')+'; upper gross cost '+amount(o.first_year_gross_ai_cost_upper_microunits,'money'):o.exclusion_reasons.join(', '))));
+          group.appendChild(ul);output.appendChild(group);
+        }
+        output.append(el('p','No shared discounts, cross-workflow labor offsets, verified savings or purchase authority are assumed.'),
+          button('Download allocation review JSON',()=>{
+            const url=URL.createObjectURL(new Blob([JSON.stringify(result,null,2)+'\n'],{type:'application/json'}));
+            const link=el('a');link.href=url;link.download='owg-workforce-allocation.json';link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
+          }));
+      }catch(error){if(attempt===generation)output.replaceChildren(el('p',error.message));}
+    });
+    file.addEventListener('change',()=>{generation++;output.replaceChildren();});
+    section.append(file,run,output);host.appendChild(section);
+  }
   async function workforceOverview(){
     const host=document.getElementById('owgWorkforceOverview');
     host.replaceChildren(el('p','Loading retained local monitoring journals…'));
@@ -2074,6 +2118,7 @@
     const backlogHost=el('div');backlogHost.id='owgCatalogBacklog';host.appendChild(backlogHost);
     host.appendChild(button('Review AI workforce monitoring',()=>workforceOverview()));
     const workforceHost=el('div');workforceHost.id='owgWorkforceOverview';host.appendChild(workforceHost);
+    installWorkforceAllocation(host);
     const message=el('p','No saved process has been loaded.');message.id='owgCatalogStatus';message.setAttribute('role','status');host.appendChild(message);
     const editor=el('div');editor.id='owgCatalogEditor';host.appendChild(editor);
     const style=el('style');style.textContent='#owgProcessCatalog label{display:block;margin:8px 0}#owgProcessCatalog fieldset{margin:12px 0;min-width:0}#owgProcessCatalog input:not([type=checkbox]){max-width:100%;width:32em}#owgProcessCatalog .owg-catalog-actions{display:flex;gap:8px;flex-wrap:wrap;margin:16px 0}';host.prepend(style);
