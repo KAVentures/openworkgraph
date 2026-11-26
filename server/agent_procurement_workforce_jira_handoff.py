@@ -212,6 +212,7 @@ def dispatch(document):
             raise journal.JournalError("Jira dispatch attempt capacity reached",409)
         reserved={"status":"attempt_reserved_outcome_unknown","plan_sha256":plan["plan_sha256"],
                   "operation":req.operation,"finding_id":req.finding_id,
+                  "destination_host":config[0],"destination_project":config[2],
                   "recorded_at_ms":register._stamp(None)}
         conn.execute("INSERT INTO procurement_audit_jira_dispatch VALUES (?,?,?,?)",
                      (req.worklist_sha256,plan["operation_key"],plan["plan_sha256"],register._encode(reserved)))
@@ -230,13 +231,39 @@ def dispatch(document):
     return result
 
 
+def _related_creations(conn,worklist,findings):
+    """Match the exact stable creation reservation key, not titles or aliases."""
+    keys={digest(["create",f["finding_id"]]):f["finding_id"] for f in findings}
+    related=[]
+    for previous,key,raw in conn.execute(
+        """SELECT worklist_sha256,operation_key,result_json FROM procurement_audit_jira_dispatch
+           WHERE worklist_sha256<>? ORDER BY worklist_sha256,operation_key""",(worklist,)):
+        if key not in keys:
+            continue
+        row=json.loads(raw)
+        if row.get("operation")!="create" or row.get("finding_id")!=keys[key]:
+            raise ValueError("stored creation reservation mismatch")
+        # Previous worklist remains the source of the result. A matching
+        # structural finding ID does not verify incident identity or linkage.
+        related.append({"previous_worklist_sha256":previous,
+                        "finding_id":keys[key],"status":row["status"],
+                        "recorded_at_ms":row["recorded_at_ms"],
+                        "plan_sha256":row["plan_sha256"],
+                        "issue_key":row.get("issue_key"),
+                        "destination_host":row.get("destination_host"),
+                        "destination_project":row.get("destination_project"),
+                        "ticket_mapping_verified":False})
+    return related
+
+
 def status(document):
     req=register.Scope.model_validate(document)
     with db.connect() as conn:
         conn.execute("BEGIN IMMEDIATE");_schema(conn)
-        register._load(conn,req.worklist_sha256)
+        value,_=register._load(conn,req.worklist_sha256)
         rows=[json.loads(r[0]) for r in conn.execute(
             "SELECT result_json FROM procurement_audit_jira_dispatch WHERE worklist_sha256=? ORDER BY operation_key",
             (req.worklist_sha256,))]
-        return {"attempts":rows,"automatic_retry_allowed":False,
-                "incident_clearance_established":False}
+        return {"attempts":rows,
+                "related_creation_attempts":_related_creations(conn,req.worklist_sha256,value["basis"]["findings"]),
+                "automatic_retry_allowed":False,"incident_clearance_established":False}
