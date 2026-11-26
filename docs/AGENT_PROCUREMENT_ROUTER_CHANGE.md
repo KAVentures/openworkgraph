@@ -85,3 +85,5 @@ This is conditional change review, not statistical noninferiority, actual
 routed execution, independently verified reviewer identity or proof of
 precommitment chronology. No provider, deployment, agent, or business
 system is called or changed. A positive referral is not execution permission.
+
+After an independently authorized external pilot, use the [controlled pilot evidence review](AGENT_PROCUREMENT_ROUTER_PILOT.md) to review declared execution and outcomes, with version attribution and rollback-review triggers. The referral alone is never execution authority.

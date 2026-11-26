@@ -1307,7 +1307,7 @@
     const section=el('section');section.appendChild(el('h4','AI workforce procurement'));
     section.appendChild(el('p','Compare portable shadow evaluations, freeze a repeated trial, or review its full scheduled population. Files are inspected only on this computer and are not retained. Model identities, measurements and business outcomes remain unverified.'));
     const mode=el('select');mode.id='owgCatalogProcurementMode';mode.setAttribute('aria-label','Procurement operation');
-    for(const [value,label] of [['compare','Compare completed shadow reports'],['freeze','Freeze a repeated trial plan'],['review','Review a frozen trial and captures'],['operating-cost','Review human and AI operating costs'],['router-freeze','Freeze a held-out router rehearsal'],['router-review','Review held-out routing predictions'],['router-change-freeze','Freeze router version comparison'],['router-change-assess','Assess paired router version change'],['router-change-decide','Record controlled router change referral'],['nominate','Nominate a candidate before holdout'],['assess','Assess the held-out trial'],['decide','Record a pinned rehearsal decision'],['outcome-review','Review controlled sandbox outcomes'],['rollout-review','Request separate rollout review'],['deployment-review','Review monitored deployment readiness'],['deployment-decide','Record deployment review referral']]){
+    for(const [value,label] of [['compare','Compare completed shadow reports'],['freeze','Freeze a repeated trial plan'],['review','Review a frozen trial and captures'],['operating-cost','Review human and AI operating costs'],['router-freeze','Freeze a held-out router rehearsal'],['router-review','Review held-out routing predictions'],['router-change-freeze','Freeze router version comparison'],['router-change-assess','Assess paired router version change'],['router-change-decide','Record controlled router change referral'],['router-pilot-freeze','Freeze controlled router pilot'],['router-pilot-review','Review controlled pilot observations'],['router-pilot-decide','Record pilot expansion or rollback referral'],['nominate','Nominate a candidate before holdout'],['assess','Assess the held-out trial'],['decide','Record a pinned rehearsal decision'],['outcome-review','Review controlled sandbox outcomes'],['rollout-review','Request separate rollout review'],['deployment-review','Review monitored deployment readiness'],['deployment-decide','Record deployment review referral']]){
       const option=el('option',label);option.value=value;mode.appendChild(option);
     }
     const modeLabel=el('label','Procurement operation ');modeLabel.htmlFor=mode.id;modeLabel.appendChild(mode);
@@ -1325,6 +1325,7 @@
         mode.value==='freeze'?'Choose a confirmed design JSON with exact reference report, candidates, gates and repeats (see AGENT_PROCUREMENT_TRIALS.md).':
         mode.value==='review'?'Choose the frozen plan and a capture ledger. Failed and missing scheduled slots remain in the denominator.':
         mode.value==='operating-cost'?'Choose the exact trial and human operating-cost bundle (see AGENT_PROCUREMENT_OPERATING_COST.md). Review and fallback time, missing evidence and fixed-cost assumptions remain visible.':
+        mode.value.startsWith('router-pilot-')?'Choose a pinned pilot evidence bundle (see AGENT_PROCUREMENT_ROUTER_PILOT.md). This reviews declared observations; it cannot execute or roll back a pilot.':
         mode.value.startsWith('router-change-')?'Choose the exact router version change bundle (see AGENT_PROCUREMENT_ROUTER_CHANGE.md). Referral is not production authorization.':
         ['router-freeze','router-review'].includes(mode.value)?'Choose the exact routing rehearsal bundle (see AGENT_PROCUREMENT_ROUTER_REHEARSAL.md). Predictions and paired outcomes are declarations, not observed live routing.':
         ['deployment-review','deployment-decide'].includes(mode.value)?'Choose the deployment readiness bundle (see AGENT_PROCUREMENT_DEPLOYMENT.md). Existing monitoring records are read locally; no release changes are made.':
@@ -1351,8 +1352,9 @@
       const economicsMode=operation==='operating-cost';
       const routerMode=['router-freeze','router-review'].includes(operation);
       const routerChangeMode=operation.startsWith('router-change-');
-      const heading={'router-change-freeze':'Frozen router version comparison','router-change-assess':'Paired router version assessment','router-change-decide':'Controlled router change receipt','router-freeze':'Frozen router rehearsal plan','router-review':'Held-out router rehearsal review','operating-cost':'Human and AI operating cost comparison',nominate:'Frozen candidate nomination',assess:'Held-out selection assessment',decide:'Rehearsal decision receipt','outcome-review':'Controlled sandbox outcome review','rollout-review':'Separate rollout review receipt','deployment-review':'Monitored deployment readiness','deployment-decide':'Release-owner referral receipt'};
-      output.appendChild(el('h5',(selectionMode||outcomeMode||deploymentMode||economicsMode||routerMode||routerChangeMode)?heading[operation]:operation==='freeze'?'Frozen trial plan · '+result.scheduled_attempts+' attempts':'Candidate procurement comparison'));
+      const routerPilotMode=operation.startsWith('router-pilot-');
+      const heading={'router-pilot-freeze':'Frozen controlled router pilot','router-pilot-review':'Controlled router pilot review','router-pilot-decide':'Pilot review referral receipt','router-change-freeze':'Frozen router version comparison','router-change-assess':'Paired router version assessment','router-change-decide':'Controlled router change receipt','router-freeze':'Frozen router rehearsal plan','router-review':'Held-out router rehearsal review','operating-cost':'Human and AI operating cost comparison',nominate:'Frozen candidate nomination',assess:'Held-out selection assessment',decide:'Rehearsal decision receipt','outcome-review':'Controlled sandbox outcome review','rollout-review':'Separate rollout review receipt','deployment-review':'Monitored deployment readiness','deployment-decide':'Release-owner referral receipt'};
+      output.appendChild(el('h5',(selectionMode||outcomeMode||deploymentMode||economicsMode||routerMode||routerChangeMode||routerPilotMode)?heading[operation]:operation==='freeze'?'Frozen trial plan · '+result.scheduled_attempts+' attempts':'Candidate procurement comparison'));
       output.appendChild(el('p','Exact saved revision '+envelope.revision+'. '+(envelope.references_latest_revision_at_inspection?
         'Latest saved revision at inspection.':'Historical revision; current revision '+envelope.latest_revision_at_inspection+'. Evaluate the current design before substitution.')));
       if(operation==='freeze'){
@@ -1360,6 +1362,66 @@
         const list=el('ul');
         for(const c of result.basis.candidates)list.appendChild(el('li',c.candidate_id+' · '+c.provider+' / '+c.model+' / '+c.runtime));
         output.appendChild(list);
+      }else if(routerPilotMode){
+        if(operation==='router-pilot-freeze'){
+          output.append(el('p',result.slots.length+' allocated distinct cases · pilot '+result.request.pilot_id),
+            el('p','Declared window (UTC): '+new Date(result.request.window_start_ms).toISOString()+' to '+new Date(result.request.window_end_exclusive_ms).toISOString()+' (exclusive)'),
+            el('p','Pinned rollback target: '+result.request.rollback_target_configuration_sha256),
+            el('p','External pilot approval reference is declared, not verified. Allocation is an offline artifact, not an instruction to execute.'));
+          const list=el('ul');
+          for(const category of ['normal','exception','missing_facts']){
+            const group=result.slots.filter(s=>s.category===category);
+            list.appendChild(el('li',category.replaceAll('_',' ')+': '+group.filter(s=>s.arm==='incumbent').length+' incumbent / '+group.filter(s=>s.arm==='challenger').length+' challenger'));
+          }
+          output.appendChild(list);
+        }else if(operation==='router-pilot-decide'){
+          output.append(el('p','Disposition: '+result.request.disposition.replaceAll('_',' ')),
+            el('p','Reviewer alias: '+result.request.reviewer_alias+' (identity not independently verified)'),
+            el('p','Pinned rollback target: '+result.rollback_target_configuration_sha256),
+            el('p','No deployment changed or rollback executed.'));
+        }else{
+          const money=v=>{
+            if(v==null)return 'unbounded';
+            const n=BigInt(v.numerator),d=BigInt(v.denominator),a=n<0n?-n:n,r=(2n*a+d)/(2n*d);
+            return (a%d!==0n?'≈ ':'')+(n<0n?'-':'')+String(r/1000000n)+'.'+String(r%1000000n).padStart(6,'0')+' '+result.currency;
+          };
+          const range=v=>money(v.lower_microunits)+' to '+money(v.upper_microunits);
+          const counts=v=>v.lower+'–'+v.upper;
+          output.append(el('p','Recommended review: '+result.recommended_review.replaceAll('_',' ')),
+            el('p',result.recorded_cases+' of '+result.scheduled_cases+' distinct cases recorded'),
+            el('p','Rollback review triggers: '+(result.rollback_review_triggers.join(', ')||'none established')),
+            el('p','Pinned rollback target: '+result.rollback_target_configuration_sha256));
+          const showArm=(name,a)=>el('p',name+': '+a.terminal+'/'+a.cases+' terminal · success '+counts(a.counts.success)+' · critical '+counts(a.counts.critical)+' · forbidden '+counts(a.counts.forbidden)+' · mean variable cost '+range(a.mean_variable_cost)+' · attribution '+a.attribution_counts.pass+' pass / '+a.attribution_counts.fail+' fail / '+a.attribution_counts.unknown+' unknown');
+          for(const [name,a] of Object.entries(result.arms))output.appendChild(showArm(name,a));
+          const gates=el('ul');for(const [k,v] of Object.entries(result.checks))gates.appendChild(el('li',k.replaceAll('_',' ')+': '+v));
+          output.append(el('h6','Frozen pilot checks'),gates);
+          for(const c of result.category_reviews){
+            const section=el('section');section.append(el('h6',c.category.replaceAll('_',' ')+' · '+c.status),
+              showArm('Incumbent',c.incumbent),showArm('Challenger',c.challenger),
+              el('p','Mean variable savings: '+range(c.mean_variable_cost_savings)));
+            const cg=el('ul');for(const [k,v] of Object.entries(c.checks))cg.appendChild(el('li',k.replaceAll('_',' ')+': '+v));
+            section.appendChild(cg);output.appendChild(section);
+          }
+          const filter=el('input');filter.type='checkbox';filter.setAttribute('aria-label','Show pilot problems or unresolved observations');
+          const label=el('label',' Show pilot problems or unresolved observations');label.prepend(filter);
+          const view=el('div');let offset=0;
+          const draw=()=>{
+            const rows=filter.checked?result.rows.filter(r=>r.attribution!=='pass'||r.status!=='completed'||r.success.lower!==1||r.critical.upper||r.forbidden.upper||r.manual_leakage.upper||r.route_deviation.upper):result.rows;
+            const list=el('ul');
+            for(const r of rows.slice(offset,offset+25)){
+              const item=el('li',r.case_token_sha256+' · '+r.arm+' · '+r.category+' · '+r.status);
+              item.append(el('p','Attribution: '+r.attribution+' · actual destination: '+(r.actual_candidate_id||r.actual_destination||'unknown')),
+                el('p','Success '+counts(r.success)+' · critical '+counts(r.critical)+' · forbidden '+counts(r.forbidden)+' · variable cost '+range(r.variable_cost)),
+                el('p','Source evidence reference: '+(r.source_evidence_sha256||'none')));
+              list.appendChild(item);
+            }
+            const nav=el('div');if(offset)nav.appendChild(button('Previous pilot page',()=>{offset=Math.max(0,offset-25);draw();}));
+            if(offset+25<rows.length)nav.appendChild(button('Next pilot page',()=>{offset+=25;draw();}));
+            view.replaceChildren(el('p',rows.length?'Showing '+(offset+1)+'–'+Math.min(rows.length,offset+25)+' of '+rows.length+' pilot rows':'No matching pilot rows.'),list,nav);
+          };
+          filter.addEventListener('change',()=>{offset=0;draw();});output.append(el('h6','Declared pilot evidence'),label,view);draw();
+          output.appendChild(el('p','Disjoint-arm comparisons are descriptive, not causal estimates. No independent execution, approval or source evidence verification is established.'));
+        }
       }else if(routerChangeMode){
         if(operation==='router-change-freeze'){
           output.append(el('p',result.paired_attempts+' paired scheduled predictions · portfolio '+result.request.portfolio_id),
@@ -1710,7 +1772,7 @@
       }
       output.appendChild(button('Download minimized procurement JSON',()=>{
         const url=URL.createObjectURL(new Blob([JSON.stringify(result,null,2)+'\n'],{type:'application/json'}));
-        const link=el('a');link.href=url;link.download=(selectionMode||outcomeMode||deploymentMode||economicsMode||routerMode||routerChangeMode)?'owg-procurement-'+operation+'.json':operation==='freeze'?'owg-procurement-plan.json':'owg-procurement-review.json';
+        const link=el('a');link.href=url;link.download=(selectionMode||outcomeMode||deploymentMode||economicsMode||routerMode||routerChangeMode||routerPilotMode)?'owg-procurement-'+operation+'.json':operation==='freeze'?'owg-procurement-plan.json':'owg-procurement-review.json';
         link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
       }));
       output.appendChild(el('p','No model or business tool was called; reported identity, measurements and outcomes remain unverified. This review grants no execution or substitution permission.'));
