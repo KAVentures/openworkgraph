@@ -173,3 +173,61 @@ def test_maximum_supported_graph_layout_is_bounded_and_deterministic():
     assert len(shapes)==120
     assert shapes['n119'][0]>shapes['n118'][0]
     assert len(_geometry(root)[1])==200
+
+
+def test_dense_fanout_fanin_uses_distinct_gap_tracks_and_task_ports():
+    nodes=[('start','task')]+[(f'branch{i}','task') for i in range(20)]+[('end','task')]
+    flows=[('start',f'branch{i}') for i in range(20)]+[(f'branch{i}','end') for i in range(20)]
+    root=_diagram_fixture(nodes,flows)
+    shapes=_assert_clear_routes(root)
+    _,edges=_geometry(root)
+    first=[edges[f'f{i}'] for i in range(20)]
+    last=[edges[f'f{i}'] for i in range(20,40)]
+    assert len({p[0] for p in first})==20
+    assert len({p[-1] for p in last})==20
+    assert len({p[1][0] for p in first})==20
+    assert len({p[-2][0] for p in last})==20
+    assert shapes['branch0'][0] - (shapes['start'][0]+shapes['start'][2])>100
+    assert ET.tostring(root)==ET.tostring(_diagram_fixture(nodes,flows))
+
+
+def test_back_edges_same_column_and_adjacent_use_independent_gap_tracks():
+    from shared.process_diagram import _gap_layout
+    root=ET.Element('root')
+    endpoints=[('a','b'),('a','c'),('b','a'),('b','d'),('c','c'),('d','a'),('a','d')]
+    levels={'a':0,'b':1,'c':1,'d':2}
+    flows=[ET.SubElement(root,'flow',{'sourceRef':a,'targetRef':b}) for a,b in endpoints]
+    lefts,tracks=_gap_layout(flows,levels)
+    assert len(tracks)==len(set(tracks.values()))
+    assert lefts[0]>100
+    assert 100<tracks[(2,'target')]<lefts[0]
+    assert tracks[(2,'target')]!=tracks[(5,'target')]
+    for i,(a,b) in enumerate(endpoints):
+        assert tracks[(i,'source')]>lefts[levels[a]]+180
+        if a!=b and levels[b]!=levels[a]+1:
+            assert tracks[(i,'target')]<lefts[levels[b]]
+
+
+def test_gateway_event_center_ports_and_cross_lane_dense_routes():
+    nodes=[('start','startEvent'),('fork','parallelGateway')]+[(f't{i}','task') for i in range(10)]+[('join','parallelGateway'),('end','endEvent')]
+    flows=[('start','fork')]+[('fork',f't{i}') for i in range(10)]+[(f't{i}','join') for i in range(10)]+[('join','end')]
+    lanes=[['start','fork','join','end'],[f't{i}' for i in range(10)]]
+    root=_diagram_fixture(nodes,flows,lanes)
+    shapes=_assert_clear_routes(root)
+    _,edges=_geometry(root)
+    x,y,w,h=shapes['fork']
+    assert {edges[f'f{i}'][0] for i in range(1,11)}=={(x+w,y+h//2)}
+    x,y,w,h=shapes['join']
+    assert {edges[f'f{i}'][-1] for i in range(11,21)}=={(x,y+h//2)}
+    assert len({edges[f'f{i}'][1][0] for i in range(1,11)})==10
+
+
+def test_port_spacing_capacity_and_single_port_center():
+    from shared.process_diagram import _spread_ports
+    assert _spread_ports(100,80,0)==[]
+    assert _spread_ports(100,80,1)==[140]
+    assert len(set(_spread_ports(100,80,65)))==65
+    values=_spread_ports(100,80,200)
+    assert values==sorted(values)
+    assert min(values)==108 and max(values)==172
+    assert len(set(values))<=65

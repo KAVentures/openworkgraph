@@ -9,7 +9,7 @@ from hashlib import sha256
 import json
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StrictBool, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, ValidationError, model_validator
 
 from . import event_log_workspace as workspace
 from . import event_log_object_relationships as relationships
@@ -19,6 +19,14 @@ Status = Literal["both", "left_only", "right_only", "left_endpoint_missing",
                  "right_endpoint_missing", "endpoint_type_conflict"]
 STATUSES = ("both", "left_only", "right_only", "left_endpoint_missing",
             "right_endpoint_missing", "endpoint_type_conflict")
+
+
+PairStatus = Literal["same_qualifier_set", "different_qualifier_set", "left_pair_only",
+                     "right_pair_only", "left_endpoint_missing", "right_endpoint_missing",
+                     "endpoint_type_conflict"]
+PAIR_STATUSES = ("same_qualifier_set", "different_qualifier_set", "left_pair_only",
+                 "right_pair_only", "left_endpoint_missing", "right_endpoint_missing",
+                 "endpoint_type_conflict")
 
 
 class Pin(BaseModel):
@@ -38,8 +46,20 @@ class Selection(BaseModel):
     target_type: str | None = Field(default=None, min_length=1, max_length=200)
     qualifier: str | None = Field(default=None, max_length=80)
     status: Status | None = None
+    mode: Literal["assertions", "pairs"] = "assertions"
+    pair_status: PairStatus | None = None
+    source_id: str | None = Field(default=None, min_length=1, max_length=200)
+    target_id: str | None = Field(default=None, min_length=1, max_length=200)
     offset: int = Field(default=0, ge=0, le=2_000_000)
     limit: int = Field(default=50, ge=1, le=200)
+
+    @model_validator(mode="after")
+    def validate_mode(self):
+        if self.mode == "pairs" and (self.qualifier is not None or self.status is not None):
+            raise ValueError("pair mode requires complete qualifier sets")
+        if self.mode == "assertions" and self.pair_status is not None:
+            raise ValueError("pair status requires pair mode")
+        return self
 
 
 def _pin(conn, log_id):
@@ -63,6 +83,57 @@ def pin(log_id):
             return _pin(conn, log_id)
         finally:
             conn.close()
+
+
+def _pair_report(conn, predicate, params, selection):
+    """Aggregate literal directed endpoint pairs, never flatten or infer links."""
+    conn.execute("""CREATE TEMP TABLE pair_diff AS
+        SELECT s,t,any_value(left_source_type) left_source_type,
+               any_value(left_target_type) left_target_type,
+               any_value(right_source_type) right_source_type,
+               any_value(right_target_type) right_target_type,
+               count(*) FILTER (WHERE in_left) left_qualifiers,
+               count(*) FILTER (WHERE in_right) right_qualifiers,
+               count(*) FILTER (WHERE in_left AND in_right) common_qualifiers,
+               count(*) FILTER (WHERE in_left AND NOT in_right) left_only_qualifiers,
+               count(*) FILTER (WHERE in_right AND NOT in_left) right_only_qualifiers,
+               CASE WHEN bool_or(status='endpoint_type_conflict') THEN 'endpoint_type_conflict'
+                    WHEN bool_or(status='left_endpoint_missing') THEN 'left_endpoint_missing'
+                    WHEN bool_or(status='right_endpoint_missing') THEN 'right_endpoint_missing'
+                    WHEN NOT bool_or(in_right) THEN 'left_pair_only'
+                    WHEN NOT bool_or(in_left) THEN 'right_pair_only'
+                    WHEN bool_and(in_left AND in_right) THEN 'same_qualifier_set'
+                    ELSE 'different_qualifier_set' END AS status
+        FROM relation_diff"""+predicate+" GROUP BY s,t", params)
+    counts = dict.fromkeys(PAIR_STATUSES, 0)
+    counts.update(dict(conn.execute("SELECT status,count(*) FROM pair_diff GROUP BY status").fetchall()))
+    sums = conn.execute("""SELECT coalesce(sum(left_qualifiers),0),
+        coalesce(sum(right_qualifiers),0),coalesce(sum(common_qualifiers),0),
+        coalesce(sum(left_only_qualifiers),0),coalesce(sum(right_only_qualifiers),0)
+        FROM pair_diff""").fetchone()
+    # Comparable pair population only; uncertainty is not an observed change.
+    comparable = sum(counts[k] for k in PAIR_STATUSES[:4])
+    common = counts["same_qualifier_set"] + counts["different_qualifier_set"]
+    where, args = (" WHERE status=?", [selection.pair_status]) if selection.pair_status else ("", [])
+    total = conn.execute("SELECT count(*) FROM pair_diff"+where,args).fetchone()[0]
+    records = conn.execute("""SELECT s,t,left_source_type,left_target_type,right_source_type,
+        right_target_type,left_qualifiers,right_qualifiers,common_qualifiers,
+        left_only_qualifiers,right_only_qualifiers,status FROM pair_diff"""+where+
+        " ORDER BY s,t LIMIT ? OFFSET ?", [*args,selection.limit,selection.offset]).fetchall()
+    keys=("source_id","target_id","left_source_type","left_target_type","right_source_type",
+          "right_target_type","left_qualifiers","right_qualifiers","common_qualifiers",
+          "left_only_qualifiers","right_only_qualifiers","status")
+    rows=[dict(zip(keys,r)) for r in records]
+    return {"pair_status_counts":counts,"filtered_pair_union_count":sum(counts.values()),
+            "comparable_pairs":comparable,"uncertain_pairs":sum(counts.values())-comparable,
+            "common_comparable_pairs":common,
+            "comparable_pair_overlap":common/comparable if comparable else None,
+            "equal_qualifier_set_share_of_common_comparable_pairs":
+                counts["same_qualifier_set"]/common if common else None,
+            "literal_assertion_counts":dict(zip(("left","right","common","left_only","right_only"),sums)),
+            "page_count":total,"offset":selection.offset,
+            "next_offset":selection.offset+len(rows) if selection.offset+len(rows)<total else None,
+            "rows":rows}
 
 
 def compare(log_id, spec):
@@ -115,6 +186,11 @@ def compare(log_id, spec):
                 if value is not None:
                     where.append(f"({lhs}=? OR {rhs}=?)")
                     params.extend([value, value])
+            for field, column in (("source_id","s"),("target_id","t")):
+                value = getattr(selection,field)
+                if value is not None:
+                    where.append(column+"=?")
+                    params.append(value)
             if selection.qualifier is not None:
                 where.append("q=?")
                 params.append(selection.qualifier)
@@ -131,6 +207,21 @@ def compare(log_id, spec):
                              ELSE 'both_same_type' END AS status,count(*)
                  FROM l FULL OUTER JOIN r USING(object_id) GROUP BY status""",
                  [log_id, selection.other_log_id]).fetchall())
+            if selection.mode == "pairs":
+                pair_result = _pair_report(conn,predicate,params,selection)
+                basis = selection.model_dump(exclude={"offset","limit"})
+                return {"format":"openworkgraph.object-relationship-pair-comparison.v1",
+                        "left":left,"right":right,
+                        "selection_sha256":sha256(json.dumps({"left_log_id":log_id,**basis},
+                            sort_keys=True,ensure_ascii=True,separators=(",",":")).encode()).hexdigest(),
+                        **pair_result,
+                        "whole_object_index_counts":{k:object_counts.get(k,0) for k in
+                            ("both_same_type","left_only","right_only","type_conflict")},
+                        "same_namespace_user_declared":True,
+                        "source_identity_independently_verified":False,
+                        "historical_validity_verified":False,"source_completeness_verified":False,
+                        "actual_relationship_changes_verified":False,"case_membership_inferred":False,
+                        "execution_authorized":False}
             if selection.status is not None:
                 predicate += (" AND " if predicate else " WHERE ")+"status=?"
                 params.append(selection.status)

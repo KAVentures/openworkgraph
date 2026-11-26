@@ -20,6 +20,11 @@
     if(resetPins){pins=null;$('pins').textContent='';$('confirm').checked=false;}
     $('run').disabled=!pins||!$('confirm').checked;
   }
+  function syncMode(){
+    const pair=$('mode').value==='pairs';
+    for(const id of ['qualifier','exact','statusFilter'])$(id).disabled=pair;
+    $('pairFilterLabel').hidden=!pair;
+  }
   function selected(){return [$('left').value,$('right').value];}
   function current(n,ids){return n===generation&&ids.every((id,i)=>id===selected()[i]);}
   function fill(id,logs){
@@ -48,8 +53,10 @@
     if(!pins||!$('confirm').checked)return;
     const ids=selected(),n=++generation;
     const spec={other_log_id:ids[1],same_namespace_declared:true,left:pinOf(pins[0]),right:pinOf(pins[1]),offset:pageOffset,limit:50};
-    for(const [id,key] of [['source','source_type'],['target','target_type'],['statusFilter','status']])if($(id).value)spec[key]=$(id).value;
-    if($('exact').checked)spec.qualifier=$('qualifier').value;
+    spec.mode=$('mode').value;
+    for(const [id,key] of [['source','source_type'],['target','target_type'],['sourceId','source_id'],['targetId','target_id']])if($(id).value)spec[key]=$(id).value;
+    if(spec.mode==='pairs'){if($('pairFilter').value)spec.pair_status=$('pairFilter').value;}
+    else{if($('statusFilter').value)spec.status=$('statusFilter').value;if($('exact').checked)spec.qualifier=$('qualifier').value;}
     $('run').disabled=true;$('previous').disabled=$('next').disabled=true;$('results').hidden=true;$('status').textContent='Comparing pinned retained assertion sets…';
     try{
       const r=await api('/v1/event-logs/'+ids[0]+'/object-relationships/compare',spec);
@@ -58,6 +65,26 @@
         [r.left,r.right].some((p,i)=>JSON.stringify(pinOf(p))!==JSON.stringify(pinOf(pins[i]))))throw Error('Snapshot response does not match reviewed pins.');
       if(pageOffset&&selection!==r.selection_sha256)throw Error('Comparison selection changed; restart at page one.');
       selection=r.selection_sha256;offset=r.offset;
+      const pair=spec.mode==='pairs';
+      $('groupDetails').hidden=pair;
+      $('evidenceTitle').textContent=pair?'Exact directed pair evidence':'Exact assertion evidence';
+      $('evidenceHeaders').replaceChildren(...(pair?['Source ID','Target ID','Left types','Right types','Left qualifiers','Right qualifiers','Common qualifiers','Left only','Right only','Status','Inspect']:['Source ID','Target ID','Qualifier','Left types','Right types','Status']).map(label=>{const th=document.createElement('th');th.scope='col';th.textContent=label;return th;}));
+      if(pair){
+        const pct=x=>x===null?'unavailable':(100*x).toFixed(1)+'%';
+        $('summary').textContent=r.filtered_pair_union_count+' directed pairs; '+r.comparable_pairs+' comparable endpoints and '+r.uncertain_pairs+' uncertain. Comparable-pair overlap '+pct(r.comparable_pair_overlap)+'; equal qualifier sets among shared comparable pairs '+pct(r.equal_qualifier_set_share_of_common_comparable_pairs)+'. These are retained-set comparisons, not verified changes.';
+        $('counts').textContent='Pair statuses\n'+JSON.stringify(r.pair_status_counts,null,2)+'\n\nLiteral assertion counts\n'+JSON.stringify(r.literal_assertion_counts,null,2)+'\n\nWhole object index\n'+JSON.stringify(r.whole_object_index_counts,null,2);
+        $('groups').textContent='';
+        $('rows').replaceChildren(...r.rows.map(row=>{
+          const tr=document.createElement('tr');
+          for(const v of [row.source_id,row.target_id,(row.left_source_type??'missing')+' → '+(row.left_target_type??'missing'),(row.right_source_type??'missing')+' → '+(row.right_target_type??'missing'),row.left_qualifiers,row.right_qualifiers,row.common_qualifiers,row.left_only_qualifiers,row.right_only_qualifiers,row.status]){
+            const td=document.createElement('td');td.textContent=String(v);tr.append(td);
+          }
+          const td=document.createElement('td'),b=document.createElement('button');b.textContent='Inspect assertions';
+          b.setAttribute('aria-label','Inspect assertions for '+row.source_id+' to '+row.target_id);
+          b.onclick=()=>{if(!current(n,ids))return;$('mode').value='assertions';$('sourceId').value=row.source_id;$('targetId').value=row.target_id;$('exact').checked=false;$('statusFilter').value='';syncMode();clear('Exact pair selected.');run();};
+          td.append(b);tr.append(td);return tr;
+        }));
+      }else{
       $('summary').textContent=r.filtered_union_count+' retained assertions across the selected type/qualifier scope. Exact evidence page contains '+r.page_count+' matching assertions in total.';
       $('counts').textContent='Assertion statuses\n'+JSON.stringify(r.assertion_status_counts,null,2)+'\n\nWhole object index\n'+JSON.stringify(r.whole_object_index_counts,null,2);
       $('groups').textContent=(r.groups_truncated?'More than 100 groups; showing first 100.\n':'')+JSON.stringify(r.group_rows,null,2);
@@ -70,6 +97,8 @@
           const td=document.createElement('td');td.textContent=value;tr.append(td);}
         return tr;
       }));
+      }
+      $('page').textContent=(r.rows.length?String(offset+1)+'–'+String(offset+r.rows.length):'0')+' of '+r.page_count;
       $('results').hidden=false;$('previous').disabled=offset===0;$('next').disabled=r.next_offset===null;
       $('status').textContent='Completed descriptive comparison; no source-system relationship change was verified.';
     }catch(e){if(current(n,ids)){clear(e.message,true);}}
@@ -81,7 +110,8 @@
     $('clear').onclick=()=>clear('Results cleared.',true);
     for(const id of ['left','right'])$(id).onchange=()=>clear('Selection changed; inspect both snapshots again.',true);
     $('confirm').onchange=()=>clear('Confirmation changed; compare again.');
-    for(const id of ['source','target','qualifier','exact','statusFilter'])$(id).addEventListener('input',()=>clear('Filter changed; compare again.'));
+    $('mode').onchange=()=>{syncMode();clear('Comparison unit changed; compare again.');};syncMode();
+    for(const id of ['source','target','sourceId','targetId','qualifier','exact','statusFilter','pairFilter'])$(id).addEventListener('input',()=>clear('Filter changed; compare again.'));
     reload();
   });
 })();
