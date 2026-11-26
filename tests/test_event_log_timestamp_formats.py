@@ -71,6 +71,17 @@ def test_format_with_offset_reads_it_from_each_value():
     assert (summary["first_event_at"], summary["last_event_at"]) == ("2024-03-13T08:05:00Z", "2024-03-13T11:05:00Z")
 
 
+def test_rfc3339_lowercase_t_and_z_are_read_like_uppercase():
+    from shared.event_log_formats import parse_timestamp
+    assert parse_timestamp("2024-01-01T00:00:00z") == parse_timestamp("2024-01-01T00:00:00Z")
+    result = _import(["c1,A,2024-01-01T00:00:00z", "c1,B,2024-01-01t01:00:00Z", "c1,C,2024-01-01t02:00:00+01:00"])
+    assert result["events"] == 3 and result["rejected_events"] == 0
+    assert _times(result["log_id"])[0].isoformat() == "2024-01-01T00:00:00+00:00"
+    # A lowercase "z" is an offset, not a naive time: an assumed offset does not shift it.
+    shifted = _import(["c1,A,2024-01-01T00:00:00z"], naive_timestamp_offset="+05:00")
+    assert workspace.summary(shifted["log_id"])["first_event_at"] == "2024-01-01T00:00:00Z"
+
+
 def test_bad_format_and_non_csv_are_refused():
     with pytest.raises(workspace.EventLogWorkspaceError, match="timestamp format"):
         _import(["c1,A,13/03/2024 09:05"], timestamp_format="%d/%m/%Y %H:%M' OR 1=1")

@@ -16,7 +16,6 @@ describes recorded order and timing, not why cases branch.
 """
 from __future__ import annotations
 
-from collections import defaultdict
 from typing import Any
 
 from . import event_log_workspace as workspace
@@ -27,15 +26,6 @@ END = "(end)"
 MAX_PREFIX = 30
 MAX_NEXT = 30
 _ANCHORS = {"start", "anywhere"}
-
-
-def _quantile(values: list[float], q: float) -> float | None:
-    if not values:
-        return None
-    ordered = sorted(values)
-    pos = (len(ordered) - 1) * q
-    lo, hi = int(pos), min(int(pos) + 1, len(ordered) - 1)
-    return round((ordered[lo] + (ordered[hi] - ordered[lo]) * (pos - lo)) / 3600, 3)
 
 
 def _find(path: list[str], prefix: list[str], anchor: str, anchor_steps: int | None) -> int | None:
@@ -73,51 +63,60 @@ def next_steps(log_id: str, prefix: list[str] | None = None, case_type: str | No
     prefix = _validated_prefix(prefix, anchor, anchor_steps)
 
     def run(conn):
-        rows = conn.execute("""SELECT list(activity ORDER BY ts, event_id), list(epoch(ts) ORDER BY ts, event_id)
-            FROM ce GROUP BY case_id""").fetchall()
-        return {"rows": rows}
+        # Keep literal activity arrays and timestamps inside DuckDB. The first
+        # occurrence of the anchor is decisive, even if an extended prefix fails.
+        conn.execute("""CREATE TEMP TABLE pe_paths AS SELECT case_id,
+            list(activity ORDER BY ts, event_id) AS path,
+            list(epoch(ts) ORDER BY ts, event_id) AS stamps
+            FROM ce GROUP BY case_id""")
+        width = len(prefix) if anchor_steps is None else anchor_steps
+        initial = prefix[:width]
+        if not prefix:
+            positions = "1"
+            params = []
+        elif anchor == "start":
+            positions = "CASE WHEN list_slice(path, 1, ?) = ? THEN 1 END"
+            params = [len(prefix), prefix]
+        else:
+            positions = "list_filter(range(1, len(path) - ? + 2), i -> list_slice(path, i, i + ? - 1) = ?)[1]"
+            params = [width, width, initial]
+        conn.execute(f"""CREATE TEMP TABLE pe_points AS WITH candidates AS (
+            SELECT *, {positions} AS anchor_at FROM pe_paths)
+            SELECT *, CASE WHEN anchor_at IS NOT NULL AND
+                (? = 0 OR list_slice(path, anchor_at, anchor_at + ? - 1) = ?)
+                THEN anchor_at + ? END AS next_index FROM candidates""",
+                     [*params, len(prefix), len(prefix), prefix, len(prefix)])
+        total, at_point, elapsed_med, elapsed_p90 = conn.execute("""SELECT count(*), count(next_index),
+            quantile_cont(stamps[next_index - 1] - stamps[1], 0.5),
+            quantile_cont(stamps[next_index - 1] - stamps[1], 0.9) FROM pe_points""").fetchone()
+        groups = conn.execute("""SELECT path[next_index] AS activity, count(*) AS n,
+            quantile_cont(stamps[next_index] - stamps[next_index - 1], 0.5) AS gap_med,
+            quantile_cont(stamps[next_index] - stamps[next_index - 1], 0.9) AS gap_p90,
+            quantile_cont(stamps[-1] - stamps[next_index], 0.5) AS end_med,
+            count(*) OVER () AS group_count
+            FROM pe_points WHERE next_index IS NOT NULL GROUP BY activity
+            ORDER BY n DESC, activity IS NULL, activity LIMIT ?""", [MAX_NEXT]).fetchall()
+        def hours(value):
+            return round(value / 3600, 3) if value is not None else None
+        steps = [{"activity": END if activity is None else activity, "is_end": activity is None, "cases": n,
+                  "share": round(n / at_point, 4) if at_point else None,
+                  "hours_from_previous": None if activity is None or not prefix else {
+                      "median": hours(gap_med), "p90": hours(gap_p90)},
+                  "hours_to_case_end": None if activity is None else {"median": hours(end_med)}}
+                 for activity, n, gap_med, gap_p90, end_med, _ in groups]
+        return {"total": total, "at_point": at_point, "elapsed_med": hours(elapsed_med),
+                "elapsed_p90": hours(elapsed_p90), "steps": steps, "next_total": groups[0][5] if groups else 0}
 
     data = workspace._query_filtered(log_id, case_type, cohort, run)
-    rows = data.pop("rows")
-    total = len(rows)
-    at_point = 0
-    gaps: dict[str, list[float]] = defaultdict(list)
-    to_end: dict[str, list[float]] = defaultdict(list)
-    counts: dict[str | None, int] = defaultdict(int)
-    elapsed: list[float] = []
-    for path, stamps in rows:
-        after = _find(path, prefix, anchor, anchor_steps)
-        if after is None:
-            continue
-        at_point += 1
-        if prefix:
-            elapsed.append(stamps[after - 1] - stamps[0])
-        if after >= len(path):
-            counts[None] += 1
-            continue
-        step = path[after]
-        counts[step] += 1
-        gaps[step].append(stamps[after] - stamps[after - 1] if after else 0.0)
-        to_end[step].append(stamps[-1] - stamps[after])
-    order = sorted(counts, key=lambda a: (-counts[a], a is None, a or ""))
-    steps = []
-    for activity in order[:MAX_NEXT]:
-        n = counts[activity]
-        steps.append({
-            "activity": END if activity is None else activity, "is_end": activity is None, "cases": n,
-            "share": round(n / at_point, 4) if at_point else None,
-            "hours_from_previous": None if activity is None or not prefix else {
-                "median": _quantile(gaps[activity], 0.5), "p90": _quantile(gaps[activity], 0.9)},
-            "hours_to_case_end": None if activity is None else {"median": _quantile(to_end[activity], 0.5)},
-        })
+    total, at_point = data["total"], data["at_point"]
     return {
         "format": FORMAT, "log_id": log_id, "case_notion": data.get("case_notion"),
         "prefix": prefix, "anchor": anchor, "cases": total, "cases_at_point": at_point,
         **({"anchor_steps": anchor_steps} if anchor_steps is not None else {}),
         "share_of_cases": round(at_point / total, 4) if total else None,
-        "hours_to_reach_point": {"median": _quantile(elapsed, 0.5), "p90": _quantile(elapsed, 0.9)}
+        "hours_to_reach_point": {"median": data["elapsed_med"], "p90": data["elapsed_p90"]}
                                 if prefix and anchor == "start" else None,
-        "next": steps, "next_total": len(order),
+        "next": data["steps"], "next_total": data["next_total"],
         "method": ("cases whose activities " + ("begin with" if anchor == "start" else "contain, one right after "
                    "another,") + " the chosen steps are followed to the activity that comes next"),
         "caveat": "The explorer shows recorded order and timing, not why cases branch.",
