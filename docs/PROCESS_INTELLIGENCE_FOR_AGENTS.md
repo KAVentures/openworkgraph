@@ -114,8 +114,8 @@ restart. If every share is revoked, the tools stay listed but empty until that r
 | `get_process_cooccurrence` | Which activities happen in the same cases, regardless of order: cases with both, the share of cases with one that also have the other, lift, and the pairs that go together most or never. Activities in fewer than 5 cases and pair counts below 5 are withheld. | aggregates |
 | `get_process_work_in_progress` | Cases arriving, completing and open per day or week, optionally with the activities that complete a case, and a Little's law check. | aggregates |
 | `get_process_batching` | Batch processing per activity: share of events in batches, batch sizes, simultaneous or sequential batches, and the wait before batched events. Resources are counted, never named. | aggregates |
-| `get_process_handovers` | Handover of work, subcontracting (ping-pong) and working together between pseudonymous resources, and who does which activity. Never names people; pairs or resources in fewer than 5 cases are withheld; no per-person durations or scoring. | aggregates |
-| `get_process_roles` | Roles mined from which activities resources perform: member count, activity mix and activities only that role performs. Members are never listed; roles or activities under 5 events are left out. | aggregates |
+| `get_process_handovers` | Handover of work, subcontracting (ping-pong) and working together between pseudonymous resources, and who does which activity. Never names people; pairs or resources in fewer than 5 cases are withheld; no per-person durations or scoring. Optional `case_filter` limits it to one group of at least 5 cases. | aggregates |
+| `get_process_roles` | Roles mined from which activities resources perform: member count, activity mix and activities only that role performs. Members are never listed; roles or activities under 5 events are left out. Optional `case_filter` limits it to one group of at least 5 cases. | aggregates |
 
 | `tag_process_cases` | Adds an `agent: ` tag with a note to cases (cases level and the tag permission). |
 

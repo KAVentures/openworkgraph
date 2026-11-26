@@ -1030,7 +1030,8 @@ def register_process_intelligence_tools(mcp: Any, runtime_module: Any) -> None:
                      "by_resource": "true" if by_resource else "false", "case_type": case_type})
 
     @mcp.tool(annotations=_READ_ONLY)
-    def get_process_handovers(log_id: str, limit: int = 50, case_type: str | None = None) -> dict[str, Any]:
+    def get_process_handovers(log_id: str, limit: int = 50, case_type: str | None = None,
+                              case_filter: dict[str, Any] | None = None) -> dict[str, Any]:
         """How work passes between people in a shared log: handover of work (consecutive events by different
         resources), subcontracting (work that goes to someone and straight back) and working together (cases two
         resources both touched), plus which resources do which activities. Resources are pseudonymous ("Resource
@@ -1039,11 +1040,17 @@ def register_process_intelligence_tools(mcp: Any, runtime_module: Any) -> None:
         """
         if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 200:
             raise ToolError("limit must be 1 to 200")
-        return _get("get_process_handovers", f"/v1/process-intelligence/{_log(log_id)}/handovers",
-                    {"limit": limit, "case_type": case_type})
+        params: dict[str, Any] = {"limit": limit, "case_type": case_type}
+        if case_filter is not None:
+            if not isinstance(case_filter, dict) or not case_filter:
+                raise ToolError("case_filter must be a non-empty object")
+            import json as _json
+            params["case_filter"] = _json.dumps(case_filter, separators=(",", ":"))
+        return _get("get_process_handovers", f"/v1/process-intelligence/{_log(log_id)}/handovers", params)
 
     @mcp.tool(annotations=_READ_ONLY)
-    def get_process_roles(log_id: str, threshold: float = 0.65, case_type: str | None = None) -> dict[str, Any]:
+    def get_process_roles(log_id: str, threshold: float = 0.65, case_type: str | None = None,
+                          case_filter: dict[str, Any] | None = None) -> dict[str, Any]:
         """Roles in a shared log, mined by grouping resources that perform a similar mix of activities (groups merge
         while their activity profiles correlate at or above threshold, 0-1). Each role gives how many resources it
         has, its activity mix and the activities only it performs. Members are never listed or named. Roles
@@ -1051,8 +1058,13 @@ def register_process_intelligence_tools(mcp: Any, runtime_module: Any) -> None:
         """
         if isinstance(threshold, bool) or not isinstance(threshold, (int, float)) or not 0 < threshold < 1:
             raise ToolError("threshold must be between 0 and 1")
-        return _get("get_process_roles", f"/v1/process-intelligence/{_log(log_id)}/roles",
-                    {"threshold": threshold, "case_type": case_type})
+        params: dict[str, Any] = {"threshold": threshold, "case_type": case_type}
+        if case_filter is not None:
+            if not isinstance(case_filter, dict) or not case_filter:
+                raise ToolError("case_filter must be a non-empty object")
+            import json as _json
+            params["case_filter"] = _json.dumps(case_filter, separators=(",", ":"))
+        return _get("get_process_roles", f"/v1/process-intelligence/{_log(log_id)}/roles", params)
 
     @mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=False))
     def tag_process_cases(log_id: str, tag: str, case_ids: list[str], note: str = "") -> dict[str, Any]:
