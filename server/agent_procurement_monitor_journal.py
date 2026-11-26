@@ -98,7 +98,7 @@ def _read(conn,key):
 def _view(key,state,history):
     return {"format":FORMAT,"workflow_id":key[0],"revision":key[1],"monitor_id":key[2],
         "plan_sha256":state["plan_sha256"],"head_sha256":history[-1]["entry_sha256"],
-        "checkpoint_count":sum(e["kind"]=="checkpoint" for e in history),"entry_count":len(history),
+        "checkpoint_count":sum(e["kind"] in ("checkpoint","producer_checkpoint") for e in history),"entry_count":len(history),
         "capacity":MAX_ENTRIES,"latest_report":state["report"],
         "sticky_rollback_triggers":state["sticky_rollback_triggers"],
         "rollback_referral_recorded":state["rollback_referral_recorded"],
@@ -108,7 +108,8 @@ def _view(key,state,history):
         "result_persisted":True,"local_dashboard_session_required":True,
         "source_evidence_authenticated":False,
         "credential_authenticated_observations":len(state.get("producer_attribution",{})),
-        "producer_attribution":state.get("producer_attribution",{}),"tamper_resistant_against_database_owner":False,
+        "producer_attribution":state.get("producer_attribution",{}),
+        "producer_grants":[{**e["details"],"revoked":any(x["kind"]=="producer_revoke" and x["details"]["grant_id"]==e["details"]["grant_id"] for x in history)} for e in history if e["kind"]=="producer_grant"],"tamper_resistant_against_database_owner":False,
         "deployment_changed":False,"execution_authorized":False}
 
 

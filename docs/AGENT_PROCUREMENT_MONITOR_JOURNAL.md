@@ -52,3 +52,5 @@ Limits: 20 journals per local database, 128 audit entries per journal,
 history. Retain/export evidence before explicitly removing a journal.
 No live polling, authenticated source telemetry, actual traffic assignment,
 production execution, causal benefit, or rollback authority is established.
+
+The optional [scoped producer interface](AGENT_PROCUREMENT_MONITOR_PRODUCER.md) adds credential-authenticated observation batches to the retained journal. New checkpoints can retain the verified monitor plan and initial source-reference hashes (no raw trial inputs), enabling incremental evaluation without resupplying the upstream bundle. Grant secrets are never retained in journal history or report exports.

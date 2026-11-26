@@ -36,12 +36,12 @@ def _require_dashboard(request):
         raise HTTPException(403, "Local dashboard session required for agent procurement")
 
 
-async def _envelope(request):
+async def _envelope(request, max_bytes=MAX_ENVELOPE):
     if str(request.headers.get("content-type") or "").split(";")[0].strip().lower() != "application/json":
         raise HTTPException(415, "Procurement request must be JSON")
     body=bytearray()
     async for part in request.stream():
-        if len(body)+len(part)>MAX_ENVELOPE:
+        if len(body)+len(part)>max_bytes:
             raise HTTPException(413, "Procurement request exceeds the supported size")
         body.extend(part)
     def unique(pairs):
@@ -152,7 +152,7 @@ async def ingest_monitor_producer(request: Request):
         if request.headers.get("origin"):
             raise HTTPException(403,"Native producer requests only")
         credential=await run_in_threadpool(telemetry.authenticate,request.headers.get("authorization"))
-        payload=await _envelope(request)
+        payload=await _envelope(request,max_bytes=512*1024)
         result=await run_in_threadpool(telemetry.ingest,credential,payload)
         return JSONResponse(result,headers={"Cache-Control":"no-store"})
     except journal.JournalError as exc:
