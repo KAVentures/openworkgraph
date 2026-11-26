@@ -102,6 +102,13 @@ Disconnect clears page memory immediately even while a request is pending. A
 response from the previous identity cannot repopulate the page or clear the next
 identity's state. This does not undo an already accepted server-side write.
 
+## Finite decision coverage lab
+
+Use the [decision coverage lab](PROCESS_DECISION_DOMAIN.md) on a saved local revision
+to enumerate reviewed synthetic boundary combinations and inspect overlap, gaps,
+FIRST shadowing, dependencies and selection coverage. Exact finite-domain counts
+are not exhaustive coverage of arbitrary business inputs or authority to execute.
+
 ## Portable declarations and limits
 
 Tables are an optional `decision_tables` field of the existing process model.
@@ -421,3 +428,7 @@ ANY, PRIORITY and other hit policies; several outputs; rows whose OWG predicate
 matches ANY of several conditions or tests one fact twice; and fact paths that are not
 simple identifiers. The DMN file is untrusted data. DOCTYPE and entities are rejected,
 size is bounded, and nothing is evaluated or executed.
+
+## Behavioral regression across saved revisions
+
+[Paired decision regression](PROCESS_POLICY_REGRESSION.md) evaluates the same explicitly dated reviewed case suite against two exact saved revisions, distinguishes regressions from intentional changes, and reports unreviewed table/case pairs without returning fact values.
