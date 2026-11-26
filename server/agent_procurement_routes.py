@@ -237,7 +237,7 @@ async def workforce_allocation(request: Request):
 
 
 @router.post("/v1/process-catalog/procurement-workforce/exchange/{action}")
-async def workforce_exchange(request: Request,action: Literal["export","review","identity","signed-export","signed-review","trust-status","trust-configure","registered-review","inbox-status","inbox-admit","inbox-review","inbox-forget","inbox-retire","inbox-dossier","audit-verify","audit-timeline","audit-triage","audit-reconcile","remediation-create","remediation-list","remediation-status","remediation-change","remediation-forget"]):
+async def workforce_exchange(request: Request,action: Literal["export","review","identity","signed-export","signed-review","trust-status","trust-configure","registered-review","inbox-status","inbox-admit","inbox-review","inbox-forget","inbox-retire","inbox-dossier","audit-verify","audit-timeline","audit-triage","audit-reconcile","remediation-create","remediation-list","remediation-status","remediation-change","remediation-forget","remediation-continuity-preview","remediation-continuity-carry"]):
     _require_dashboard(request)
     if str(request.headers.get("X-OpenWorkGraph-Context") or "").strip().lower()=="ai":
         raise HTTPException(403,"Exchange requires explicit dashboard operator")
@@ -256,7 +256,9 @@ async def workforce_exchange(request: Request,action: Literal["export","review",
             "audit-reconcile":audit_review.reconcile_receipts,
             "remediation-create":audit_review.create_remediation,"remediation-list":remediation.list_registers,
             "remediation-status":remediation.status,"remediation-change":remediation.change,
-            "remediation-forget":remediation.forget}[action]
+            "remediation-forget":remediation.forget,
+            "remediation-continuity-preview":audit_review.preview_continuity,
+            "remediation-continuity-carry":audit_review.carry_continuity}[action]
         result=await run_in_threadpool(fn,document)
         return JSONResponse(result,headers={"Cache-Control":"no-store"})
     except journal.JournalError as exc:
