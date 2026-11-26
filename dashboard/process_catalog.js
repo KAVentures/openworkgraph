@@ -1392,13 +1392,16 @@
             el('p',result.prior_checkpoint_extension_verified?'Retained prior snapshot extension verified.':'No retained prior snapshot supplied.'),
             el('p','Current snapshot pin: '+result.snapshot_sha256),
             el('p','Previously overdue windows: '+(result.overdue_windows_at_previous_checkpoint.join(', ')||'none reported at supplied checkpoint')),
-            el('p','Rollback review triggers: '+(result.rollback_review_triggers.map(x=>(x.window_id||'cumulative')+': '+x.reason).join(' · ')||'none established')));
+            el('p','Rollback review triggers: '+(result.rollback_review_triggers.map(x=>(x.window_id||'cumulative')+': '+x.reason).join(' · ')||'none established')),
+            el('p','Prior checkpoint triggers: '+(result.rollback_triggers_at_previous_checkpoint.map(x=>(x.window_id||'cumulative')+': '+x.reason).join(' · ')||'none supplied')));
           const showArm=(name,a)=>el('p',name+': '+a.terminal+'/'+a.cases+' terminal · success '+counts(a.counts.success)+' · mean cost '+range(a.mean_variable_cost));
           output.appendChild(el('h6','Cumulative started-window results'));
           for(const [name,a] of Object.entries(result.arms))output.appendChild(showArm(name,a));
           for(const c of result.cumulative_category_reviews){
             const section=el('section');section.append(el('h6',c.category.replaceAll('_',' ')+' · '+c.status),showArm('Incumbent',c.incumbent),showArm('Challenger',c.challenger),el('p','Mean variable savings: '+range(c.mean_variable_cost_savings)));output.appendChild(section);
           }
+          output.appendChild(el('h6','Closed-window cumulative prefixes'));
+          const prefixes=el('ul');for(const p of result.closed_prefix_checks)prefixes.appendChild(el('li',p.through_window_id+' · '+p.status+' · '+Object.entries(p.category_status).map(([k,v])=>k.replaceAll('_',' ')+': '+v).join(' · ')));output.appendChild(prefixes);
           output.appendChild(el('h6','Individual monitoring windows'));
           for(const w of result.windows){
             const section=el('section');section.append(el('h6',w.window_id+' · '+w.state.replaceAll('_',' ')),

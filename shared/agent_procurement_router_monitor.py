@@ -161,10 +161,12 @@ def _check_extension(previous,current):
             raise ValueError("prior monitoring observation removed or changed")
 
 
-def _rate(summary):
-    counts=summary["counts"]["success"];n=summary["cases"]
-    from fractions import Fraction
-    return (Fraction(counts["lower"],n),Fraction(counts["upper"],n))
+def _pooled_categories(rows,policy):
+    result=[]
+    for cat in sorted({r["category"] for r in rows}):
+        a,b=(pilot._summary([r for r in rows if r["arm"]==arm and r["category"]==cat]) for arm in ("incumbent","challenger"))
+        result.append({"category":cat,"incumbent":a,"challenger":b,**pilot._comparison(a,b,policy)})
+    return result
 
 
 def _snapshot_review(plan,raw,initial_sources):
@@ -179,7 +181,8 @@ def _snapshot_review(plan,raw,initial_sources):
         raise ValueError("unknown monitoring window")
     if initial_sources & {o["source_evidence_sha256"] for rows in captures.values() for o in rows}:
         raise ValueError("source reference reused from initial pilot")
-    rows=[];windows=[];triggers=[]
+    rows=[];windows=[];triggers=[];prefix_checks=[]
+    policy=pilot.Policy.model_validate(plan["windows"][0]["plan"]["request"]["policy"])
     for item in plan["windows"]:
         wid,p=item["window_id"],item["plan"]
         start,end=p["request"]["window_start_ms"],p["request"]["window_end_exclusive_ms"]
@@ -200,13 +203,16 @@ def _snapshot_review(plan,raw,initial_sources):
             "scheduled_cases":result["scheduled_cases"],"recorded_cases":result["recorded_cases"],
             "checks":result["checks"],"arms":result["arms"],"category_reviews":result["category_reviews"],
             "pilot_report_sha256":result["report_sha256"]})
-    policy=pilot.Policy.model_validate(plan["windows"][0]["plan"]["request"]["policy"])
+        if cut>=end:
+            prefix=_pooled_categories(rows,policy)
+            status=_combine([c["status"] for c in prefix])
+            prefix_checks.append({"through_window_id":wid,"status":status,
+                                  "category_status":{c["category"]:c["status"] for c in prefix}})
+            if status=="fail":triggers.append({"window_id":wid,"reason":"closed_prefix_category_policy_failure"})
     pooled=[];groups={}
     if rows:
         groups={arm:pilot._summary([r for r in rows if r["arm"]==arm]) for arm in ("incumbent","challenger")}
-        for cat in sorted({r["category"] for r in rows}):
-            a,b=(pilot._summary([r for r in rows if r["arm"]==arm and r["category"]==cat]) for arm in ("incumbent","challenger"))
-            pooled.append({"category":cat,"incumbent":a,"challenger":b,**pilot._comparison(a,b,policy)})
+        pooled=_pooled_categories(rows,policy)
         if any(c["status"]=="fail" for c in pooled):
             triggers.append({"window_id":None,"reason":"cumulative_category_policy_failure"})
     completed=sum(w["state"]=="complete_pass" for w in windows)
@@ -216,7 +222,7 @@ def _snapshot_review(plan,raw,initial_sources):
     ready=completed==len(windows) and bool(pooled) and all(c["status"]=="pass" for c in pooled) and not triggers
     state="rollback_review" if triggers else "continued_monitoring_review" if ready else "hold"
     return {"snapshot_sha256":digest(snapshot),"as_of_ms":cut,"windows":windows,"arms":groups,
-            "cumulative_category_reviews":pooled,"scheduled_cases":plan["scheduled_cases"],
+            "cumulative_category_reviews":pooled,"closed_prefix_checks":prefix_checks,"scheduled_cases":plan["scheduled_cases"],
             "started_window_cases":len(rows),"recorded_cases":sum(r["status"]!="not_recorded" for r in rows),
             "completed_passing_windows":completed,"rollback_review_triggers":triggers,
             "recommended_review":state,"eligible_for_continued_monitoring_review":ready}
@@ -228,7 +234,7 @@ def review(packet,initial,monitor_plan,snapshot,previous_checkpoint):
         raise ValueError("monitoring plan or initial evidence changed")
     initial_sources={o["source_evidence_sha256"] for o in initial["captures"]["observations"]}
     latest=_snapshot_review(plan,snapshot,initial_sources)
-    previous_pin=None;prior_overdue=[]
+    previous_pin=None;prior_overdue=[];prior_triggers=[]
     if previous_checkpoint is not None:
         if not isinstance(previous_checkpoint,dict) or set(previous_checkpoint)!={"snapshot","expected_snapshot_sha256"}:
             raise ValueError("exact retained previous checkpoint required")
@@ -237,13 +243,17 @@ def review(packet,initial,monitor_plan,snapshot,previous_checkpoint):
             raise ValueError("prior snapshot pin mismatch")
         prior_review=_snapshot_review(plan,previous,initial_sources)
         prior_overdue=[w["window_id"] for w in prior_review["windows"] if w["state"]=="overdue"]
+        prior_triggers=prior_review["rollback_review_triggers"]
         _check_extension(previous,_normalize(snapshot))
         previous_pin=previous_checkpoint["expected_snapshot_sha256"]
+    if prior_triggers:
+        latest["eligible_for_continued_monitoring_review"]=False
+        latest["recommended_review"]="rollback_review"
     return router._seal({"format":REPORT,"monitor_plan_sha256":plan["monitor_plan_sha256"],
         "initial_receipt_sha256":plan["initial_receipt_sha256"],"currency":plan["currency"],
         "rollback_target_configuration_sha256":plan["rollback_target_configuration_sha256"],
         "previous_snapshot_sha256":previous_pin,"prior_checkpoint_extension_verified":previous_pin is not None,
-        "overdue_windows_at_previous_checkpoint":prior_overdue,
+        "overdue_windows_at_previous_checkpoint":prior_overdue,"rollback_triggers_at_previous_checkpoint":prior_triggers,
         **latest,"continuous_history_independently_verified":False,"live_telemetry_verified":False,
         "deployment_changed":False,"execution_authorized":False,
         "limitations":["Finite declared monitoring schedule; no live ingestion, background polling or deployment actions.",

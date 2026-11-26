@@ -77,3 +77,10 @@ checkpoint; that absence is explicit in the report. Source evidence, external
 approval and chronology are not independently authenticated. These are
 descriptive disjoint-arm comparisons, not causal effects, verified ROI or
 authorization to operate production.
+
+Each closed-window cumulative prefix is recomputed separately so a later
+passing pooled average cannot mask an established earlier prefix failure.
+Any rollback trigger in the supplied prior checkpoint blocks continuation
+at the next review even if current pooled checks recover. This is not a
+persistent incident history: retain all checkpoints and refer for separate
+review rather than discarding an earlier trigger.
