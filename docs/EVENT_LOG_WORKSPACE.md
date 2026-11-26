@@ -3500,6 +3500,23 @@ The preview does not replace an existing editor suite automatically. Select **Re
 
 The local owner-only endpoint is `POST /v1/event-logs/petri-test-generation?max_cases=20&max_depth=20` with raw PNML body (2 MiB maximum). The scenario limit is 1–40 and prefix depth 1–99. Prefix exploration is bounded to 2,000 subsets and 600,000 counted work units, and selection to 2,000,000 counted feature units. No model, suite or report is retained; the response uses `Cache-Control: no-store`. No agent execution or policy approval is authorized.
 
+### Challenge acceptance suites with synthetic workflow faults
+
+Within **Run workflow acceptance scenarios**, expand **Challenge acceptance suite with synthetic faults**. Review or edit the suite first. Mutation testing requires the exact baseline to pass that suite; a baseline failure or inconclusive result stops the review. Choose up to eight independent mutations across four operators:
+
+- Hide a visible activity (make the transition silent without changing firing conditions).
+- Rename a visible activity to a fresh synthetic label.
+- Remove one transition and its incident arcs (never remove the last transition).
+- Increase one input-arc weight by one, within the supported weight limit.
+
+Selection is deterministic: round-robin by enabled operator, then sorted target identifiers. Each mutation is applied to a fresh copy of the original submitted PNML; saved models are not edited. The report gives the available and selected mutation counts and each recipe, resulting model SHA-256, failed scenario IDs and unknown scenario IDs.
+
+A fault is **detected** if any acceptance case fails, **survived** if all cases pass, or **inconclusive** otherwise. The detection-fraction interval uses all selected mutations as the denominator: detected / selected to (detected + inconclusive) / selected. This is not corrected for semantically equivalent faults and is not an estimate of real-world failure probability. No denominator is invented when no applicable mutations exist.
+
+For surviving mutations, the completed-visible-language checker attempts an exact comparison with the original model. If it finds an added or removed trace, OWG proposes an additional exact completed-trace scenario with the reference model's expected result. Long truncated witnesses and unsupported labels are not used as executable scenarios. Review the proposal and explicitly add it to the suite editor; it is never applied automatically. A completed-language-equivalent mutation can still change prefix behavior, deadlock, timing or other properties. An inconclusive comparison is not an equivalence proof.
+
+The owner-only `POST /v1/event-logs/petri-mutation-review` endpoint accepts `application/octet-stream`: four unsigned big-endian bytes giving the UTF-8 JSON settings byte count, that many JSON bytes, then the reference PNML bytes. JSON is `{"suite": <acceptance suite>, "settings": {"max_mutants": 4, "operators": ["hide_activity", "rename_activity"]}}`; settings can omit either key to use its default. The JSON frame is limited to 256 KiB + 4 KiB and PNML to 2 MiB. Each of at most eight mutations uses existing bounded marking exploration, acceptance and completed-language comparison budgets. Results are non-retained and downloadable as digest-pinned JSON. Mutation testing makes no real business changes, executes no agents and does not certify independently authored business policy.
+
 ### Process trees (PTML) from PM4Py and ProM
 
 The file picker also accepts a **process tree** in PTML, as `pm4py.write_ptml` and ProM's Inductive
