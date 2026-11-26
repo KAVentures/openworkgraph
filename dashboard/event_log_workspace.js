@@ -1525,7 +1525,7 @@
     results.appendChild(cooccurrenceSection(inspection));
     results.appendChild(dueDatesSection(names,inspection));
     results.appendChild(unusualCasesSection());
-    results.appendChild(funnelSection(names));
+    results.appendChild(funnelSection(names,inspection));
     const petriReplay=petriReplaySection(inspection);
     results.appendChild(modelQualitySection(petriReplay.replayScored));
     results.appendChild(modelChangeSection(inspection));
@@ -8128,7 +8128,7 @@
     return box;
   }
 
-  function funnelSection(activityNames){
+  function funnelSection(activityNames,inspection){
     const box=section('Milestone funnel');box.id='owgFunnel';
     box.appendChild(el('div','Choose activities in order to see how many cases reach each one after the previous ones, how long that takes, and what the cases that stopped did last. Other activities may happen in between.','muted'));
     const options=[['','(choose an activity)'],...activityNames.slice(0,500).map(a=>[a,a])];
@@ -8136,7 +8136,7 @@
     const pickers=[];
     const addStep=()=>{if(pickers.length>=8)return;const n=pickers.length+1;const pick=select('owgFunnelStep'+n,options);
       if(activityNames[n-1])pick.value=activityNames[n-1];pickers.push(pick);steps.appendChild(field('Step '+n,pick));more.disabled=pickers.length>=8;};
-    const more=button('Add step','secondary');more.id='owgFunnelAdd';more.onclick=addStep;
+    const more=button('Add step','secondary');more.id='owgFunnelAdd';more.onclick=()=>{addStep();invalidate();};
     const windowPick=select('owgFunnelWindow',[['','No time limit'],['24','Within 24 hours of the previous step'],['168','Within 7 days'],['720','Within 30 days']]);
     const evidenceStep=select('owgFunnelEvidenceStep',[['','No case evidence'],...Array.from({length:8},(_,i)=>[String(i+1),'Step '+(i+1)])]);
     const evidenceStatus=select('owgFunnelEvidenceStatus',[['reached','Reached step'],['dropped','Stopped before step']]);
@@ -8158,6 +8158,9 @@
     const stale=()=>{lastFunnel=null;exports.enable(false);};
     steps.addEventListener('change',stale);row.addEventListener('change',stale);
     for(let i=0;i<3;i++)addStep();
+    let revision=0;
+    const invalidate=()=>{revision++;out.replaceChildren();run.disabled=false;statusLine.textContent='Settings changed; show the funnel again.';};
+    steps.addEventListener('change',invalidate);row.addEventListener('change',invalidate);
     const pct=x=>x===null||x===undefined?'—':Math.round(x*1000)/10+'%';
     const hrs=x=>x===null||x===undefined?'—':(x<48?(Math.round(x*10)/10)+' h':(Math.round(x/24*10)/10)+' d');
     run.onclick=async()=>{
@@ -8167,17 +8170,44 @@
       const generation=state.generation;run.disabled=true;statusLine.textContent='Following cases…';out.replaceChildren();stale();
       try{
         const params={step:chosen};if(windowPick.value)params.within_hours=windowPick.value;
-        if(evidenceStep.value){params.evidence_step=evidenceStep.value;params.evidence_status=evidenceStatus.value;}
-        const r=await getJSON(logPath('funnel',params));
-        if(generation!==state.generation)return;
+        if(evidenceStep.value){params.evidence_step=evidenceStep.value;params.evidence_status=evidenceStatus.value;params.evidence_page=true;}
+        const version=++revision,current=()=>generation===state.generation&&version===revision;
+        const basePath=logPath('funnel',params),r=await getJSON(basePath).catch(error=>{if(!current())return null;throw error;});
+        if(!current())return;
         const first=r.steps[0],last=r.steps[r.steps.length-1];
         statusLine.textContent=Number(last.cases).toLocaleString()+' of '+Number(first.cases).toLocaleString()+' cases that reached '+first.activity+' went on to reach '+last.activity+' ('+pct(r.completed.share_of_first_step)+'), in a median '+hrs(r.completed.hours_first_to_last.median)+'.'+(r.largest_drop?' The largest drop is before step '+r.largest_drop.to_step+' ('+Number(r.largest_drop.cases).toLocaleString()+' cases).':'');
         const t=table(['Step','Reached','Of step 1','From previous','Dropped','Median time from previous','Stopped cases did last'],r.steps.map(x=>[x.step+'. '+x.activity,Number(x.cases).toLocaleString(),pct(x.share_of_first_step),x.step===1?'—':pct(x.conversion_from_previous),x.step===1?'—':Number(x.dropped_after_previous).toLocaleString()+(x.stopped_cases_possibly_open?' ('+x.stopped_cases_possibly_open+' possibly open)':''),x.step===1?'—':hrs(x.hours_from_previous.median),x.step===1?'—':(x.stopped_cases_last_activity.map(a=>a.activity+' ('+a.cases+')').join(', ')||'—')]));
         t.querySelector('tbody').querySelectorAll('tr').forEach((tr,i)=>{const bar=el('div');bar.setAttribute('aria-hidden','true');bar.style.cssText='height:4px;background:currentColor;opacity:.35;margin-top:4px;width:'+Math.round((r.steps[i].share_of_first_step||0)*100)+'%';tr.cells[1].appendChild(bar);});
         out.appendChild(t);
-        if(r.evidence){const e=r.evidence;out.appendChild(el('h4','Case evidence'));
-          out.appendChild(el('div','Showing '+e.cases.length+' of '+e.total+' cases '+(e.status==='reached'?'reaching step ':'stopping before step ')+e.step+(e.truncated?' (first 50 by case ID).':'.'),'muted'));
-          if(e.cases.length)out.appendChild(table(['Case ID','Last recorded activity','Steps reached'],e.cases.map(c=>[c.case_id,c.last_activity,c.steps_reached])));}
+        if(r.evidence){
+          out.appendChild(el('h4','Case evidence'));
+          const host=el('div');host.id='owgFunnelEvidence';out.appendChild(host);
+          const cursors=[null],expected=r.evidence.revision;let page=0;
+          const showEvidence=e=>{
+            const message=el('div','Showing '+e.cases.length+' of '+e.total+' cases '+(e.status==='reached'?'reaching step ':'stopping before step ')+e.step+'.','muted');
+            const previous=button('Previous cases','secondary'),next=button('Next cases','secondary');
+            previous.id='owgFunnelEvidencePrevious';next.id='owgFunnelEvidenceNext';previous.disabled=page===0;next.disabled=!e.next_after;
+            const load=async(index,cursor)=>{
+              previous.disabled=next.disabled=true;message.textContent='Loading case evidence…';
+              try{
+                const url=new URL(basePath,location.href);
+                if(cursor!==null)url.searchParams.set('evidence_after',cursor);
+                url.searchParams.set('evidence_revision',expected);
+                const result=await getJSON(url.pathname+url.search);
+                if(!current()||!host.isConnected)return;
+                page=index;cursors[index]=cursor;showEvidence(result.evidence);
+              }catch(error){if(current()&&host.isConnected){message.textContent=error.message;previous.disabled=page===0;}}
+            };
+            previous.onclick=()=>load(page-1,cursors[page-1]);next.onclick=()=>load(page+1,e.next_after);
+            const rows=e.cases.map(c=>{
+              const open=button('Open case','secondary');open.setAttribute('aria-label','Open case '+c.case_id);
+              open.onclick=()=>{if(current())inspection.open(c.case_id,r.case_notion);};
+              return [c.case_id,c.last_activity,c.steps_reached,open];
+            });
+            host.replaceChildren(message,...(rows.length?[table(['Case ID','Last recorded activity','Steps reached','Evidence'],rows)]:[]),previous,next);
+          };
+          showEvidence(r.evidence);
+        }
         out.appendChild(el('div',r.caveat,'muted'));
         lastFunnel=r;exports.enable(true);
       }catch(error){statusLine.textContent=error.message;}
