@@ -375,6 +375,27 @@ async def event_log_petri_soundness(request: Request):
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
+@router.post("/v1/event-logs/petri-test-generation")
+async def event_log_petri_test_generation(request: Request,
+                                          max_cases: int = Query(default=20, ge=1, le=40),
+                                          max_depth: int = Query(default=20, ge=1, le=99)):
+    """Generate characterization scenarios from one explicitly submitted PNML model."""
+    from . import event_log_petri_test_generation as generation
+    from . import event_log_petri_replay as replay
+    _require_dashboard(request)
+    data = bytearray()
+    async for chunk in request.stream():
+        if len(data) + len(chunk) > replay.MAX_BYTES:
+            raise HTTPException(413, "the Petri net file is larger than 2 MB")
+        data.extend(chunk)
+    try:
+        result = await run_in_threadpool(generation.generate, bytes(data),
+                                         {"max_cases": max_cases, "max_depth": max_depth})
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
 @router.post("/v1/event-logs/petri-acceptance")
 async def event_log_petri_acceptance(request: Request):
     """Run an explicitly supplied acceptance suite on one or two models."""
