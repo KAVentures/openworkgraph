@@ -69,7 +69,8 @@ def _prepare(conn, log_id: str, settings: WipSpec):
     step = timedelta(days=1 if unit == "day" else 7)
     count = int((final - start) / step) + 1
     if count > MAX_BUCKETS:
-        raise workspace.EventLogWorkspaceError(f"the log spans {count} {unit}s; at most {MAX_BUCKETS} buckets, try weeks or a cohort")
+        hint = "try weeks or a cohort" if unit == "day" else "narrow it with a cohort, for example a start-date range"
+        raise workspace.EventLogWorkspaceError(f"the log spans {count} {unit}s; at most {MAX_BUCKETS} buckets, {hint}")
     return first, last, start, final, step
 
 
