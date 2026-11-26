@@ -79,6 +79,17 @@ def _check_size(conn,pin,encoded):
         raise journal.JournalError("Remediation register capacity reached; export and remove a register",409)
 
 
+def _transition(current,state,owner,reference):
+    if state not in TRANSITIONS[current["state"]]:
+        raise ValueError("unsupported follow-up transition")
+    if state=="follow_up_reported" and not reference:
+        raise ValueError("reported follow-up requires a declared evidence reference")
+    if state!="assigned" and owner!=current["owner_alias"]:
+        raise ValueError("owner change requires explicit assignment transition")
+    if (state,owner,reference)==(current["state"],current["owner_alias"],current["evidence_reference"]):
+        raise ValueError("unchanged follow-up state")
+
+
 def _load(conn,pin):
     row=conn.execute("SELECT register_json FROM procurement_audit_remediation WHERE worklist_sha256=?",(pin,)).fetchone()
     if row is None:
@@ -87,8 +98,13 @@ def _load(conn,pin):
     if value["worklist_sha256"]!=pin or digest(value["basis"])!=value["basis_sha256"]:
         raise ValueError("stored remediation basis mismatch")
     previous=value["basis_sha256"]
-    states={f["finding_id"]:{"state":"unassigned","owner_alias":None,"evidence_reference":None}
-            for f in value["basis"]["findings"]}
+    if value["basis"]["worklist_sha256"]!=pin:
+        raise ValueError("stored remediation scope mismatch")
+    findings={f["finding_id"]:f for f in value["basis"]["findings"]}
+    if len(findings)!=len(value["basis"]["findings"]):
+        raise ValueError("duplicate stored finding")
+    states={key:{"state":"unassigned","owner_alias":None,"evidence_reference":None} for key in findings}
+    previous_stamp=_stamp(value["basis"]["created_at_ms"])
     for index,event in enumerate(value["events"],1):
         body={k:v for k,v in event.items() if k!="event_sha256"}
         if (event["previous_sha256"]!=previous or event["revision"]!=index
@@ -97,6 +113,10 @@ def _load(conn,pin):
         current=states[event["finding_id"]]
         if current["state"]!=event["previous_state"] or current["owner_alias"]!=event["previous_owner_alias"]:
             raise ValueError("stored remediation history state mismatch")
+        if event["finding_sha256"]!=findings[event["finding_id"]]["finding_sha256"] or _stamp(event["recorded_at_ms"])<previous_stamp:
+            raise ValueError("stored remediation event scope or clock mismatch")
+        _transition(current,event["state"],event["owner_alias"],event["evidence_reference"])
+        previous_stamp=event["recorded_at_ms"]
         states[event["finding_id"]]={k:event[k] for k in ("state","owner_alias","evidence_reference")}
         previous=event["event_sha256"]
     if value["revision"]!=len(value["events"]) or value["history_sha256"]!=previous:
@@ -188,14 +208,7 @@ def change(document,*,now=None):
         if f is None or f["finding_sha256"]!=req.expected_finding_sha256:
             raise ValueError("unknown or changed finding")
         current=states[req.finding_id]
-        if req.state not in TRANSITIONS[current["state"]]:
-            raise ValueError("unsupported follow-up transition")
-        if req.state=="follow_up_reported" and not req.evidence_reference:
-            raise ValueError("reported follow-up requires a declared evidence reference")
-        if req.state!="assigned" and req.owner_alias!=current["owner_alias"]:
-            raise ValueError("owner change requires explicit assignment transition")
-        if (req.state,req.owner_alias,req.evidence_reference)==(current["state"],current["owner_alias"],current["evidence_reference"]):
-            raise ValueError("unchanged follow-up state")
+        _transition(current,req.state,req.owner_alias,req.evidence_reference)
         if value["revision"]>=MAX_EVENTS:
             raise journal.JournalError("Remediation history capacity reached",409)
         stamp=_stamp(now)
