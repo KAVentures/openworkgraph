@@ -223,3 +223,60 @@ the ordered `dossiers` array. The server requires the exact keys and
 strict confirmation, recomputes all reports, returns no-store responses,
 and does not consult the retained trust registry. Neither endpoint confers
 current trust, verified chronology, incident clearance or execution authority.
+
+
+## Evidence-pinned follow-up worklist
+
+After independently recomputing a timeline, expand **Prioritized audit
+findings and follow-up assignments**. The worklist deterministically derives
+findings from all supplied snapshots, including prior rollback referrals,
+source attention flags, cutoff regressions, changed or unavailable cohorts,
+excluded journals, journals absent in the latest snapshot, absent
+installations, declared key changes, unreadable journals and changed
+freshness policy. A later clean snapshot does not discard an earlier flag.
+
+Priority 0 is a historical rollback referral; priority 1 is an evidence
+coverage or cutoff warning; priority 2 is another review finding. These
+priorities are review ordering, not a diagnosis of severity or actual harm.
+The worklist pins exact dossier and report digests for every finding.
+Filter and search by finding kind, installation, journal or finding ID;
+pagination does not change the underlying worklist or selected findings.
+
+Select up to 200 findings, enter a declared reviewer alias, and record
+investigate, escalate, request_evidence or acknowledge for each selection.
+A rollback referral cannot be merely acknowledged. Any non-acknowledgment
+disposition requires a declared follow-up owner. Optional external references
+are opaque aliases, not URLs or ticket lookups. The server independently
+recomputes the timeline and worklist from the original archives before
+issuing a receipt, rejects changed pins or duplicated findings, and reports
+all selected/unselected counts including unselected rollback referrals.
+Changing a selection or reviewer clears the visible stale receipt.
+
+No external issue is created, no assignment is sent to another person, and
+no incident is cleared. Reviewer/owner aliases and external references are
+operator declarations, not authenticated identities. A receipt covering
+every finding is not evidence that work was performed. The worklist and
+receipt are portable, minimized exports; neither is retained by the local
+server, and no credentials, signed packets or source case tags are in them.
+
+For larger archives, build the worklist offline:
+
+```sh
+python -m server.agent_procurement_workforce_audit_triage manifest.json --manifest-sha256 <independent-digest> --output worklist.json first.json second.json
+```
+
+Create a separate decision JSON containing the exact worklist_sha256 (as
+expected_worklist_sha256), reviewer_alias, confirmed=true, and selections.
+Each selection contains finding_id, expected_finding_sha256 (from the
+worklist), disposition, owner_alias (or null for acknowledgment), and
+optional external_reference. Then run the same command with
+`--decision decision.json --output receipt.json` instead of the worklist
+output. Original dossiers and independent manifest are always required.
+
+The dashboard-only POST
+/v1/process-catalog/procurement-workforce/exchange/audit-triage accepts the
+audit-timeline document plus a decision object as described above; the
+same exact-text, 8 MiB request, explicit confirmation and no-store
+boundaries apply. The CLI has the historical timeline aggregate input cap,
+exclusive output and a maximum 30,000 findings; exceeding any cap is
+refused rather than silently truncating the worklist.
