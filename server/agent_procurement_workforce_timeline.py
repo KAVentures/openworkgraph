@@ -116,7 +116,7 @@ def review(documents, manifest, *, expected_manifest_sha256):
             item = old if old is not None else {
                 "installation_alias": scope[0], "journal_tag": scope[1],
                 "first_snapshot": i+1, "observed_snapshots": 0,
-                "rollback_referral_snapshots": [], "cutoff_regression_snapshots": [],
+                "rollback_referral_snapshots": [], "source_attention_snapshots": [], "cutoff_regression_snapshots": [],
                 "excluded_snapshots": [], "changed_cohort_snapshots": [],
                 "latest_cutoff_ms": None, "maximum_cutoff_ms": None,
                 "_cohort": None}
@@ -127,6 +127,8 @@ def review(documents, manifest, *, expected_manifest_sha256):
                 item["cutoff_regression_snapshots"].append(i+1)
             if row["rollback_review"]:
                 item["rollback_referral_snapshots"].append(i+1)
+            if row["attention"]:
+                item["source_attention_snapshots"].append(i+1)
             if not report_rows[scope]["included_in_totals"]:
                 item["excluded_snapshots"].append(i+1)
             item.update({"last_snapshot": i+1,"observed_snapshots": item["observed_snapshots"]+1,
