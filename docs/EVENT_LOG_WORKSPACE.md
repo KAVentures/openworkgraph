@@ -206,6 +206,15 @@ An import or append runs one at a time. You can prepare another file while a
 save is running. The completed save keeps newer file and mapping choices in
 the form.
 
+### Unnamed and duplicate columns
+
+Column names must be non-empty and unambiguous (not repeated, also ignoring case), so a mapping can
+never pick a different column than the one you meant; a file with an empty or repeated column name
+is refused. One exception: many exports end every line with a delimiter (`case;activity;time;`),
+which leaves one unnamed last column. That column is ignored when it is empty in every row. If it
+holds a value in any row the file is refused, rather than a value being dropped silently, and two or
+more unnamed trailing columns are still refused.
+
 ### SQLite database files
 
 When switching files or tables, the import form keeps the latest selection.
@@ -2906,6 +2915,11 @@ notion. Import validates the rules and case notion against the destination log.
 Filter names are unique within each log.
 
 
+Use **Update from active filter** to replace a saved filter's criteria with the
+current selection. The saved filter keeps its identity and name. If another
+edit changed it since the list was loaded, OWG asks you to reload and review
+before updating.
+
 The case evidence drill-down also uses the active case filter, so browsing cases shows the same
 cases the filtered views count ("N matching cases (case filter applied)"). Object-type maps keep
 their own case notion and are not filtered.
@@ -3606,6 +3620,40 @@ tagged. Tagging again with the same tag does not duplicate it.
 body, plus the case-filter parameters (`tag` there is the filter for cases already tagged, so the
 new tag is `new_tag`). A tag is the analyst's label, not a finding.
 
+### Structural and behavioral net validation
+
+After replaying a net, expand **Structural and behavioral net validation** and choose **Validate net soundness**. This checks the *model*, independently of observed cases or cohort filters. A log can fit an unsound net, and a sound net need not fit a particular log.
+
+The checker explores reachable markings by firing enabled ordinary place/transition net transitions. For a completely explored finite graph it verifies classical workflow-net soundness: unique marked source and sink, all nodes on a structural source-to-sink path, the option to reach the exact final marking from every reachable marking, proper completion, and no dead transitions. It also reports one-safeness separately (a weighted sound net need not be one-safe), final-marking reachability, deadlock and non-completing marking witnesses. Witnesses use transition IDs and reached token counts, not guessed business activity order. Cycles with exits can be sound while allowing an infinite execution. The separate **Every maximal execution completes** property is verified only if complete exploration establishes an acyclic reachability graph and no reachable nonfinal deadlock. An observed repeatable cycle refutes that stronger guarantee even in a partial graph; the report includes an entry marking, a transition sequence reaching it, and a cycle returning to it. No fairness, scheduling or time assumptions are made. The shortest completion is measured in transition firings (including silent transitions); the longest execution is reported only when every maximal execution is guaranteed to complete. Truncated witnesses are explicitly marked as prefixes, not independently replayable complete paths.
+
+Results have three possible values: **Verified**, **Failed**, and **Inconclusive**. Limits are 200 places, 300 transitions, 5,000 reachable markings, 256 tokens per place and 300,000 transition checks. If a limit is reached, an observed counterexample remains valid; unexplored absence is not evidence of soundness, dead transitions, or unboundedness. The checker does not approximate high-level, reset, inhibitor or other extended nets, does not guess final markings, and rejects unrecognized semantic/tool-specific extensions. Some otherwise replayable external PNML files may consequently be refused. The supported subset is the explicitly marked ordinary PNML P/T net, including OWG-generated nets.
+
+The dashboard can download a JSON report containing the input PNML SHA-256, coverage, property verdicts, limits and counterexamples. The local dashboard-session-only endpoint is `POST /v1/event-logs/petri-soundness` with the raw PNML body (at most 2 MB); returns JSON with `Cache-Control: no-store`. No net or report is retained by this operation, and no connector or business-action authorization is implied.
+
+### Compare completed behavior of two Petri-net revisions
+
+In **Structural and behavioral net validation**, expand **Compare two model revisions**. Replay the baseline model, select the candidate PNML file, and choose **Compare completed behavior**. The checker independently constructs bounded reachable marking graphs and compares their visible completed-trace languages using epsilon closure and a product of determinized marking subsets. Silent transitions do not consume activities; duplicate labels are handled nondeterministically. Only the exact final marking accepts a trace, including the empty trace where applicable.
+
+Two directional results distinguish candidate regressions (baseline traces removed) from expanded behavior (new traces allowed by the candidate). The first discovered distinguishing trace in each direction is shortest by number of visible activities. A complete comparison can prove equality or inclusion even when the language is infinite, as with a loop. If either marking graph is incomplete, neither inclusion is established. A product-search limit leaves unproved properties inconclusive; an already discovered distinguishing trace remains evidence of non-inclusion. The product is limited to 3,000 subset pairs and 500,000 counted exploration work units, in addition to the soundness checker's per-model bounds. Transition labels are bounded to 200 characters and long witness sequences are marked as truncated.
+
+**Download model comparison (JSON)** exports both submitted model digests, coverage, directional verdicts and witnesses. The owner-only, non-retained endpoint is `POST /v1/event-logs/petri-language-comparison` with `Content-Type: application/octet-stream`. Its body contains the unsigned four-byte big-endian length of the baseline, then exactly that many baseline bytes, then the candidate bytes. Each model is limited to 2 MB. Digests identify the exact submitted bytes (the dashboard encodes its current replayed baseline text as UTF-8 and sends the candidate file bytes unchanged).
+
+This is completed **visible trace language** equivalence, not branching-time equivalence, identical concurrency, absence of deadlocks, guaranteed termination, policy compliance, equal costs/timing or business-outcome equivalence. Use soundness and independent evidence alongside it; no result grants execution authority.
+
+### Verify declared compliance rules on a Petri-net model
+
+Expand **Verify declared compliance rules on the model** in the structural and behavioral validation panel. Use the rule builder or paste an editable JSON object containing a `rules` array. It accepts the same five untimed activity-only templates as the existing log compliance checker: `response`, `chain_response`, `precedence`, `not_coexistence` and `existence`. Labels match exactly. Time-bounded response and segregation-of-duties rules are explicitly refused: an ordinary P/T net does not model timestamps or resources.
+
+For each rule and the entire suite jointly, OWG explores the product of reachable Petri markings and deterministic finite rule-monitor states. Silent transitions do not count as visible steps. Only completed traces ending at the exact final marking are classified. The joint check matters: two rules can each be satisfiable on different executions while no single completed execution satisfies both.
+
+Results distinguish verified satisfaction, observed counterexamples, vacuous-only satisfaction, absence of any completed trace, and inconclusive exploration. A rule that is never activated is not evidence that its required step occurs. A model with no completed trace is not reported as verified. Each result includes the possibility of satisfying, violating, activated satisfying and vacuous traces, with concrete witness sequences when found. The search prioritizes shortest visible paths and then total firings; incomplete marking graphs may hide shorter witnesses. Long traces are explicitly marked as prefixes. Rule indices in witnesses refer to the zero-based original ordered suite.
+
+Optionally upload a candidate revision to compare against the same baseline and rule suite. A change from no possible violating trace to a possible violation is a model-policy regression; the reverse is a removal of that possibility. Unchanged possibility is not proof of identical violating trace languages. See the separate completed-behavior comparison for exact visible trace equivalence. The JSON export pins both model byte digests, canonical normalized rule-suite digest, all rules, witnesses and search coverage.
+
+The owner-only endpoint is `POST /v1/event-logs/petri-policy-review`, with `Content-Type: application/octet-stream`. The frame is a four-byte unsigned big-endian rule JSON byte count, that many UTF-8 rule JSON bytes, a four-byte unsigned big-endian baseline byte count, that many baseline PNML bytes, then optional candidate PNML bytes. Rules are limited to 64 KiB and 20 entries; each model is limited to 2 MiB. Unknown keys, duplicate rules, duplicate JSON keys and unsupported templates are refused. A maximum of 10,000 product states per check and 600,000 counted work units per model is enforced in addition to the marking-graph bounds. Later checks may be inconclusive when the shared budget is exhausted. The response is non-retained and `Cache-Control: no-store`.
+
+These are model-level untimed activity trace properties, not legal compliance, real-world case evidence, policy approval or a grant of agent execution authority. A completed-trace property does not by itself establish that all executions complete; use the separate soundness and termination checks.
+
 ### Process trees (PTML) from PM4Py and ProM
 
 The file picker also accepts a **process tree** in PTML, as `pm4py.write_ptml` and ProM's Inductive
@@ -3619,12 +3667,14 @@ Supported nodes:
 
 - `manualTask` (an activity) and `automaticTask` (a silent step);
 - `sequence`, `xor` and `and`;
+- `or` (inclusive choice): execute any nonempty subset of branches, with parallel interleaving of their activities;
+- `interleaved`: execute every child exactly once, in any order, with no overlap between whole child blocks;
 - `xorLoop` with two children (PM4Py: do, redo) or three (ProM: do, redo, exit). The exit runs
   once after the loop.
 
-Other operators (`or`, `interleaved`, …), a node with two parents, cycles, unconnected nodes,
+Other operators (such as `def`), a node with two parents, cycles, unconnected nodes,
 unknown references and XML with a DOCTYPE or entity declaration are refused with a message.
-Nothing is approximated.
+Nothing is approximated by the converter. PTML requires an ASCII-compatible XML encoding (such as UTF-8) and both parsers are bounded to 250 nesting levels.
 
 A tree can also be pasted as PM4Py prints it (`print(tree)`), for example
 `->( 'Register', X( 'Check', tau ), *( 'Fix', tau ), 'Close' )`. Its notation:
@@ -3634,9 +3684,9 @@ A tree can also be pasted as PM4Py prints it (`print(tree)`), for example
 - labels are single-quoted. A label ends at the quote followed by a comma or a closing bracket,
   so quotes inside a label are kept.
 
-`O` (or) and `<>` (interleaving) are refused, as in PTML. The dashboard field is
+`O` denotes inclusive choice and `<>` denotes interleaving. For example, `O( 'Pay', 'Ship' )` accepts either alone or both in either order, whereas `<>( ->( 'A', 'B' ), ->( 'C', 'D' ) )` accepts only the two whole-block orders. The compiled nets use linear-size branch selection/lock constructions. Exact net semantics do not make the downstream bounded token-replay heuristic complete: highly branching nets can exceed its silent-state budget; review alignments and their limits before interpreting apparent deviations. The dashboard field is
 **Or paste a PM4Py process tree**. Its endpoint is `POST /v1/event-logs/process-tree-to-pnml`
-with `{"notation": "…"}` (dashboard session only, at most 200,000 characters, nesting at most 500
+with `{"notation": "…"}` (dashboard session only, at most 200,000 characters, nesting at most 250
 levels). The response has the same shape as `ptml-to-pnml`.
 
 ## Temporal profile
