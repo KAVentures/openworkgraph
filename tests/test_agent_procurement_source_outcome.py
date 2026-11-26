@@ -4,7 +4,7 @@ from itertools import product
 
 import pytest
 
-from shared.agent_procurement_source_outcome import project,project_jira,summarize
+from shared.agent_procurement_source_outcome import project,project_jira,project_github,summarize
 import importlib
 from server import agent_procurement_source_outcome as source
 from server import agent_procurement_monitor_journal as journal
@@ -187,3 +187,56 @@ def test_source_confirmation_conflicts_with_separate_reviewer():
     result=summarize(state)
     assert result["blocks_continuation"]
     assert result["conflicts"][0]["reason"]=="source_predicate_conflicts_with_separate_reviewer_failure"
+
+
+GH_REF="owg:r:"+"c"*32
+GH_RECORD={"provider":"github","resource_kind":"pull_request","host":"github.com","resolver_locator":"Owner/Repo/pull/42"}
+
+
+def github_receipt(merged=2000,read=4500):
+    return {"provider":"github","availability":"source_reported","object_type":"pull_request",
+        "source_state_reported":True,"source_state":"merged","verified_at":iso(read),
+        "verification_method":"explicit_opt_in_authenticated_local_github_cli_read",
+        "verified_business_outcome":False,
+        "process_audit_events":[{"action":"pull_request_merged","observed_at":iso(merged)}]}
+
+
+def test_github_merge_projection_against_exact_window_oracle():
+    for start,end,stamp,read,state,provenance,kind in product(
+            (1000,1500,2000,2500),(2000,2500,3000,3500,4000),
+            (0,1000,1500,1999,2000,2500,2999,3000,4000,5000),
+            (2000,3500,4500,5500),("merged","open","closed_unmerged"),
+            (False,True),("valid","missing","duplicate","conflict","malformed")):
+        if start>=end:continue
+        row=github_receipt(stamp,read);row["source_state"]=state
+        if not provenance:row["verification_method"]="unknown"
+        event=row["process_audit_events"][0]
+        row["process_audit_events"]={"valid":[event],"missing":[],"duplicate":[event,event],
+            "conflict":[event,{"action":"pull_request_closed_unmerged"}],"malformed":[None]}[kind]
+        old=deepcopy(row);actual=project_github(row,start,end,5000)
+        second=stamp-stamp%1000
+        expected=end<=read<=5000 and stamp<=read and state=="merged" and provenance and kind=="valid" and set(range(second,second+1000)).issubset(range(start,end))
+        assert (actual["status"]=="confirmed")==expected
+        assert row==old
+
+
+def test_github_identity_and_pinned_resolver(monkeypatch):
+    monkeypatch.setattr(source,"ensure_api_token",lambda:"local-test-secret")
+    pred="github_pr_merged_in_window"
+    assert source._identity(GH_RECORD,pred)==source._identity({**GH_RECORD,"resolver_locator":"owner/repo/pull/42"},pred)
+    assert source._identity(GH_RECORD,pred)!=source._identity({**GH_RECORD,"resolver_locator":"Owner/Repo/pull/43"},pred)
+    for locator in ("../Repo/pull/42","Owner/-repo/pull/42","Owner/Repo/pull/0","https://github.com/Owner/Repo/pull/42"):
+        with pytest.raises(ValueError):source._identity({**GH_RECORD,"resolver_locator":locator},pred)
+    install_record_events(monkeypatch,GH_RECORD,GH_REF)
+    def reader(ref,*,resolver):
+        assert ref==GH_REF and resolver(ref)==GH_RECORD and resolver(REF) is None
+        return github_receipt()
+    monkeypatch.setattr(source,"_gh_pr_snapshot",reader)
+    assert source._read_source(GH_REF,GH_RECORD,pred)==github_receipt()
+
+
+@pytest.mark.parametrize("mode",["missing","wrong_host","conflict","truncated"])
+def test_github_retained_record_guard(monkeypatch,mode):
+    install_record_events(monkeypatch,GH_RECORD,GH_REF,mode=mode)
+    monkeypatch.setattr(source,"_gh_pr_snapshot",lambda *a,**k:pytest.fail("provider read without exact retained evidence"))
+    assert source._read_source(GH_REF,GH_RECORD,"github_pr_merged_in_window")["availability"]=="unknown"
