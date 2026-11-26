@@ -228,6 +228,16 @@ print(json.dumps({"a":a[0],"b":b[0],"trust":a[1]["trust"],"manifest":m,"pin":dig
   page.once('dialog',d=>d.accept());
   await page.getByRole('button',{name:'Recompute selected historical audit evidence',exact:true}).click();
   await page.getByText('Independently recomputed historical timeline',{exact:true}).waitFor();
+  await page.getByText('Prioritized audit findings and follow-up assignments',{exact:true}).click();
+  await page.getByLabel('Declared audit reviewer alias',{exact:true}).fill('reviewer');
+  await page.getByRole('checkbox',{name:/Select finding /}).check();
+  await page.getByRole('textbox',{name:/Follow-up owner /}).fill('ops');
+  page.once('dialog',d=>d.accept());
+  await page.getByRole('button',{name:'Record selected audit follow-up referrals',exact:true}).click();
+  await page.getByText('Evidence-pinned follow-up receipt',{exact:true}).waitFor();
+  await page.getByText('1 declared referrals · 0 unselected findings · 0 unselected rollback referrals',{exact:true}).waitFor();
+  await page.getByLabel('Declared audit reviewer alias',{exact:true}).fill('different');
+  assert.equal(await page.getByText('Evidence-pinned follow-up receipt',{exact:true}).count(),0);
   await page.getByLabel('Historical journal review filter',{exact:true}).selectOption('rollback');
   await page.getByText('1 matching journals · page 1 of 1',{exact:true}).waitFor();
   await page.getByText(/site · .*rollback referral observed/).click();
@@ -239,7 +249,7 @@ print(json.dumps({"a":a[0],"b":b[0],"trust":a[1]["trust"],"manifest":m,"pin":dig
   page.once('dialog',d=>d.accept());
   await page.getByRole('button',{name:'Recompute selected historical audit evidence',exact:true}).click();
   await page.getByText(/Historical review refused/).waitFor();
-  assert.equal(auditRequests,4);
+  assert.equal(auditRequests,5);
   await exchangePanel.click();
 
   await page.getByLabel('Business goal',{exact:true}).fill('Revised draft only');
