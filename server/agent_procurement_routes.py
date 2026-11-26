@@ -18,6 +18,7 @@ from shared import agent_procurement_router_change as change
 from shared import agent_procurement_router_pilot as pilot
 from shared import agent_procurement_router_monitor as monitor
 from . import agent_procurement_deployment as deployment
+from . import agent_procurement_monitor_journal as journal
 from .local_auth import dashboard_session_valid
 from .local_process_catalog import catalog
 
@@ -86,6 +87,11 @@ def _inspect(operation, workflow_id, revision, payload):
             if operation!="router-monitor-review" and catalog.get(workflow_id)["revision"]!=revision:
                 raise HTTPException(409,"Open latest saved process revision before monitoring decision")
             result=monitor.operation(packet,operation,document)
+        elif operation.startswith("router-journal-"):
+            def ensure_current():
+                if catalog.get(workflow_id)["revision"]!=revision:
+                    raise HTTPException(409,"Open latest saved process revision before recording monitoring evidence")
+            result=journal.operation(packet,workflow_id,revision,operation,document,ensure_current=ensure_current)
         elif operation in ("deployment-review","deployment-decide"):
             if catalog.get(workflow_id)["revision"]!=revision:
                 raise HTTPException(409,"Open the latest saved process revision before deployment review")
@@ -107,6 +113,8 @@ def _inspect(operation, workflow_id, revision, payload):
         latest=catalog.get(workflow_id)["revision"]
         if operation in ("nominate","decide","rollout-review","deployment-review","deployment-decide","router-freeze","router-change-freeze","router-change-decide","router-pilot-freeze","router-pilot-decide","router-monitor-freeze","router-monitor-decide") and latest!=revision:
             raise HTTPException(409,"Saved process revision changed during review; reopen the latest revision")
+    except journal.JournalError as exc:
+        raise HTTPException(exc.status,str(exc)) from None
     except LookupError:
         raise HTTPException(404,"Saved process revision not found") from None
     except (ValueError,KeyError,TypeError,RecursionError,OverflowError):
@@ -117,12 +125,12 @@ def _inspect(operation, workflow_id, revision, payload):
         "result":result,"workflow_id":workflow_id,"revision":revision,
         "latest_revision_at_inspection":latest,
         "references_latest_revision_at_inspection":latest==revision,
-        "result_persisted":False,"execution_authorized":False,
+        "result_persisted":bool(result.get("result_persisted",False)),"execution_authorized":False,
     }
 
 
 @router.post("/v1/process-catalog/procurement/{operation}")
-async def inspect_procurement(request: Request, operation: Literal["compare","freeze","review","nominate","assess","decide","outcome-review","rollout-review","deployment-review","deployment-decide","operating-cost","router-freeze","router-review","router-change-freeze","router-change-assess","router-change-decide","router-pilot-freeze","router-pilot-review","router-pilot-decide","router-monitor-freeze","router-monitor-review","router-monitor-decide"],
+async def inspect_procurement(request: Request, operation: Literal["compare","freeze","review","nominate","assess","decide","outcome-review","rollout-review","deployment-review","deployment-decide","operating-cost","router-freeze","router-review","router-change-freeze","router-change-assess","router-change-decide","router-pilot-freeze","router-pilot-review","router-pilot-decide","router-monitor-freeze","router-monitor-review","router-monitor-decide","router-journal-append","router-journal-detail","router-journal-decide","router-journal-forget"],
                               workflow_id: str = Query(pattern=r"^[A-Za-z0-9_-]{1,80}$"),
                               revision: int = Query(ge=1,le=2**31-1)):
     _require_dashboard(request)
