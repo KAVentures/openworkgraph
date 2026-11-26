@@ -324,3 +324,57 @@ no-store and 8 MiB request limits apply. The CLI has the historical aggregate
 dossier input cap and exclusive 40 MiB portable output cap. Larger output
 is refused instead of truncating findings. No reconciliation is retained
 by the server; separately preserve exports according to your audit policy.
+
+
+## Persistent local remediation registers
+
+The previous review, triage and reconciliation operations remain transient.
+For longer-running follow-up, recompute a historical timeline, then choose
+**Retain exact worklist for local remediation** and confirm local retention.
+The server recomputes the signed input against independent trust pins and
+requires the exact worklist digest. Only minimized finding identifiers,
+kind, priority, scope and basis hashes are retained initially. No signed
+packets, source case tags, trust keys, triage receipts or raw source data are
+retained by this register. Original evidence must remain in separate custody.
+
+Open **Local audit remediation registers** to reload a register, filter its
+findings, assign owners, record investigation and evidence-request progress,
+record a declared follow-up with an opaque evidence reference, or reopen a
+finding. Every change requires the exact worklist/finding pins, current
+revision and history digest, declared reviewer and owner, and explicit
+confirmation. A stale revision is refused. Reassignment must be explicit;
+reported follow-up requires a reference and is not closure or verified work.
+Historical rollback referrals remain visible in every state.
+
+A register has a frozen evidence basis. Importing the same worklist is
+idempotent and preserves progress; a different worklist is a separate
+register, not silent replacement or migration. Local progress events are
+hash-linked and replayed on read; this detects inconsistent local history,
+but a database writer can rewrite an entire chain. Neither the chain nor
+the local clock establishes trusted chronology, identity or external
+evidence validity. Export and retain a separate history pin as appropriate.
+
+Export the full minimized register and history before using **Remove local
+remediation register**. Removal requires the exact latest revision/history
+pin and a declaration that the export was made. It does not erase backups,
+downloads or the independent signed evidence. There is no automatic
+retention expiry. Caps are 20 registers, 2,000 findings per register,
+5,000 events per register and 32 MiB total encoded register storage; exceeding
+a cap refuses the action rather than dropping evidence.
+
+Dashboard-session-only POST actions under
+/v1/process-catalog/procurement-workforce/exchange/:
+
+- remediation-create: original audit-timeline request plus
+  expected_worklist_sha256 and confirm_local_retention=true.
+- remediation-list: empty JSON object.
+- remediation-status: worklist_sha256.
+- remediation-change: worklist_sha256, expected_revision,
+  expected_history_sha256, finding_id, expected_finding_sha256, state,
+  owner_alias, reviewer_alias, optional evidence_reference, confirmed=true.
+- remediation-forget: worklist_sha256, expected_revision,
+  expected_history_sha256, confirmed_exported=true.
+
+All use the standard JSON-text document envelope and no-store response.
+These actions never create or update external tickets, verify actual
+remediation, clear incidents, or authorize deployment.
