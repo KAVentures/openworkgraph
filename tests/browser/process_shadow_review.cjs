@@ -338,6 +338,8 @@ print(json.dumps({"a":a[0],"b":b[0],"c":c[0],"trust":a[1]["trust"],"manifest":m,
 c=sqlite3.connect(sys.argv[1])
 assert c.execute('SELECT COUNT(*) FROM workflow_knowledge').fetchone()[0]==1
 assert c.execute('SELECT COUNT(*) FROM events').fetchone()[0]==0
+for table in ('procurement_audit_remediation','procurement_audit_remediation_tickets','procurement_audit_jira_dispatch'):
+    assert c.execute('SELECT COUNT(*) FROM '+table).fetchone()[0]==0,table
 assert 'PRIVATE_' not in '\\n'.join(c.iterdump())
 `,path.join(scratch,'data','workflow_observer.db')],{encoding:'utf8'});
   assert.equal(checked.status,0,checked.stderr);assert.deepEqual(errors,[]);
