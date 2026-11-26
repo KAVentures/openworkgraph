@@ -3956,6 +3956,16 @@
     const checkRow=el('div',null,'row');checkRow.style.alignItems='end';checkRow.append(run);
     if(otherLogs.length)checkRow.append(field('Object rule comparison log',compareLog),compare);
     const f={activity:field('Activity A',activity),related:field('Related type U',relatedType),required:field('Activity B',required),via:field('Related through',via),direction:field('Supplied assertion direction',direction),exact:field('Match exact supplied qualifier',exact),qualifier:field('Supplied qualifier (empty is a valid exact label)',qualifier),min:field('At least',min),max:field('At most',max)};
+    const exactActivity=input('owgObjectRuleExactActivity','text','Exact stored activity A (optional)');
+    const exactRequired=input('owgObjectRuleExactRequired','text','Exact stored activity B (optional)');
+    const exactVia=input('owgObjectRuleExactVia','text','Exact stored linking activity (optional)');
+    for(const [picker,entry] of [[activity,exactActivity],[required,exactRequired],[via,exactVia]]){
+      entry.maxLength=400;picker.addEventListener('change',()=>{entry.value='';});
+    }
+    f.activity.append(field('Exact activity A',exactActivity));
+    f.required.append(field('Exact activity B',exactRequired));
+    f.via.append(field('Exact linking activity',exactVia));
+    box.appendChild(el('div','Activity suggestions are limited to the displayed object graph. Exact entries override them and use stored event labels, before any activity mapping or hidden-activity filter.','muted'));
     if(types.length<2&&(allTypes.length>1||graph.log&&(graph.log.object_relationships||['ocel','ocelxml'].includes(graph.log.source_format))))template.value='supplied_object_cardinality';
     const sync=()=>{
       const t=template.value,supplied=t==='supplied_object_cardinality';
@@ -4203,7 +4213,16 @@
     };
     drawPending();
     manageSaved(()=>refreshSaved());
-    add.onclick=()=>{try{if(rules.length>=20)throw new Error('Check at most 20 object rules at once.');rules.push(objectRule({template:template.value,activity:activity.value,objectType:objectType.value,relatedType:relatedType.value,required:required.value,via:via.value,min:min.value,max:max.value,direction:direction.value,exactQualifier:exact.checked,qualifier:qualifier.value}));message.textContent='';drawPending();}catch(error){message.textContent=error.message;}};
+    add.onclick=()=>{try{
+      if(rules.length>=20)throw new Error('Check at most 20 object rules at once.');
+      const chosen=(entry,picker)=>{const value=entry.value||picker.value;if(value&&Array.from(value).length>200)throw new Error('Activity labels must have at most 200 characters.');return value;};
+      const t=template.value;
+      const a=['event_cardinality','synchronization'].includes(t)?chosen(exactActivity,activity):'';
+      const b=t==='synchronization'?chosen(exactRequired,required):'';
+      const link=t==='object_cardinality'?chosen(exactVia,via):'';
+      rules.push(objectRule({template:t,activity:a,objectType:objectType.value,relatedType:relatedType.value,required:b,via:link,min:min.value,max:max.value,direction:direction.value,exactQualifier:exact.checked,qualifier:qualifier.value}));
+      message.textContent='';drawPending();
+    }catch(error){message.textContent=error.message;}};
     run.onclick=async()=>{
       resetResults();busy=true;comparing=false;syncChecks();message.textContent='Checking object rules…';
       const turn=requestVersion;
@@ -4215,11 +4234,18 @@
           return text+(res.violating>shown.length?'; showing '+shown.length+' of '+res.violating+' retained violations':'');
         };
         const rows=r.results.map(res=>{
+          const absent=[['activity_in_log',res.rule.activity??res.rule.via_activity,'activity'],
+            ['required_activity_in_log',res.rule.required_activity,'required activity'],
+            ['object_type_in_log',res.rule.object_type,'object type'],['related_type_in_log',res.rule.related_type,'related object type']]
+            .filter(([key])=>res[key]===false).map(([,value,name])=>name+' '+JSON.stringify(value));
+          const description=el('div');description.appendChild(el('div',res.description));
+          if(absent.length)description.appendChild(el('div','Absent from this log · '+absent.join(', '),'muted'));
+          else if(res.complete&&res.activated===0)description.appendChild(el('div','No activated units; this does not establish compliance.','muted'));
           const open=button('Inspect violations','secondary');open.setAttribute('aria-label','Inspect violations for '+res.description);
           open.onclick=()=>inspect(turn,r,res);
-          return res.complete?[res.description,Number(res.activated).toLocaleString()+' '+unit[res.unit],Number(res.violating).toLocaleString(),
+          return res.complete?[description,Number(res.activated).toLocaleString()+' '+unit[res.unit],Number(res.violating).toLocaleString(),
           res.violation_rate===null?'—':pct(res.violation_rate)+(res.violation_rate_ci95?' ['+pct(res.violation_rate_ci95[0])+', '+pct(res.violation_rate_ci95[1])+']':' (retained set)'),
-          examples(res),res.violating?open:'']:[res.description,'—',unknown(res),'—','',''];
+          examples(res),res.violating?open:'']:[description,'—',unknown(res),'—','',''];
         });
         out.replaceChildren(el('div',r.rules_with_violations+' of '+r.results.length+' object rules have violations.','muted'),
           table(['Rule','Applies to','Violating','Violation rate (95% CI)','Examples','Evidence'],rows),el('div',r.interpretation,'muted'));
@@ -4243,7 +4269,7 @@
           const cell=el('div');
           cell.append(el('div',result.activated?number(result.violating)+' of '+number(result.activated)+' activated '+unit[result.unit]+' violate ('+pct(result.violation_rate)+')':'0 activated '+unit[result.unit]));
           const absent=[['activity','activity'],['object_type','object type'],['related_type','related type'],['required_activity','required activity']]
-            .filter(([key])=>result[key+'_in_log']===false).map(([key,name])=>name+' '+JSON.stringify(result.rule[key]));
+            .filter(([key])=>result[key+'_in_log']===false).map(([key,name])=>name+' '+JSON.stringify(key==='activity'?(result.rule.activity??result.rule.via_activity):result.rule[key]));
           if(absent.length)cell.append(el('div','Absent from this log · '+absent.join(', '),'muted'));
           if(result.violating){
             const open=button('Inspect violations','secondary');
