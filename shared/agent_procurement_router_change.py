@@ -7,7 +7,6 @@ uncertainty cancels in paired differences (but not in absolute quality).
 from __future__ import annotations
 
 import argparse
-from fractions import Fraction
 from itertools import product
 from pathlib import Path
 from typing import Annotated, Literal
@@ -68,6 +67,8 @@ def freeze(packet, discovery, holdout_plan, request):
     req=FreezeRequest.model_validate(request)
     if not req.confirmed or not req.confirm_non_overlapping_incremental_switch_cost:
         raise ValueError("explicit confirmation of change and switching cost required")
+    if not req.comparison_policy.require_nonnegative_first_year_savings and req.comparison_policy.minimum_first_year_savings_microunits:
+        raise ValueError("disabled savings gate cannot declare a positive threshold")
     if req.incumbent_configuration_sha256==req.challenger_configuration_sha256:
         raise ValueError("router versions must have distinct configuration hashes")
     common={"portfolio_id":req.portfolio_id,"policy":req.router_policy.model_dump(),
@@ -113,7 +114,7 @@ def _pair_row(a,b,paths):
         # destination is identical; otherwise use conservative intervals.
         success=ZERO if same else router._difference(y["success"],x["success"])
         cost=ZERO if same else router._difference(x["cost"],y["cost"])
-        capacity=ZERO if same else router._difference(y["capacity"],x["capacity"])
+        capacity=ZERO if same else router._difference(x["person_ms"],y["person_ms"])
         options.append({"cost_savings":cost,"released_path_person_ms":capacity,
                         "success_change":success,
                         "new_outcome_regression":ZERO if same else _drop(x["success"],y["success"]),

@@ -115,3 +115,5 @@ path with and without router effort. An identical path cancels even unknown
 shared arm costs. These differences exclude fixed charges, may be negative,
 and do not establish that the intended path was optimal or that cheaper
 misrouting is acceptable. Quality gates remain separate.
+
+For subsequent configuration changes, see [paired router change control](AGENT_PROCUREMENT_ROUTER_CHANGE.md). This compares two router versions on the same frozen paired holdout and supports a separate non-authorizing referral.

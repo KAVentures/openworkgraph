@@ -183,10 +183,12 @@ def _difference(a,b):
 def _path(row, manual=False):
     if manual:
         return {"cost":_pair(row["manual_cost"]),"saving":ZERO,"capacity":ZERO,
+                "person_ms":(row["manual_person_ms"]["lower"],row["manual_person_ms"]["upper"]),
                 "success":_outcome(row["manual_declared_outcome"]),"regression":(0,0),
                 "critical":(0,0),"non_delivery":(0,0)}
     q=row["declared_outcome_comparison"]["regression"]
     return {"cost":_pair(row["candidate_cost"]),"saving":_pair(row["paired_savings"]),
+            "person_ms":(row["candidate_person_ms"]["lower"],row["candidate_person_ms"]["upper"]),
             "capacity":_difference((row["manual_person_ms"]["lower"],row["manual_person_ms"]["upper"]),
                                    (row["candidate_person_ms"]["lower"],row["candidate_person_ms"]["upper"])),
             "success":_outcome(row["candidate_declared_outcome"]),"regression":(q["lower"],q["upper"]),
