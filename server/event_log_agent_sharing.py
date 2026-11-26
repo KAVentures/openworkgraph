@@ -1253,18 +1253,29 @@ def compliance(log_id: str, rules: Any, case_type: str | None = None) -> dict[st
 
 
 def performance_spectrum(log_id: str, case_type: str | None = None, segments: list[str] | None = None,
-                         top: int = 6, bins: int = 30) -> dict[str, Any]:
+                         top: int = 6, bins: int = 30, case_filter: dict[str, Any] | None = None) -> dict[str, Any]:
     """Time between consecutive activities over the log's span, per segment: duration classes per time bin,
     FIFO and batching shares (aggregates level). Individual case lines are not returned, and segments seen fewer
     than AGENT_MIN_CELL_CASES times are withheld."""
     require(log_id, "aggregates")
     from . import event_log_performance_spectrum as ps
-    result = ps.spectrum(log_id, case_type, segments=ps.parse_segments(list(segments or [])), top=top, bins=bins)
+    from . import event_log_cohorts as cohorts
+    chosen = None
+    if case_filter is not None:
+        if not isinstance(case_filter, dict) or not case_filter:
+            raise EventLogWorkspaceError("case_filter must be a non-empty object of case-filter keys")
+        if workspace.summary(log_id, case_type, case_filter)["cases"] < AGENT_MIN_FILTERED_CASES:
+            raise EventLogWorkspaceError(f"fewer than {AGENT_MIN_FILTERED_CASES} cases match this filter; widen it")
+        chosen = cohorts.parse_cohort(case_filter)
+    result = ps.spectrum(log_id, case_type, segments=ps.parse_segments(list(segments or [])), top=top, bins=bins,
+                         cohort=case_filter)
     floor = AGENT_MIN_CELL_CASES
     # Repeated events from one case are not five independent supporting cases.
     # The dashboard spectrum counts occurrences; separately measure case support
     # in the same mapped case notion before sharing any segment with agents.
     def support(conn):
+        if chosen:
+            cohorts.restrict(conn, chosen, log_id)   # support counts only the cases the answer describes
         rows = conn.execute("""SELECT activity, next_activity, count(DISTINCT case_id)
             FROM (SELECT case_id, activity,
                          lead(activity) OVER (PARTITION BY case_id ORDER BY ts, event_id) AS next_activity

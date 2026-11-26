@@ -307,11 +307,13 @@ def register_process_intelligence_tools(mcp: Any, runtime_module: Any) -> None:
 
     @mcp.tool(annotations=_READ_ONLY)
     def get_process_performance_spectrum(log_id: str, segments: list[str] | None = None, top: int = 6, bins: int = 30,
-                                         case_type: str | None = None) -> dict[str, Any]:
+                                         case_type: str | None = None,
+                                         case_filter: dict[str, Any] | None = None) -> dict[str, Any]:
         """Performance spectrum of a shared log: for the most frequent segments (one activity directly followed by
         another) or the given ones ("A->B"), the time between the two over the log's span in bins, classed fast,
         normal, slow and very slow, with the share handled first-in-first-out and the share ending in batches.
-        Segments seen fewer than 5 times are withheld and individual case lines are not returned. Aggregates only.
+        Segments seen fewer than 5 times are withheld and individual case lines are not returned. case_filter (the
+        same keys as insight cohorts) limits it to one group of at least 5 cases. Aggregates only.
         """
         chosen = list(segments or [])
         if len(chosen) > 12 or any(not isinstance(s, str) or "->" not in s for s in chosen):
@@ -320,8 +322,14 @@ def register_process_intelligence_tools(mcp: Any, runtime_module: Any) -> None:
             raise ToolError("top must be 1 to 12")
         if isinstance(bins, bool) or not isinstance(bins, int) or not 2 <= bins <= 100:
             raise ToolError("bins must be 2 to 100")
+        params: dict[str, Any] = {"segment": chosen or None, "top": top, "bins": bins, "case_type": case_type}
+        if case_filter is not None:
+            if not isinstance(case_filter, dict) or not case_filter:
+                raise ToolError("case_filter must be a non-empty object")
+            import json as _json
+            params["case_filter"] = _json.dumps(case_filter, separators=(",", ":"))
         return _get("get_process_performance_spectrum", f"/v1/process-intelligence/{_log(log_id)}/performance-spectrum",
-                    {"segment": chosen or None, "top": top, "bins": bins, "case_type": case_type})
+                    params)
 
     @mcp.tool(annotations=_READ_ONLY)
     def get_process_root_cause(log_id: str, outcome: str, hours: float | None = None,
