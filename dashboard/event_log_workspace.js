@@ -8921,6 +8921,19 @@
             const boundary=b?(b.change_point?'Change point · ':'')+'distance '+b.distance.toFixed(3)+', p '+p(b.p_value):skip?'Skipped · '+reason(skip)+(side?' ('+side+')':''):'—';
             return [w.window,Number(w.cases).toLocaleString(),Number(w.sampled_cases).toLocaleString(),Number(w.sampled_cases_with_paths).toLocaleString(),duration(w.median_case_duration_seconds),boundary,inspect(w.window)];
           })));
+        if(windowKind.value!=='cases'){
+          const note=el('div');note.id='owgConceptDriftMarkers';out.appendChild(note);
+          getJSON('/v1/event-logs/'+encodeURIComponent(state.logId)+'/change-markers').then(m=>{
+            if(!current()||!m.markers.length)return;
+            const starts=r.windows.map(w=>w.window);
+            const windowOf=day=>{let found=null;starts.forEach(s=>{if(s<=day)found=s;});return found;};
+            const points=new Set(r.change_points.map(c=>c.after));
+            note.append(el('h4','Your recorded changes'),table(['Change','Date','Window','At a change point'],m.markers.map(x=>{
+              const day=x.marked_at.slice(0,10),w=x.within_log?windowOf(day):null;
+              return [x.label,day,w||'Outside the analysed windows',w&&(points.has(w)||points.has(starts[starts.indexOf(w)+1]))?'Yes':'No'];
+            })),el('div','A change you recorded near a change point may help explain it; it does not prove the cause.','muted'));
+          }).catch(()=>{});
+        }
         r.change_points.forEach(c=>{
           out.appendChild(el('h4','Paths that moved most: '+c.before+' → '+c.after));
           out.appendChild(table(['Path','Sampled share before','Sampled share after','Before cases','After cases'],c.paths_that_moved.map(m=>[
