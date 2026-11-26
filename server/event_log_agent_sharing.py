@@ -802,12 +802,20 @@ def funnel(log_id: str, steps: list[str], case_type: str | None = None,
     return {**fn.funnel(log_id, steps, case_type, within_hours=within_hours), "format": FORMAT, "log_id": log_id}
 
 
-def unusual_cases(log_id: str, case_type: str | None = None, limit: int = 25) -> dict[str, Any]:
-    """Cases that stand out and why. Case IDs and paths only for logs shared at the cases level."""
+def unusual_cases(log_id: str, case_type: str | None = None, limit: int = 25,
+                  case_filter: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Cases that stand out and why. Case IDs and paths only for logs shared at the cases level. An optional
+    case filter (at least AGENT_MIN_FILTERED_CASES cases) looks for outliers within one group."""
     require(log_id, "aggregates")
     from . import event_log_unusual_cases as uc
+    if case_filter is not None:
+        if not isinstance(case_filter, dict) or not case_filter:
+            raise EventLogWorkspaceError("case_filter must be a non-empty object of case-filter keys")
+        if workspace.summary(log_id, case_type, case_filter)["cases"] < AGENT_MIN_FILTERED_CASES:
+            raise EventLogWorkspaceError(f"fewer than {AGENT_MIN_FILTERED_CASES} cases match this filter; widen it")
     with_cases = _level(log_id) == "cases"
-    result = uc.unusual_cases(log_id, case_type, limit=max(1, min(int(limit), 50)), include_case_ids=with_cases)
+    result = uc.unusual_cases(log_id, case_type, limit=max(1, min(int(limit), 50)), include_case_ids=with_cases,
+                              cohort=case_filter)
     if not with_cases:
         result["top"] = [{k: v for k, v in c.items() if k not in ("path", "path_truncated")} for c in result["top"]]
     return {**result, "format": FORMAT, "log_id": log_id}

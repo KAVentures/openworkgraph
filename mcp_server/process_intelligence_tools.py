@@ -452,7 +452,8 @@ def register_process_intelligence_tools(mcp: Any, runtime_module: Any) -> None:
         return _get("get_process_funnel", f"/v1/process-intelligence/{_log(log_id)}/funnel", params)
 
     @mcp.tool(annotations=_READ_ONLY)
-    def get_unusual_process_cases(log_id: str, limit: int = 25, case_type: str | None = None) -> dict[str, Any]:
+    def get_unusual_process_cases(log_id: str, limit: int = 25, case_type: str | None = None,
+                                  case_filter: dict[str, Any] | None = None) -> dict[str, Any]:
         """Cases of a shared log that stand out from the rest, each with its reasons: a rare path, unusually slow
         or fast, unusually many events, heavy rework, or an activity almost no other case has, measured against
         the log (robust z-scores and frequencies). Case IDs and paths appear only for logs shared at the cases
@@ -460,8 +461,13 @@ def register_process_intelligence_tools(mcp: Any, runtime_module: Any) -> None:
         """
         if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 50:
             raise ToolError("limit must be 1 to 50")
-        return _get("get_unusual_process_cases", f"/v1/process-intelligence/{_log(log_id)}/unusual-cases",
-                    {"limit": limit, "case_type": case_type})
+        params: dict[str, Any] = {"limit": limit, "case_type": case_type}
+        if case_filter is not None:
+            if not isinstance(case_filter, dict) or not case_filter:
+                raise ToolError("case_filter must be a non-empty object")
+            import json as _json
+            params["case_filter"] = _json.dumps(case_filter, separators=(",", ":"))
+        return _get("get_unusual_process_cases", f"/v1/process-intelligence/{_log(log_id)}/unusual-cases", params)
 
     @mcp.tool(annotations=_READ_ONLY)
     def get_process_due_dates(log_id: str, activity: str, due_attribute: str | None = None,
