@@ -985,6 +985,19 @@ def register_process_intelligence_tools(mcp: Any, runtime_module: Any) -> None:
                     {"gap_seconds": gap_seconds, "min_batch_size": min_batch_size,
                      "by_resource": "true" if by_resource else "false", "case_type": case_type})
 
+    @mcp.tool(annotations=_READ_ONLY)
+    def get_process_handovers(log_id: str, limit: int = 50, case_type: str | None = None) -> dict[str, Any]:
+        """How work passes between people in a shared log: handover of work (consecutive events by different
+        resources), subcontracting (work that goes to someone and straight back) and working together (cases two
+        resources both touched), plus which resources do which activities. Resources are pseudonymous ("Resource
+        01", stable only within one response) and never named; pairs or resources seen in fewer than 5 cases are
+        withheld. No durations or scoring per person. Aggregates only.
+        """
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 200:
+            raise ToolError("limit must be 1 to 200")
+        return _get("get_process_handovers", f"/v1/process-intelligence/{_log(log_id)}/handovers",
+                    {"limit": limit, "case_type": case_type})
+
     @mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=False))
     def tag_process_cases(log_id: str, tag: str, case_ids: list[str], note: str = "") -> dict[str, Any]:
         """Record a decision about cases as a case tag, for example "needs review" or "duplicate invoice".

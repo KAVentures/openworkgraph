@@ -588,3 +588,10 @@ async def agent_batching(request: Request, log_id: str, gap_seconds: int = Query
                          case_type: str | None = Query(default=None, max_length=200)):
     _require_agent_access(request)
     return await _answer(sharing.batching, log_id, case_type, gap_seconds, min_batch_size, by_resource)
+
+
+@router.get("/v1/process-intelligence/{log_id}/handovers")
+async def agent_handovers(request: Request, log_id: str, limit: int = Query(default=50, ge=1, le=200),
+                          case_type: str | None = Query(default=None, max_length=200)):
+    _require_agent_access(request)
+    return await _answer(sharing.handovers, log_id, case_type, limit)
