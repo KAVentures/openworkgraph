@@ -10,7 +10,7 @@ from test_agent_procurement_trials import trial, capture, ledger, study
 
 
 def amount(value):
-    return None if value is None else Fraction(value["numerator"],value["denominator"])
+    return None if value is None else Fraction(int(value["numerator"]),int(value["denominator"]))
 
 
 def baseline(trial):
@@ -123,3 +123,13 @@ def test_changed_capture_requires_new_pin(trial):
     changed=deepcopy(captures)
     changed["captures"][0]["attempts"][0]["cost_microunits"]+=1
     with pytest.raises(ValueError,match="pin"):assess(packet,plan,changed,req)
+
+
+def test_exact_money_encoding_survives_browser_json_integer_limits(trial):
+    packet,plan,captures,req=baseline(trial)
+    req["scenario"]["manual_annual_microunits"]=9007199254740993
+    result=assess(packet,plan,captures,req)
+    assert result["scenario"]["manual_annual_microunits"]=="9007199254740993"
+    value=candidate(result)["annual_recurring_savings_scenario"]["lower_microunits"]
+    assert isinstance(value["numerator"],str) and isinstance(value["denominator"],str)
+    assert amount(value)==9007199254743493

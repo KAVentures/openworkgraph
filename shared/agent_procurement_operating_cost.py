@@ -100,7 +100,7 @@ def _money(x):
     """Exact rational microunits; no intermediate per-attempt rounding."""
     if x is None:
         return None
-    return {"numerator": x.numerator, "denominator": x.denominator}
+    return {"numerator": str(x.numerator), "denominator": str(x.denominator)}
 
 
 def _cost_parts(observation, rates, direct, *, provider_complete=True):
@@ -237,7 +237,12 @@ def assess(packet, plan, captures, request):
     result={"format":REPORT,"process_reference":trial["process_reference"],"spec_sha256":trial["spec_sha256"],
             "plan_sha256":trial["plan_sha256"],"ledger_sha256":trial["ledger_sha256"],
             "trial_review_sha256":digest(trial),"request_sha256":digest(req.model_dump()),"currency":req.currency,
-            "manual_baseline":_summary(list(manual_parts.values())),"scenario":req.scenario.model_dump(),
+            "manual_baseline":_summary(list(manual_parts.values())),
+            "scenario":{"annual_cases":req.scenario.annual_cases,
+                        "manual_annual_microunits":str(req.scenario.manual_annual_microunits),
+                        "candidate_fixed_costs":[{"candidate_id":x.candidate_id,
+                            "annual_microunits":str(x.annual_microunits),"one_time_microunits":str(x.one_time_microunits)}
+                            for x in req.scenario.candidate_fixed_costs]},
             "rates":req.rates.model_dump(),"candidates":summaries,
             "independent_outcomes_verified":False,"cost_boundary_verified":False,
             "representative_population_established":False,"realized_savings_verified":False,

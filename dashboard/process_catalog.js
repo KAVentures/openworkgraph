@@ -1307,7 +1307,7 @@
     const section=el('section');section.appendChild(el('h4','AI workforce procurement'));
     section.appendChild(el('p','Compare portable shadow evaluations, freeze a repeated trial, or review its full scheduled population. Files are inspected only on this computer and are not retained. Model identities, measurements and business outcomes remain unverified.'));
     const mode=el('select');mode.id='owgCatalogProcurementMode';mode.setAttribute('aria-label','Procurement operation');
-    for(const [value,label] of [['compare','Compare completed shadow reports'],['freeze','Freeze a repeated trial plan'],['review','Review a frozen trial and captures'],['nominate','Nominate a candidate before holdout'],['assess','Assess the held-out trial'],['decide','Record a pinned rehearsal decision'],['outcome-review','Review controlled sandbox outcomes'],['rollout-review','Request separate rollout review'],['deployment-review','Review monitored deployment readiness'],['deployment-decide','Record deployment review referral']]){
+    for(const [value,label] of [['compare','Compare completed shadow reports'],['freeze','Freeze a repeated trial plan'],['review','Review a frozen trial and captures'],['operating-cost','Review human and AI operating costs'],['nominate','Nominate a candidate before holdout'],['assess','Assess the held-out trial'],['decide','Record a pinned rehearsal decision'],['outcome-review','Review controlled sandbox outcomes'],['rollout-review','Request separate rollout review'],['deployment-review','Review monitored deployment readiness'],['deployment-decide','Record deployment review referral']]){
       const option=el('option',label);option.value=value;mode.appendChild(option);
     }
     const modeLabel=el('label','Procurement operation ');modeLabel.htmlFor=mode.id;modeLabel.appendChild(mode);
@@ -1324,6 +1324,7 @@
       hint.textContent=mode.value==='compare'?'Choose an existing comparison request (see AGENT_PROCUREMENT.md).':
         mode.value==='freeze'?'Choose a confirmed design JSON with exact reference report, candidates, gates and repeats (see AGENT_PROCUREMENT_TRIALS.md).':
         mode.value==='review'?'Choose the frozen plan and a capture ledger. Failed and missing scheduled slots remain in the denominator.':
+        mode.value==='operating-cost'?'Choose the exact trial and human operating-cost bundle (see AGENT_PROCUREMENT_OPERATING_COST.md). Review and fallback time, missing evidence and fixed-cost assumptions remain visible.':
         ['deployment-review','deployment-decide'].includes(mode.value)?'Choose the deployment readiness bundle (see AGENT_PROCUREMENT_DEPLOYMENT.md). Existing monitoring records are read locally; no release changes are made.':
         ['outcome-review','rollout-review'].includes(mode.value)?'Choose the outcome review bundle (see AGENT_PROCUREMENT_OUTCOMES.md). No rollout or execution permission will be granted.':
         'Choose the exact selection bundle (see AGENT_PROCUREMENT_SELECTION.md). Nomination and decision require a current saved revision and explicit confirmation in the document.';
@@ -1345,8 +1346,9 @@
       const selectionMode=['nominate','assess','decide'].includes(operation);
       const outcomeMode=['outcome-review','rollout-review'].includes(operation);
       const deploymentMode=['deployment-review','deployment-decide'].includes(operation);
-      const heading={nominate:'Frozen candidate nomination',assess:'Held-out selection assessment',decide:'Rehearsal decision receipt','outcome-review':'Controlled sandbox outcome review','rollout-review':'Separate rollout review receipt','deployment-review':'Monitored deployment readiness','deployment-decide':'Release-owner referral receipt'};
-      output.appendChild(el('h5',(selectionMode||outcomeMode||deploymentMode)?heading[operation]:operation==='freeze'?'Frozen trial plan · '+result.scheduled_attempts+' attempts':'Candidate procurement comparison'));
+      const economicsMode=operation==='operating-cost';
+      const heading={'operating-cost':'Human and AI operating cost comparison',nominate:'Frozen candidate nomination',assess:'Held-out selection assessment',decide:'Rehearsal decision receipt','outcome-review':'Controlled sandbox outcome review','rollout-review':'Separate rollout review receipt','deployment-review':'Monitored deployment readiness','deployment-decide':'Release-owner referral receipt'};
+      output.appendChild(el('h5',(selectionMode||outcomeMode||deploymentMode||economicsMode)?heading[operation]:operation==='freeze'?'Frozen trial plan · '+result.scheduled_attempts+' attempts':'Candidate procurement comparison'));
       output.appendChild(el('p','Exact saved revision '+envelope.revision+'. '+(envelope.references_latest_revision_at_inspection?
         'Latest saved revision at inspection.':'Historical revision; current revision '+envelope.latest_revision_at_inspection+'. Evaluate the current design before substitution.')));
       if(operation==='freeze'){
@@ -1354,6 +1356,60 @@
         const list=el('ul');
         for(const c of result.basis.candidates)list.appendChild(el('li',c.candidate_id+' · '+c.provider+' / '+c.model+' / '+c.runtime));
         output.appendChild(list);
+      }else if(economicsMode){
+        // Exact amounts use decimal strings. Round only the displayed value,
+        // never the downloaded report or the evidence hash.
+        const money=v=>{
+          if(v==null)return 'unbounded';
+          const n=BigInt(v.numerator),d=BigInt(v.denominator),a=n<0n?-n:n;
+          const rounded=(a*2n+d)/(2n*d),whole=rounded/1000000n,part=String(rounded%1000000n).padStart(6,'0');
+          return (a%d!==0n?'≈ ':'')+(n<0n?'-':'')+String(whole)+'.'+part+' '+result.currency;
+        };
+        const range=v=>money(v.lower_microunits)+' to '+money(v.upper_microunits);
+        const human=(data)=>{
+          const o=data.declared_business_outcomes,t=data.human_touched_attempts;
+          return data.complete_cost_attempts+' of '+data.attempts+' attempts with complete costs · human-touched attempts '+t.lower+'–'+t.upper+
+            ' · declared business outcomes: '+o.declared_success+' success, '+o.declared_failure+' failure, '+o.unresolved_or_missing+' unresolved/missing';
+        };
+        const manual=result.manual_baseline;
+        output.append(el('h6','Current human-led baseline'),el('p','Total enrolled cost: '+range(manual.total_cost)),el('p',human(manual)));
+        output.appendChild(el('p','Annual scenario: '+result.scenario.annual_cases+' cases. Conditional estimate, not verified realized savings or deployment approval.'));
+        for(const c of result.candidates){
+          const box=el('section');box.append(el('h6',c.candidate_id+' · trial gates: '+c.trial_gate_status),
+            el('p','All-attempt operating cost: '+range(c.candidate.total_cost)),
+            el('p','Paired savings versus manual: '+range(c.paired_trial_savings)),
+            el('p','Recurring annual savings scenario: '+range(c.annual_recurring_savings_scenario)),
+            el('p','First-year savings scenario: '+range(c.first_year_savings_scenario)),
+            el('p',human(c.candidate)));
+          const categories=el('ul');
+          for(const [key,value] of Object.entries(c.candidate.human_time_by_category)){
+            categories.appendChild(el('li',key+': '+value.lower_person_ms+' to '+(value.upper_person_ms==null?'unbounded':value.upper_person_ms)+' person-ms · '+value.known_attempts+' measured attempts'));
+          }
+          box.appendChild(categories);output.appendChild(box);
+        }
+        const picker=el('select');picker.setAttribute('aria-label','Operating cost candidate');
+        for(const c of result.candidates){const option=el('option',c.candidate_id);option.value=c.candidate_id;picker.appendChild(option);}
+        const filter=el('input');filter.type='checkbox';filter.setAttribute('aria-label','Show incomplete operating cost evidence');
+        const label=el('label',' Show incomplete operating cost evidence');label.prepend(filter);
+        const view=el('div');let offset=0;
+        const draw=()=>{
+          const candidate=result.candidates.find(c=>c.candidate_id===picker.value);
+          const rows=filter.checked?candidate.rows.filter(r=>r.manual_missing.length||r.candidate_missing.length):candidate.rows;
+          const list=el('ul');
+          for(const r of rows.slice(offset,offset+25)){
+            const line=el('li',r.case_id+' · repeat '+r.repeat+' · '+r.trial_status+' · savings: '+range(r.paired_savings));
+            line.appendChild(el('p','Manual missing: '+(r.manual_missing.join(', ')||'none')+' · AI missing: '+(r.candidate_missing.join(', ')||'none')));
+            line.appendChild(el('p','Declared outcomes: '+(r.manual_declared_outcome||'unknown')+' → '+(r.candidate_declared_outcome||'unknown')));
+            list.appendChild(line);
+          }
+          const nav=el('div');
+          if(offset)nav.appendChild(button('Previous operating cost page',()=>{offset=Math.max(0,offset-25);draw();}));
+          if(offset+25<rows.length)nav.appendChild(button('Next operating cost page',()=>{offset+=25;draw();}));
+          view.replaceChildren(el('p',rows.length?'Showing '+(offset+1)+'–'+Math.min(rows.length,offset+25)+' of '+rows.length+' cost rows':'No matching cost rows.'),list,nav);
+        };
+        picker.addEventListener('change',()=>{offset=0;draw();});filter.addEventListener('change',()=>{offset=0;draw();});
+        output.append(el('h6','Paired operating cost evidence'),picker,label,view);draw();
+        output.appendChild(el('p','Cost, person-time, human baseline, and business outcome observations are operator declarations. Unknown costs are not zero; shadow matches do not establish realized business success.'));
       }else if(deploymentMode){
         if(operation==='deployment-decide'){
           output.appendChild(el('p','Disposition: '+result.request.decision.replaceAll('_',' ')+'. No production rollout authorized.'));
@@ -1460,7 +1516,7 @@
       }
       output.appendChild(button('Download minimized procurement JSON',()=>{
         const url=URL.createObjectURL(new Blob([JSON.stringify(result,null,2)+'\n'],{type:'application/json'}));
-        const link=el('a');link.href=url;link.download=(selectionMode||outcomeMode||deploymentMode)?'owg-procurement-'+operation+'.json':operation==='freeze'?'owg-procurement-plan.json':'owg-procurement-review.json';
+        const link=el('a');link.href=url;link.download=(selectionMode||outcomeMode||deploymentMode||economicsMode)?'owg-procurement-'+operation+'.json':operation==='freeze'?'owg-procurement-plan.json':'owg-procurement-review.json';
         link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
       }));
       output.appendChild(el('p','No model or business tool was called; reported identity, measurements and outcomes remain unverified. This review grants no execution or substitution permission.'));

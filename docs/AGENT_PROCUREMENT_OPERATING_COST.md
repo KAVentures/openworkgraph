@@ -47,7 +47,7 @@ The same bundle is supported by POST
 `/v1/process-catalog/procurement/operating-cost?workflow_id=...&revision=...`
 with an authenticated local dashboard session, JSON envelope
 `{"document":"<bundle as JSON text>"}`. No retention; cache-control no-store.
-No separate visual dashboard panel is included in this slice.
+In the local saved-process catalog, select **Review human and AI operating costs**, choose the bundle, and inspect the summary, all-attempt coverage and paginated case evidence. Export the exact report or clear the review.
 
 ## Interpretation
 
@@ -56,7 +56,7 @@ for each candidate, not treated as more independent observations. Output
 includes labor categories, human-touch bounds, declared business-outcome
 coverage, exact paired costs and savings, and first-year versus recurring
 conditional scenarios. Currency values are exact rational microunits
-(numerator/denominator) to avoid rounding artifacts. Null bounds are unbounded
+(numerator/denominator as decimal strings) to avoid rounding artifacts, including browser JSON precision loss. Fixed scenario amounts are also returned as decimal strings; the input still uses integer microunits. The dashboard displays amounts rounded to the nearest microunit when necessary; the downloaded report preserves exact values. Null bounds are unbounded
 in the relevant direction; missing costs are never imputed as zero.
 
 Forecasts assume the observed case mix and per-attempt costs transfer to the
