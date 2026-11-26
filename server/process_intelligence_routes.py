@@ -46,6 +46,8 @@ async def _answer(operation, *args: Any, **kwargs: Any) -> JSONResponse:
     outcome = "ok"
     try:
         result = await run_in_threadpool(operation, *args, **kwargs)
+        if args and isinstance(args[0], str):
+            sharing.check_answer_size(args[0], result)
     except sharing.NotShared as exc:
         outcome = "not_shared"
         raise HTTPException(404, str(exc)) from None

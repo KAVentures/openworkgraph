@@ -44,6 +44,9 @@ Celonis also offers this kind of write-back. Here it is opt-in and narrow:
   not accept real IDs from the agent, because the agent never saw them.
 - A tag changes nothing else and authorizes no action in any source system.
 
+A log with fewer than 5 cases (objects) answers no `aggregates`-level request: every figure would describe a
+handful of identifiable cases. Share it at the `cases` level if agents should see it.
+
 ## MCP tools
 
 These tools are listed once at least one log is shared. Connected apps see them after their next

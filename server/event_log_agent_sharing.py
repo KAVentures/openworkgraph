@@ -225,6 +225,30 @@ def require(log_id: Any, level: str) -> None:
     shared = _level(log_id)
     if shared is None or (level == "cases" and shared != "cases"):
         raise NotShared("no process log shared with agents at that level has this id")
+    if level == "aggregates" and shared == "aggregates" and _case_count(log_id) < AGENT_MIN_FILTERED_CASES:
+        # Every aggregate of a log this small describes a handful of identifiable cases.
+        raise NotAllowed(f"this log has fewer than {AGENT_MIN_FILTERED_CASES} cases, too few to share as "
+                         "aggregates; the owner can share it at the cases level instead")
+
+
+def check_answer_size(log_id: str, result: Any) -> None:
+    """Refuse an aggregates-level answer that describes fewer than AGENT_MIN_FILTERED_CASES cases, for example
+    one about a small object type inside a larger object-centric log."""
+    cases = result.get("cases") if isinstance(result, dict) else None
+    if (isinstance(cases, int) and not isinstance(cases, bool) and 0 < cases < AGENT_MIN_FILTERED_CASES
+            and _level(log_id) == "aggregates"):
+        raise NotAllowed(f"this selection has fewer than {AGENT_MIN_FILTERED_CASES} cases, too few to describe "
+                         "as aggregates; pick a larger case type or ask the owner to share at the cases level")
+
+
+def _case_count(log_id: str) -> int:
+    with workspace._LOCK:
+        conn = workspace._connect()
+        try:
+            row = conn.execute("SELECT objects FROM logs WHERE log_id = ?", [log_id]).fetchone()
+        finally:
+            conn.close()
+    return int(row[0]) if row else 0
 
 
 def shared_logs() -> dict[str, Any]:
@@ -235,16 +259,19 @@ def shared_logs() -> dict[str, Any]:
         try:
             rows = conn.execute("""SELECT s.log_id, l.name, s.level, l.events, l.objects FROM event_log_agent_shares s
                 JOIN logs l USING (log_id) ORDER BY l.name""").fetchall()
-            types = {log_id: [t for (t,) in conn.execute(
-                "SELECT DISTINCT object_type FROM objects WHERE log_id = ? ORDER BY 1 LIMIT 20", [log_id]).fetchall()]
-                for log_id, *_ in rows}
+            counts = {log_id: conn.execute("""SELECT object_type, count(*) FROM objects WHERE log_id = ?
+                GROUP BY 1 ORDER BY 1 LIMIT 20""", [log_id]).fetchall() for log_id, *_ in rows}
+            types = {log_id: [t for t, _ in found] for log_id, found in counts.items()}
             taggable = {r[0] for r in conn.execute("SELECT log_id FROM event_log_agent_tag_grants").fetchall()}
         finally:
             conn.close()
     return {"format": FORMAT, "logs": [{"log_id": i, "name": n, "level": lv, "events": e, "objects": o,
-                                        "case_notions": types[i], "agents_may_tag_cases": i in taggable}
+                                        "case_notions": types[i], "agents_may_tag_cases": i in taggable,
+                                        "case_notions_too_small_for_aggregates": [] if lv == "cases" else [
+                                            t for t, c in counts[i] if c < AGENT_MIN_FILTERED_CASES]}
                      for i, n, lv, e, o in rows],
-            "note": "Only logs the owner shared with agents are listed."}
+            "note": ("Only logs the owner shared with agents are listed. A case notion with fewer than "
+                     f"{AGENT_MIN_FILTERED_CASES} objects answers no aggregates-level request.")}
 
 
 def _top(items: list[Any], n: int) -> list[Any]:
