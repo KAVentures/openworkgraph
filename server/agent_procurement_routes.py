@@ -22,6 +22,7 @@ from . import agent_procurement_deployment as deployment
 from . import agent_procurement_monitor_journal as journal
 from . import agent_procurement_monitor_telemetry as telemetry
 from . import agent_procurement_workforce_overview as workforce
+from . import agent_procurement_workforce_allocation as allocation
 from .local_auth import dashboard_session_valid
 from .local_process_catalog import catalog
 
@@ -176,3 +177,19 @@ async def workforce_overview(request: Request):
         raise HTTPException(exc.status,str(exc)) from None
     except (sqlite3.Error,ValueError,TypeError,KeyError,RecursionError,OverflowError):
         raise HTTPException(503,"Local workforce monitoring overview unavailable") from None
+
+
+@router.post("/v1/process-catalog/procurement-workforce/allocation")
+async def workforce_allocation(request: Request):
+    _require_dashboard(request)
+    payload=await _envelope(request,max_bytes=8*1024*1024)
+    _require_dashboard(request)
+    try:
+        result=await run_in_threadpool(allocation.assess,payload)
+        return JSONResponse(result,headers={"Cache-Control":"no-store"})
+    except LookupError:
+        raise HTTPException(404,"Saved process revision not found") from None
+    except sqlite3.Error:
+        raise HTTPException(503,"Local procurement storage temporarily unavailable") from None
+    except (ValueError,TypeError,KeyError,RecursionError,OverflowError):
+        raise HTTPException(422,"Invalid, stale, overlapping or oversized workforce allocation evidence") from None
