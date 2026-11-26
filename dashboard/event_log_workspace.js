@@ -10359,6 +10359,46 @@
       compareActivityA:field('Comparison activity A',mCompareActivityA),compareActivityB:field('Comparison activity B',mCompareActivityB),
       operation:field('Operation',mOperation)};
     for(const side of ['left','right'])for(const key of ['kind','metric','value','unit'])mf[side+key]=field((side==='left'?'Left':'Right')+' '+({kind:'operand',metric:'metric',value:'constant',unit:'constant unit'}[key]),operands[side][key]);
+    // Add exact-label lookup to each activity selector without altering the typed metric contract.
+    const metricActivities=new Map();
+    for(const [key,control,subject] of [
+      ['from',mFrom,'metric start activity'],['to',mTo,'metric end activity'],['activity',mActivity,'metric activity'],
+      ['statActivity',mStatActivity,'metric filtered activity'],['stageFrom',mStageFrom,'metric stage start'],
+      ['stageTo',mStageTo,'metric stage end'],['compareActivityA',mCompareActivityA,'comparison activity A'],
+      ['compareActivityB',mCompareActivityB,'comparison activity B']]){
+      const exact=input(control.id+'Exact','text','Exact activity label (optional)');exact.maxLength=400;
+      const lookup=activityLabelLookup(exact,{id:part=>control.id+part,subject});
+      const note=el('div','An exact label overrides the suggestion.','muted');
+      mf[key].append(field('Exact '+subject,exact),lookup.wrap,note);
+      let suggestion=control.value,added=null,changing=false;
+      const assign=(value,notify)=>{
+        if(added){added.remove();added=null;}
+        if(value&&Array.from(value).length<=200){
+          if(!Array.from(control.options).some(option=>option.value===value)){
+            added=document.createElement('option');added.value=value;added.textContent=value;control.appendChild(added);
+          }
+          control.value=value;note.textContent='An exact label overrides the suggestion.';
+        }else{
+          control.value=value?'':suggestion;
+          note.textContent=value?'Activity labels must have at most 200 characters.':'An exact label overrides the suggestion.';
+        }
+        if(notify){changing=true;control.dispatchEvent(new Event('change',{bubbles:true}));changing=false;}
+      };
+      exact.addEventListener('input',()=>{lookup.reset();assign(exact.value,true);});
+      control.addEventListener('change',()=>{
+        if(changing)return;
+        const value=control.value;
+        if(added){added.remove();added=null;}
+        if(Array.from(control.options).some(option=>option.value===value))suggestion=value;
+        control.value=suggestion;exact.value='';lookup.reset();note.textContent='An exact label overrides the suggestion.';
+      });
+      metricActivities.set(control,{exact,field:mf[key],set(value){
+        const v=String(value||'');lookup.reset();
+        const listed=Array.from(control.options).some(option=>option!==added&&option.value===v);
+        if(listed){if(added){added.remove();added=null;}control.value=v;suggestion=v;exact.value='';}
+        else{exact.value=v;assign(v,false);}
+      }});
+    }
     const mSync=()=>{const k=mKind.value;show(mf.from,k==='time_between');show(mf.fromOcc,k==='time_between');show(mf.to,k==='time_between');show(mf.toOcc,k==='time_between');
       const numeric=k==='event_attribute_statistic';
       show(mf.activity,k==='activity_count');show(mf.attribute,numeric||k.endsWith('_number')||k.endsWith('_sum'));show(mf.unit,numeric||k.endsWith('_number')||k.endsWith('_sum'));
@@ -10376,8 +10416,12 @@
     const library=el('div');library.id='owgMetricLibrary';
     const metricBox=document.createElement('fieldset');metricBox.style.cssText='border:1px solid var(--line,#ccc);border-radius:6px;padding:8px;margin-top:8px';
     const legend=el('legend','Case metrics (optional)');metricBox.append(legend,el('div','Define up to four values per case, then choose a measure. Numeric event statistics use only observed finite values; choose available or require all matching rows, optionally one activity and a first or last completed stage. Compare first and last completed stages adds three metrics atomically; fractional first-to-last change adds four, including (last minus first) divided by first, and selects a dimensionless ratio (2 means +200%, not 2%). A zero first-stage value leaves relative change unknown. Compare two distinct activities adds A, B, and signed B minus A as three ordinary metrics; absent or invalid matching values remain unknown. Compare a selected activity with the whole case using Total and Only this activity: the selected total divided by all recorded totals is a ratio, not a guaranteed 0–100% share. Missing selected values or zero whole-case totals remain unknown. Clear stage boundaries and the single-activity filter before comparing. Unfinished stages are not completed. Times are in seconds; declared units are never converted. Arithmetic uses earlier metrics or typed constants; ratio means dimensionless. Add/subtract need identical units; division by zero is missing. Saved arithmetic templates can add their saved dependencies together, but conflicting or missing definitions are refused atomically. Editing a metric name updates its dependent arithmetic and selected measures in the draft; rerun before saving or exporting. Save an analysis to retain all definitions together.','muted'),metricRow,metricList,library);
-    const readMetric=()=>caseMetric({kind:mKind.value,name:mName.value,from:mFrom.value,to:mTo.value,fromOccurrence:mFromOcc.value,toOccurrence:mToOcc.value,activity:mActivity.value,attribute:mAttribute.value,unit:mUnit.value,statistic:mStatistic.value,missingPolicy:mMissing.value,statActivity:mStatActivity.value,stageFrom:mStageFrom.value,stageTo:mStageTo.value,stageOccurrence:mStageOccurrence.value,operation:mOperation.value,
-      ...Object.fromEntries(Object.entries(operands).flatMap(([side,controls])=>Object.entries(controls).map(([key,node])=>[side+key[0].toUpperCase()+key.slice(1),node.value])))});
+    const readMetric=()=>{
+      if([...metricActivities.values()].some(item=>!item.field.hidden&&Array.from(item.exact.value).length>200))
+        throw new Error('Activity labels must have at most 200 characters.');
+      return caseMetric({kind:mKind.value,name:mName.value,from:mFrom.value,to:mTo.value,fromOccurrence:mFromOcc.value,toOccurrence:mToOcc.value,activity:mActivity.value,attribute:mAttribute.value,unit:mUnit.value,statistic:mStatistic.value,missingPolicy:mMissing.value,statActivity:mStatActivity.value,stageFrom:mStageFrom.value,stageTo:mStageTo.value,stageOccurrence:mStageOccurrence.value,operation:mOperation.value,
+        ...Object.fromEntries(Object.entries(operands).flatMap(([side,controls])=>Object.entries(controls).map(([key,node])=>[side+key[0].toUpperCase()+key.slice(1),node.value])))});
+    };
     // A changed metric draft cannot reuse an earlier result or its export/share grants.
     // Invalidate synchronously, including when a dependent metric is removed.
     function invalidateAnalysisResult(){
@@ -10411,7 +10455,7 @@
       sync();
     }
     function populateMetric(m){
-      const choose=(control,value)=>{const v=String(value||'');if(v&&![...control.options].some(o=>o.value===v))throw new Error('This metric references an activity no longer listed in the log; it can still be run.');control.value=v;};
+      const choose=(control,value)=>metricActivities.get(control).set(value);
       mKind.value=m.kind;mName.value=m.name;
       if(m.kind==='time_between'){
         choose(mFrom,m.from_activity);choose(mTo,m.to_activity);
