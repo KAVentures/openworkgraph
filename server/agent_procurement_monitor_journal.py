@@ -15,6 +15,7 @@ from pydantic import Field, StrictBool
 from shared.agent_procurement import Alias, Strict, digest
 from shared.agent_procurement_corroboration import summarize as summarize_corroboration
 from shared.agent_procurement_source_outcome import summarize as summarize_source_outcomes
+from shared.agent_procurement_source_finance import summarize as summarize_source_finance
 from shared.agent_procurement_router_monitor import _normalize, _review_verified, review
 from shared.process_shadow_review import Hash
 from . import db
@@ -121,6 +122,8 @@ def _view(key,state,history):
         "source_outcomes":source_outcomes,
         "source_outcome_bindings":state.get("source_outcome_bindings",[]),
         "source_outcome_checks":state.get("source_outcome_checks",[]),
+        "source_finance":summarize_source_finance(state),
+        "source_finance_checks":state.get("source_finance_checks",[]),
         "outcome_corroboration":corroboration,
         "outcome_corroborations":state.get("outcome_corroborations",[]),
         "result_persisted":True,"local_dashboard_session_required":True,
@@ -221,7 +224,8 @@ def _next_state(state,plan,snapshot,report,initial_sources):
         "outcome_corroboration_required":state.get("outcome_corroboration_required",False) if state else False,
         "outcome_corroborations":state.get("outcome_corroborations",[]) if state else [],
         "source_outcome_bindings":state.get("source_outcome_bindings",[]) if state else [],
-        "source_outcome_checks":state.get("source_outcome_checks",[]) if state else []}
+        "source_outcome_checks":state.get("source_outcome_checks",[]) if state else [],
+        "source_finance_checks":state.get("source_finance_checks",[]) if state else []}
 
 
 def append(packet,workflow_id,revision,doc):

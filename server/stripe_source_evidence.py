@@ -109,6 +109,7 @@ def stripe_record_receipt(
     resolver: Callable[[str], dict[str, Any] | None] = resolve_resource_reference,
     reader: Callable[[str, str], dict[str, Any]] = _get,
     include_lifecycle: bool = False,
+    include_invoice_amounts: bool = False,
 ) -> dict[str, Any]:
     env = os.environ if environment is None else environment
     # A signed Finder-launched app does not inherit interactive shell variables.
@@ -176,6 +177,18 @@ def stripe_record_receipt(
             "handoff_verified": False, "source_audit_history_available": False,
         }
         if include_lifecycle is True and kind=='invoice':receipt.update(_invoice_lifecycle(response,resource_ref))
+        # Finance projection is never included in the ordinary record receipt.
+        # Only the separately confirmed procurement finance path requests it.
+        if include_invoice_amounts is True and kind=="invoice":
+            amount=response.get("amount_paid")
+            currency=response.get("currency")
+            if (response.get("livemode") is True and key.startswith("rk_live_")
+                    and type(amount) is int and 0<=amount<=10**18
+                    and isinstance(currency,str) and re.fullmatch(r"[a-z]{3}",currency)):
+                receipt["invoice_finance"]={"amount_paid_minor_units":str(amount),
+                    "currency":currency.upper(),"live_record_reported":True}
+                receipt["names_and_amounts_included"]=True
+                receipt["names_included"]=False
         return receipt
     except (OSError, ValueError, TypeError, KeyError, httpx.HTTPError):
         return _unknown("stripe_source_unavailable")

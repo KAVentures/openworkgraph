@@ -80,14 +80,16 @@ def _identity(record,predicate="invoice_paid_in_window"):
     return hmac.new(ensure_api_token().encode("utf-8"),value.encode("ascii"),hashlib.sha256).hexdigest()
 
 
-def _read_source(ref,resolved,predicate):
+def _read_source(ref,resolved,predicate,*,include_invoice_amounts=False):
     # Use the existing exact retained-event guard before any provider read,
     # including for Stripe. A resolver entry alone is not read authority.
     identity=(resolved["provider"],resolved["resource_kind"],resolved["host"])
     resolver=lambda requested:dict(resolved) if requested==ref else None
     if predicate=="invoice_paid_in_window":
         def reader(requested,*,include_lifecycle=False):
-            return stripe_source_evidence.stripe_record_receipt(requested,include_lifecycle=include_lifecycle,resolver=resolver)
+            kwargs={"include_lifecycle":include_lifecycle,"resolver":resolver}
+            if include_invoice_amounts is True:kwargs["include_invoice_amounts"]=True
+            return stripe_source_evidence.stripe_record_receipt(requested,**kwargs)
     else:
         def reader(requested):
             return jira_source_evidence.jira_issue_receipt(requested,resolver=resolver)
