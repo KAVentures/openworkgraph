@@ -131,7 +131,7 @@ def _view(value,states):
             "timeline_sha256":value["basis"]["timeline_sha256"],
             "manifest_sha256":value["basis"]["manifest_sha256"],
             "created_at_ms":value["basis"]["created_at_ms"],
-            "basis_sha256":value["basis_sha256"],"revision":value["revision"],
+            "basis_sha256":value["basis_sha256"],"lineage":value["basis"].get("lineage"),"revision":value["revision"],
             "history_sha256":value["history_sha256"],"finding_count":len(rows),
             "findings":rows,"events":value["events"],
             "counts_by_state":{s:sum(r["state"]==s for r in rows) for s in TRANSITIONS},
