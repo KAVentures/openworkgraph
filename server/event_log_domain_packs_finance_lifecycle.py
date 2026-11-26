@@ -7,8 +7,11 @@ FORMAT = "openworkgraph.domain-pack.v1"
 def _pack(key, title, case, label, roles, optional, targets, pairs, counts,
           steps, prerequisites, separation, assumptions):
     ref = "@" + case
+    # Stable, distinct prefixes fit the metric library\'s 40-character identifier limit.
+    metric_prefix = {"capital_expenditure_request": "capex_request",
+                     "loan_application_operations": "loan_application"}.get(key, key)
     def metric(name, kind, **kw):
-        return {"case_type": ref, "metric": {"name": key + "_" + name, "kind": kind, **kw}}
+        return {"case_type": ref, "metric": {"name": metric_prefix + "_" + name, "kind": kind, **kw}}
 
     def rule(template, **kw):
         return {"case_type": ref, "rule": {"template": template, **kw}}
