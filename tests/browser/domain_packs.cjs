@@ -78,6 +78,49 @@ const path=require('node:path');
   await page.locator('#owgDomainPackStatus').filter({hasText:'Reinstalled 1.0.0.'}).waitFor();
   await page.locator('#owgDomainPackRun').click();
   await report.getByRole('cell',{name:'every VF01 Billing is followed by Clear Payment within 1728000 s',exact:true}).waitFor();
+  // Import two more actual retained logs, install the same mapped pack,
+  // then compare both against the current baseline.
+  const baselineId=await page.locator('#owgEventLogPick').inputValue(),comparisonIds=[];
+  for(let i=0;i<2;i++){
+    const prior=await page.locator('#owgEventLogPick').inputValue();
+    await page.locator('#owgEventLogFile').setInputFiles({name:'portfolio-'+i+'.jsonocel',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(doc))});
+    await page.locator('#owgEventLogStatus').filter({hasText:'File mapping ready.'}).waitFor();
+    await page.locator('#owgEventLogConsent').check();
+    await page.locator('#owgEventLogImport').click();
+    await page.waitForFunction(previous=>{
+      const pick=document.querySelector('#owgEventLogPick'),type=document.querySelector('#owgEventLogCaseType');
+      return pick&&pick.value&&pick.value!==previous&&type&&Array.from(type.options).some(o=>o.value==='SalesOrder');
+    },prior);
+    comparisonIds.push(await page.locator('#owgEventLogPick').inputValue());
+    await page.locator('#owgEventLogCaseType').selectOption(mapping.object_types.order);
+    await page.locator('#owgEventLogAnalyze').click();
+    await page.locator('#owgDomainPackSetup').click();
+    await page.locator('#owgDomainPackChoice').selectOption('order_to_cash');
+    for(const kind of ['object_types','activities'])for(const [role,name] of Object.entries(mapping[kind]))
+      await page.locator('#owgDomainPackRole-'+role).selectOption(name);
+    await page.locator('#owgDomainPackParam-payment_terms_days').fill('20');
+    await page.locator('#owgDomainPackInstall').click();
+    await page.locator('#owgDomainPackStatus').filter({hasText:'Installed 1.0.0.'}).waitFor();
+  }
+  await page.locator('#owgEventLogPick').selectOption(baselineId);
+  await page.locator('#owgEventLogCaseType').selectOption(mapping.object_types.order);
+  await page.locator('#owgEventLogAnalyze').click();
+  const portfolio=page.locator('#owgDomainPackPortfolio');
+  await portfolio.locator('summary').click();
+  await portfolio.getByRole('button',{name:'Load baseline packs'}).click();
+  await portfolio.locator('#owgPortfolioPack').selectOption('order_to_cash');
+  for(const id of comparisonIds)await portfolio.locator('input[type=checkbox][value="'+id+'"]').check();
+  await portfolio.getByRole('button',{name:'Review portfolio sources'}).click();
+  await portfolio.getByText('All selected versions and parameters match.',{exact:true}).waitFor();
+  await portfolio.getByText('Identical retained content detected in 3 source pair(s). Never pool these populations.',{exact:true}).waitFor();
+  await portfolio.getByRole('button',{name:'Compare reviewed portfolio'}).click();
+  await portfolio.getByText('Portfolio comparison complete. No pooled population or ranking inferred.',{exact:true}).waitFor();
+  assert.ok(await portfolio.getByRole('cell',{name:'o2c_order_to_invoice',exact:true}).count()===3);
+  await portfolio.locator('input[type=checkbox][value="'+comparisonIds[0]+'"]').uncheck();
+  assert.equal(await portfolio.getByRole('button',{name:'Compare reviewed portfolio'}).isDisabled(),true);
+  await portfolio.locator('summary').click();
+  await page.locator('#owgDomainPackSetup').click();
+  await page.locator('#owgDomainPackStatus').filter({hasText:'Installed: 1.0.0'}).waitFor();
   await page.addScriptTag({content:await fs.readFile(require.resolve('axe-core/axe.min.js'),'utf8')});
   const audit=await page.evaluate(async()=>window.axe.run(document.querySelector('#owgDomainPacks'),{
    runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21a','wcag21aa']},resultTypes:['violations']}));
