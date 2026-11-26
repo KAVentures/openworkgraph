@@ -24,13 +24,17 @@
   // Views that honour the workspace case filter; every other section uses all cases.
   const FILTERED=new Set(['automation-candidates','summary','variants','variants/preview','variant-coverage','duration-distribution','activities','kpis','process-map','playback','dotted-chart','performance-spectrum','waiting-time','drift','model-discovery','organization','report.html','decision-points','decision-rules']);
   FILTERED.add('roles');
+  FILTERED.add('process-map.dot');
   FILTERED.add('anonymized-export');
+  FILTERED.add('organization.graphml');
   FILTERED.add('anonymized-export.csv');
   FILTERED.add('model-discovery.pnml');
+  FILTERED.add('model-discovery.bpmn');
   FILTERED.add('temporal-profile');
   FILTERED.add('heuristics-net');
   FILTERED.add('footprints');
   FILTERED.add('model-quality');
+  FILTERED.add('model-discovery.ptml');
   FILTERED.add('similar-cases');
   FILTERED.add('model-change');
   FILTERED.add('model-comparison');
@@ -585,10 +589,11 @@
     exportFormat.onchange=()=>{const note=relationshipExportNote();const review=exportFormat.value.endsWith('-review')?'Review CSV changes formula-like text and column names; use the regular export for re-import.':'';const attributes=exportFormat.value==='xes-attributes'?'Includes retained trace and event attribute values in the download.':'';if(review||attributes||note)status((review+attributes+note).trim());};
     {const option=document.createElement('option');option.value='ocelsqlite';option.textContent='OCEL 2.0 SQLite';exportFormat.appendChild(option);}
     {const option=document.createElement('option');option.value='xlsx';option.textContent='Excel workbook (.xlsx)';exportFormat.appendChild(option);}
+    {const option=document.createElement('option');option.value='parquet';option.textContent='Apache Parquet (typed columns)';exportFormat.appendChild(option);}
     exportButton.onclick=async()=>{
       try{
         status('Preparing export…');
-        const response=await api(exportFormat.value==='ocelsqlite'?logPath('ocel.sqlite',{}):exportFormat.value==='xlsx'?logPath('events.xlsx',{}):logPath('export',{format:exportFormat.value}));
+        const response=await api(exportFormat.value==='ocelsqlite'?logPath('ocel.sqlite',{}):exportFormat.value==='xlsx'?logPath('events.xlsx',{}):exportFormat.value==='parquet'?logPath('events.parquet',{}):logPath('export',{format:exportFormat.value}));
         const url=URL.createObjectURL(await response.blob());
         const link=el('a');link.href=url;link.download=state.logId+'.'+({sourcecsv:'csv','csv-review':'review.csv','sourcecsv-review':'review.csv','xes-attributes':'xes',ocel:'jsonocel',ocelxml:'xmlocel',ocelsqlite:'ocel.sqlite'}[exportFormat.value]||exportFormat.value);
         document.body.appendChild(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
@@ -4455,13 +4460,32 @@
     const pctInput=select('owgStuckPercentile',[['0.9','Longer than 90% of past waits'],['0.95','Longer than 95%'],['0.75','Longer than 75%']]);
     const run=button('Find stuck cases','secondary');run.id='owgStuckRun';
     const out=el('div');out.id='owgStuckResults';out.setAttribute('role','status');
-    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Activities that end a case (comma-separated or JSON array)',ends),field('Stuck when idle',pctInput),run);
+    const csvRun=button('Download all stuck cases (CSV)','secondary');csvRun.id='owgStuckCsv';
+    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Activities that end a case (comma-separated or JSON array)',ends),field('Stuck when idle',pctInput),run,csvRun);
     box.append(row,out);
     const generation=state.generation;
     let revision=0;
     const invalidate=()=>{revision++;run.disabled=false;out.replaceChildren();};
     ends.addEventListener('input',invalidate);
     pctInput.addEventListener('change',invalidate);
+    const stuckSpec=()=>{
+      const raw=ends.value.trim();
+      const endActivities=/^\[\s*(?:"|\])/.test(raw)?JSON.parse(raw):raw.split(',').map(x=>x.trim()).filter(Boolean);
+      const spec={end_activities:endActivities,percentile:Number(pctInput.value),cohort:globalCohort()};
+      if(state.caseType)spec.case_type=state.caseType;
+      return spec;
+    };
+    // The whole worklist, not only the rows shown, for a spreadsheet or a follow-up queue.
+    csvRun.onclick=async()=>{
+      const logId=state.logId;
+      try{
+        csvRun.disabled=true;
+        const response=await api('/v1/event-logs/'+encodeURIComponent(logId)+'/stuck-cases.csv',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(stuckSpec())});
+        download(logId+'-stuck-cases.csv',await response.text(),'text/csv');
+        out.replaceChildren(el('div','Downloaded every stuck case ('+(response.headers.get('X-OWG-Stuck-Cases')||'').replace(/; /g,', ').replace(/_/g,' ')+'), most overdue first.','muted'));
+      }catch(error){out.replaceChildren(el('div',error.message,'muted'));}
+      finally{csvRun.disabled=false;}
+    };
     run.onclick=async()=>{
       const ticket=++revision,logId=state.logId,caseType=state.caseType;
       const current=()=>box.isConnected&&generation===state.generation&&ticket===revision&&
@@ -6691,6 +6715,25 @@
           finally{draft.disabled=false;}
         };
         out.appendChild(draft);
+        const tree=button('Download process tree (PTML)','secondary');tree.id='owgDiscoveryPtml';
+        tree.onclick=async()=>{
+          try{
+            tree.disabled=true;
+            const response=await api(logPath('model-discovery.ptml',{noise:String(r.settings.noise),activities:String(r.settings.activities)}));
+            download(state.logId+'-discovered.ptml',await response.text(),'application/xml');
+            statusLine.textContent='Process tree downloaded ('+(response.headers.get('X-OWG-Process-Tree')||'').replace(/; /g,', ')+'). It opens with pm4py.read_ptml and in ProM.';
+          }catch(error){if(generation===state.generation)statusLine.textContent=error.message;}
+          finally{tree.disabled=false;}
+        };
+        out.appendChild(tree);
+        // The same tree as PM4Py prints it: paste it into pm4py's parse() or into "Check against a Petri net".
+        const notation=node=>node.op==='activity'?"'"+node.activity+"'":node.op==='tau'?'tau':
+          ({seq:'->',xor:'X',and:'+',loop:'*'})[node.op]+'( '+node.children.map(notation).join(', ')+' )';
+        const notationBox=document.createElement('details');notationBox.id='owgDiscoveryNotationBox';
+        const notationText=el('pre',notation(r.tree));notationText.id='owgDiscoveryNotation';
+        notationText.style.cssText='white-space:pre-wrap;overflow-wrap:anywhere;max-width:100%';
+        notationBox.append(el('summary','Process tree in PM4Py notation'),notationText);
+        out.appendChild(notationBox);
         const petri=button('Download Petri net (PNML)','secondary');petri.id='owgDiscoveryPnml';
         petri.onclick=async()=>{
           try{
@@ -6702,6 +6745,17 @@
           finally{petri.disabled=false;}
         };
         out.appendChild(petri);
+        const bpmnFile=button('Download BPMN','secondary');bpmnFile.id='owgDiscoveryBpmn';
+        bpmnFile.onclick=async()=>{
+          try{
+            bpmnFile.disabled=true;
+            const response=await api(logPath('model-discovery.bpmn',{noise:String(r.settings.noise),activities:String(r.settings.activities)}));
+            download(state.logId+'-discovered.bpmn',await response.text(),'application/xml');
+            statusLine.textContent='BPMN downloaded ('+(response.headers.get('X-OWG-BPMN')||'').replace(/; /g,', ')+'). It opens in Camunda Modeler, bpmn.io and other BPMN 2.0 designers as an unreviewed draft.';
+          }catch(error){if(generation===state.generation)statusLine.textContent=error.message;}
+          finally{bpmnFile.disabled=false;}
+        };
+        out.appendChild(bpmnFile);
       }catch(error){if(generation===state.generation)statusLine.textContent=error.message;}
       finally{run.disabled=false;}
     };
@@ -8009,12 +8063,12 @@
     const box=section('Check against a Petri net');box.id='owgPetri';
     const netsBase=()=>'/v1/event-logs/'+encodeURIComponent(state.logId)+'/reference-nets';
     box.appendChild(el('div','Replay the recorded cases on a Petri net from ProM, PM4Py, Apromore or another tool (a .pnml file), or on the net discovered here. Tokens that are missing or left behind show where the cases and the net disagree. The file is read for this check and not stored.','muted'));
-    const file=input('owgPetriFile','file');file.accept='.pnml,application/xml,text/xml';
+    const file=input('owgPetriFile','file');file.accept='.pnml,.ptml,application/xml,text/xml';
     const run=button('Replay on this net','secondary');run.id='owgPetriRun';
     const own=button('Replay on the discovered net','secondary');own.id='owgPetriDiscovered';
     const happy=button('Check against the most common path','secondary');happy.id='owgPetriHappy';
     const align=button('Explain each case step by step','secondary');align.id='owgPetriAlign';align.disabled=true;
-    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Petri net (.pnml)',file),run,own,happy,align);
+    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Petri net (.pnml) or process tree (.ptml)',file),run,own,happy,align);
     const statusLine=el('div',null,'muted');statusLine.id='owgPetriStatus';statusLine.setAttribute('role','status');statusLine.setAttribute('aria-live','polite');
     const out=el('div');out.id='owgPetriResults';
     const aligned=el('div');aligned.id='owgPetriAlignResults';
@@ -8023,7 +8077,20 @@
     const alertSave=button('Alert me','secondary');alertSave.id='owgPetriAlertSave';alertSave.disabled=true;
     const alertMessage=el('div',null,'muted');alertMessage.id='owgPetriAlertMessage';alertMessage.setAttribute('role','status');alertMessage.setAttribute('aria-live','polite');
     const alertRow=el('div',null,'row');alertRow.style.alignItems='end';alertRow.append(field('Signal when cases not fitting this net are',alertShare),field('Among cases',alertWindow),alertSave);
-    box.append(row,statusLine,out,aligned,alertRow,alertMessage);
+    // A tree printed by PM4Py (print(tree)) can be pasted instead of saved as a file.
+    const treeText=document.createElement('textarea');treeText.id='owgPetriTreeText';treeText.rows=2;treeText.maxLength=200000;
+    treeText.placeholder="->( 'Register', X( 'Check', tau ), 'Pay' )";treeText.style.cssText='width:100%;font-family:monospace';
+    const treeRun=button('Replay on pasted process tree','secondary');treeRun.id='owgPetriTreeRun';
+    const treeRow=el('div',null,'row');treeRow.style.alignItems='end';treeRow.append(field('Or paste a PM4Py process tree',treeText),treeRun);
+    treeRun.onclick=async()=>{
+      if(!treeText.value.trim()){statusLine.textContent='Paste a process tree first.';return;}
+      try{
+        statusLine.textContent='Converting the process tree…';
+        const converted=await (await api('/v1/event-logs/process-tree-to-pnml',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({notation:treeText.value})})).json();
+        await replay(converted.pnml,'the pasted process tree');
+      }catch(error){statusLine.textContent=error.message;}
+    };
+    box.append(row,treeRow,statusLine,out,aligned,alertRow,alertMessage);
     // Reference nets saved with this log: keep the net just checked, or check again against a saved one.
     const savedPick=select('owgPetriSaved',[]);const savedRun=button('Replay on saved net','secondary');savedRun.id='owgPetriSavedRun';
     const savedDelete=button('Delete saved net','secondary');savedDelete.id='owgPetriSavedDelete';
@@ -8174,6 +8241,15 @@
       finally{run.disabled=own.disabled=false;align.disabled=!lastNet;}};
     run.onclick=async()=>{const chosen=file.files&&file.files[0];if(!chosen){statusLine.textContent='Choose a .pnml file first.';return;}
       if(chosen.size>2*1024*1024){statusLine.textContent='The Petri net file is larger than 2 MB.';return;}
+      // A process tree from PM4Py or ProM is converted to its workflow net first, then replayed as usual.
+      if(/\.ptml$/i.test(chosen.name)){
+        try{
+          statusLine.textContent='Converting the process tree…';
+          const converted=await (await api('/v1/event-logs/ptml-to-pnml',{method:'POST',headers:{'Content-Type':'application/xml'},body:await chosen.arrayBuffer()})).json();
+          await replay(converted.pnml,chosen.name+' (process tree)');
+        }catch(error){statusLine.textContent=error.message;}
+        return;
+      }
       await replay(await chosen.text(),chosen.name);};
     happy.onclick=async()=>{
       try{statusLine.textContent='Building the most common path…';const response=await api(logPath('variant.pnml',{rank:'1'}));
@@ -9084,13 +9160,24 @@
     const run=button('Show handovers','secondary');run.id='owgEventLogOrgRun';
     const rolesRun=button('Discover roles','secondary');rolesRun.id='owgEventLogRolesRun';
     const threshold=input('owgEventLogRolesThreshold','number');threshold.value='0.65';threshold.min='0.01';threshold.max='0.99';threshold.step='0.01';
-    const row=el('div',null,'row');row.style.alignItems='end';row.append(namesLabel,run,field('Role similarity threshold',threshold),rolesRun);
+    const network=button('Download network (GraphML)','secondary');network.id='owgEventLogOrgGraphml';
+    const row=el('div',null,'row');row.style.alignItems='end';row.append(namesLabel,run,field('Role similarity threshold',threshold),rolesRun,network);
     const out=el('div');out.id='owgEventLogOrgResults';out.setAttribute('role','status');
     const evidence=el('div');evidence.id='owgEventLogOrgCaseReview';
     box.append(row,out,evidence);
     let request=0;
     const clear=()=>{request++;out.replaceChildren();evidence.replaceChildren();};
     names.addEventListener('change',clear);threshold.addEventListener('input',clear);
+    // The same network for Gephi, yEd or Cytoscape; pseudonymous unless names are shown.
+    network.onclick=async()=>{
+      try{
+        network.disabled=true;
+        const response=await api(logPath('organization.graphml',{names:names.checked?'shown':'pseudonymous'}));
+        download(state.logId+'-resources.graphml',await response.text(),'application/graphml+xml');
+        out.replaceChildren(el('div','Downloaded the resource network ('+(response.headers.get('X-OWG-Network')||'').replace(/; /g,', ')+'). It opens in Gephi, yEd and Cytoscape. '+(names.checked?'It contains resource names from the log.':'Resources are pseudonymous in the file.'),'muted'));
+      }catch(error){out.textContent=error.message;}
+      finally{network.disabled=false;}
+    };
     function reviewCases(kind,pair,report,current){
       const panel=el('div');
       const titles={handover:'Handover',return:'Return handover',shared:'Shared cases'};
@@ -10442,7 +10529,8 @@
     const svgButton=button('Download map (SVG)','secondary');svgButton.id='owgMapDownloadSvg';
     const pngButton=button('Download map (PNG)','secondary');pngButton.id='owgMapDownloadPng';
     const csvButton=button('Download map data (CSV)','secondary');csvButton.id='owgMapDownloadCsv';
-    const exportRow=el('div',null,'row');exportRow.append(svgButton,pngButton,csvButton);
+    const dotButton=button('Download map (Graphviz DOT)','secondary');dotButton.id='owgMapDownloadDot';
+    const exportRow=el('div',null,'row');exportRow.append(svgButton,pngButton,csvButton,dotButton);
     box.append(row,status,player.node,graphHost,exportRow,slow);
     const generation=state.generation;let timer=null,request=0,lastCaption='',lastMap=null;
     // The numbers behind the drawn map, one row per activity, start, path and end, for a spreadsheet.
@@ -10455,6 +10543,16 @@
       Object.entries(r.end_activities||{}).forEach(([a,n])=>lines.push(['end',a,'',n,'','','','']));
       downloadBlob(new Blob([toCSV(lines)],{type:'text/csv'}),mapFileName('csv'));
       status.textContent='Downloaded the map data: '+r.activities.length+' activities and '+r.transitions.length+' paths at the current settings.';
+    };
+    // The same map as a Graphviz graph, recomputed on the server at the current slider settings.
+    dotButton.onclick=async()=>{
+      try{
+        dotButton.disabled=true;
+        const response=await api(logPath('process-map.dot',{activities:String(Number(acts.node.value)/100),paths:String(Number(paths.node.value)/100)}));
+        downloadBlob(new Blob([await response.text()],{type:'text/vnd.graphviz'}),mapFileName('dot'));
+        status.textContent='Downloaded the map as a Graphviz graph ('+(response.headers.get('X-OWG-Map')||'').replace(/; /g,', ')+'). Render it with dot -Tsvg or any Graphviz viewer.';
+      }catch(error){status.textContent=error.message;}
+      finally{dotButton.disabled=false;}
     };
     const currentSvg=()=>graphHost.querySelector('#owgMapDrawing svg')||graphHost.querySelector('svg');
     svgButton.onclick=()=>{const svg=currentSvg();if(!svg){status.textContent='No map is drawn to download.';return;}

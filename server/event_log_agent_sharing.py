@@ -799,7 +799,18 @@ def funnel(log_id: str, steps: list[str], case_type: str | None = None,
     """Milestone funnel over chosen activities (aggregates level: counts, timings, last activities)."""
     require(log_id, "aggregates")
     from . import event_log_funnel as fn
-    return {**fn.funnel(log_id, steps, case_type, within_hours=within_hours), "format": FORMAT, "log_id": log_id}
+    result = fn.funnel(log_id, steps, case_type, within_hours=within_hours)
+    keep = AGENT_MIN_CELL_CASES
+    for step in result["steps"]:
+        if step.get("hours_from_previous") and step["cases"] < keep:
+            step["hours_from_previous"] = {"median": None, "p90": None, "mean": None}
+        step["stopped_cases_last_activity"] = None if step.get("stopped_cases_last_activity") is None else [
+            row for row in step["stopped_cases_last_activity"] if row["cases"] >= keep]
+    completed = result.get("completed") or {}
+    if (completed.get("cases") or 0) < keep and completed.get("hours_first_to_last"):
+        completed["hours_first_to_last"] = {"median": None, "p90": None}
+    result.pop("evidence", None)
+    return {**result, "withheld_below": keep, "format": FORMAT, "log_id": log_id}
 
 
 def unusual_cases(log_id: str, case_type: str | None = None, limit: int = 25) -> dict[str, Any]:
@@ -828,7 +839,17 @@ def next_steps(log_id: str, steps: list[str] | None = None, case_type: str | Non
     """Path explorer: what happens after a sequence of steps (aggregates level)."""
     require(log_id, "aggregates")
     from . import event_log_path_explorer as px
-    return {**px.next_steps(log_id, steps, case_type, anchor=anchor), "format": FORMAT, "log_id": log_id}
+    result = px.next_steps(log_id, steps, case_type, anchor=anchor)
+    keep = AGENT_MIN_CELL_CASES
+    for step in result["next"]:
+        if step["cases"] < keep:
+            if step.get("hours_from_previous"):
+                step["hours_from_previous"] = {"median": None, "p90": None}
+            if step.get("hours_to_case_end"):
+                step["hours_to_case_end"] = {"median": None}
+    if result.get("hours_to_reach_point") and (result.get("cases_at_point") or 0) < keep:
+        result["hours_to_reach_point"] = {"median": None, "p90": None}
+    return {**result, "withheld_below": keep, "format": FORMAT, "log_id": log_id}
 
 
 def insights(log_id: str, case_type: str | None = None, sla_hours: float | None = None,
@@ -1014,7 +1035,17 @@ def activity_profile(log_id: str, activity: str, case_type: str | None = None) -
     """One activity from every side (aggregates level)."""
     require(log_id, "aggregates")
     from . import event_log_activity_profile as ap
-    return {**ap.activity_profile(log_id, activity, case_type), "format": FORMAT, "log_id": log_id}
+    result = ap.activity_profile(log_id, activity, case_type)
+    keep = AGENT_MIN_CELL_CASES
+    if result["cases_with_activity"] < keep:
+        raise EventLogWorkspaceError(f"this activity occurs in fewer than {keep} cases; it is not profiled for agents")
+    for side in ("comes_after", "comes_before"):
+        result[side] = [{**row, "median_hours": row.get("median_hours") if row["times"] >= keep else None}
+                        for row in result[side]]
+    without = result["cases"] - result["cases_with_activity"]
+    if without < keep and isinstance(result.get("case_hours"), dict):
+        result["case_hours"] = {**result["case_hours"], "without_activity": {"median": None, "p90": None}}
+    return {**result, "withheld_below": keep, "format": FORMAT, "log_id": log_id}
 
 
 def activity_glossary(log_id: str) -> dict[str, Any]:
@@ -1176,14 +1207,36 @@ def similar_cases(log_id: str, case_id: str, case_type: str | None = None, limit
             "format": FORMAT, "log_id": log_id}
 
 
-def rework(log_id: str, case_type: str | None = None, limit: int = 20) -> dict[str, Any]:
-    """Repeated activities, loop patterns and how cases with rework compare (aggregates level)."""
+def rework(log_id: str, case_type: str | None = None, limit: int = 20,
+           case_filter: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Repeated activities, loop patterns and how cases with rework compare (aggregates level). An optional case
+    filter narrows the cases, which also lets agents analyse logs above the rework case limit."""
     require(log_id, "aggregates")
     from . import event_log_rework as rw
     spec: dict[str, Any] = {"limit": max(1, min(int(limit), 100))}
     if case_type:
         spec["case_type"] = case_type
-    return {**rw.rework(log_id, spec), "format": FORMAT, "log_id": log_id}
+    if case_filter is not None:
+        if not isinstance(case_filter, dict) or not case_filter:
+            raise EventLogWorkspaceError("case_filter must be a non-empty object of case-filter keys")
+        if workspace.summary(log_id, case_type, case_filter)["cases"] < AGENT_MIN_FILTERED_CASES:
+            raise EventLogWorkspaceError(f"fewer than {AGENT_MIN_FILTERED_CASES} cases match this filter; widen it")
+        spec["cohort"] = case_filter
+    try:
+        result = rw.rework(log_id, spec)
+    except EventLogWorkspaceError as exc:
+        if "use a cohort" in str(exc):
+            raise EventLogWorkspaceError(f"rework reads at most {rw.MAX_CASES:,} cases; pass a narrower case_filter, "
+                                         "for example a start-date range") from None
+        raise
+    keep = AGENT_MIN_CELL_CASES
+    comparison = result.get("comparison")
+    if comparison and min(comparison["cases_with_rework"], comparison["cases_without_rework"]) < keep:
+        result["comparison"] = {"cases_with_rework": comparison["cases_with_rework"],
+                                "cases_without_rework": comparison["cases_without_rework"],
+                                "withheld": f"one side has fewer than {keep} cases"}
+    result["loop_patterns"] = [p for p in result.get("loop_patterns", []) if p["cases"] >= keep]
+    return {**result, "withheld_below": keep, "format": FORMAT, "log_id": log_id}
 
 
 def waiting_times(log_id: str, case_type: str | None = None,
@@ -1333,4 +1386,53 @@ def batching(log_id: str, case_type: str | None = None, gap_seconds: int = 60, m
     spec: dict[str, Any] = {"gap_seconds": gap_seconds, "min_batch_size": min_batch_size, "by_resource": by_resource}
     if case_type:
         spec["case_type"] = case_type
-    return {**bt.batching(log_id, spec), "format": FORMAT, "log_id": log_id}
+    result = bt.batching(log_id, spec)
+    keep = AGENT_MIN_CELL_CASES
+    for row in result.get("activities", []):
+        if (row.get("batched_events") or 0) < keep:
+            row["median_wait_before_batched_seconds"] = None
+            row["median_batch_span_seconds"] = None
+        if (row.get("events") or 0) - (row.get("batched_events") or 0) < keep:
+            row["median_wait_before_unbatched_seconds"] = None
+    return {**result, "withheld_below": keep, "format": FORMAT, "log_id": log_id}
+
+
+def handovers(log_id: str, case_type: str | None = None, limit: int = 50) -> dict[str, Any]:
+    """How work passes between people (aggregates level): handover of work, ping-pong (subcontracting) and
+    working together, between pseudonymous resources. Names are never returned, a resource or pair seen in
+    fewer than AGENT_MIN_CELL_CASES cases is withheld and matrix cells below that many events are blanked."""
+    require(log_id, "aggregates")
+    from . import event_log_organization as org
+    limit = max(1, min(int(limit), 200))
+    full = org.organization(log_id, case_type, names="pseudonymous", limit=limit)
+    keep = AGENT_MIN_CELL_CASES
+
+    def kept(rows: list[dict[str, Any]], key: str) -> tuple[list[dict[str, Any]], int]:
+        shown = [row for row in rows if row[key] >= keep]
+        return shown, len(rows) - len(shown)
+
+    resources, hidden_resources = kept(full["resources"], "cases")
+    handover, hidden_handover = kept(full["handover_of_work"], "cases")
+    ping_pong, hidden_ping_pong = kept(full["subcontracting"], "cases")
+    together, hidden_together = kept(full["working_together"], "shared_cases")
+    matrix = full["activity_resource_matrix"]
+    return {
+        "resources": [{k: row[k] for k in ("resource", "events", "cases", "activities")} for row in resources],
+        "handover_of_work": handover,
+        "subcontracting": ping_pong,
+        "working_together": together,
+        "cases_with_handover": full["cases_with_handover"],
+        "activity_resource_matrix": {
+            "activities": matrix["activities"], "resources": matrix["resources"],
+            "events": [[n if n >= keep else None for n in row] for row in matrix["events"]],
+        },
+        "coverage": full["coverage"],
+        "withheld": {"resources": hidden_resources, "handover_pairs": hidden_handover,
+                     "subcontracting_pairs": hidden_ping_pong, "working_together_pairs": hidden_together,
+                     "min_cases": keep, "matrix_cells_below": keep,
+                     "resources_truncated": full["resources_truncated"]},
+        "privacy": {"names_returned": False, "labels_are_stable_within_this_response_only": True,
+                    "per_person_durations_or_speed_computed": False, "ranking_or_performance_scoring": False},
+        "interpretation": full["interpretation"],
+        "format": FORMAT, "log_id": log_id,
+    }

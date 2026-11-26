@@ -711,16 +711,23 @@ def register_process_intelligence_tools(mcp: Any, runtime_module: Any) -> None:
         return _get("get_process_signals", f"/v1/process-intelligence/{_log(log_id)}/signals", {})
 
     @mcp.tool(annotations=_READ_ONLY)
-    def get_process_rework(log_id: str, limit: int = 20, case_type: str | None = None) -> dict[str, Any]:
+    def get_process_rework(log_id: str, limit: int = 20, case_type: str | None = None,
+                           case_filter: dict[str, Any] | None = None) -> dict[str, Any]:
         """Rework in a shared log: the share of cases that repeat an activity, which activities are repeated most
         and how often, the most common loop patterns (self-loop, short loop, longer return), and how long cases
         with rework take compared with cases without (median difference with a 95% interval). Association, not
-        cause. Aggregates only.
+        cause. case_filter (the same keys as insight cohorts) narrows the cases; logs above 200,000 cases need one.
+        Aggregates only.
         """
         if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 100:
             raise ToolError("limit must be 1 to 100")
-        return _get("get_process_rework", f"/v1/process-intelligence/{_log(log_id)}/rework",
-                    {"limit": limit, "case_type": case_type})
+        params: dict[str, Any] = {"limit": limit, "case_type": case_type}
+        if case_filter is not None:
+            if not isinstance(case_filter, dict) or not case_filter:
+                raise ToolError("case_filter must be a non-empty object")
+            import json as _json
+            params["case_filter"] = _json.dumps(case_filter, separators=(",", ":"))
+        return _get("get_process_rework", f"/v1/process-intelligence/{_log(log_id)}/rework", params)
 
     @mcp.tool(annotations=_READ_ONLY)
     def get_process_waiting_times(log_id: str, case_type: str | None = None,
@@ -829,6 +836,19 @@ def register_process_intelligence_tools(mcp: Any, runtime_module: Any) -> None:
         return _get("get_process_batching", f"/v1/process-intelligence/{_log(log_id)}/batching",
                     {"gap_seconds": gap_seconds, "min_batch_size": min_batch_size,
                      "by_resource": "true" if by_resource else "false", "case_type": case_type})
+
+    @mcp.tool(annotations=_READ_ONLY)
+    def get_process_handovers(log_id: str, limit: int = 50, case_type: str | None = None) -> dict[str, Any]:
+        """How work passes between people in a shared log: handover of work (consecutive events by different
+        resources), subcontracting (work that goes to someone and straight back) and working together (cases two
+        resources both touched), plus which resources do which activities. Resources are pseudonymous ("Resource
+        01", stable only within one response) and never named; pairs or resources seen in fewer than 5 cases are
+        withheld. No durations or scoring per person. Aggregates only.
+        """
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 200:
+            raise ToolError("limit must be 1 to 200")
+        return _get("get_process_handovers", f"/v1/process-intelligence/{_log(log_id)}/handovers",
+                    {"limit": limit, "case_type": case_type})
 
     @mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=False))
     def tag_process_cases(log_id: str, tag: str, case_ids: list[str], note: str = "") -> dict[str, Any]:

@@ -357,6 +357,38 @@ async def convert_sqlite_event_log(request: Request, table: str | None = Query(d
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
+@router.post("/v1/event-logs/ptml-to-pnml")
+async def convert_ptml_process_tree(request: Request):
+    """Convert a PTML process tree (ProM, PM4Py) to a PNML workflow net for replay. Nothing is stored."""
+    from . import event_log_ptml_import as ptml_import
+    _require_dashboard(request)
+    data = bytearray()
+    async for chunk in request.stream():
+        data += chunk
+        if len(data) > ptml_import.MAX_BYTES:
+            raise HTTPException(413, "the process tree file is larger than 2 MB")
+    try:
+        result = await run_in_threadpool(ptml_import.to_pnml, bytes(data))
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+@router.post("/v1/event-logs/process-tree-to-pnml")
+async def convert_process_tree_notation(request: Request):
+    """Convert a process tree in PM4Py's printed notation to a PNML net: {"notation": "->( 'A', 'B' )"}."""
+    from . import event_log_ptml_import as ptml_import
+    _require_dashboard(request)
+    spec = await _json_body(request, "process tree", strict=True, limit=ptml_import.MAX_NOTATION_CHARS * 2)
+    if not isinstance(spec, dict) or set(spec) != {"notation"}:
+        raise HTTPException(422, "send the tree as notation")
+    try:
+        result = await run_in_threadpool(ptml_import.notation_to_pnml, spec["notation"])
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
 @router.post("/v1/event-logs/mapping-matches")
 async def event_log_mapping_matches(request: Request):
     """Earlier CSV column mappings that fit a file header (by column names only). Nothing is stored."""
@@ -1246,6 +1278,22 @@ async def event_log_stuck_cases(request: Request, log_id: str):
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
+@router.post("/v1/event-logs/{log_id}/stuck-cases.csv")
+async def event_log_stuck_cases_csv(request: Request, log_id: str):
+    """Every stuck case, not only the first ``limit``, as a CSV worklist."""
+    from . import event_log_stuck as stuck
+    _require_dashboard(request)
+    spec = await _json_body(request, "stuck-case settings", strict=True, limit=16384)
+    try:
+        text, meta = await run_in_threadpool(stuck.stuck_cases_csv, log_id, spec)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return Response(text, media_type="text/csv; charset=utf-8", headers={
+        "Cache-Control": "no-store", "Content-Disposition": f'attachment; filename="{log_id}-stuck-cases.csv"',
+        "X-OWG-Stuck-Cases": f"stuck={meta['stuck_cases']}; judged={meta['judged_open_cases']}; "
+                             f"not_judged={meta['not_judged_open_cases']}"})
+
+
 @router.get("/v1/event-logs/{log_id}/automation-candidates")
 def event_log_automation_candidates(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
                                     limit: int = Query(default=15, ge=1, le=50),
@@ -1982,6 +2030,22 @@ def event_log_process_map(request: Request, log_id: str, case_type: str | None =
     return _respond(process_maps.process_map, log_id, case_type, activities=activities, paths=paths, cohort=cohort)
 
 
+@router.get("/v1/event-logs/{log_id}/process-map.dot")
+def event_log_process_map_dot(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
+                              activities: float = Query(default=1.0, gt=0, le=1), paths: float = Query(default=1.0, gt=0, le=1),
+                              cohort: dict[str, Any] = Depends(_case_filter)):
+    """The simplified map at the same slider settings as a Graphviz DOT graph."""
+    from . import event_log_map_dot as map_dot
+    _require_dashboard(request)
+    try:
+        dot, meta = map_dot.map_dot(log_id, case_type, activities=activities, paths=paths, cohort=cohort)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return Response(dot, media_type="text/vnd.graphviz", headers={
+        "Cache-Control": "no-store", "Content-Disposition": f'attachment; filename="{log_id}-map.dot"',
+        "X-OWG-Map": f"activities={meta['activities']}; transitions={meta['transitions']}"})
+
+
 @router.get("/v1/event-logs/{log_id}/playback")
 def event_log_playback(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
                        activities: float = Query(default=1.0, gt=0, le=1),
@@ -2128,6 +2192,27 @@ def event_log_organization(request: Request, log_id: str, case_type: str | None 
     _require_dashboard(request)
     return _respond(organization.organization, log_id, case_type, names=names, cohort=cohort,
                     automation_resources=automation_resource, limit=limit)
+
+
+@router.get("/v1/event-logs/{log_id}/organization.graphml")
+def event_log_organization_graphml(request: Request, log_id: str,
+                                   case_type: str | None = Query(default=None, max_length=200),
+                                   names: str = Query(default="pseudonymous", max_length=20),
+                                   automation_resource: list[str] | None = Query(default=None, max_length=50),
+                                   limit: int = Query(default=100, ge=1, le=organization.MAX_EDGES),
+                                   cohort: dict[str, Any] = Depends(_case_filter)):
+    """The handover and working-together network as GraphML, pseudonymous unless names are asked for."""
+    from . import event_log_organization_graphml as graphml
+    _require_dashboard(request)
+    try:
+        xml, meta = graphml.organization_graphml(log_id, case_type, names=names, cohort=cohort,
+                                                 automation_resources=automation_resource, limit=limit)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return Response(xml, media_type="application/graphml+xml", headers={
+        "Cache-Control": "no-store", "Content-Disposition": f'attachment; filename="{log_id}-resources.graphml"',
+        "X-OWG-Network": f"resources={meta['resources']}; handovers={meta['handovers']}; "
+                         f"working_together={meta['working_together']}; names={meta['names']}"})
 
 
 @router.post("/v1/event-logs/{log_id}/organization/cases")
@@ -3099,6 +3184,23 @@ def event_log_model_discovery(request: Request, log_id: str, case_type: str | No
     return _respond(model_discovery.discover, log_id, case_type, noise=noise, activities=activities, cohort=cohort)
 
 
+@router.get("/v1/event-logs/{log_id}/model-discovery.ptml")
+def event_log_model_discovery_ptml(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
+                                   noise: float = Query(default=0.2, ge=0, lt=1),
+                                   activities: float = Query(default=1.0, gt=0, le=1),
+                                   cohort: dict[str, Any] = Depends(_case_filter)):
+    """The discovered process tree as PTML, for PM4Py and ProM."""
+    from . import event_log_ptml as ptml
+    _require_dashboard(request)
+    try:
+        xml, meta = ptml.discovered_ptml(log_id, case_type, noise=noise, activities=activities, cohort=cohort)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return Response(xml, media_type="application/xml", headers={
+        "Cache-Control": "no-store", "Content-Disposition": f'attachment; filename="{log_id}-discovered.ptml"',
+        "X-OWG-Process-Tree": f"nodes={meta['nodes']}; activities={meta['activities']}"})
+
+
 @router.get("/v1/event-logs/{log_id}/model-discovery.pnml")
 def event_log_model_discovery_pnml(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
                                    noise: float = Query(default=0.2, ge=0, lt=1),
@@ -3113,6 +3215,23 @@ def event_log_model_discovery_pnml(request: Request, log_id: str, case_type: str
     return Response(xml, media_type="application/xml", headers={
         "Cache-Control": "no-store", "Content-Disposition": f'attachment; filename="{log_id}-discovered.pnml"',
         "X-OWG-Petri-Net": f"places={meta['places']}; transitions={meta['transitions']}; silent={meta['silent_transitions']}"})
+
+
+@router.get("/v1/event-logs/{log_id}/model-discovery.bpmn")
+def event_log_model_discovery_bpmn(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
+                                   noise: float = Query(default=0.2, ge=0, lt=1),
+                                   activities: float = Query(default=1.0, gt=0, le=1),
+                                   cohort: dict[str, Any] = Depends(_case_filter)):
+    """The discovered model as BPMN 2.0 with diagram interchange, for process designers."""
+    from . import event_log_bpmn_export as bpmn
+    _require_dashboard(request)
+    try:
+        xml, meta = bpmn.discovered_bpmn(log_id, case_type, noise=noise, activities=activities, cohort=cohort)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return Response(xml, media_type="application/xml", headers={
+        "Cache-Control": "no-store", "Content-Disposition": f'attachment; filename="{log_id}-discovered.bpmn"',
+        "X-OWG-BPMN": f"tasks={meta['tasks']}; gateways={meta['gateways']}; flows={meta['flows']}"})
 
 
 @router.get("/v1/event-logs/{log_id}/variant.pnml")
@@ -3264,6 +3383,27 @@ def export_event_log_xlsx(request: Request, log_id: str, case_type: str | None =
         raise
     return FileResponse(str(path), media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                         filename=f"{log_id}.xlsx", headers={"Cache-Control": "no-store"},
+                        background=BackgroundTask(shutil.rmtree, folder, ignore_errors=True))
+
+
+@router.get("/v1/event-logs/{log_id}/events.parquet")
+def export_event_log_parquet(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200)):
+    """The log's events as a typed Apache Parquet file (the CSV export's rows). Not stored."""
+    import shutil
+    from . import event_log_parquet_export as parquet_export
+    _require_dashboard(request)
+    folder = tempfile.mkdtemp(prefix="owg-parquet-export-", dir=str(DATA_DIR))
+    path = Path(folder) / "events.parquet"
+    try:
+        meta = parquet_export.write(log_id, path, case_type)
+    except workspace.EventLogWorkspaceError as exc:
+        shutil.rmtree(folder, ignore_errors=True)
+        raise HTTPException(422, str(exc)) from None
+    except BaseException:
+        shutil.rmtree(folder, ignore_errors=True)
+        raise
+    return FileResponse(str(path), media_type="application/vnd.apache.parquet", filename=f"{log_id}.parquet",
+                        headers={"Cache-Control": "no-store", "X-OWG-Rows": str(meta["rows"])},
                         background=BackgroundTask(shutil.rmtree, folder, ignore_errors=True))
 
 

@@ -494,9 +494,19 @@ async def agent_signals(request: Request, log_id: str):
 
 @router.get("/v1/process-intelligence/{log_id}/rework")
 async def agent_rework(request: Request, log_id: str, limit: int = Query(default=20, ge=1, le=100),
-                       case_type: str | None = Query(default=None, max_length=200)):
+                       case_type: str | None = Query(default=None, max_length=200),
+                       case_filter: str | None = Query(default=None, max_length=8192)):
     _require_agent_access(request)
-    return await _answer(sharing.rework, log_id, case_type, limit)
+    chosen = None
+    if case_filter is not None:
+        import json
+        try:
+            chosen = json.loads(case_filter)
+        except ValueError:
+            raise HTTPException(422, "case_filter must be a JSON object") from None
+        if not isinstance(chosen, dict):
+            raise HTTPException(422, "case_filter must be a JSON object")
+    return await _answer(sharing.rework, log_id, case_type, limit, chosen)
 
 
 @router.get("/v1/process-intelligence/{log_id}/waiting-times")
@@ -562,3 +572,10 @@ async def agent_batching(request: Request, log_id: str, gap_seconds: int = Query
                          case_type: str | None = Query(default=None, max_length=200)):
     _require_agent_access(request)
     return await _answer(sharing.batching, log_id, case_type, gap_seconds, min_batch_size, by_resource)
+
+
+@router.get("/v1/process-intelligence/{log_id}/handovers")
+async def agent_handovers(request: Request, log_id: str, limit: int = Query(default=50, ge=1, le=200),
+                          case_type: str | None = Query(default=None, max_length=200)):
+    _require_agent_access(request)
+    return await _answer(sharing.handovers, log_id, case_type, limit)
