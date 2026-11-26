@@ -1901,7 +1901,7 @@
   }
   function installWorkforceExchange(host){
     const section=el('details');section.append(el('summary','Exchange minimized monitoring summaries across installations'),
-      el('p','Explicit offline export or review. Use the same high-entropy correlation key at each source, and obtain packet pins separately from trusted operators. No network transfer or source authentication.'));
+      el('p','Explicit offline export or review. Use the same high-entropy correlation key at each source, and obtain packet pins separately from trusted operators. No automatic network transfer. Signed packets can be verified against separately obtained public keys.'));
     const alias=el('input');alias.setAttribute('aria-label','Installation alias');alias.maxLength=80;
     const secret=el('input');secret.type='password';secret.autocomplete='off';secret.maxLength=64;secret.setAttribute('aria-label','Shared 32-byte correlation key in hexadecimal');
     const aliasLabel=el('label','Installation alias ');aliasLabel.append(alias);
@@ -1912,6 +1912,17 @@
       const url=URL.createObjectURL(new Blob([JSON.stringify(value,null,2)+'\n'],{type:'application/json'}));
       const link=el('a');link.href=url;link.download=name+'.json';link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
     });
+    const signingMode=el('input');signingMode.type='checkbox';signingMode.checked=true;
+    const signingLabel=el('label','Require signed export and review ');signingLabel.append(signingMode);
+    const identity=button('Show installation public signing key',async()=>{
+      if(!window.confirm('Create or read the local installation signing identity?'))return;
+      const attempt=++generation;output.replaceChildren();
+      try{
+        const value=await request('/v1/process-catalog/procurement-workforce/exchange/identity',{document:JSON.stringify({confirmed:true})});
+        if(attempt!==generation||!output.isConnected)return;
+        output.append(el('p','Public key: '+value.public_key_hex),el('p','Fingerprint: '+value.public_key_sha256),download(value,'owg-workforce-public-identity'),el('p','Verify this fingerprint through a separate trusted channel. No private key is exported.'));
+      }catch(error){if(attempt===generation)output.replaceChildren(el('p',error.message));}
+    });
     const runExport=button('Create minimized exchange packet',async()=>{
       const attempt=++generation;output.replaceChildren();
       try{
@@ -1919,12 +1930,15 @@
         if(!/^[a-f0-9]{64}$/.test(secret.value))throw new Error('Provide a randomly generated 32-byte key as lowercase hex.');
         const document=JSON.stringify({installation_alias:alias.value,correlation_key_hex:secret.value,confirmed:true});
         secret.value='';
-        const result=await request('/v1/process-catalog/procurement-workforce/exchange/export',{document});
+        const signed=signingMode.checked;
+        const result=await request('/v1/process-catalog/procurement-workforce/exchange/'+(signed?'signed-export':'export'),{document});
         if(attempt!==generation||!output.isConnected)return;
-        output.append(el('p',result.packet.rows.length+' minimized journal rows · '+result.packet.unreadable_journals+' unreadable'),
-          el('p','Packet SHA-256: '+result.packet_sha256),
-          el('p','Correlation namespace: '+result.packet.correlation_namespace_sha256),
-          download({expected_packet_sha256:result.packet_sha256,packet:result.packet},'owg-workforce-exchange-packet'));
+        const envelope=signed?result.signed_packet:{expected_packet_sha256:result.packet_sha256,packet:result.packet};
+        output.append(el('p',envelope.packet.rows.length+' minimized journal rows · '+envelope.packet.unreadable_journals+' unreadable'),
+          el('p','Packet SHA-256: '+envelope.expected_packet_sha256),
+          el('p','Correlation namespace: '+envelope.packet.correlation_namespace_sha256),
+          download(envelope,signed?'owg-workforce-signed-exchange-packet':'owg-workforce-exchange-packet'));
+        if(signed)output.append(el('p','Signing public key fingerprint: '+result.public_key_sha256),el('p','Distribute the public key fingerprint separately; do not treat a packet as its own trust anchor.'));
       }catch(error){if(attempt===generation)output.replaceChildren(el('p',error.message));}
     });
     const runReview=button('Review pinned installation packets',async()=>{
@@ -1932,10 +1946,13 @@
       try{
         const selected=file.files?.[0];if(!selected||selected.size>8*1024*1024)throw new Error('Choose a review bundle of at most 8 MiB.');
         if(!window.confirm('Review these explicitly selected offline installation packets?'))return;
-        const result=await request('/v1/process-catalog/procurement-workforce/exchange/review',{document:await selected.text()});
+        const signed=signingMode.checked;
+        const result=await request('/v1/process-catalog/procurement-workforce/exchange/'+(signed?'signed-review':'review'),{document:await selected.text()});
         if(attempt!==generation||!output.isConnected)return;
         output.append(el('h4','Multi-installation review'),el('p',result.installations.length+' declared installations · '+result.included_journals+' included journals · '+result.excluded_journals+' excluded · '+result.unreadable_journals+' unreadable'),
           el('p',result.totals_may_be_incomplete?'Totals may be incomplete.':'No exclusions identified in the supplied packets; completeness is not independently verified.'));
+        output.appendChild(el('p',result.all_packet_signatures_verified_against_operator_pins?'All signatures verified against explicit operator-pinned keys.':'Unsigned content-digest review only.'));
+        for(const pin of result.trusted_key_fingerprints||[])output.appendChild(el('p',pin.installation_alias+' · key fingerprint '+pin.public_key_sha256));
         const money=(v,c)=>{
           if(v==null)return 'unbounded';
           const n=BigInt(v.numerator),d=BigInt(v.denominator),r=(2n*n+d)/(2n*d);
@@ -1952,7 +1969,8 @@
       }catch(error){if(attempt===generation)output.replaceChildren(el('p',error.message));}
     });
     file.addEventListener('change',()=>{generation++;output.replaceChildren();});
-    section.append(aliasLabel,secretLabel,runExport,el('p','Review bundle: combine downloaded packet objects with separately obtained pins and the expected correlation namespace (see AGENT_PROCUREMENT_WORKFORCE_EXCHANGE.md).'),file,runReview,output);host.appendChild(section);
+    signingMode.addEventListener('change',()=>{generation++;output.replaceChildren();});
+    section.append(signingLabel,identity,aliasLabel,secretLabel,runExport,el('p','Review bundle: combine downloaded packets with separately obtained pins, the expected correlation namespace and (for signed review) an explicit public-key trust list (see AGENT_PROCUREMENT_WORKFORCE_EXCHANGE.md).'),file,runReview,output);host.appendChild(section);
   }
   function installWorkforceSchedule(host){
     const section=el('details');section.append(el('summary','Schedule local workforce deadline reviews'),

@@ -67,3 +67,40 @@ They are declarations as of export; the reviewer does not independently
 recompute a source journal or execute a rollback. A review does not
 authenticate an installation, prove coverage of all enterprise sites,
 validate business outcomes or authorize spending or execution.
+
+## Signed exchange (recommended)
+
+The dashboard defaults to signed export/review. Use Show installation public
+signing key to create/read a stable Ed25519 public key. The private seed is
+stored in the existing local authentication directory using its existing
+secret-file permissions; it is not included in the exported packet, public
+identity or unencrypted credential-excluding backups. Explicit encrypted
+credential backups may preserve the seed. A cloned or restored credential
+store can reproduce the signing identity; do not treat it as a hardware-bound
+installation identifier. Deleting the seed externally will require re-enrollment
+of the new key; no automatic rotation or revocation is implied.
+
+POST exchange/identity accepts {confirmed:true}; exchange/signed-export
+accepts the same document as the original export. The latter returns a
+signed_packet (expected_packet_sha256, packet, signature_hex). Signatures
+use Ed25519 over the fixed ASCII protocol domain plus a NUL and the raw
+32-byte canonical packet SHA-256 digest. The packet commits to alias,
+namespace, timestamp, and all summary fields. The public key is not a
+self-authenticating claim; obtain it and verify its SHA-256 fingerprint
+through a separately trusted administrative channel before review.
+
+POST exchange/signed-review accepts the original review document with
+signed packet objects and an additional trust list. Each trust entry has
+installation_alias, public_key_hex (32-byte raw Ed25519 public key, lowercase
+hex), and correlation_namespace_sha256. The list must match the exact set
+of packet aliases; aliases and public keys cannot be reused across entries.
+Every signature must verify against that list before aggregation. No fallback
+to unsigned review occurs on failure. The original freshness, integrity,
+overlap and conservative accounting checks still apply.
+
+The report distinguishes key-signature verification from organizational
+identity and outcome verification. This is offline, nonpersistent review:
+no global trust registry, credential revocation propagation, authenticated
+live transport or persistent anti-replay history is provided. A still-fresh
+signed packet can be reviewed again; it is not counted twice within a single
+review. Trust only keys whose operator ownership you have established.

@@ -49,6 +49,10 @@ with TestClient(app) as client:
     assert client.post(exchange_path,json={}).status_code==401
     assert client.post(exchange_path,json={},headers=bearer).status_code==403
     assert client.post(exchange_path,json={},headers=h).status_code==422
+    signing_path='/v1/process-catalog/procurement-workforce/exchange/identity'
+    assert client.post(signing_path,json={}).status_code==401
+    assert client.post(signing_path,json={},headers=bearer).status_code==403
+    assert client.post(signing_path,json={'document':'{"confirmed":false}'},headers=h).status_code==422
     overview_path='/v1/process-catalog/procurement-workforce/overview'
     assert client.get(overview_path).status_code==401
     assert client.get(overview_path,headers=bearer).status_code==403
