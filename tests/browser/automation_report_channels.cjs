@@ -63,6 +63,13 @@ const path=require('node:path');
      return (await r.json()).incidents.find(x=>x.kind==='run_failures');
    });
    assert.equal(staleReview.review_revision,0);
+   await failed.getByRole('button',{name:/^Inspect retained run evidence/}).click();
+   await failed.getByText(/2 matching retained runs/).waitFor();
+   await failed.locator('summary').filter({hasText:'f1 · failed'}).click();
+   await failed.locator('details').filter({hasText:'f1 · failed'}).getByRole('button',{name:'Read exact retained report'}).click();
+   await failed.locator('details').filter({hasText:'f1 · failed'}).getByRole('table').waitFor();
+   assert.match(await failed.locator('details').filter({hasText:'f1 · failed'}).textContent(),/Charge card/);
+
    await failed.getByRole('textbox').fill('Processor outage');
    await failed.getByRole('button',{name:/^Resolve incident/}).click();
    await incidentsPanel.locator('fieldset').filter({hasText:'Processor outage'}).getByText(/Failed runs · resolved/).waitFor();

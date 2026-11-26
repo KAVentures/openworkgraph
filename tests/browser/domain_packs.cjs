@@ -105,6 +105,15 @@ const path=require('node:path');
   await page.locator('#owgDomainPackSetup').click();
   await page.locator('#owgDomainPackChoice').selectOption('sales_lead_management');
   await page.locator('#owgDomainPackRole-lead').selectOption('case');
+  // Fractional minimum must not invalidate a whole-number default.
+  const qualification=page.locator('#owgDomainPackParam-qualification_hours');
+  assert.equal(await qualification.inputValue(),'48');
+  assert.equal(await qualification.evaluate(n=>n.checkValidity()),true);
+  await qualification.fill('0.5');
+  assert.equal(await qualification.evaluate(n=>n.checkValidity()),true);
+  await qualification.fill('0.1');
+  assert.equal(await qualification.evaluate(n=>n.checkValidity()),false);
+  await qualification.fill('48');
   for(const [role,name] of Object.entries({create_lead:'Lead created',qualify_lead:'Qualified',create_opportunity:'Opportunity created',review_lead:'Reviewed'}))
     await page.locator('#owgDomainPackRole-'+role).selectOption(name);
   await page.locator('#owgDomainPackInstall').click();
