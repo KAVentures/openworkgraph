@@ -81,7 +81,7 @@ def test_metric_specs_are_validated():
         {"level": "events", "metrics": [WAIT], "measures": [{"fn": "count"}]},
         {"level": "cases", "metrics": [{**WAIT, "name": "Bad Name"}], "measures": [{"fn": "count"}]},
         {"level": "cases", "metrics": [{**WAIT, "kind": "sql"}], "measures": [{"fn": "count"}]},
-        {"level": "cases", "metrics": [{"name": "x", "kind": "event_attribute_sum", "attribute": 'a"b', "unit": "EUR"}],
+        {"level": "cases", "metrics": [{"name": "x", "kind": "event_attribute_sum", "attribute": "a\x01b", "unit": "EUR"}],
          "measures": [{"fn": "count"}]},
         {"level": "cases", "metrics": [{"name": "x", "kind": "event_attribute_sum", "attribute": "a", "unit": "<b>"}],
          "measures": [{"fn": "count"}]},

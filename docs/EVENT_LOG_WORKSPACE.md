@@ -149,6 +149,13 @@ shift them. Signs, exponents, separators and longer values are rejected as
 unparseable. Format detection offers them when every sampled value is a
 plain number of 9–10 (seconds) or 12–13 (milliseconds) digits.
 
+Excel serial date numbers (`45355.5868055556` for 4 March 2024 14:05, as some
+CSV files saved from spreadsheets contain) use the named format `excel-serial`:
+days since 1899-12-30 (Excel's 1900 date system) with the time of day as the
+fraction, rounded to the millisecond. They are local times, so the import also
+needs the offset decision. Format detection offers it when every sampled value
+is a number from 20000 to 99999 (1954 to 2173), optionally with decimals.
+
 Every value must match the pattern exactly. A value with trailing text, an
 impossible date such as 31/02, or a value in another layout is rejected as
 unparseable, not guessed. A pattern without `%z` describes times without an
@@ -193,6 +200,17 @@ header, optional `other_headers` with columns for up to three other delimiters,
 and optional `preferred_log_id`. Each match includes its
 `missing_attribute_columns`.
 
+### Separate date and time columns
+
+Some exports, such as SAP and other ERP change documents, put the date and the time of day in two
+columns ("Posting Date" and "Time"). Choose the date column as the timestamp column and the other as
+**Time-of-day column** (`time_column=` on the import, append, preview and format-detection routes).
+Each row is read as the date, a space and the time, so a declared format covers both, for example
+`%d.%m.%Y %H:%M:%S`. A row without a time keeps only its date, which a format with a time rejects
+rather than reading as midnight. A row without a date has no timestamp. The time column is recorded
+in the import's transform. The dashboard preselects both when a file has a column named like a date
+and another named like a time.
+
 ### Preview a CSV mapping
 
 Use **Preview CSV mapping** before confirming storage. OWG shows the accepted
@@ -205,6 +223,15 @@ identities when appending.
 An import or append runs one at a time. You can prepare another file while a
 save is running. The completed save keeps newer file and mapping choices in
 the form.
+
+### Unnamed and duplicate columns
+
+Column names must be non-empty and unambiguous (not repeated, also ignoring case), so a mapping can
+never pick a different column than the one you meant; a file with an empty or repeated column name
+is refused. One exception: many exports end every line with a delimiter (`case;activity;time;`),
+which leaves one unnamed last column. That column is ignored when it is empty in every row. If it
+holds a value in any row the file is refused, rather than a value being dropped silently, and two or
+more unnamed trailing columns are still refused.
 
 ### SQLite database files
 
@@ -453,7 +480,7 @@ AI bearer tokens and MCP clients cannot read or change imported business logs.
 | `POST /v1/event-logs/{log_id}/delete` | Delete the log and every row that belongs to it. |
 | `GET`/`POST /v1/event-logs/{log_id}/expiry` (`{"delete_after": ISO time \| null}`) | Read, set or clear the date after which the log is deleted automatically (below). |
 | `POST /v1/event-logs/{log_id}/export/matching-cases` | Download matching cases. Body contains `cohort` and optional `case_id`, `include_unfiltered`, `case_type`, `events_from` and `events_before`. Query `format` is `csv` (default), `csv-attributes`, `csv-review`, `jsonl`, `xes`, `xes-attributes`, `ocel`, `ocelxml`, `sourcecsv`, or `sourcecsv-review`. Source-ID formats require the `source_case` notion. |
-| `POST /v1/event-logs/{log_id}/export/matching-cases.xlsx` | Download matching cases as an Excel workbook. The body is the same as for `export/matching-cases`. The worksheet holds the exact CSV rows as text cells, at most 1,048,575 events. |
+| `POST /v1/event-logs/{log_id}/export/matching-cases.xlsx` | Download matching cases as an Excel workbook. The body is the same as for `export/matching-cases`. Worksheets hold the exact CSV rows as text cells, 1,048,575 events each, continuing on further worksheets up to 16. |
 | `POST /v1/event-logs/{log_id}/derive` | Save the cases matching a filter as a new log (below). |
 | `POST /v1/event-logs/combine` | Combine 2 to 10 saved logs into a new log (below). |
 | `GET /v1/event-logs/{log_id}/quality` | Stored quality and mapping reports per import and append, plus current whole-log diagnostics (below). |
@@ -884,15 +911,19 @@ by literal case key, with an optional `limit` of 1–100 (default 50). Send the 
 `next_after` as `after` to continue. If the cluster changes, rerun the report to get
 its current key. This route requires a dashboard session.
 
-From **Inspect cases**, **Tag cases matching this cluster** can mark the cases
-whose current paths match that cluster, within the case scope used to build it.
-Preview the count and sample before applying; existing tag notes on matching
-cases will be replaced. The preview is checked again at save time, so changes to
-the matching cases or existing notes require another preview. The selected paths
-are re-evaluated on the current log, not a frozen report-time case list. When a
-cluster cannot fit the bounded variant filter, request size, or 100,000-case
-tagging limit, tagging is not available; inspect or download its case list instead. Tagging does not change
-stored events and the cluster report must be run again afterward.
+From **Inspect cases**, **Tag cases in this cluster** recomputes the cluster in
+the original case scope and can mark its current members, including clusters
+whose paths cannot fit a variant filter. Preview the count and sample before
+applying; existing tag notes on matching cases will be replaced. The preview is
+checked again at save time, so changes to membership or existing notes require
+another preview. The cluster is recomputed on the current log, not a frozen
+report-time case list. Tagging is limited to 100,000 cases; inspect or download
+larger case lists instead. Tagging does not change stored events and the cluster
+report must be run again afterward. `POST /v1/event-logs/{log_id}/trace-clusters/tag/preview`
+accepts the clustering settings, `cluster_key`, tag and note; apply with the
+same settings and `expected_selection_sha256` at `/trace-clusters/tag`. Both
+routes require a dashboard session. The server rechecks membership and existing
+notes under the workspace lock and applies the tag transactionally.
 
 **Download cluster report JSON** includes the original request, the complete
 returned cluster summary, settings and case notion. The CSV gives one row per
@@ -3072,6 +3103,15 @@ with the score and its volume, routine and waiting components, occurrences, case
 rate, routing pattern, same-predecessor and same-successor shares, median wait before, resources
 and repeats per case. Cells that a spreadsheet would read as formulas start with `'`.
 
+### Estimating the time automation could free
+
+Below the ranking, **Estimate** turns the top candidates into hours-per-week ranges (and, with an hourly cost,
+cost-per-year ranges) from assumptions you enter: the minutes one occurrence takes, low and high. The log only
+supplies occurrences per week. The share automation could take over is assumed per routing pattern (fixed
+60-90 %, mostly fixed 30-60 %, variable 0-30 %) and shown with the result. Every figure is a range labelled
+measured or assumed, not a measured saving. `POST /v1/event-logs/{log_id}/automation-estimate` with
+`{"handling_minutes": [low, high], "automatable_share"?, "hourly_cost"?, "limit"?}`; the active case filter applies.
+
 ## Performance spectrum
 
 The performance spectrum shows how long each step-to-step segment took, over calendar time. It
@@ -3394,8 +3434,11 @@ Each period needs at least 10 cases; a start-date case filter cannot be combined
 Both models are drafts from their own cases, and a change in how events are recorded looks the same
 as a change in the work.
 
-`GET /v1/event-logs/{log_id}/model-change?split=2024-03-01&noise=0.2` plus the other case-filter
-parameters. Agents use `get_process_model_change` (aggregates only).
+`GET /v1/event-logs/{log_id}/model-change?split=2024-03-01&noise=0.2&activities=1` plus the other case-filter
+parameters. **Activities shown** (`activities`, a share of events, most frequent activities first) keeps a
+log with more activities than a model holds comparable, as in model discovery and model quality; both the
+period and the group comparison take it. Agents use `get_process_model_change` (aggregates only), which picks
+a share that fits automatically.
 
 **Compare groups** in the same section runs the comparison between two groups of cases chosen by
 case attribute values, such as `region=EU` and `region=US`, as Celonis compares org units (a value
@@ -3611,6 +3654,40 @@ tagged. Tagging again with the same tag does not duplicate it.
 body, plus the case-filter parameters (`tag` there is the filter for cases already tagged, so the
 new tag is `new_tag`). A tag is the analyst's label, not a finding.
 
+### Structural and behavioral net validation
+
+After replaying a net, expand **Structural and behavioral net validation** and choose **Validate net soundness**. This checks the *model*, independently of observed cases or cohort filters. A log can fit an unsound net, and a sound net need not fit a particular log.
+
+The checker explores reachable markings by firing enabled ordinary place/transition net transitions. For a completely explored finite graph it verifies classical workflow-net soundness: unique marked source and sink, all nodes on a structural source-to-sink path, the option to reach the exact final marking from every reachable marking, proper completion, and no dead transitions. It also reports one-safeness separately (a weighted sound net need not be one-safe), final-marking reachability, deadlock and non-completing marking witnesses. Witnesses use transition IDs and reached token counts, not guessed business activity order. Cycles with exits can be sound while allowing an infinite execution. The separate **Every maximal execution completes** property is verified only if complete exploration establishes an acyclic reachability graph and no reachable nonfinal deadlock. An observed repeatable cycle refutes that stronger guarantee even in a partial graph; the report includes an entry marking, a transition sequence reaching it, and a cycle returning to it. No fairness, scheduling or time assumptions are made. The shortest completion is measured in transition firings (including silent transitions); the longest execution is reported only when every maximal execution is guaranteed to complete. Truncated witnesses are explicitly marked as prefixes, not independently replayable complete paths.
+
+Results have three possible values: **Verified**, **Failed**, and **Inconclusive**. Limits are 200 places, 300 transitions, 5,000 reachable markings, 256 tokens per place and 300,000 transition checks. If a limit is reached, an observed counterexample remains valid; unexplored absence is not evidence of soundness, dead transitions, or unboundedness. The checker does not approximate high-level, reset, inhibitor or other extended nets, does not guess final markings, and rejects unrecognized semantic/tool-specific extensions. Some otherwise replayable external PNML files may consequently be refused. The supported subset is the explicitly marked ordinary PNML P/T net, including OWG-generated nets.
+
+The dashboard can download a JSON report containing the input PNML SHA-256, coverage, property verdicts, limits and counterexamples. The local dashboard-session-only endpoint is `POST /v1/event-logs/petri-soundness` with the raw PNML body (at most 2 MB); returns JSON with `Cache-Control: no-store`. No net or report is retained by this operation, and no connector or business-action authorization is implied.
+
+### Compare completed behavior of two Petri-net revisions
+
+In **Structural and behavioral net validation**, expand **Compare two model revisions**. Replay the baseline model, select the candidate PNML file, and choose **Compare completed behavior**. The checker independently constructs bounded reachable marking graphs and compares their visible completed-trace languages using epsilon closure and a product of determinized marking subsets. Silent transitions do not consume activities; duplicate labels are handled nondeterministically. Only the exact final marking accepts a trace, including the empty trace where applicable.
+
+Two directional results distinguish candidate regressions (baseline traces removed) from expanded behavior (new traces allowed by the candidate). The first discovered distinguishing trace in each direction is shortest by number of visible activities. A complete comparison can prove equality or inclusion even when the language is infinite, as with a loop. If either marking graph is incomplete, neither inclusion is established. A product-search limit leaves unproved properties inconclusive; an already discovered distinguishing trace remains evidence of non-inclusion. The product is limited to 3,000 subset pairs and 500,000 counted exploration work units, in addition to the soundness checker's per-model bounds. Transition labels are bounded to 200 characters and long witness sequences are marked as truncated.
+
+**Download model comparison (JSON)** exports both submitted model digests, coverage, directional verdicts and witnesses. The owner-only, non-retained endpoint is `POST /v1/event-logs/petri-language-comparison` with `Content-Type: application/octet-stream`. Its body contains the unsigned four-byte big-endian length of the baseline, then exactly that many baseline bytes, then the candidate bytes. Each model is limited to 2 MB. Digests identify the exact submitted bytes (the dashboard encodes its current replayed baseline text as UTF-8 and sends the candidate file bytes unchanged).
+
+This is completed **visible trace language** equivalence, not branching-time equivalence, identical concurrency, absence of deadlocks, guaranteed termination, policy compliance, equal costs/timing or business-outcome equivalence. Use soundness and independent evidence alongside it; no result grants execution authority.
+
+### Verify declared compliance rules on a Petri-net model
+
+Expand **Verify declared compliance rules on the model** in the structural and behavioral validation panel. Use the rule builder or paste an editable JSON object containing a `rules` array. It accepts the same five untimed activity-only templates as the existing log compliance checker: `response`, `chain_response`, `precedence`, `not_coexistence` and `existence`. Labels match exactly. Time-bounded response and segregation-of-duties rules are explicitly refused: an ordinary P/T net does not model timestamps or resources.
+
+For each rule and the entire suite jointly, OWG explores the product of reachable Petri markings and deterministic finite rule-monitor states. Silent transitions do not count as visible steps. Only completed traces ending at the exact final marking are classified. The joint check matters: two rules can each be satisfiable on different executions while no single completed execution satisfies both.
+
+Results distinguish verified satisfaction, observed counterexamples, vacuous-only satisfaction, absence of any completed trace, and inconclusive exploration. A rule that is never activated is not evidence that its required step occurs. A model with no completed trace is not reported as verified. Each result includes the possibility of satisfying, violating, activated satisfying and vacuous traces, with concrete witness sequences when found. The search prioritizes shortest visible paths and then total firings; incomplete marking graphs may hide shorter witnesses. Long traces are explicitly marked as prefixes. Rule indices in witnesses refer to the zero-based original ordered suite.
+
+Optionally upload a candidate revision to compare against the same baseline and rule suite. A change from no possible violating trace to a possible violation is a model-policy regression; the reverse is a removal of that possibility. Unchanged possibility is not proof of identical violating trace languages. See the separate completed-behavior comparison for exact visible trace equivalence. The JSON export pins both model byte digests, canonical normalized rule-suite digest, all rules, witnesses and search coverage.
+
+The owner-only endpoint is `POST /v1/event-logs/petri-policy-review`, with `Content-Type: application/octet-stream`. The frame is a four-byte unsigned big-endian rule JSON byte count, that many UTF-8 rule JSON bytes, a four-byte unsigned big-endian baseline byte count, that many baseline PNML bytes, then optional candidate PNML bytes. Rules are limited to 64 KiB and 20 entries; each model is limited to 2 MiB. Unknown keys, duplicate rules, duplicate JSON keys and unsupported templates are refused. A maximum of 10,000 product states per check and 600,000 counted work units per model is enforced in addition to the marking-graph bounds. Later checks may be inconclusive when the shared budget is exhausted. The response is non-retained and `Cache-Control: no-store`.
+
+These are model-level untimed activity trace properties, not legal compliance, real-world case evidence, policy approval or a grant of agent execution authority. A completed-trace property does not by itself establish that all executions complete; use the separate soundness and termination checks.
+
 ### Process trees (PTML) from PM4Py and ProM
 
 The file picker also accepts a **process tree** in PTML, as `pm4py.write_ptml` and ProM's Inductive
@@ -3747,7 +3824,7 @@ through `get_process_decision_rules` (see PROCESS_INTELLIGENCE_FOR_AGENTS.md).
 
 ### Excel event-log export
 
-Dashboard owners can download a saved log as an Excel workbook (`GET /v1/event-logs/{log_id}/events.xlsx`). The workbook preserves case IDs, activities, timestamps, and resources as literal text cells, with a frozen header and filter. It is a CSV-equivalent view rather than an OCEL relationship export.
+Dashboard owners can download a saved log as an Excel workbook (`GET /v1/event-logs/{log_id}/events.xlsx`). The workbook preserves case IDs, activities, timestamps, and resources as literal text cells, with a frozen header and filter. It is a CSV-equivalent view rather than an OCEL relationship export. A worksheet holds at most 1,048,575 events, so a larger log continues on further worksheets ("Events 2", "Events 3", ...), each with the header row, up to 16 worksheets (about 16.7 million events). To read it back, import the first worksheet and append the others.
 
 ### Parquet event-log export
 
@@ -3766,6 +3843,15 @@ events. The workspace's Parquet import reads the file back to the same events.
 ### Rework and loop case evidence
 
 The local rework report shows the total number of repeated activities and recorded loop patterns, with an adjustable display limit of 20, 50 or 100. JSON and CSV downloads contain the displayed results and the JSON includes the selected cohort and analysis settings. The report offers explicit case-evidence links for repeated activities and exact closed activity loops. Selectors respect the active case cohort and retain literal event order; timestamp ties do not establish business order.
+
+### Keeping hidden-activity selections intact
+
+The hide-activities picker includes all currently hidden labels, even when they
+fall outside the initial 2,000 frequent activities. Search original labels and
+page through matches to add other activities to the picker without changing
+the current selection. The dashboard checks that
+the saved hidden set has not changed since it loaded. If another view changed
+it, reload before saving; the stale selection is not applied.
 
 ### Exact activity labels in due-date and breakdown reports
 
@@ -3788,3 +3874,11 @@ The dashboard-session endpoint `POST /v1/event-logs/{log_id}/activity-mappings/t
 accepts `{ "format": "openworkgraph.activity-mapping.v1", "mapping": { ... } }`.
 It validates and previews the definition against original event labels without
 changing the log or its saved mappings.
+
+### Exact activities in compliance rules
+
+Activity A and B accept an exact label in place of the suggested activity. Use
+**Find labels** to search the current case notion, then add and check the rule.
+The checked definition is also used for violation evidence and saved signals.
+Adding or removing a queued rule clears the previous check; run it again to
+review violations or save a signal.
