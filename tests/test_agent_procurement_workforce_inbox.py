@@ -91,3 +91,37 @@ def test_two_writers_same_revision_only_one_advances(local_db):
     with ThreadPoolExecutor(max_workers=2) as pool:
         result=list(pool.map(attempt,[packet("a",a),packet("b",b)]))
     assert sum(result)==1 and status()["inbox_revision"]==1
+
+
+def incident_packet(alias,key,when,flag):
+    from server import agent_procurement_workforce_signing as signing
+    from test_agent_procurement_workforce_exchange import row,pinned
+    item=row(alias);item["rollback_review"]=flag
+    return signing.sign_packet(key,pinned(alias,[item],when=when)["packet"])
+
+
+def test_sticky_rollback_signal_survives_clean_packet_and_removal(local_db):
+    key=Ed25519PrivateKey.generate();configure(0,"a",key)
+    first=admit(status(),incident_packet("a",key,100,True))
+    assert len(first["retained_rollback_signals"])==1
+    original=first["retained_rollback_signals"][0]
+    second=admit(first,incident_packet("a",key,101,False))
+    assert second["retained_rollback_signals"]==[original]
+    third=admit(second,incident_packet("a",key,102,True))
+    item=third["retained_rollback_signals"][0]
+    assert item["first_packet_sha256"]==original["first_packet_sha256"]
+    assert item["last_exported_ms"]==102
+    result=inbox.review(scope(third),now=150)
+    assert result["retained_rollback_signals"]==[item]
+    req=scope(status());req.pop("maximum_packet_age_ms")
+    assert inbox.forget(req)["retained_rollback_signals_preserved"]
+    assert status()["retained_rollback_signals"]==[item]
+
+
+def test_incident_capacity_rolls_back_packet_admission(local_db,monkeypatch):
+    key=Ed25519PrivateKey.generate();configure(0,"a",key)
+    old=status()
+    monkeypatch.setattr(inbox,"MAX_INCIDENTS",0)
+    with pytest.raises(journal.JournalError,match="capacity"):
+        admit(old,incident_packet("a",key,100,True))
+    assert status()==old

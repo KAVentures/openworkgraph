@@ -21,6 +21,7 @@ from . import db
 
 MAX_PACKET_BYTES=4*1024*1024
 MAX_TOTAL_BYTES=32*1024*1024
+MAX_INCIDENTS=2000
 Age=Annotated[StrictInt,Field(ge=1,le=366*24*3600000)]
 
 
@@ -53,6 +54,12 @@ def _schema(conn):
         exported_at_ms INTEGER NOT NULL,packet_sha256 TEXT NOT NULL,
         packet_json TEXT NOT NULL,admitted_at_ms INTEGER NOT NULL,
         PRIMARY KEY(namespace,alias))""")
+    conn.execute("""CREATE TABLE IF NOT EXISTS procurement_workforce_inbox_incidents (
+        namespace TEXT NOT NULL,alias TEXT NOT NULL,journal_tag TEXT NOT NULL,
+        first_seen_ms INTEGER NOT NULL,last_seen_ms INTEGER NOT NULL,
+        first_packet_sha256 TEXT NOT NULL,last_packet_sha256 TEXT NOT NULL,
+        first_exported_ms INTEGER NOT NULL,last_exported_ms INTEGER NOT NULL,
+        PRIMARY KEY(namespace,alias,journal_tag))""")
 
 
 def _revision(conn):
@@ -108,6 +115,34 @@ def _classify(row,member,now,age):
     return "available"
 
 
+def _retain_incidents(conn,ns,alias,packet,now):
+    """Preserve first and latest signed rollback flags; never infer clearance."""
+    tags=sorted({r.journal_tag for r in packet.packet.rows if r.rollback_review})
+    if not tags:return
+    existing={r[0] for r in conn.execute(
+        "SELECT journal_tag FROM procurement_workforce_inbox_incidents WHERE namespace=? AND alias=?",
+        (ns,alias))}
+    count=conn.execute("SELECT COUNT(*) FROM procurement_workforce_inbox_incidents").fetchone()[0]
+    if count+len(set(tags)-existing)>MAX_INCIDENTS:
+        raise journal.JournalError("Retained rollback signal capacity reached; export and explicitly review incident history",409)
+    stamp=packet.packet.exported_at_ms;pin=packet.expected_packet_sha256
+    for tag in tags:
+        conn.execute("""INSERT INTO procurement_workforce_inbox_incidents VALUES (?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(namespace,alias,journal_tag) DO UPDATE SET
+            last_seen_ms=excluded.last_seen_ms,last_packet_sha256=excluded.last_packet_sha256,
+            last_exported_ms=excluded.last_exported_ms
+            WHERE excluded.last_exported_ms>procurement_workforce_inbox_incidents.last_exported_ms""",
+            (ns,alias,tag,now,now,pin,pin,stamp,stamp))
+
+
+def _incidents(conn,ns):
+    fields=("installation_alias","journal_tag","first_seen_ms","last_seen_ms",
+            "first_packet_sha256","last_packet_sha256","first_exported_ms","last_exported_ms")
+    return [dict(zip(fields,tuple(r))) for r in conn.execute("""SELECT alias,journal_tag,first_seen_ms,last_seen_ms,
+        first_packet_sha256,last_packet_sha256,first_exported_ms,last_exported_ms
+        FROM procurement_workforce_inbox_incidents WHERE namespace=? ORDER BY alias,journal_tag""",(ns,))]
+
+
 def _inventory(conn,ns,now,age):
     active=_active(conn,ns);stored=_stored(conn,ns);rows=[]
     for alias in sorted(set(active)|set(stored)):
@@ -124,7 +159,7 @@ def _inventory(conn,ns,now,age):
         "inbox_revision":_revision(conn),"correlation_namespace_sha256":ns,"as_of_ms":now,
         "maximum_packet_age_ms":age,"active_installations":len(active),
         "ready_for_complete_review":bool(active) and all(r["status"]=="available" for r in rows if r["active"]),
-        "entries":rows,"execution_authorized":False,"organization_identity_verified":False}
+        "entries":rows,"retained_rollback_signals":_incidents(conn,ns),"execution_authorized":False,"organization_identity_verified":False}
 
 
 def status(document,*,now=None):
@@ -172,6 +207,7 @@ def admit(document,*,now=None):
             public_key=excluded.public_key,exported_at_ms=excluded.exported_at_ms,
             packet_sha256=excluded.packet_sha256,packet_json=excluded.packet_json,admitted_at_ms=excluded.admitted_at_ms""",
             (ns,alias,public,stamp,pin,encoded,now))
+        _retain_incidents(conn,ns,alias,packet,now)
         _advance(conn)
         return {**_inventory(conn,ns,now,req.maximum_packet_age_ms),"idempotent_replay":False}
 
@@ -193,6 +229,8 @@ def review(document,*,now=None):
         result.pop("report_sha256")
         result["format"]="openworkgraph.workforce-inbox-review.v1"
         result["inbox_revision"]=_revision(conn)
+        result["retained_rollback_signals"]=_incidents(conn,ns)
+        result["retained_rollback_signals_are_review_referrals_only"]=True
         result["limitations"].append("Review uses the latest explicitly admitted signed snapshot for each active site. No remote transport, live presence, or proof of organizational completeness.")
         return {**result,"report_sha256":digest(result)}
 
@@ -203,7 +241,8 @@ def forget(document):
         conn.execute("BEGIN IMMEDIATE");_schema(conn);_check(conn,req)
         count=conn.execute("DELETE FROM procurement_workforce_inbox WHERE namespace=?",
                            (req.correlation_namespace_sha256,)).rowcount
+        # Explicit removal of packet contents preserves the minimized incident ledger.
         if count:_advance(conn)
-        return {"removed_packets":count,"inbox_revision":_revision(conn),
+        return {"removed_packets":count,"retained_rollback_signals_preserved":True,"inbox_revision":_revision(conn),
             "registry_revision":trust._revision(conn),"accepted_registry_watermarks_preserved":True,
             "physical_erasure_verified":False,"execution_authorized":False}

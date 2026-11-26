@@ -159,7 +159,7 @@ cohort is silently presented as a complete review.
 
 Explicit namespace removal deletes retained packet contents, not accepted
 registry watermarks; unreviewed staging history is discarded. Physical
-backup/export erasure is not established. The inbox retains latest content,
+backup/export erasure is not established. The inbox retains latest packet content plus minimized sticky rollback signals,
 not an append-only remote incident history. All results retain the existing
 source authenticity, completeness, causal and organization identity limits.
 
@@ -168,3 +168,13 @@ correlation_namespace_sha256 and maximum_packet_age_ms. inbox-admit adds
 expected_revision, expected_inbox_revision, confirmed=true, signed_packet.
 inbox-review uses the same fields without signed_packet. inbox-forget uses
 namespace, the two revisions and confirmed=true, without maximum age.
+
+Signed rollback-review flags from admitted packets are retained separately by
+namespace, alias and opaque journal tag, with first/latest packet pins and
+reported timestamps. A later clean packet, absent journal, revoked key or
+explicit packet-content removal does not clear these signals. They are
+review referrals, not proof of harm or a remote rollback action. The 2,000
+signal global cap fails closed on new signals; no silent pruning or automatic
+clearance is implemented. An operator can export the minimized inbox status;
+no full historical packet is retained for each signal. A local database
+owner can alter this history; it is not an external immutable audit log.

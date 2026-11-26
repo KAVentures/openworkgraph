@@ -2215,6 +2215,10 @@
         el('p',value.ready_for_complete_review?'Every active site has a fresh verified packet.':'Complete review blocked: missing, stale, changed-key or superseded packets.'),
         el('p','Active installations: '+value.active_installations));
       const list=el('ul');for(const entry of value.entries)list.appendChild(el('li',entry.installation_alias+' · '+entry.status+(entry.exported_at_ms!==null?' · '+new Date(entry.exported_at_ms).toISOString():'')+(entry.packet_sha256?' · '+entry.packet_sha256:'')));inboxOutput.appendChild(list);
+      const incidents=value.retained_rollback_signals||[];
+      inboxOutput.appendChild(el('h5','Retained rollback review signals: '+incidents.length));
+      const retained=el('ul');for(const item of incidents)retained.appendChild(el('li',item.installation_alias+' · '+item.journal_tag.slice(0,12)+' · last reported '+new Date(item.last_exported_ms).toISOString()));
+      inboxOutput.append(retained,download(value,'owg-workforce-inbox-status'));
     };
     const loadInbox=async()=>{
       const scope=inboxScope();const value=await inboxCall('inbox-status',JSON.stringify(scope));
@@ -2243,7 +2247,7 @@
     }));
     const forgetInbox=button('Remove retained packets in namespace',()=>inboxPerform(async()=>{
       const scope=pinnedScope();delete scope.maximum_packet_age_ms;
-      if(!window.confirm('Remove this namespace’s retained packet contents? Accepted registry watermarks remain. Backups and exports are not erased.'))return;
+      if(!window.confirm('Remove this namespace’s retained packet contents? Accepted registry watermarks and minimized rollback signals remain. Backups and exports are not erased.'))return;
       await inboxCall('inbox-forget',JSON.stringify(scope));await loadInbox();
     }));
     for(const [label,input] of [['Correlation namespace',inboxNs],['Maximum age in hours',age]]){const l=el('label',label+' ');l.appendChild(input);inboxSection.appendChild(l);}
