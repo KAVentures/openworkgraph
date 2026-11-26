@@ -21,11 +21,14 @@ MAX_BYTES = 2 * 1024 * 1024
 MAX_NODES = 250
 MAX_FLOWS = 600
 MAX_SCOPE_DEPTH = 12
+MAX_PROCESSES = 40
+MAX_EXPANDED_NODES = 500
+MAX_EXPANDED_FLOWS = 1200
 NS = "http://www.omg.org/spec/BPMN/20100524/MODEL"
 DI = "http://www.omg.org/spec/BPMN/20100524/DI"
 TASKS = {"task", "userTask", "manualTask", "serviceTask", "scriptTask", "businessRuleTask"}
 GATEWAYS = {"exclusiveGateway", "parallelGateway"}
-NODES = TASKS | GATEWAYS | {"startEvent", "endEvent", "subProcess"}
+NODES = TASKS | GATEWAYS | {"startEvent", "endEvent", "subProcess", "callActivity"}
 FORBIDDEN = re.compile(rb"<!\s*(DOCTYPE|ENTITY)", re.IGNORECASE)
 
 
@@ -129,7 +132,7 @@ def _parallel_pairs(nodes, successors, predecessors, end):
     return pairs
 
 
-def to_pnml(data: bytes):
+def to_pnml(data: bytes, process_id: str | None = None):
     if len(data) > MAX_BYTES:
         _fail("BPMN file is larger than 2 MB")
     if b"\x00" in data or FORBIDDEN.search(data):
@@ -147,20 +150,42 @@ def to_pnml(data: bytes):
             processes.append(child)
         elif child.tag != "{" + DI + "}BPMNDiagram" and child.tag != _tag("documentation"):
             _fail("unsupported BPMN definitions element: " + child.tag.rsplit("}", 1)[-1])
-    if len(processes) != 1:
-        _fail("direct replay requires exactly one independent BPMN process")
-    process = processes[0]
-    _attrs(process, {"id", "name", "isExecutable", "processType", "isClosed"})
-    pid = _id(process)
-    if process.get("processType") not in (None, "None", "Private") or process.get("isClosed") not in (None, "false", "0"):
-        _fail("only independent private process control flow is supported")
-    context = {"ids": {pid}, "nodes": 0, "flows": 0}
-    scope = _read_scope(process, context, depth=0)
+    if not 1 <= len(processes) <= MAX_PROCESSES:
+        _fail("direct replay requires 1–40 independent process definitions")
+    definitions = {}
+    for process in processes:
+        _attrs(process, {"id", "name", "isExecutable", "processType", "isClosed"})
+        pid = _id(process)
+        if pid in definitions:
+            _fail("duplicate BPMN process identifier: " + pid)
+        if process.get("processType") not in (None, "None", "Private") or process.get("isClosed") not in (None, "false", "0"):
+            _fail("only independent private process control flow is supported")
+        definitions[pid] = process
+    if process_id is not None and (not isinstance(process_id, str) or process_id not in definitions):
+        _fail("selected BPMN process is not present")
+    if process_id is None:
+        if len(definitions) != 1:
+            _fail("multiple BPMN processes: explicitly select a process ID")
+        process_id = next(iter(definitions))
+    pid = process_id
+    process = definitions[pid]
+    context = {"ids": set(definitions), "nodes": 0, "flows": 0}
+    scopes = {ident: _read_scope(element, context, depth=0)
+              for ident, element in sorted(definitions.items())}
+    # Validate every definition, including unused ones. Resolve only exact
+    # unqualified local IDs; external QName bindings are not guessed.
+    for ident in sorted(scopes):
+        _expanded_size(scopes[ident], scopes, (ident,), 0, [0, 0])
+    scope = scopes[pid]
+    expanded = [0, 0]
+    _expanded_size(scope, scopes, (pid,), 0, expanded)
     net = pnml._Net()
     source, sink = net.place(), net.place()
     evidence = {"node_transition_ids": {}, "flow_place_ids": {}, "parallel_pairs": {},
-                "scope_by_node": {}, "scope_by_flow": {}, "subprocess_boundaries": {}}
-    _emit_scope(net, scope, source, sink, evidence)
+                "scope_by_node": {}, "scope_by_flow": {}, "subprocess_boundaries": {},
+                "call_boundaries": {}, "node_instances": [], "flow_instances": [],
+                "parallel_pair_instances": []}
+    _emit_scope(net, scope, source, sink, evidence, scopes, ())
     result_net = {"places": net.places, "transitions": net.transitions, "arcs": net.arcs,
                   "source": source, "sink": sink}
     xml = pnml.to_pnml(result_net, (process.get("name") or pid)[:200])
@@ -168,10 +193,12 @@ def to_pnml(data: bytes):
         _fail("converted PNML exceeds the replay byte limit")
     return {"format": "openworkgraph.bpmn_replay_conversion.v1", "pnml": xml,
             "bpmn_sha256": sha256(data).hexdigest(), "pnml_sha256": sha256(xml.encode()).hexdigest(),
-            "process_id": pid, "nodes": context["nodes"], "sequence_flows": context["flows"],
+            "process_id": pid, "available_process_ids": sorted(definitions),
+            "nodes": expanded[0], "sequence_flows": expanded[1],
+            "definition_nodes": context["nodes"], "definition_sequence_flows": context["flows"],
             "places": len(net.places), "transitions": len(net.transitions), **evidence,
             "caveat": "Only unconditional visible activity and routing token semantics are represented. "
-                      "Plain embedded subprocess wrappers are silent; their internal tasks remain visible. "
+                      "Plain embedded subprocess and local call wrappers are silent; their internal tasks remain visible. "
                       "No task code, data conditions, timing, resources, collaboration or execution authority is imported."}
 
 
@@ -183,6 +210,7 @@ def _read_scope(process, context, depth):
     elements = {}
     flows = {}
     children = {}
+    calls = {}
     for element in process:
         kind = _kind(element)
         if kind == "documentation" or (_kind(process) == "subProcess" and kind in {"incoming", "outgoing"}):
@@ -205,10 +233,12 @@ def _read_scope(process, context, depth):
             allowed = {"id", "name"}
             if kind in GATEWAYS:
                 allowed.add("gatewayDirection")
-            if kind in TASKS or kind == "subProcess":
+            if kind in TASKS or kind in {"subProcess", "callActivity"}:
                 allowed.add("isForCompensation")
             if kind == "subProcess":
                 allowed.add("triggeredByEvent")
+            if kind == "callActivity":
+                allowed.add("calledElement")
             if kind == "startEvent":
                 allowed.add("isInterrupting")
             _attrs(element, allowed)
@@ -223,6 +253,11 @@ def _read_scope(process, context, depth):
                 for c in element:
                     if c.tag not in {_tag("incoming"), _tag("outgoing"), _tag("documentation")}:
                         _fail("unsupported task, gateway or event semantics: " + c.tag.rsplit("}", 1)[-1])
+            if kind == "callActivity":
+                ref = element.get("calledElement")
+                if not ref or ":" in ref or len(ref) > 200 or any(c.isspace() for c in ref):
+                    _fail("call activity requires an unqualified local process ID: " + ident)
+                calls[ident] = ref
             nodes[ident] = kind
             elements[ident] = element
             label = element.get("name", "")
@@ -260,7 +295,7 @@ def _read_scope(process, context, depth):
             ok = (n_in, n_out) == (0, 1)
         elif kind == "endEvent":
             ok = (n_in, n_out) == (1, 0)
-        elif kind in TASKS or kind == "subProcess":
+        elif kind in TASKS or kind in {"subProcess", "callActivity"}:
             ok = (n_in, n_out) == (1, 1)
         elif kind == "parallelGateway":
             ok = (n_in == 1 and n_out >= 2) or (n_in >= 2 and n_out == 1)
@@ -280,16 +315,45 @@ def _read_scope(process, context, depth):
         _fail("every BPMN node must lie on a start-to-end graph path")
     pairs = _parallel_pairs(nodes, successors, predecessors, end)
     return {"id": _id(process), "nodes": nodes, "labels": labels, "flows": flows,
-            "incoming": incoming, "outgoing": outgoing, "pairs": pairs, "children": children}
+            "incoming": incoming, "outgoing": outgoing, "pairs": pairs, "children": children, "calls": calls}
 
 
-def _emit_scope(net, scope, source, sink, evidence):
+def _expanded_size(scope, scopes, ancestors, depth, totals):
+    if depth > MAX_SCOPE_DEPTH:
+        _fail("expanded BPMN subprocess/call nesting exceeds 12 levels")
+    totals[0] += len(scope["nodes"])
+    totals[1] += len(scope["flows"])
+    if totals[0] > MAX_EXPANDED_NODES or totals[1] > MAX_EXPANDED_FLOWS:
+        _fail("expanded BPMN call graph exceeds node or flow budget")
+    for ident in sorted(scope["children"]):
+        _expanded_size(scope["children"][ident], scopes, ancestors, depth + 1, totals)
+    for ident, ref in sorted(scope["calls"].items()):
+        if ref not in scopes:
+            _fail("unresolved local calledElement: " + ref)
+        if ref in ancestors:
+            _fail("recursive BPMN call activity: " + " -> ".join((*ancestors, ref)))
+        _expanded_size(scopes[ref], scopes, (*ancestors, ref), depth + 1, totals)
+
+
+def _instance_key(path, ident):
+    # Source IDs can contain arbitrary punctuation; length-prefix each call
+    # segment to avoid aliasing between distinct expansion paths.
+    return ident if not path else "@" + "".join(f"{len(x)}:{x}" for x in (*path, ident))
+
+
+def _emit_scope(net, scope, source, sink, evidence, scopes, path):
     nodes, labels = scope["nodes"], scope["labels"]
     incoming, outgoing = scope["incoming"], scope["outgoing"]
     flow_places = {fid: net.place() for fid in sorted(scope["flows"])}
-    evidence["flow_place_ids"].update(flow_places)
-    evidence["parallel_pairs"].update(scope["pairs"])
-    evidence["scope_by_flow"].update({fid: scope["id"] for fid in flow_places})
+    for fid, place in flow_places.items():
+        evidence["flow_place_ids"].setdefault(fid, place)
+        evidence["scope_by_flow"][fid] = scope["id"]
+        evidence["flow_instances"].append({"source_id": fid, "scope_id": scope["id"],
+                                           "call_path": list(path), "place_id": place})
+    for split, join in sorted(scope["pairs"].items()):
+        evidence["parallel_pairs"][split] = join
+        evidence["parallel_pair_instances"].append({"split_id": split, "join_id": join,
+                                                     "call_path": list(path)})
     for ident in sorted(nodes):
         kind = nodes[ident]
         inputs = [flow_places[f] for f in sorted(incoming[ident])]
@@ -303,14 +367,27 @@ def _emit_scope(net, scope, source, sink, evidence):
         elif kind == "subProcess":
             entry, exit = net.place(), net.place()
             enter = net.transition(None, inputs[0], entry)
-            _emit_scope(net, scope["children"][ident], entry, exit, evidence)
+            _emit_scope(net, scope["children"][ident], entry, exit, evidence, scopes, path)
             leave = net.transition(None, exit, outputs[0])
             tids = [enter, leave]
-            evidence["subprocess_boundaries"][ident] = {"entry_place_id": entry, "exit_place_id": exit,
-                                                        "entry_transition_id": enter, "exit_transition_id": leave}
+            evidence["subprocess_boundaries"].setdefault(ident, {"entry_place_id": entry, "exit_place_id": exit,
+                                                        "entry_transition_id": enter, "exit_transition_id": leave})
+        elif kind == "callActivity":
+            ref = scope["calls"][ident]
+            entry, exit = net.place(), net.place()
+            enter = net.transition(None, inputs[0], entry)
+            _emit_scope(net, scopes[ref], entry, exit, evidence, scopes, (*path, ident))
+            leave = net.transition(None, exit, outputs[0])
+            tids = [enter, leave]
+            evidence["call_boundaries"][_instance_key(path, ident)] = {
+                "source_id": ident, "called_process_id": ref, "call_path": list(path),
+                "entry_place_id": entry, "exit_place_id": exit,
+                "entry_transition_id": enter, "exit_transition_id": leave}
         elif kind == "exclusiveGateway":
             tids = [net.transition(None, a, b) for a in inputs for b in outputs]
         else:
             tids = [net.silent_between(inputs, outputs)]
-        evidence["node_transition_ids"][ident] = tids
+        evidence["node_transition_ids"].setdefault(ident, []).extend(tids)
         evidence["scope_by_node"][ident] = scope["id"]
+        evidence["node_instances"].append({"source_id": ident, "scope_id": scope["id"],
+                                           "call_path": list(path), "transition_ids": tids})
