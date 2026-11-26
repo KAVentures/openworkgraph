@@ -343,6 +343,10 @@ def brief(log_id: str, case_type: str | None = None, sla_hours: float | None = N
                              "by_signal": unusual["by_signal"]}
     except EventLogWorkspaceError as exc:
         parts_unavailable["unusual"] = str(exc)
+    from . import event_log_change_markers as cm
+    markers = cm.markers(log_id)["markers"]
+    result["owner_change_markers"] = [{"label": m["label"], "marked_at": m["marked_at"], "within_log": m["within_log"]}
+                                      for m in markers[-10:]]
     result["parts_unavailable"] = parts_unavailable
     result["next_tools"] = [
         {"tool": "get_process_insights", "for": "every ranked finding with the case filter that reproduces it"},
@@ -351,6 +355,7 @@ def brief(log_id: str, case_type: str | None = None, sla_hours: float | None = N
         {"tool": "get_process_next_steps", "for": "walking the process one step at a time"},
         {"tool": "get_process_root_cause", "for": "what goes with slow, reworked or other outcomes"},
         {"tool": "get_unusual_process_cases", "for": "the cases that stand out and why"},
+        {"tool": "get_process_drift", "for": "whether the process changed around the owner's change markers"},
     ]
     result["interpretation"] = ("A starting summary of recorded events, not a diagnosis. Model figures describe a "
                                 "draft discovered from this log; deviations and outliers are not errors.")
