@@ -59,6 +59,15 @@ async def object_state_check_witnesses(request: Request, log_id: str):
     return await run_in_threadpool(_respond, state.witnesses, log_id, spec)
 
 
+@router.post("/v1/event-logs/{log_id}/object-state-check/timeline")
+async def object_state_check_timeline(request: Request, log_id: str):
+    from . import event_log_object_state_check as state
+    _require_dashboard(request)
+    spec = await _json_body(request, "object state timeline settings", strict=True, limit=16384)
+    _require_dashboard(request)
+    return await run_in_threadpool(_respond, state.timeline, log_id, spec)
+
+
 @router.post("/v1/event-logs/{log_id}/object-state-check/labels")
 async def object_state_check_labels(request: Request, log_id: str):
     from . import event_log_object_state_labels as labels

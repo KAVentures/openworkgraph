@@ -15,6 +15,7 @@ from . import event_log_object_relationships as relationships
 MAX_EVENTS = 200_000
 MAX_LINKS = 1_000_000
 MAX_HISTORY_ROWS = 2_000_000
+MAX_TIMELINE_BUCKETS = 1000
 MAX_WORKLIST_BYTES = 512 * 1024 * 1024
 STATUSES = ("matched", "not_matched", "unknown", "no_linked_object")
 OBJECT_STATUSES = ("matched", "not_matched", "missing_history", "before_first_value", "ambiguous_value")
@@ -95,6 +96,11 @@ class WitnessSpec(Spec):
         return value
 
 
+class TimelineSpec(Spec):
+    expected_revision: int = Field(ge=0)
+    bucket: Literal['day', 'week', 'month']
+
+
 class ExportSpec(Spec):
     expected_revision: int = Field(ge=0)
     kind: Literal['events', 'objects']
@@ -140,6 +146,14 @@ def witnesses(log_id, value):
     except ValidationError:
         raise workspace.EventLogWorkspaceError('invalid event-time state witness request') from None
     return _analyze(log_id, spec, witness=True)
+
+
+def timeline(log_id, value):
+    try:
+        spec = TimelineSpec.model_validate(value)
+    except ValidationError:
+        raise workspace.EventLogWorkspaceError('invalid event-time state timeline request') from None
+    return _analyze(log_id, spec, timeline=True)
 
 
 def export_worklist(log_id: str, value, out: IO[str]):
@@ -201,7 +215,7 @@ def _write_worklist(conn, log_id: str, spec: ExportSpec, revision: int, out: IO[
     return {'rows':written}
 
 
-def _analyze(log_id, spec, witness=False, export=None):
+def _analyze(log_id, spec, witness=False, export=None, timeline=False):
     with workspace._LOCK:
         conn = workspace._connect()
         try:
@@ -286,6 +300,28 @@ def _analyze(log_id, spec, witness=False, export=None):
             total=conn.execute("SELECT count(*) FROM st_result "+where,args).fetchone()[0]
             if export is not None:
                 return _write_worklist(conn, log_id, spec, revision, export)
+            if timeline:
+                # Date truncation is UTC because imported timestamps are stored in UTC.
+                conn.execute("""CREATE TEMP TABLE st_buckets AS
+                    SELECT date_trunc(?, ts) AS bucket_start, count(*) AS total,
+                      count(*) FILTER (WHERE status='matched') AS matched,
+                      count(*) FILTER (WHERE status='not_matched') AS not_matched,
+                      count(*) FILTER (WHERE status='unknown') AS unknown,
+                      count(*) FILTER (WHERE status='no_linked_object') AS no_linked_object
+                    FROM st_result """ + where + " GROUP BY 1", [spec.bucket, *args])
+                count = conn.execute('SELECT count(*) FROM st_buckets').fetchone()[0]
+                if count > MAX_TIMELINE_BUCKETS:
+                    raise workspace.EventLogWorkspaceError('timeline exceeds 1,000 non-empty periods; choose a larger period or date window')
+                rows = conn.execute('SELECT * FROM st_buckets ORDER BY bucket_start LIMIT ? OFFSET ?',
+                                    [spec.limit, spec.offset]).fetchall()
+                return {'format':'openworkgraph.ocel-state-check-timeline.v1', 'log_id':log_id,
+                        'revision':revision, 'bucket':spec.bucket, 'matching_events':total,
+                        'total_buckets':count, 'offset':spec.offset,
+                        'next_offset':spec.offset+len(rows) if spec.offset+len(rows)<count else None,
+                        'rows':[{'start_utc':at.isoformat()[:10], 'events':n, 'matched':yes, 'not_matched':no,
+                                 'unknown':unknown, 'no_linked_object':none}
+                                for at,n,yes,no,unknown,none in rows],
+                        'historical_source_completeness_verified':False, 'policy_compliance_verified':False}
             if witness:
                 selected = conn.execute('SELECT n_objects, status FROM st_result' +
                                         (where + ' AND ' if where else ' WHERE ') + 'event_id=?',

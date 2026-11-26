@@ -4321,13 +4321,19 @@
     const exportEvents=button('Download event results (CSV)','secondary'),exportObjects=button('Download object evidence (CSV)','secondary');
     const exportStatus=el('div',null,'muted');exportStatus.setAttribute('role','status');
     exportBar.append(el('p','Downloads cover the applied result status and event ID filters and include event or object IDs and recorded values. Formula-like cells are escaped for spreadsheet review.','muted'),exportEvents,exportObjects,exportStatus);show(exportBar,false);
+    const trend=document.createElement('details');trend.id='owgObjectStateTimeline';
+    const trendBucket=select('owgObjectStateTimelineBucket',[['day','UTC day'],['week','UTC week (Monday start)'],['month','UTC month']]);
+    const trendRun=button('Show state timeline','secondary'),trendPrev=button('Previous timeline periods','secondary'),trendNext=button('Next timeline periods','secondary');
+    const trendStatus=el('div',null,'muted');trendStatus.setAttribute('role','status');const trendRows=el('div');
+    trend.append(el('summary','Outcome timeline'),el('p','Counts cover non-empty UTC periods and the applied result filters. These describe retained data and do not establish compliance.','muted'),field('Timeline period',trendBucket),trendRun,trendPrev,trendNext,trendStatus,trendRows);show(trend,false);
     const results=el('div');results.id='owgObjectStateResults';
     const witness=el('div');witness.id='owgObjectStateWitness';
-    box.append(form,el('p','Saved checks are stored locally with this log and can include exact recorded values. Loading one does not run it.','muted'),savedRow,savedStatus,transfer,notice,summary,resultControls,exportBar,results,witness);
+    box.append(form,el('p','Saved checks are stored locally with this log and can include exact recorded values. Loading one does not run it.','muted'),savedRow,savedStatus,transfer,notice,summary,resultControls,trend,exportBar,results,witness);
     const generation=state.generation,logId=state.logId,base='/v1/event-logs/'+encodeURIComponent(logId)+'/object-state-check';
-    let turn=0,witnessTurn=0,exportTurn=0,formVersion=0,settings=null,revision=null,offset=0,following=null;
+    let turn=0,witnessTurn=0,exportTurn=0,trendTurn=0,formVersion=0,settings=null,revision=null,offset=0,following=null;
     const current=t=>generation===state.generation&&box.isConnected&&t===turn;
-    const clear=()=>{++turn;++exportTurn;++formVersion;settings=null;revision=null;offset=0;following=null;run.disabled=false;notice.textContent='';exportStatus.textContent='';summary.replaceChildren();results.replaceChildren();witness.replaceChildren();show(resultControls,false);show(exportBar,false);};
+    const resetTrend=()=>{++trendTurn;trendRows.replaceChildren();trendStatus.textContent='';trendRun.disabled=false;trendPrev.disabled=trendNext.disabled=true;show(trend,false);};
+    const clear=()=>{++turn;++exportTurn;++formVersion;resetTrend();settings=null;revision=null;offset=0;following=null;run.disabled=false;notice.textContent='';exportStatus.textContent='';summary.replaceChildren();results.replaceChildren();witness.replaceChildren();show(resultControls,false);show(exportBar,false);};
     form.addEventListener('input',clear);form.addEventListener('change',clear);
     exact.addEventListener('change',()=>show(qualifierField,exact.checked));
     const statusLabel={matched:'Matched',not_matched:'Not matched',unknown:'Unknown',no_linked_object:'No linked object',missing_history:'No timed history',before_first_value:'Before first value',ambiguous_value:'Conflicting values'};
@@ -4464,7 +4470,7 @@
       prev.onclick=()=>page(index-1);nextPage.onclick=()=>{cursors[index+1]=following;page(index+1);};page(0);
     }
     async function load(spec,start,filter,pin){
-      const request=++turn;++exportTurn;run.disabled=true;resultFilter.disabled=findEvent.disabled=clearEvent.disabled=previous.disabled=next.disabled=true;show(exportBar,false);exportStatus.textContent='';
+      const request=++turn;++exportTurn;resetTrend();run.disabled=true;resultFilter.disabled=findEvent.disabled=clearEvent.disabled=previous.disabled=next.disabled=true;show(exportBar,false);exportStatus.textContent='';
       notice.textContent='Checking recorded state…';summary.replaceChildren();results.replaceChildren();witness.replaceChildren();
       try{
         const payload={...spec,offset:start,limit:30,...(filter?{status:filter}:{}),...(pin!==null?{expected_revision:pin}:{})};
@@ -4481,7 +4487,7 @@
           inspect.onclick=()=>inspectWitnesses(item,spec,filter,response.revision,request);
           return [item.event_id,item.at,statusLabel[item.status]||item.status,Number(item.linked_objects).toLocaleString(),Number(item.matched_objects).toLocaleString(),Number(item.not_matched_objects).toLocaleString(),Number(item.unknown_objects).toLocaleString(),inspect];
         })):el('p','No events match this result filter.','muted'));
-        show(resultControls,true);resultFilter.disabled=findEvent.disabled=clearEvent.disabled=false;previous.disabled=offset===0;next.disabled=following===null;
+        show(resultControls,true);show(trend,true);resultFilter.disabled=findEvent.disabled=clearEvent.disabled=false;previous.disabled=offset===0;next.disabled=following===null;
         exportEvents.disabled=exportObjects.disabled=false;show(exportBar,true);
       }catch(error){if(current(request)){settings=null;revision=null;notice.textContent=error.message;show(resultControls,false);}}
       finally{if(current(request))run.disabled=false;}
@@ -4497,6 +4503,23 @@
     resultFilter.onchange=()=>{if(settings)load(settings,0,resultFilter.value,revision);};
     previous.onclick=()=>{if(settings)load(settings,Math.max(0,offset-30),resultFilter.value,revision);};
     next.onclick=()=>{if(settings&&following!==null)load(settings,following,resultFilter.value,revision);};
+    let trendOffset=0,trendFollowing=null;
+    async function loadTrend(start){
+      if(!settings||revision===null)return;
+      const review=turn,ticket=++trendTurn,bucket=trendBucket.value,active=()=>current(review)&&ticket===trendTurn;
+      trendRun.disabled=trendPrev.disabled=trendNext.disabled=true;trendRows.replaceChildren();trendStatus.textContent='Calculating timeline…';
+      const payload={...settings,expected_revision:revision,bucket,offset:start,limit:50,...(resultFilter.value?{status:resultFilter.value}:{})};
+      try{
+        const result=await (await api(base+'/timeline',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)})).json();
+        if(!active())return;trendOffset=start;trendFollowing=result.next_offset;
+        trendStatus.textContent=result.total_buckets?'Showing '+(start+1)+'–'+(start+result.rows.length)+' of '+result.total_buckets+' non-empty periods; '+result.matching_events+' events match the applied filters.':'No events match the applied filters.';
+        if(result.rows.length)trendRows.replaceChildren(table(['Period start (UTC)','Events','Matched','Not matched','Unknown','No linked object'],result.rows.map(row=>[row.start_utc,row.events,row.matched,row.not_matched,row.unknown,row.no_linked_object])));
+        trendPrev.disabled=start===0;trendNext.disabled=trendFollowing===null;
+      }catch(error){if(active())trendStatus.textContent=error.message;}
+      finally{if(active())trendRun.disabled=false;}
+    }
+    trendBucket.onchange=()=>{++trendTurn;trendRows.replaceChildren();trendStatus.textContent='Period changed; show the timeline again.';trendRun.disabled=false;trendPrev.disabled=trendNext.disabled=true;};
+    trendRun.onclick=()=>loadTrend(0);trendPrev.onclick=()=>loadTrend(Math.max(0,trendOffset-50));trendNext.onclick=()=>{if(trendFollowing!==null)loadTrend(trendFollowing);};
     async function downloadWorklist(kind){
       if(!settings||revision===null)return;
       const request=turn,ticket=++exportTurn,active=()=>current(request)&&ticket===exportTurn;
