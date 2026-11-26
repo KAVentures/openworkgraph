@@ -137,36 +137,41 @@ def _acceptance(previous_time,previous_pin,new_time,new_pin):
 def review(document,*,now=None):
     req=Review.model_validate(document)
     if not req.confirmed:raise ValueError("explicit retained review confirmation required")
-    ns=req.expected_correlation_namespace_sha256
     with db.connect() as conn:
         conn.execute("BEGIN IMMEDIATE");_schema(conn);_check(conn,req.expected_revision)
-        active={x["installation_alias"]:x for x in _entries(conn)
-                if x["correlation_namespace_sha256"]==ns and x["active"]}
-        if not active or {p.packet.installation_alias for p in req.packets}!=set(active):
-            raise ValueError("provide exactly one fresh packet for every active installation in the namespace")
-        result=signing.signed_review({"expected_correlation_namespace_sha256":ns,
-            "maximum_packet_age_ms":req.maximum_packet_age_ms,"confirmed":True,
-            "trust":[{"installation_alias":a,"public_key_hex":v["public_key_hex"],
-                      "correlation_namespace_sha256":ns} for a,v in sorted(active.items())],
-            "packets":[p.model_dump() for p in req.packets]},now=now)
-        advancing=[]
-        for p in req.packets:
-            old=active[p.packet.installation_alias]
-            action=_acceptance(old["accepted_at_ms"],old["accepted_packet_sha256"],
-                               p.packet.exported_at_ms,p.expected_packet_sha256)
-            if action=="advance":advancing.append(p)
-        for p in advancing:
-            conn.execute("""UPDATE procurement_workforce_trust SET accepted_at_ms=?,accepted_packet_sha256=?
-                            WHERE namespace=? AND alias_fold=?""",
-                (p.packet.exported_at_ms,p.expected_packet_sha256,ns,p.packet.installation_alias.casefold()))
-        if advancing:_advance(conn)
-        result.pop("report_sha256")
-        result["format"]="openworkgraph.workforce-registered-exchange-review.v1"
-        result["registry_revision"]=_revision(conn)
-        result["accepted_new_packets"]=len(advancing)
-        result["exact_repeated_packets"]=len(req.packets)-len(advancing)
-        result["persistent_replay_history_verified"]=False
-        result["local_monotonic_packet_pins_checked"]=True
-        result["result_persisted"]=bool(advancing)
-        result["limitations"].append("Local registry retains only latest accepted timestamps and packet pins. Revoked keys cannot contribute to registered review. This does not prevent database rollback, a signer fabricating later timestamps, or replay in a different registry.")
-        return {**result,"report_sha256":digest(result)}
+        return _review_locked(conn,req,now=now)
+
+
+def _review_locked(conn,req,*,now=None):
+    """Caller owns the write transaction and has checked registry revision."""
+    ns=req.expected_correlation_namespace_sha256
+    active={x["installation_alias"]:x for x in _entries(conn)
+            if x["correlation_namespace_sha256"]==ns and x["active"]}
+    if not active or {p.packet.installation_alias for p in req.packets}!=set(active):
+        raise ValueError("provide exactly one fresh packet for every active installation in the namespace")
+    result=signing.signed_review({"expected_correlation_namespace_sha256":ns,
+        "maximum_packet_age_ms":req.maximum_packet_age_ms,"confirmed":True,
+        "trust":[{"installation_alias":a,"public_key_hex":v["public_key_hex"],
+                  "correlation_namespace_sha256":ns} for a,v in sorted(active.items())],
+        "packets":[p.model_dump() for p in req.packets]},now=now)
+    advancing=[]
+    for p in req.packets:
+        old=active[p.packet.installation_alias]
+        action=_acceptance(old["accepted_at_ms"],old["accepted_packet_sha256"],
+                           p.packet.exported_at_ms,p.expected_packet_sha256)
+        if action=="advance":advancing.append(p)
+    for p in advancing:
+        conn.execute("""UPDATE procurement_workforce_trust SET accepted_at_ms=?,accepted_packet_sha256=?
+                        WHERE namespace=? AND alias_fold=?""",
+            (p.packet.exported_at_ms,p.expected_packet_sha256,ns,p.packet.installation_alias.casefold()))
+    if advancing:_advance(conn)
+    result.pop("report_sha256")
+    result["format"]="openworkgraph.workforce-registered-exchange-review.v1"
+    result["registry_revision"]=_revision(conn)
+    result["accepted_new_packets"]=len(advancing)
+    result["exact_repeated_packets"]=len(req.packets)-len(advancing)
+    result["persistent_replay_history_verified"]=False
+    result["local_monotonic_packet_pins_checked"]=True
+    result["result_persisted"]=bool(advancing)
+    result["limitations"].append("Local registry retains only latest accepted timestamps and packet pins. Revoked keys cannot contribute to registered review. This does not prevent database rollback, a signer fabricating later timestamps, or replay in a different registry.")
+    return {**result,"report_sha256":digest(result)}
