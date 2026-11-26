@@ -31,6 +31,7 @@ from . import agent_procurement_workforce_exchange as exchange
 from . import agent_procurement_workforce_signing as signing
 from . import agent_procurement_workforce_trust as trust
 from . import agent_procurement_workforce_inbox as inbox
+from . import agent_procurement_workforce_dossier as dossier
 from . import agent_procurement_monitor_schedule as monitor_schedule
 from .local_auth import dashboard_session_valid
 from .local_process_catalog import catalog
@@ -234,7 +235,7 @@ async def workforce_allocation(request: Request):
 
 
 @router.post("/v1/process-catalog/procurement-workforce/exchange/{action}")
-async def workforce_exchange(request: Request,action: Literal["export","review","identity","signed-export","signed-review","trust-status","trust-configure","registered-review","inbox-status","inbox-admit","inbox-review","inbox-forget","inbox-retire"]):
+async def workforce_exchange(request: Request,action: Literal["export","review","identity","signed-export","signed-review","trust-status","trust-configure","registered-review","inbox-status","inbox-admit","inbox-review","inbox-forget","inbox-retire","inbox-dossier"]):
     _require_dashboard(request)
     if str(request.headers.get("X-OpenWorkGraph-Context") or "").strip().lower()=="ai":
         raise HTTPException(403,"Exchange requires explicit dashboard operator")
@@ -247,7 +248,7 @@ async def workforce_exchange(request: Request,action: Literal["export","review",
         fn={"export":exchange.export,"review":exchange.review,"identity":signing.identity,
             "signed-export":signing.signed_export,"signed-review":signing.signed_review,
             "trust-status":trust.status,"trust-configure":trust.configure,"registered-review":trust.review,"inbox-status":inbox.status,
-            "inbox-admit":inbox.admit,"inbox-review":inbox.review,"inbox-forget":inbox.forget,"inbox-retire":inbox.retire}[action]
+            "inbox-admit":inbox.admit,"inbox-review":inbox.review,"inbox-forget":inbox.forget,"inbox-retire":inbox.retire,"inbox-dossier":dossier.freeze_inbox}[action]
         result=await run_in_threadpool(fn,document)
         return JSONResponse(result,headers={"Cache-Control":"no-store"})
     except journal.JournalError as exc:
