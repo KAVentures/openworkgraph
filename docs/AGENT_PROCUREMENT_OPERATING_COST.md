@@ -109,3 +109,39 @@ The report also disaggregates by the frozen suite's normal, exception and
 missing-facts categories with exact paired costs and declared outcome gates.
 Category results are descriptive and share the same repeated cohort; no
 annual category mix, independent sampling, or representativeness is inferred.
+
+
+## Conditional category-specific multi-agent portfolios
+
+Add optional scenario.portfolio to compare up to 20 explicit assignments of
+normal, exception and missing_facts categories to any enrolled candidate or
+null (retain manual). Supply all three category_volumes with annual_cases,
+including zero values, reconciling exactly to scenario.annual_cases. Each
+portfolio has portfolio_id, assignments (category, candidate_id), and
+routing_annual_microunits, routing_one_time_microunits,
+routing_cost_per_ai_case_microunits, routing_human_ms_per_ai_case. All costs
+are nonnegative; routing direct charges exclude human routing labor, valued
+separately at the declared routine rate. Zero-volume categories must be manual.
+An all-manual scenario has no AI routing charges. Active candidates incur
+their full declared fixed charges once each, even if they cover multiple
+categories. Manual fixed costs are retained unless every case is AI-assigned
+and avoidable_manual_annual_microunits is explicitly declared (default zero).
+
+Supply confirm_conditional_category_assignment and
+confirm_non_overlapping_routing_costs as true; the reviewed retrospective
+category labels are **not verified pre-execution signals**. A positive volume
+in an unobserved category is refused. Defaults require 90% declared success
+and zero paired regression; optional minimum_declared_success_basis_points
+and maximum_declared_regression_basis_points alter both weighted and
+per-category gates. Active candidates must also pass the original whole-trial
+gates. An identical manual path incurs exactly zero paired savings and
+regressions even with missing manual evidence. Other uncertainty remains
+explicit. Weighted outcome counts are conditional rational projections, not
+integer predictions of actual outcomes.
+
+The dashboard and exported report show each assignment, population coverage,
+annual/first-year costs, paired savings, human capacity net of routing time,
+conditional outcome and regression bounds, and gate status. OWG does not
+choose a portfolio, launch a router or grant execution permission. Routing
+accuracy, pre-execution classification, volumes, outcome transfer and actual
+benefits require separate validation before production use.

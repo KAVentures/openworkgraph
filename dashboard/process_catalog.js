@@ -1425,6 +1425,39 @@
           }
           box.appendChild(volumeList);output.appendChild(box);
         }
+        if(result.conditional_portfolios){
+          const p=result.conditional_portfolios;
+          output.append(el('h5','Conditional multi-agent portfolios'),
+            el('p','Declared annual category volumes: '+Object.entries(p.category_volumes).map(([k,v])=>k.replaceAll('_',' ')+': '+v).join(' · ')),
+            el('p','All-manual annual cost: '+range(p.all_manual_annual_cost)),
+            el('p','Retrospective case labels are not proven available before execution. No portfolio is automatically selected or authorized.'));
+          const count=v=>{
+            if(v==null)return 'unbounded';
+            const n=BigInt(v.numerator),d=BigInt(v.denominator);
+            return d===1n?String(n):String(n)+'/'+String(d);
+          };
+          const countRange=v=>count(v.lower)+' to '+count(v.upper);
+          for(const plan of p.portfolios){
+            const section=el('section');
+            section.append(el('h6',plan.portfolio_id+' · declared evidence: '+plan.declared_evidence_status),
+              el('p',plan.ai_cases+' AI-assigned / '+plan.manual_cases+' manual cases · active agents: '+(plan.active_candidate_ids.join(', ')||'none')),
+              el('p','Annual cost: '+range(plan.annual_cost)),
+              el('p','First-year cost: '+range(plan.first_year_cost)),
+              el('p','Recurring savings: '+range(plan.recurring_savings)),
+              el('p','First-year savings: '+range(plan.first_year_savings)),
+              el('p','Conditional declared success count: '+countRange(plan.annual_declared_success_count)+' · regression count: '+countRange(plan.annual_declared_regression_count)),
+              el('p','Annual released person-ms: '+countRange(plan.annual_released_person_ms)+' (not cash savings)'));
+            const gates=el('ul');for(const [key,value] of Object.entries(plan.checks))gates.appendChild(el('li',key.replaceAll('_',' ')+': '+value));
+            const routes=el('ul');
+            for(const r of plan.routes){
+              const item=el('li',r.category.replaceAll('_',' ')+' · '+r.annual_cases+' cases → '+(r.candidate_id||'manual')+' · '+r.status);
+              if(r.annual_cases)item.append(el('p',r.observed_distinct_cases+' observed cases / '+r.observed_attempts+' attempts · variable cost: '+range(r.annual_variable_cost)),
+                el('p','Declared regression count: '+countRange(r.annual_declared_regression_count)));
+              routes.appendChild(item);
+            }
+            section.append(gates,el('h6','Conditional assignments'),routes);output.appendChild(section);
+          }
+        }
         const picker=el('select');picker.setAttribute('aria-label','Operating cost candidate');
         for(const c of result.candidates){const option=el('option',c.candidate_id);option.value=c.candidate_id;picker.appendChild(option);}
         const filter=el('input');filter.type='checkbox';filter.setAttribute('aria-label','Show incomplete operating cost evidence');

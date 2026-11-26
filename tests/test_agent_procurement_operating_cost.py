@@ -227,3 +227,98 @@ def test_category_reviews_reconcile_population_without_cherry_picking(trial):
     assert sum(amount(g["paired_savings"]["lower_microunits"]) for g in groups)==270
     assert {r["case_category"] for r in cheap["rows"]}=={"normal","exception","missing_facts"}
     assert cheap["declared_outcome_review"]["minimum_declared_success_basis_points"]==9000
+
+
+def _portfolio_request(req):
+    req["scenario"]["portfolio"]={
+        "category_volumes":[{"category":k,"annual_cases":20} for k in ("normal","exception","missing_facts")],
+        "portfolios":[
+            {"portfolio_id":"mixed","assignments":[{"category":"normal","candidate_id":"cheap"},
+              {"category":"exception","candidate_id":"baseline"},{"category":"missing_facts","candidate_id":None}],
+             "routing_annual_microunits":10,"routing_one_time_microunits":20,
+             "routing_cost_per_ai_case_microunits":1,"routing_human_ms_per_ai_case":36000},
+            {"portfolio_id":"manual","assignments":[{"category":k,"candidate_id":None} for k in ("normal","exception","missing_facts")],
+             "routing_annual_microunits":0,"routing_one_time_microunits":0,
+             "routing_cost_per_ai_case_microunits":0,"routing_human_ms_per_ai_case":0}],
+        "avoidable_manual_annual_microunits":100,
+        "confirm_conditional_category_assignment":True,"confirm_non_overlapping_routing_costs":True}
+    return req["scenario"]["portfolio"]
+
+
+def test_portfolio_manual_and_mixed_reconcile_exact_costs(trial):
+    packet,plan,captures,req=baseline(trial)
+    _portfolio_request(req)
+    report=assess(packet,plan,captures,req)
+    p=report["conditional_portfolios"];mixed,manual=p["portfolios"]
+    assert mixed["ai_cases"]==40 and mixed["manual_cases"]==20
+    assert mixed["active_candidate_ids"]==["baseline","cheap"]
+    assert mixed["candidate_and_routing_annual_fixed_microunits"]=="410"
+    assert mixed["candidate_and_routing_one_time_microunits"]=="120"
+    assert amount(mixed["routing_variable_cost"])==80
+    assert mixed["avoidable_manual_fixed_microunits"]=="0"
+    assert amount(mixed["annual_released_person_ms"]["lower"])==70560000
+    total=amount(p["all_manual_annual_cost"]["lower_microunits"])
+    assert total-amount(mixed["annual_cost"]["upper_microunits"])==amount(mixed["recurring_savings"]["lower_microunits"])
+    assert total-amount(mixed["first_year_cost"]["upper_microunits"])==amount(mixed["first_year_savings"]["lower_microunits"])
+    assert amount(manual["recurring_savings"]["lower_microunits"])==0
+    assert amount(manual["annual_declared_regression_count"]["upper"])==0
+    assert not p["category_available_before_execution_verified"] and not p["execution_authorized"]
+
+
+def test_portfolio_fixed_cost_once_even_across_multiple_categories(trial):
+    packet,plan,captures,req=baseline(trial)
+    policy=_portfolio_request(req)
+    for row in policy["portfolios"][0]["assignments"]:row["candidate_id"]="cheap"
+    mixed=assess(packet,plan,captures,req)["conditional_portfolios"]["portfolios"][0]
+    assert mixed["active_candidate_ids"]==["cheap"]
+    assert mixed["candidate_and_routing_annual_fixed_microunits"]=="210"
+    assert mixed["avoidable_manual_fixed_microunits"]=="100"
+    assert amount(mixed["routing_variable_cost"])==120
+    assert amount(mixed["recurring_savings"]["lower_microunits"])==2470
+    assert amount(mixed["first_year_savings"]["lower_microunits"])==2400
+
+
+def test_portfolio_missing_manual_evidence_cannot_regress_against_itself(trial):
+    packet,plan,captures,req=baseline(trial)
+    _portfolio_request(req)
+    req["manual"]=[]
+    manual=assess(packet,plan,captures,req)["conditional_portfolios"]["portfolios"][1]
+    assert manual["annual_cost"]["upper_microunits"] is None
+    assert amount(manual["first_year_savings"]["lower_microunits"])==0
+    assert amount(manual["first_year_savings"]["upper_microunits"])==0
+    assert amount(manual["annual_declared_regression_count"]["upper"])==0
+    assert manual["declared_evidence_status"]=="unknown"
+
+
+def test_portfolio_category_gates_do_not_hide_regression_in_rare_case(trial):
+    packet,plan,captures,req=baseline(trial)
+    policy=_portfolio_request(req)
+    policy["category_volumes"]=[{"category":"normal","annual_cases":1},{"category":"exception","annual_cases":1},
+                                {"category":"missing_facts","annual_cases":58}]
+    policy["maximum_declared_regression_basis_points"]=500
+    slots={s["slot_id"]:s for s in plan["slots"]}
+    normal=next(r["case_id"] for r in plan["basis"]["reference_report"]["cases"] if r["category"]=="normal")
+    for x in req["interventions"]:
+        s=slots[x["slot_id"]]
+        if s["candidate_id"]=="cheap" and s["case_id"]==normal:x["observed_business_outcome"]="failure"
+    mixed=assess(packet,plan,captures,req)["conditional_portfolios"]["portfolios"][0]
+    assert mixed["checks"]["weighted_regression"]=="pass"
+    assert mixed["checks"]["all_positive_volume_category_checks"]=="fail"
+    assert mixed["declared_evidence_status"]=="fail"
+
+
+@pytest.mark.parametrize("kind",["wrong_total","unknown_candidate","duplicate_category","zero_active",
+                                  "manual_routing_cost","duplicate_id","avoidable_excess","unconfirmed","negative"])
+def test_portfolio_rejects_bad_inputs(trial,kind):
+    packet,plan,captures,req=baseline(trial)
+    p=_portfolio_request(req);mixed=p["portfolios"][0]
+    if kind=="wrong_total":p["category_volumes"][0]["annual_cases"]=21
+    elif kind=="unknown_candidate":mixed["assignments"][0]["candidate_id"]="nonexistent"
+    elif kind=="duplicate_category":mixed["assignments"][1]["category"]="normal"
+    elif kind=="zero_active":p["category_volumes"][0]["annual_cases"]=0;p["category_volumes"][1]["annual_cases"]=40
+    elif kind=="manual_routing_cost":p["portfolios"][1]["routing_annual_microunits"]=1
+    elif kind=="duplicate_id":p["portfolios"][1]["portfolio_id"]="mixed"
+    elif kind=="avoidable_excess":p["avoidable_manual_annual_microunits"]=101
+    elif kind=="unconfirmed":p["confirm_conditional_category_assignment"]=False
+    elif kind=="negative":mixed["routing_human_ms_per_ai_case"]=-1
+    with pytest.raises(ValueError):assess(packet,plan,captures,req)

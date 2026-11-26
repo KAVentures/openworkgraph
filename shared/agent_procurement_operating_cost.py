@@ -17,6 +17,7 @@ from pydantic import Field, StrictBool, StrictInt, model_validator
 from .agent_procurement import Alias, CaseId, Cost, Duration, Strict, _load, digest
 from .agent_procurement_trials import review as review_trial
 from .agent_procurement_adoption import adoption, paired_outcomes, released_time
+from .agent_procurement_portfolio import PortfolioPolicy, evaluate as evaluate_portfolio
 from .process_shadow_review import Hash
 
 FORMAT = "openworkgraph.procurement-operating-cost.v1"
@@ -75,6 +76,7 @@ class Scenario(Strict):
     manual_annual_microunits: AnnualCost
     candidate_fixed_costs: list[FixedCost] = Field(min_length=2, max_length=10)
     adoption: AdoptionPolicy | None = None
+    portfolio: PortfolioPolicy | None = None
 
     @model_validator(mode="after")
     def valid_adoption(self):
@@ -325,6 +327,18 @@ def assess(packet, plan, captures, request):
                            "Full-replacement figures assume all declared manual fixed cost is eliminated; the separate mixed-adoption scenarios retain it until an explicitly declared avoidable amount at full adoption.",
                            "Released person-time is conditional capacity, not cash savings or verified staff reduction. Outcome gates refer only to declared observations.",
                            "Savings do not establish deployment eligibility; no provider call, business write, or selection is performed."]}
+    if req.scenario.portfolio is not None:
+        result["conditional_portfolios"]=evaluate_portfolio(
+            req.scenario.portfolio,req.scenario.annual_cases,req.scenario.manual_annual_microunits,
+            fixed,summaries,_money,req.rates.routine_hourly_microunits)
+        # Exact scenario assumptions remain reconstructable without browser
+        # integer truncation. Monetary values are portable decimal strings.
+        p=req.scenario.portfolio.model_dump()
+        p["avoidable_manual_annual_microunits"]=str(p["avoidable_manual_annual_microunits"])
+        for row in p["portfolios"]:
+            for key in ("routing_annual_microunits","routing_one_time_microunits","routing_cost_per_ai_case_microunits"):
+                row[key]=str(row[key])
+        result["scenario"]["portfolio_policy"]=p
     return {**result,"report_sha256":digest(result)}
 
 
