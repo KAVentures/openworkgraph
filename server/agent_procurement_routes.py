@@ -25,6 +25,7 @@ from . import agent_procurement_workforce_overview as workforce
 from . import agent_procurement_workforce_allocation as allocation
 from . import agent_procurement_finance as finance
 from . import agent_procurement_workforce_exchange as exchange
+from . import agent_procurement_workforce_signing as signing
 from . import agent_procurement_monitor_schedule as monitor_schedule
 from .local_auth import dashboard_session_valid
 from .local_process_catalog import catalog
@@ -214,7 +215,7 @@ async def workforce_allocation(request: Request):
 
 
 @router.post("/v1/process-catalog/procurement-workforce/exchange/{action}")
-async def workforce_exchange(request: Request,action: Literal["export","review"]):
+async def workforce_exchange(request: Request,action: Literal["export","review","identity","signed-export","signed-review"]):
     _require_dashboard(request)
     if str(request.headers.get("X-OpenWorkGraph-Context") or "").strip().lower()=="ai":
         raise HTTPException(403,"Exchange requires explicit dashboard operator")
@@ -224,7 +225,9 @@ async def workforce_exchange(request: Request,action: Literal["export","review"]
         if not isinstance(payload,dict) or set(payload)!={"document"} or not isinstance(payload["document"],str):
             raise ValueError("exact JSON-text document required")
         document=single.loads(payload["document"])
-        result=await run_in_threadpool(exchange.export if action=="export" else exchange.review,document)
+        fn={"export":exchange.export,"review":exchange.review,"identity":signing.identity,
+            "signed-export":signing.signed_export,"signed-review":signing.signed_review}[action]
+        result=await run_in_threadpool(fn,document)
         return JSONResponse(result,headers={"Cache-Control":"no-store"})
     except journal.JournalError as exc:
         raise HTTPException(exc.status,str(exc)) from None
