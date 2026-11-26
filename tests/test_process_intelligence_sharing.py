@@ -291,14 +291,15 @@ async def _listed_tools(tmp_path: Path, enabled: bool) -> set[str]:
             return {tool.name for tool in (await session.list_tools()).tools}
 
 
-PROCESS_TOOLS = {"list_process_logs", "get_process_overview", "get_process_overview_for_cases", "get_process_root_cause",
+PROCESS_TOOLS = {"list_process_logs", "get_process_overview", "get_process_overview_for_cases",
+                 "compare_process_cohorts", "get_process_root_cause",
                  "explain_process_case", "get_slowest_process_cases", "tag_process_cases",
                  "get_process_rework", "get_process_waiting_times", "get_process_drift", "get_stuck_process_cases",
-                 "get_process_automation_candidates", "get_process_signals", "get_process_decision_rules",
+                 "get_process_automation_candidates", "get_process_signals", "preview_process_signal", "get_process_decision_rules",
                  "get_process_temporal_profile", "get_process_heuristics_net",
                  "get_process_footprints", "get_process_model_quality", "compare_process_logs", "get_process_model", "get_process_attributes",
                  "get_process_deviations", "list_process_reference_nets", "get_process_reference_deviations",
-                 "get_process_funnel",
+                 "get_process_funnel", "estimate_process_automation_benefit",
                  "get_process_trace_clusters", "check_process_compliance", "get_process_performance_spectrum",
                  "get_unusual_process_cases",
                  "get_process_due_dates",
@@ -306,7 +307,7 @@ PROCESS_TOOLS = {"list_process_logs", "get_process_overview", "get_process_overv
                  "get_process_next_steps",
                  "predict_open_process_cases", "predict_next_process_activity",
                  "get_process_insights",
-                 "get_process_activity_glossary",
+                 "get_process_activity_glossary", "list_process_filter_sets",
                  "get_process_deviation_causes",
                  "get_process_object_map",
                  "align_process_case",
