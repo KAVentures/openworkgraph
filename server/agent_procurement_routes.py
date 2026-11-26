@@ -236,7 +236,7 @@ async def workforce_allocation(request: Request):
 
 
 @router.post("/v1/process-catalog/procurement-workforce/exchange/{action}")
-async def workforce_exchange(request: Request,action: Literal["export","review","identity","signed-export","signed-review","trust-status","trust-configure","registered-review","inbox-status","inbox-admit","inbox-review","inbox-forget","inbox-retire","inbox-dossier","audit-verify","audit-timeline","audit-triage"]):
+async def workforce_exchange(request: Request,action: Literal["export","review","identity","signed-export","signed-review","trust-status","trust-configure","registered-review","inbox-status","inbox-admit","inbox-review","inbox-forget","inbox-retire","inbox-dossier","audit-verify","audit-timeline","audit-triage","audit-reconcile"]):
     _require_dashboard(request)
     if str(request.headers.get("X-OpenWorkGraph-Context") or "").strip().lower()=="ai":
         raise HTTPException(403,"Exchange requires explicit dashboard operator")
@@ -251,7 +251,8 @@ async def workforce_exchange(request: Request,action: Literal["export","review",
             "trust-status":trust.status,"trust-configure":trust.configure,"registered-review":trust.review,"inbox-status":inbox.status,
             "inbox-admit":inbox.admit,"inbox-review":inbox.review,"inbox-forget":inbox.forget,"inbox-retire":inbox.retire,"inbox-dossier":dossier.freeze_inbox,
             "audit-verify":audit_review.verify,"audit-timeline":audit_review.review_timeline,
-            "audit-triage":audit_review.record_triage}[action]
+            "audit-triage":audit_review.record_triage,
+            "audit-reconcile":audit_review.reconcile_receipts}[action]
         result=await run_in_threadpool(fn,document)
         return JSONResponse(result,headers={"Cache-Control":"no-store"})
     except journal.JournalError as exc:
