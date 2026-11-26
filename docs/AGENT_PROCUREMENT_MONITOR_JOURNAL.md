@@ -60,3 +60,8 @@ The [local workforce overview](AGENT_PROCUREMENT_WORKFORCE_OVERVIEW.md) aggregat
 For closed-window declarations of booked revenue, expenses and telemetry reconciliation, see [finance reconciliation](AGENT_PROCUREMENT_FINANCE.md). Booked figures are not added to modeled savings or imputed labor.
 
 Optional unattended deadline review uses the existing local scheduler and [journal-specific consent](AGENT_PROCUREMENT_MONITOR_SCHEDULE.md). Idle ticks do not consume journal entries.
+
+Retained-only journal list, detail, consent withdrawal, producer revocation and
+removal remain available by exact workflow/revision scope even after the
+reviewed process has been deleted. In that case the API reports a null current
+revision; the local workforce overview identifies the orphaned journal.

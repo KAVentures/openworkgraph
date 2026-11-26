@@ -41,3 +41,9 @@ ambient recording, and does not ingest new events. It sends no external
 notification, performs no business operation and has no rollback authority.
 The overview and retained journal expose the resulting incident/deadline
 state. No timing guarantee is made while the application is closed.
+
+While scheduled consent is enabled, the final audit entry is reserved for
+explicit withdrawal. Capacity exhaustion cannot consume that reserved entry.
+An already deleted process design never receives a scheduled update; its
+retained journals remain inspectable and explicitly removable by exact scope
+through the dashboard-session API.

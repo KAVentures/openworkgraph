@@ -67,8 +67,13 @@ def _inspect(operation, workflow_id, revision, payload):
     if not isinstance(payload,dict) or set(payload)!=keys or any(not isinstance(v,str) for v in payload.values()):
         raise HTTPException(422,"Supply the selected procurement JSON document(s) as text")
     try:
-        packet=catalog.export(workflow_id,revision)
         document=single.loads(payload["document"])
+        # Retained evidence must remain inspectable/removable even after the
+        # associated reviewed process is deleted. These actions do not use a
+        # process packet; writes that enable consent still check current scope.
+        retained_only=operation in ("router-journal-list","router-journal-detail","router-journal-forget",
+                                    "router-journal-schedule","router-producer-revoke")
+        packet=None if retained_only else catalog.export(workflow_id,revision)
         if operation=="compare":
             result=single.compare(packet,document)
         elif operation=="freeze":
@@ -121,7 +126,11 @@ def _inspect(operation, workflow_id, revision, payload):
             if operation in ("nominate","decide") and catalog.get(workflow_id)["revision"]!=revision:
                 raise HTTPException(409,"Open the latest saved process revision before nomination or decision")
             result=selection.operation(packet,operation,document)
-        latest=catalog.get(workflow_id)["revision"]
+        try:
+            latest=catalog.get(workflow_id)["revision"]
+        except LookupError:
+            if not retained_only:raise
+            latest=None
         if operation in ("nominate","decide","rollout-review","deployment-review","deployment-decide","router-freeze","router-change-freeze","router-change-decide","router-pilot-freeze","router-pilot-decide","router-monitor-freeze","router-monitor-decide") and latest!=revision:
             raise HTTPException(409,"Saved process revision changed during review; reopen the latest revision")
     except sqlite3.Error:

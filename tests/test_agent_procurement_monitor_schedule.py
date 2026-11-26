@@ -73,3 +73,37 @@ def test_existing_scheduler_dispatches_only_local_target(tmp_path,monkeypatch):
     assert local_scheduler.run_due(now=10**10)==[{"schedule_id":job["schedule_id"],"outcome":"succeeded:monitor_deadline_review_2_advanced"}]
     monkeypatch.setattr(schedule,"run_once",lambda:{"advanced":1,"failed":1})
     assert schedule.run_scheduled("local")==("failed:monitor_deadline_review_incomplete",0.0)
+
+
+def test_last_entry_reserved_for_consent_withdrawal(local_db,monitor,monkeypatch):
+    packet,initial,plan,snapshot=monitor
+    snapshot=deepcopy(snapshot);snapshot["as_of_ms"]=2000;snapshot["windows"]=[]
+    head=journal.append(packet,"process_1",1,doc(initial,plan,snapshot))
+    monkeypatch.setattr(journal,"MAX_ENTRIES",3)
+    a=schedule.configure("process_1",1,consent(head))
+    assert schedule.run_once(3200)["failed"]==1
+    assert journal.detail("process_1",1,{"monitor_id":"monitor-1"})==a
+    b=schedule.configure("process_1",1,consent(a,False))
+    assert b["entry_count"]==3 and not b["scheduled_deadline_review_enabled"]
+    assert schedule.run_once(3200)["not_enabled"]==1
+
+
+def test_removed_process_can_still_remove_retained_journal(local_db,monitor,monkeypatch):
+    from server import agent_procurement_routes as routes
+    import json
+    packet,initial,plan,snapshot=monitor
+    head=journal.append(packet,"process_1",1,doc(initial,plan,snapshot))
+    a=schedule.configure("process_1",1,consent(head))
+    with local_db() as conn:conn.execute("DELETE FROM workflow_knowledge")
+    def missing(*args,**kwargs):raise LookupError("deleted")
+    monkeypatch.setattr(routes.catalog,"export",missing)
+    monkeypatch.setattr(routes.catalog,"get",missing)
+    detail=routes._inspect("router-journal-detail","process_1",1,
+        {"document":json.dumps({"monitor_id":"monitor-1"})})
+    assert detail["latest_revision_at_inspection"] is None
+    assert detail["result"]["head_sha256"]==a["head_sha256"]
+    assert schedule.run_once(4500)["historical"]==1
+    removed=routes._inspect("router-journal-forget","process_1",1,
+        {"document":json.dumps({"monitor_id":"monitor-1","expected_head_sha256":a["head_sha256"],"confirmed":True})})
+    assert removed["result"]["removed"]
+    assert journal.list_journals("process_1",1,{})["journals"]==[]

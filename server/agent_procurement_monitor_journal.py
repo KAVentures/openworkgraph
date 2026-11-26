@@ -124,6 +124,9 @@ def _view(key,state,history):
 def _save(conn,key,state,history,kind,details):
     if len(history)>=MAX_ENTRIES:
         raise JournalError("Monitoring journal capacity reached; export and review before creating a new plan",409)
+    # Reserve one audit entry for explicit withdrawal of scheduled consent.
+    if state.get("scheduled_deadline_review_enabled",False) and len(history)>=MAX_ENTRIES-1:
+        raise JournalError("Monitoring journal capacity reserved for scheduled consent withdrawal",409)
     encoded=_json(state)
     if len(encoded.encode("ascii"))>MAX_STATE_BYTES:
         raise JournalError("Monitoring journal state exceeds capacity",413)
