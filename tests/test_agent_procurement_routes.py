@@ -67,7 +67,7 @@ with TestClient(app) as client:
     assert client.post(signing_path,json={}).status_code==401
     assert client.post(signing_path,json={},headers=bearer).status_code==403
     assert client.post(signing_path,json={'document':'{"confirmed":false}'},headers=h).status_code==422
-    for action in ("inbox-status","inbox-admit","inbox-review","inbox-forget","inbox-retire","inbox-dossier","audit-verify","audit-timeline"):
+    for action in ("inbox-status","inbox-admit","inbox-review","inbox-forget","inbox-retire","inbox-dossier","audit-verify","audit-timeline","audit-triage"):
         path="/v1/process-catalog/procurement-workforce/exchange/"+action
         assert client.post(path,json={"document":"{}"}).status_code==401
         assert client.post(path,json={"document":"{}"},headers=bearer).status_code==403
@@ -106,6 +106,19 @@ with TestClient(app) as client:
     assert result.headers["cache-control"]=="no-store"
     assert result.json()["timeline"]["unique_journals_with_observed_rollback_referrals"]==1
     assert not result.json()["result_persisted"]
+    work=result.json()["worklist"]
+    finding=work["findings"][0]
+    assert finding["kind"]=="rollback_referral"
+    decision={"expected_worklist_sha256":work["worklist_sha256"],"reviewer_alias":"reviewer",
+              "confirmed":True,"selections":[{"finding_id":finding["finding_id"],
+              "expected_finding_sha256":finding["finding_sha256"],"disposition":"escalate",
+              "owner_alias":"ops"}]}
+    referred=audit_call("audit-triage",{**timeline_body,"decision":decision})
+    assert referred.status_code==200,referred.text
+    assert referred.headers["cache-control"]=="no-store"
+    assert referred.json()["selected_count"]==1
+    assert not referred.json()["incident_clearance_established"]
+    assert audit_call("audit-triage",{**timeline_body,"decision":{**decision,"expected_worklist_sha256":"0"*64}}).status_code==422
     assert audit_call("audit-verify",{**historical,"confirmed":False}).status_code==422
     assert audit_call("audit-verify",{**historical,"expected_dossier_sha256":"0"*64}).status_code==422
     assert audit_call("audit-timeline",{**timeline_body,"dossiers":[y[0],x[0]]}).status_code==422
