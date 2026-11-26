@@ -2251,6 +2251,17 @@
       if(!inboxOutput.isConnected||inboxScope().correlation_namespace_sha256!==scope.correlation_namespace_sha256)return;
       await loadInbox();renderReview(inboxOutput,result);
     }));
+    const exportDossier=button('Export independently verifiable signed audit dossier',()=>inboxPerform(async()=>{
+      const scope=pinnedScope();
+      if(!inboxState.ready_for_complete_review)throw new Error('Every active installation must have an available packet.');
+      if(!window.confirm('Export all current signed minimized packets and their reproducible report? Opaque tags are linkable within this namespace. Transfer only through an approved channel; separately communicate the dossier digest and trusted keys. Historical rollback signals require a separate inbox status export.'))return;
+      const result=await inboxCall('inbox-dossier',JSON.stringify(scope));
+      if(!inboxOutput.isConnected||JSON.stringify(scope)!==JSON.stringify(pinnedScope()))return;
+      inboxOutput.append(el('h5','Historical signed audit dossier'),
+        el('p','Dossier SHA-256: '+result.dossier_sha256),
+        el('p','This does not advance accepted registry pins or establish current authorization. Use separately obtained trust keys and digest to recompute the report offline.'),
+        download(result,'owg-workforce-audit-dossier'));
+    }));
     const forgetInbox=button('Remove retained packets in namespace',()=>inboxPerform(async()=>{
       const scope=pinnedScope();delete scope.maximum_packet_age_ms;
       if(!window.confirm('Remove this namespace’s retained packet contents? Accepted registry watermarks and minimized rollback signals remain. Backups and exports are not erased.'))return;
@@ -2258,7 +2269,7 @@
     }));
     for(const [label,input] of [['Correlation namespace',inboxNs],['Maximum age in hours',age]]){const l=el('label',label+' ');l.appendChild(input);inboxSection.appendChild(l);}
     for(const input of [inboxNs,age])input.addEventListener('change',()=>{inboxState=null;inboxOutput.replaceChildren();});
-    inboxSection.append(button('Load inbox status',()=>inboxPerform(loadInbox)),inboxFile,admit,reviewInbox,forgetInbox,inboxOutput);
+    inboxSection.append(button('Load inbox status',()=>inboxPerform(loadInbox)),inboxFile,admit,reviewInbox,exportDossier,forgetInbox,inboxOutput);
     const runReview=button('Review pinned installation packets',async()=>{
       const attempt=++generation;output.replaceChildren();
       try{
