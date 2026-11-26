@@ -439,6 +439,8 @@
       try{
         const text=await headText(chosen,65536,encoding.value);
         const columns=csvHeader(text,sep);
+        // A delimiter at the end of every line leaves an unnamed last column; it holds nothing to map.
+        if(columns.length>1&&!columns[columns.length-1].trim()&&columns[columns.length-2].trim())columns.pop();
         if(sequence!==columnReadSequence||file.files?.[0]!==chosen||format.value!=='csv'||(delimiter.value==='t'?'\t':delimiter.value)!==sep)return;
         setMappingColumns(columns);
         status(columnsReady?'File mapping ready. Review the selected columns before storing.':'Choose a CSV with case, activity and time columns.');
