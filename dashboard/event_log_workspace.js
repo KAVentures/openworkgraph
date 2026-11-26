@@ -4921,6 +4921,92 @@
     return panel;
   }
 
+  function domainPackPriorityPanel(valid,logId){
+    const panel=el('details');panel.id='owgDomainPackPriority';
+    const pack=select('owgPriorityPack',[['','Load installed packs first']]),kind=select('owgPriorityType',[]);
+    const threshold=input('owgPriorityThreshold','number');threshold.min='1';threshold.max='1200';threshold.step='1';threshold.value='1';
+    const include=el('input');include.id='owgPriorityUncertain';include.type='checkbox';include.checked=true;
+    const load=button('Load installed packs','secondary'),run=button('Build priority worklist'),next=button('Next cases','secondary');
+    const status=el('p',null,'muted'),out=el('div'),choices=el('fieldset');status.setAttribute('role','status');
+    let revision=0,groups=[],weights=[],report=null,request=null,busy=false;
+    const active=t=>valid()&&panel.isConnected&&t===revision;
+    const endpoint=()=>'/v1/event-logs/'+encodeURIComponent(logId)+'/domain-packs/'+encodeURIComponent(pack.value)+'/priority';
+    const downloads=exportButtons('owg-priority-worklist-page',()=>report,r=>[
+      ['Case','Confirmed points','Possible points','Threshold status','Violated rule indices (zero based)','Unknown rule indices (zero based)','Basis digest'],
+      ...r.cases.map(c=>[c.case_id,c.lower,c.upper,c.threshold_status,c.violated_rule_indices.join(';'),c.unknown_rule_indices.join(';'),r.basis_sha256])]);
+    function clear(){
+      revision++;report=null;request=null;out.replaceChildren();next.hidden=true;downloads.enable(false);
+      run.disabled=busy||!weights.some(w=>w.check.checked);
+    }
+    function edited(){clear();status.textContent='Selection changed; build a fresh worklist.';}
+    function showRules(){
+      weights=[];choices.replaceChildren(el('legend','Select rules and declare priority weights (1–100)'));
+      for(const rule of groups.find(g=>g.case_type===kind.value)?.rules||[]){
+        const check=el('input');check.type='checkbox';check.checked=weights.length<12;
+        const id='owgPriorityWeight'+rule.rule_index,w=input(id,'number');w.min='1';w.max='100';w.step='1';w.value='1';
+        const label=el('label');label.append(check,document.createTextNode(' '+(rule.rule_index+1)+': '+[rule.rule.template,rule.rule.a,rule.rule.b].filter(Boolean).join(' · ')));
+        const line=el('div');line.append(label,field('Priority points for rule '+(rule.rule_index+1),w));choices.append(line);
+        weights.push({rule,check,w});check.onchange=w.oninput=edited;
+      }
+      clear();
+    }
+    kind.onchange=showRules;threshold.oninput=include.onchange=edited;
+    pack.onchange=async()=>{
+      groups=[];setOptions(kind,[]);showRules();const t=revision;
+      if(!pack.value)return;
+      try{
+        const r=await getJSON(endpoint());if(!active(t))return;
+        if(r.pack_id!==pack.value)throw new Error('Unexpected installed rule catalog.');
+        groups=r.groups;setOptions(kind,groups.map(g=>[g.case_type,g.case_type]));showRules();
+        status.textContent=groups.length?'Choose weights and a minimum score.':'No mapped compliance rules.';
+      }catch(error){if(active(t))status.textContent=error.message;}
+    };
+    load.onclick=async()=>{
+      groups=[];setOptions(kind,[]);showRules();setOptions(pack,[['','Choose installed pack']]);const t=revision;load.disabled=true;
+      try{
+        const r=await getJSON('/v1/event-logs/'+encodeURIComponent(logId)+'/domain-packs');if(!active(t))return;
+        setOptions(pack,[['','Choose installed pack'],...r.installs.map(i=>[i.pack_id,i.pack_id+' · '+i.version])]);
+        status.textContent=r.installs.length?'Choose a pack.':'Install a domain pack first.';
+      }catch(error){if(active(t))status.textContent=error.message;}
+      finally{if(panel.isConnected)load.disabled=false;}
+    };
+    async function page(body,t){
+      busy=true;run.disabled=true;next.disabled=true;downloads.enable(false);status.textContent='Evaluating retained cases…';
+      try{
+        const r=await (await api(endpoint(),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).json();
+        if(!active(t))return;
+        if(r.basis.pack_id!==pack.value||r.basis.case_type!==kind.value||! /^[a-f0-9]{64}$/.test(r.basis_sha256||'')||
+          (body.expected_basis_sha256&&r.basis_sha256!==body.expected_basis_sha256))throw new Error('Reviewed basis changed.');
+        report=r;
+        out.replaceChildren(el('h4','Priority worklist'),
+          el('p',r.cases_evaluated+' evaluated · '+r.confirmed_threshold_cases+' confirmed above threshold · '+r.uncertain_threshold_cases+' uncertain · '+r.below_threshold_cases+' below threshold.'),
+          el('p',r.matching_cases+' matching cases; '+r.cases.length+' on this page. Export contains this page only.','muted'),
+          table(['Case','Confirmed points','Possible points','Status','Violated rules','Unknown rules'],r.cases.map(c=>[
+            c.case_id,c.lower,c.upper,c.threshold_status,c.violated_rule_indices.map(i=>i+1).join(', ')||'—',c.unknown_rule_indices.map(i=>i+1).join(', ')||'—'])),
+          el('p',r.interpretation,'muted'));
+        next.hidden=!r.next_after;downloads.enable(true);status.textContent='Priority review complete. No configuration changed.';
+      }catch(error){if(active(t)){report=null;next.hidden=true;status.textContent=error.message;}}
+      finally{busy=false;if(panel.isConnected){run.disabled=!weights.some(w=>w.check.checked);next.disabled=false;}}
+    }
+    run.onclick=()=>{
+      if(busy)return;
+      clear();const t=revision,chosen=weights.filter(x=>x.check.checked);
+      const points=chosen.map(x=>({rule_index:x.rule.rule_index,weight:Number(x.w.value)}));
+      if(!chosen.length||chosen.length>12||chosen.some(x=>!x.w.value||!x.w.checkValidity())||
+         !threshold.value||!threshold.checkValidity()||Number(threshold.value)>points.reduce((s,x)=>s+x.weight,0)){
+        status.textContent='Select one to twelve rules, integer weights 1–100, and a threshold within the total points.';return;
+      }
+      request={case_type:kind.value,weights:points,minimum_confirmed:Number(threshold.value),include_uncertain:include.checked,limit:50};
+      page(request,t);
+    };
+    next.onclick=()=>{if(!busy&&report?.next_after&&request)page({...request,expected_basis_sha256:report.basis_sha256,after:report.next_after},revision);};
+    run.disabled=true;next.hidden=true;
+    panel.append(el('summary','Build a weighted compliance priority worklist'),el('p','Declare review points per rule. Unknown outcomes contribute only to possible points. Scores are not probabilities, financial losses or staff ratings.','muted'),
+      load,field('Installed pack',pack),field('Object type',kind),choices,field('Minimum priority points',threshold),
+      field('Include cases that may reach the threshold',include),run,status,downloads.node,out,next);
+    return panel;
+  }
+
   function domainPackSection(){
     const box=section('Domain packs');box.id='owgDomainPacks';
     box.appendChild(el('div','Apply ready-made definitions for a well-known process to this log: case metrics, compliance and object rules and a reference object model. Map each role to the names your log uses; the pack states its assumptions and is not validated against your source system.','muted'));
@@ -4934,6 +5020,7 @@
     const generation=state.generation,logId=state.logId,base='/v1/event-logs/'+encodeURIComponent(logId)+'/domain-packs';
     let turn=0;const current=t=>generation===state.generation&&box.isConnected&&t===turn;
     box.append(domainPackBenchmarkPanel(()=>generation===state.generation&&box.isConnected,logId));
+    box.append(domainPackPriorityPanel(()=>generation===state.generation&&box.isConnected,logId));
     const post=(url,body)=>api(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
     setup.onclick=async()=>{
       const t=++turn;setup.disabled=true;historyTurn++;historyOut.replaceChildren();form.replaceChildren();out.replaceChildren();status.textContent='Loading…';
