@@ -126,3 +126,16 @@ def test_offline_cli_recomputes_before_receipt(tmp_path):
     assert audit.read_json(r)["selected_count"]==1
     with pytest.raises(SystemExit):
         triage.main([*args,"--output",str(r),"--decision",str(p),*paths])
+
+
+def test_source_attention_retained_when_later_snapshot_clean():
+    key=Ed25519PrivateKey.generate()
+    old=row("a");old["attention"]=True
+    x=snapshot({"a":(key,[old])},100)
+    y=snapshot({"a":(key,[row("a")])},120)
+    m=manifest(x,y)
+    result=workbench.review_timeline({"confirmed":True,"expected_manifest_sha256":digest(m),
+                                    "manifest":m,"dossiers":[x[0],y[0]]})
+    assert result["timeline"]["journals"][0]["source_attention_snapshots"]==[1]
+    assert result["worklist"]["counts_by_kind"]=={"source_attention":1}
+    assert result["worklist"]["findings"][0]["evidence"]["snapshots"][0]["snapshot"]==1
