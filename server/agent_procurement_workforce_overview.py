@@ -152,7 +152,7 @@ def summarize(records,current,now,unreadable=()):
             "Deadline flags use the server clock without mutating retained checkpoints; refresh a journal to retain a new assessment."]}
 
 
-def overview():
+def read_inventory():
     with db.connect() as conn:
         conn.execute("BEGIN");journal._schema(conn)
         keys=[tuple(r) for r in conn.execute("""SELECT workflow_id,revision,monitor_id FROM procurement_monitor_journals
@@ -175,4 +175,9 @@ def overview():
                     except (ValueError,TypeError):payload={}
                     if isinstance(payload,dict) and payload.get("process_model"):
                         current[key[0]]={"revision":row[0],"title":payload.get("title",key[0])}
-        return summarize(records,current,int(time.time()*1000),unreadable)
+        return records,current,unreadable
+
+
+def overview():
+    records,current,unreadable=read_inventory()
+    return summarize(records,current,int(time.time()*1000),unreadable)
