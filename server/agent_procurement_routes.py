@@ -25,6 +25,7 @@ from . import agent_procurement_workforce_overview as workforce
 from . import agent_procurement_workforce_allocation as allocation
 from . import agent_procurement_finance as finance
 from . import agent_procurement_corroboration as corroboration
+from . import agent_procurement_source_outcome as source_outcome
 from . import agent_procurement_workforce_exchange as exchange
 from . import agent_procurement_workforce_signing as signing
 from . import agent_procurement_workforce_trust as trust
@@ -110,6 +111,10 @@ def _inspect(operation, workflow_id, revision, payload):
             result=telemetry.revoke(workflow_id,revision,document)
         elif operation=="router-journal-schedule":
             result=monitor_schedule.configure(workflow_id,revision,document)
+        elif operation=="router-source-outcome-bind":
+            result=source_outcome.bind(workflow_id,revision,document)
+        elif operation=="router-source-outcome-check":
+            result=source_outcome.check(workflow_id,revision,document)
         elif operation=="router-corroboration-require":
             result=corroboration.require(workflow_id,revision,document)
         elif operation=="router-corroboration-manifest":
@@ -164,11 +169,11 @@ def _inspect(operation, workflow_id, revision, payload):
 
 
 @router.post("/v1/process-catalog/procurement/{operation}")
-async def inspect_procurement(request: Request, operation: Literal["compare","freeze","review","nominate","assess","decide","outcome-review","rollout-review","deployment-review","deployment-decide","operating-cost","router-freeze","router-review","router-change-freeze","router-change-assess","router-change-decide","router-pilot-freeze","router-pilot-review","router-pilot-decide","router-monitor-freeze","router-monitor-review","router-monitor-decide","router-journal-list","router-journal-append","router-journal-refresh","router-journal-schedule","router-journal-detail","router-journal-decide","router-journal-forget","router-producer-grant","router-producer-revoke","router-producer-manifest","router-finance-reconcile","router-corroboration-require","router-corroboration-manifest","router-corroboration-record"],
+async def inspect_procurement(request: Request, operation: Literal["compare","freeze","review","nominate","assess","decide","outcome-review","rollout-review","deployment-review","deployment-decide","operating-cost","router-freeze","router-review","router-change-freeze","router-change-assess","router-change-decide","router-pilot-freeze","router-pilot-review","router-pilot-decide","router-monitor-freeze","router-monitor-review","router-monitor-decide","router-journal-list","router-journal-append","router-journal-refresh","router-journal-schedule","router-journal-detail","router-journal-decide","router-journal-forget","router-producer-grant","router-producer-revoke","router-producer-manifest","router-finance-reconcile","router-corroboration-require","router-corroboration-manifest","router-corroboration-record","router-source-outcome-bind","router-source-outcome-check"],
                               workflow_id: str = Query(pattern=r"^[A-Za-z0-9_-]{1,80}$"),
                               revision: int = Query(ge=1,le=2**31-1)):
     _require_dashboard(request)
-    if operation.startswith(("router-producer-","router-corroboration-")) and str(request.headers.get("X-OpenWorkGraph-Context") or "").strip().lower()=="ai":
+    if operation.startswith(("router-producer-","router-corroboration-","router-source-outcome-")) and str(request.headers.get("X-OpenWorkGraph-Context") or "").strip().lower()=="ai":
         raise HTTPException(403,"Producer credentials require an explicit dashboard operator")
     payload=await _envelope(request)
     _require_dashboard(request)

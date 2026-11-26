@@ -14,6 +14,7 @@ from pydantic import Field, StrictBool
 
 from shared.agent_procurement import Alias, Strict, digest
 from shared.agent_procurement_corroboration import summarize as summarize_corroboration
+from shared.agent_procurement_source_outcome import summarize as summarize_source_outcomes
 from shared.agent_procurement_router_monitor import _normalize, _review_verified, review
 from shared.process_shadow_review import Hash
 from . import db
@@ -104,6 +105,7 @@ def _read(conn,key):
 
 def _view(key,state,history):
     corroboration=summarize_corroboration(state)
+    source_outcomes=summarize_source_outcomes(state)
     return {"format":FORMAT,"workflow_id":key[0],"revision":key[1],"monitor_id":key[2],
         "plan_sha256":state["plan_sha256"],"head_sha256":history[-1]["entry_sha256"],
         "checkpoint_count":sum(e["kind"] in ("checkpoint","producer_checkpoint","clock_checkpoint","scheduled_checkpoint") for e in history),"entry_count":len(history),
@@ -115,7 +117,10 @@ def _view(key,state,history):
         "overdue_window_history":state["overdue_window_history"],"history":history,
         "eligible_for_continued_monitoring_review":bool(state["report"]["eligible_for_continued_monitoring_review"]
             and not state["sticky_rollback_triggers"] and not state["rollback_referral_recorded"]
-            and not corroboration["blocks_continuation"]),
+            and not corroboration["blocks_continuation"] and not source_outcomes["blocks_continuation"]),
+        "source_outcomes":source_outcomes,
+        "source_outcome_bindings":state.get("source_outcome_bindings",[]),
+        "source_outcome_checks":state.get("source_outcome_checks",[]),
         "outcome_corroboration":corroboration,
         "outcome_corroborations":state.get("outcome_corroborations",[]),
         "result_persisted":True,"local_dashboard_session_required":True,
@@ -214,7 +219,9 @@ def _next_state(state,plan,snapshot,report,initial_sources):
         "finance_reconciliations":state.get("finance_reconciliations",[]) if state else [],
         "scheduled_deadline_review_enabled":state.get("scheduled_deadline_review_enabled",False) if state else False,
         "outcome_corroboration_required":state.get("outcome_corroboration_required",False) if state else False,
-        "outcome_corroborations":state.get("outcome_corroborations",[]) if state else []}
+        "outcome_corroborations":state.get("outcome_corroborations",[]) if state else [],
+        "source_outcome_bindings":state.get("source_outcome_bindings",[]) if state else [],
+        "source_outcome_checks":state.get("source_outcome_checks",[]) if state else []}
 
 
 def append(packet,workflow_id,revision,doc):
