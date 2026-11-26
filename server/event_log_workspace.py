@@ -330,7 +330,7 @@ def _load(conn: duckdb.DuckDBPyConnection, log_id: str, paths: tuple[Path, Path,
 
 
 MAX_QUARANTINED_ROWS = 10_000          # rejected rows kept per batch when the user asks to keep them
-_OFFSET_RE = r"(Z|[+-][0-9]{2}:?[0-9]{2})$"
+_OFFSET_RE = r"([Zz]|[+-][0-9]{2}:?[0-9]{2})$"
 _DECISION = re.compile(r"^(Z|[+-](0[0-9]|1[0-4]):[0-5][0-9])$")
 
 
@@ -359,7 +359,9 @@ def timestamp_sql(raw: str, offset: str, pattern: str = "") -> str:
     ``pattern`` every value must match it exactly."""
     if pattern:
         return timestamp_formats.timestamp_sql(raw, offset, pattern)
-    parsed = f"CASE WHEN regexp_matches(trim({raw}), '{_OFFSET_RE}') THEN try_cast(trim({raw}) AS TIMESTAMPTZ)"
+    # RFC 3339 also allows a lowercase "t" and "z"; DuckDB reads only the uppercase forms.
+    iso = f"regexp_replace(regexp_replace(trim({raw}), '[zZ]$', '+00:00'), '^([0-9]{{4}}-[0-9]{{2}}-[0-9]{{2}})t', '\\1T')"
+    parsed = f"CASE WHEN regexp_matches(trim({raw}), '{_OFFSET_RE}') THEN try_cast({iso} AS TIMESTAMPTZ)"
     if offset:
         suffix = "+00:00" if offset == "Z" else offset
         parsed += (f" WHEN trim(coalesce({raw}, '')) <> '' THEN try_cast(strftime(try_cast(trim({raw}) AS TIMESTAMP),"
@@ -401,15 +403,19 @@ def _load_csv_fast(conn: duckdb.DuckDBPyConnection, log_id: str, path: Path, map
             copy.unlink(missing_ok=True)
     columns = [mapping.get(k) or "" for k in ("case_column", "activity_column", "timestamp_column")]
     resource = mapping.get("resource_column") or ""
+    # An optional time-of-day column is joined to the timestamp (date) column, for exports that split them.
+    clock = mapping.get("time_column") or ""
     if not all(columns):
         raise EventLogFormatError("case, activity and timestamp columns are required")
+    if clock and clock == columns[2]:
+        raise EventLogFormatError("the time-of-day column must differ from the timestamp (date) column")
     source = f"read_csv(?, header=true, names=?, delim='{delimiter}', all_varchar=true, sample_size=-1)"
     with path.open("r",encoding="utf-8-sig",newline="") as handle:
         original_header=read_csv_header(handle,delimiter)
     header = [row[0] for row in conn.execute(f"DESCRIBE SELECT * FROM {source}", [str(path),original_header]).fetchall()]
     if header!=original_header:
         raise EventLogFormatError("CSV column names must be preserved literally without automatic renaming")
-    missing = [name for name in columns + ([resource] if resource else []) if name not in header]
+    missing = [name for name in columns + ([resource] if resource else []) + ([clock] if clock else []) if name not in header]
     if missing:
         raise EventLogFormatError("missing required columns: " + ", ".join(sorted(missing))[:300])
     if identity_mode:source_identity.validate_columns(identity_mode,header)
@@ -419,6 +425,10 @@ def _load_csv_fast(conn: duckdb.DuckDBPyConnection, log_id: str, path: Path, map
             [str(path), original_header]).fetchone():
         raise EventLogFormatError(TRAILING_VALUES)
     case, activity, stamp = (q(c) for c in columns)
+    if clock:
+        # "date time"; a missing time leaves the date alone, a missing date leaves the timestamp missing.
+        stamp = (f"CASE WHEN trim(coalesce({stamp}, '')) = '' THEN NULL "
+                 f"ELSE concat_ws(' ', trim({stamp}), nullif(trim(coalesce({q(clock)}, '')), '')) END")
     res = q(resource) if resource else "''"
     # Optional extra columns kept as event attributes, with the streaming reader's bounds.
     extra = list(dict.fromkeys(mapping.get("attribute_columns") or []))

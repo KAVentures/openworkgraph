@@ -149,6 +149,13 @@ shift them. Signs, exponents, separators and longer values are rejected as
 unparseable. Format detection offers them when every sampled value is a
 plain number of 9–10 (seconds) or 12–13 (milliseconds) digits.
 
+Excel serial date numbers (`45355.5868055556` for 4 March 2024 14:05, as some
+CSV files saved from spreadsheets contain) use the named format `excel-serial`:
+days since 1899-12-30 (Excel's 1900 date system) with the time of day as the
+fraction, rounded to the millisecond. They are local times, so the import also
+needs the offset decision. Format detection offers it when every sampled value
+is a number from 20000 to 99999 (1954 to 2173), optionally with decimals.
+
 Every value must match the pattern exactly. A value with trailing text, an
 impossible date such as 31/02, or a value in another layout is rejected as
 unparseable, not guessed. A pattern without `%z` describes times without an
@@ -192,6 +199,17 @@ Columns are matched by name, and source event identity settings stay separate.
 header, optional `other_headers` with columns for up to three other delimiters,
 and optional `preferred_log_id`. Each match includes its
 `missing_attribute_columns`.
+
+### Separate date and time columns
+
+Some exports, such as SAP and other ERP change documents, put the date and the time of day in two
+columns ("Posting Date" and "Time"). Choose the date column as the timestamp column and the other as
+**Time-of-day column** (`time_column=` on the import, append, preview and format-detection routes).
+Each row is read as the date, a space and the time, so a declared format covers both, for example
+`%d.%m.%Y %H:%M:%S`. A row without a time keeps only its date, which a format with a time rejects
+rather than reading as midnight. A row without a date has no timestamp. The time column is recorded
+in the import's transform. The dashboard preselects both when a file has a column named like a date
+and another named like a time.
 
 ### Preview a CSV mapping
 
@@ -462,7 +480,7 @@ AI bearer tokens and MCP clients cannot read or change imported business logs.
 | `POST /v1/event-logs/{log_id}/delete` | Delete the log and every row that belongs to it. |
 | `GET`/`POST /v1/event-logs/{log_id}/expiry` (`{"delete_after": ISO time \| null}`) | Read, set or clear the date after which the log is deleted automatically (below). |
 | `POST /v1/event-logs/{log_id}/export/matching-cases` | Download matching cases. Body contains `cohort` and optional `case_id`, `include_unfiltered`, `case_type`, `events_from` and `events_before`. Query `format` is `csv` (default), `csv-attributes`, `csv-review`, `jsonl`, `xes`, `xes-attributes`, `ocel`, `ocelxml`, `sourcecsv`, or `sourcecsv-review`. Source-ID formats require the `source_case` notion. |
-| `POST /v1/event-logs/{log_id}/export/matching-cases.xlsx` | Download matching cases as an Excel workbook. The body is the same as for `export/matching-cases`. The worksheet holds the exact CSV rows as text cells, at most 1,048,575 events. |
+| `POST /v1/event-logs/{log_id}/export/matching-cases.xlsx` | Download matching cases as an Excel workbook. The body is the same as for `export/matching-cases`. Worksheets hold the exact CSV rows as text cells, 1,048,575 events each, continuing on further worksheets up to 16. |
 | `POST /v1/event-logs/{log_id}/derive` | Save the cases matching a filter as a new log (below). |
 | `POST /v1/event-logs/combine` | Combine 2 to 10 saved logs into a new log (below). |
 | `GET /v1/event-logs/{log_id}/quality` | Stored quality and mapping reports per import and append, plus current whole-log diagnostics (below). |
@@ -3081,6 +3099,15 @@ with the score and its volume, routine and waiting components, occurrences, case
 rate, routing pattern, same-predecessor and same-successor shares, median wait before, resources
 and repeats per case. Cells that a spreadsheet would read as formulas start with `'`.
 
+### Estimating the time automation could free
+
+Below the ranking, **Estimate** turns the top candidates into hours-per-week ranges (and, with an hourly cost,
+cost-per-year ranges) from assumptions you enter: the minutes one occurrence takes, low and high. The log only
+supplies occurrences per week. The share automation could take over is assumed per routing pattern (fixed
+60-90 %, mostly fixed 30-60 %, variable 0-30 %) and shown with the result. Every figure is a range labelled
+measured or assumed, not a measured saving. `POST /v1/event-logs/{log_id}/automation-estimate` with
+`{"handling_minutes": [low, high], "automatable_share"?, "hourly_cost"?, "limit"?}`; the active case filter applies.
+
 ## Performance spectrum
 
 The performance spectrum shows how long each step-to-step segment took, over calendar time. It
@@ -3403,8 +3430,11 @@ Each period needs at least 10 cases; a start-date case filter cannot be combined
 Both models are drafts from their own cases, and a change in how events are recorded looks the same
 as a change in the work.
 
-`GET /v1/event-logs/{log_id}/model-change?split=2024-03-01&noise=0.2` plus the other case-filter
-parameters. Agents use `get_process_model_change` (aggregates only).
+`GET /v1/event-logs/{log_id}/model-change?split=2024-03-01&noise=0.2&activities=1` plus the other case-filter
+parameters. **Activities shown** (`activities`, a share of events, most frequent activities first) keeps a
+log with more activities than a model holds comparable, as in model discovery and model quality; both the
+period and the group comparison take it. Agents use `get_process_model_change` (aggregates only), which picks
+a share that fits automatically.
 
 **Compare groups** in the same section runs the comparison between two groups of cases chosen by
 case attribute values, such as `region=EU` and `region=US`, as Celonis compares org units (a value
@@ -3790,7 +3820,7 @@ through `get_process_decision_rules` (see PROCESS_INTELLIGENCE_FOR_AGENTS.md).
 
 ### Excel event-log export
 
-Dashboard owners can download a saved log as an Excel workbook (`GET /v1/event-logs/{log_id}/events.xlsx`). The workbook preserves case IDs, activities, timestamps, and resources as literal text cells, with a frozen header and filter. It is a CSV-equivalent view rather than an OCEL relationship export.
+Dashboard owners can download a saved log as an Excel workbook (`GET /v1/event-logs/{log_id}/events.xlsx`). The workbook preserves case IDs, activities, timestamps, and resources as literal text cells, with a frozen header and filter. It is a CSV-equivalent view rather than an OCEL relationship export. A worksheet holds at most 1,048,575 events, so a larger log continues on further worksheets ("Events 2", "Events 3", ...), each with the header row, up to 16 worksheets (about 16.7 million events). To read it back, import the first worksheet and append the others.
 
 ### Parquet event-log export
 

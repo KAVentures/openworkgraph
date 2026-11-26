@@ -22,7 +22,7 @@
   const attrText=()=>[state.attr.attribute,state.attr.attribute_range?rangeText(state.attr.attribute_range):'',state.attr.starts_with?'starts with '+JSON.stringify(state.attr.starts_with):'',state.attr.ends_with?'ends with '+JSON.stringify(state.attr.ends_with):'',state.attr.duration?durationText(state.attr.duration):'',moreFilterText(state.attr)].filter(Boolean).join('; ');
   let labelLookupBusy=false;
   // Views that honour the workspace case filter; every other section uses all cases.
-  const FILTERED=new Set(['automation-candidates','summary','variants','variants/preview','variant-coverage','duration-distribution','activities','kpis','process-map','playback','dotted-chart','performance-spectrum','waiting-time','drift','model-discovery','organization','report.html','decision-points','decision-rules']);
+  const FILTERED=new Set(['automation-candidates','automation-estimate','summary','variants','variants/preview','variant-coverage','duration-distribution','activities','kpis','process-map','playback','dotted-chart','performance-spectrum','waiting-time','drift','model-discovery','organization','report.html','decision-points','decision-rules']);
   FILTERED.add('roles');
   FILTERED.add('process-map.dot');
   FILTERED.add('anonymized-export');
@@ -227,6 +227,7 @@
     const mapping=el('div',null,'row');mapping.id='owgEventLogMapping';mapping.style.alignItems='end';
     const cols={case:select('owgEventLogCase',[]),activity:select('owgEventLogActivity',[]),time:select('owgEventLogTime',[]),resource:select('owgEventLogResource',[])};
     const delimiter=select('owgEventLogDelimiter',[[',','Comma'],[';','Semicolon'],['t','Tab'],['|','Pipe']]);
+    const clock=select('owgEventLogTimeOfDay',[['','(none)']]);
     const encoding=select('owgEventLogEncoding',[['utf-8','UTF-8'],['windows-1252','Windows-1252 (Western European)'],['utf-16','UTF-16 (Excel Unicode text)']]);
     const extras=select('owgEventLogAttributes',[]);extras.multiple=true;extras.size=3;
     extras.title='Only the columns you choose are stored, for example a lifecycle (start/complete) or end-time column.';
@@ -235,7 +236,7 @@
     naiveOffset.title='For timestamps without a time zone, e.g. +01:00 or -05:00. Leave empty to reject such rows.';
     // Times such as 03/04/2024 14:05 need a declared format; the dashboard suggests one from the first rows.
     const timeFormat=select('owgEventLogTimeFormat',[['','ISO 8601 (2024-03-04T14:05:00Z)']]);
-    mapping.append(field('Case column',cols.case),field('Activity column',cols.activity),field('Timestamp column (with timezone)',cols.time),field('Timestamp format',timeFormat),field('Resource column',cols.resource),field('Extra columns to keep (optional)',extras),field('Delimiter',delimiter),field('Text encoding',encoding),field('Offset for times without one',naiveOffset));
+    mapping.append(field('Case column',cols.case),field('Activity column',cols.activity),field('Timestamp column (with timezone)',cols.time),field('Time-of-day column (if separate)',clock),field('Timestamp format',timeFormat),field('Resource column',cols.resource),field('Extra columns to keep (optional)',extras),field('Delimiter',delimiter),field('Text encoding',encoding),field('Offset for times without one',naiveOffset));
     const identity=el('fieldset');identity.id='owgEventLogIdentity';identity.append(el('legend','Supplied source-event IDs (optional)'));
     const useIdentity=input('owgEventLogUseIdentity','checkbox');
     const identityFields=el('div',null,'row');identityFields.style.alignItems='end';
@@ -308,7 +309,7 @@
       // so a delayed column read cannot overwrite another chosen file's mapping.
       const options=['case_id','activity','timestamp','source_event_id'].map(x=>[x,x]);
       for(const column of [cols.case,cols.activity,cols.time])setOptions(column,options);
-      setOptions(cols.resource,[['','(none)'],...options]);setOptions(extras,options);
+      setOptions(cols.resource,[['','(none)'],...options]);setOptions(extras,options);setOptions(clock,[['','(none)']]);
       setOptions(eventId,[['','Choose a column'],...options]);
       for(const column of [sourceColumn,caseColumn,jsonColumn])setOptions(column,[['','(none)'],...options]);
       cols.case.value='case_id';cols.activity.value='activity';cols.time.value='timestamp';cols.resource.value='';
@@ -344,7 +345,8 @@
     }
     function csvMapping(q){
       q.set('case_column',cols.case.value);q.set('activity_column',cols.activity.value);q.set('timestamp_column',cols.time.value);q.set('resource_column',cols.resource.value);
-      if(!(useIdentity.checked&&jsonColumn.value))[...extras.selectedOptions].forEach(o=>{if(![cols.case.value,cols.activity.value,cols.time.value,cols.resource.value].includes(o.value))q.append('attribute_column',o.value);});
+      if(clock.value)q.set('time_column',clock.value);
+      if(!(useIdentity.checked&&jsonColumn.value))[...extras.selectedOptions].forEach(o=>{if(![cols.case.value,cols.activity.value,cols.time.value,cols.resource.value,clock.value].includes(o.value))q.append('attribute_column',o.value);});
       q.set('delimiter',delimiter.value);if(keep.checked)q.set('keep_rejected','true');
       if(encoding.value!=='utf-8')q.set('encoding',encoding.value);
       if(naiveOffset.value.trim())q.set('naive_timestamp_offset',naiveOffset.value.trim());
@@ -391,6 +393,12 @@
       cols.activity.value=guess(columns,['activity','event','step','action'])||columns[1]||'';
       cols.time.value=guess(columns,['time','date','ts'])||columns[2]||'';
       cols.resource.value=guess(columns,['resource','user','who','agent','owner']);
+      // Exports that split date and time (such as "Posting Date" and "Time"): the date column is the
+      // timestamp column and the time column is joined to it.
+      setOptions(clock,[['','(none)'],...options]);clock.value='';
+      const dateOnly=columns.find(c=>/(^|[ _-])(date|datum|fecha|data)$/i.test(c.trim()));
+      const timeOnly=columns.find(c=>/^(time|uhrzeit|zeit|hora|ora|time of day)$|[ _-](time|uhrzeit|zeit)$/i.test(c.trim())&&c!==dateOnly);
+      if(dateOnly&&timeOnly){cols.time.value=dateOnly;clock.value=timeOnly;}
       setOptions(extras,options);[...extras.options].forEach(o=>{o.selected=/lifecycle/i.test(o.value);});
       setOptions(eventId,[['','Choose a column'],...options]);
       for(const control of [sourceColumn,caseColumn,jsonColumn])setOptions(control,[['','(none)'],...options]);
@@ -528,13 +536,13 @@
     // Suggest a timestamp format from the first rows of the chosen time column (sent to this computer only).
     let formatSequence=0;
     async function detectTimeFormat(){
-      const sequence=++formatSequence,chosen=file.files&&file.files[0],column=cols.time.value,selectedDelimiter=delimiter.value;
+      const sequence=++formatSequence,chosen=file.files&&file.files[0],column=cols.time.value,selectedDelimiter=delimiter.value,timeColumn=clock.value;
       setOptions(timeFormat,[['','ISO 8601 (2024-03-04T14:05:00Z)']]);timeFormat.value='';
       if(!chosen||format.value!=='csv'||!column)return;
       try{
-        const q=new URLSearchParams({column,delimiter:selectedDelimiter});
+        const q=new URLSearchParams({column,delimiter:selectedDelimiter});if(timeColumn)q.set('time_column',timeColumn);
         const r=await (await api('/v1/event-logs/timestamp-formats?'+q,{method:'POST',body:await headText(chosen,256*1024,encoding.value),headers:{'Content-Type':'text/plain'}})).json();
-        if(sequence!==formatSequence||file.files?.[0]!==chosen||format.value!=='csv'||delimiter.value!==selectedDelimiter||cols.time.value!==column)return;
+        if(sequence!==formatSequence||file.files?.[0]!==chosen||format.value!=='csv'||delimiter.value!==selectedDelimiter||cols.time.value!==column||clock.value!==timeColumn)return;
         setOptions(timeFormat,[['','ISO 8601 (2024-03-04T14:05:00Z)'],...r.candidates.map(c=>[c.pattern,c.pattern+' \u2014 '+c.order+': '+c.first_value+' reads as '+c.first_value_reads_as])]);
         if(r.suggested){
           clearImportPreview();timeFormat.value=r.suggested;refreshImport();
@@ -545,7 +553,7 @@
         else if(r.samples&&!r.candidates.length&&r.iso_with_offset+r.iso_without_offset<r.samples)status('Some times in the first rows are not ISO 8601 and match no known format; those rows will be rejected.');
       }catch(_){/* detection is a convenience; the import still validates every row */}
     }
-    cols.time.addEventListener('change',detectTimeFormat);
+    cols.time.addEventListener('change',detectTimeFormat);clock.addEventListener('change',detectTimeFormat);
     // Offer the mapping recorded with an earlier import whose columns this file also has.
     const reuseRow=el('div',null,'row');reuseRow.id='owgEventLogReuse';reuseRow.hidden=true;mapping.appendChild(reuseRow);
     function applyMapping(m,header){
@@ -555,6 +563,7 @@
         setMappingColumns(header.columns);
       }
       cols.case.value=m.case_column;cols.activity.value=m.activity_column;cols.time.value=m.timestamp_column;cols.resource.value=m.resource_column||'';
+      clock.value=m.time_column||'';
       [...extras.options].forEach(o=>{o.selected=(m.attribute_columns||[]).includes(o.value);});
       naiveOffset.value=m.naive_timestamp_offset||'';
       if(m.timestamp_format&&![...timeFormat.options].some(o=>o.value===m.timestamp_format))timeFormat.appendChild(new Option(m.timestamp_format,m.timestamp_format));
@@ -1064,7 +1073,7 @@
         'ocel':'Includes objects linked to matching events, their timed attributes, and relationships between included objects.',
         'ocelxml':'Includes objects linked to matching events, their timed attributes, and relationships between included objects.',
         'jsonl':'One JSON object per line with case ID, activity, timestamp and resource (null when missing).',
-        'xlsx':'One Events worksheet with the exact CSV columns as text cells, a frozen header and a filter. At most 1,048,575 events.'
+        'xlsx':'Events worksheets with the exact CSV columns as text cells, a frozen header and a filter. Over 1,048,575 events, the rows continue on further worksheets.'
       }[formats.value];
     }
     formats.onchange=describeFormat;describeFormat();
@@ -2949,6 +2958,38 @@
         last=r;exports.enable(true);
       }catch(error){out.replaceChildren(el('div',error.message,'muted'));}
       finally{run.disabled=false;}};
+    // Hours-per-week ranges from the owner's own assumptions; only occurrences per week are measured.
+    const est=el('div');est.id='owgAutomationEstimate';
+    est.append(el('h4','Estimate the time automation could free'),
+      el('div','Enter how many minutes one occurrence takes. A log records when steps happened, not how long anyone worked on them, so this is your assumption. Results are ranges, not measured savings.','muted'));
+    const minLow=input('owgAutomationMinutesLow','number'),minHigh=input('owgAutomationMinutesHigh','number'),rate=input('owgAutomationHourlyCost','number');
+    for(const n of [minLow,minHigh,rate]){n.min='0';n.step='any';}
+    minLow.value='3';minHigh.value='8';
+    const estRun=button('Estimate','secondary');estRun.id='owgAutomationEstimateRun';
+    const estRow=el('div',null,'row');estRow.style.alignItems='end';
+    estRow.append(field('Minutes per occurrence, low',minLow),field('Minutes per occurrence, high',minHigh),field('Hourly cost (optional)',rate),estRun);
+    const estOut=el('div');estOut.id='owgAutomationEstimateResults';estOut.setAttribute('role','status');estOut.setAttribute('aria-live','polite');
+    est.append(estRow,estOut);box.appendChild(est);
+    const range=([a,b],f)=>f(a)+'\u2013'+f(b);
+    const hrs=v=>Number(v).toLocaleString(undefined,{maximumFractionDigits:1});
+    estRun.onclick=async()=>{
+      const low=Number(minLow.value),high=Number(minHigh.value);
+      if(!(low>=0)||!(high>=low)){estOut.replaceChildren(el('div','Enter a low and a high number of minutes, with the high at least the low.','muted'));return;}
+      const body={handling_minutes:[low,high],limit:15};
+      if(rate.value!==''){const c=Number(rate.value);if(!(c>0)){estOut.replaceChildren(el('div','The hourly cost must be above 0, or left empty.','muted'));return;}body.hourly_cost=c;}
+      estRun.disabled=true;estOut.replaceChildren(el('div','Estimating\u2026','muted'));
+      try{
+        const r=await (await api(logPath('automation-estimate',{}),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).json();
+        const withCost='cost_per_year_total' in r;
+        const shares=r.assumptions.automatable_share;
+        estOut.replaceChildren(
+          el('div','About '+range(r.hours_per_week_total,hrs)+' hours a week across these '+r.candidates.length+' activities'+(withCost?', about '+range(r.cost_per_year_total,hrs)+' a year at '+r.assumptions.hourly_cost+' an hour':'')+'.'),
+          table(['Activity','Routing','Per week (measured)','Share automatable (assumed)','Hours a week','Consider'].concat(withCost?['Cost a year']:[]),
+            r.candidates.map(c=>[c.activity,PATTERNS[c.routing_pattern],String(c.measured.occurrences_per_week),
+              range(c.assumed.automatable_share,v=>Math.round(v*100)+'%'),range(c.hours_per_week,hrs),c.alternative_to_consider].concat(withCost?[range(c.cost_per_year,hrs)]:[]))),
+          el('div','Assumed automatable shares: fixed '+range(shares.fixed,pct)+', mostly fixed '+range(shares.mostly_fixed,pct)+', variable '+range(shares.variable,pct)+'. '+r.interpretation,'muted'));
+      }catch(error){estOut.replaceChildren(el('div',error.message,'muted'));}
+      finally{estRun.disabled=false;}};
     return box;
   }
 
@@ -8141,10 +8182,11 @@
     const groupB=input('owgModelChangeCohortBAttribute','text','e.g. region=US');groupB.maxLength=400;groupB.autocomplete='off';
     const split=input('owgModelChangeSplit','date');
     const noise=select('owgModelChangeNoise',[['0.2','Leave out paths under 20% (default)'],['0','Keep every path'],['0.4','Leave out paths under 40%']]);
+    const shown=select('owgModelChangeCoverage',[['1','All activities'],['0.9','90% of events'],['0.75','75% of events'],['0.5','50% of events']]);
     const run=button('Compare periods','secondary');run.id='owgModelChangeRun';
     const splitField=field('Split at (empty: median case start)',split),aField=field('Group A (attribute=value)',groupA),bField=field('Group B (attribute=value)',groupB);
     const sync=()=>{splitField.hidden=mode.value!=='periods';aField.hidden=bField.hidden=mode.value!=='groups';};sync();
-    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Compare',mode),splitField,aField,bField,field('Models',noise),run);
+    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Compare',mode),splitField,aField,bField,field('Models',noise),field('Activities shown',shown),run);
     const statusLine=el('div',null,'muted');statusLine.id='owgModelChangeStatus';statusLine.setAttribute('role','status');statusLine.setAttribute('aria-live','polite');
     const out=el('div');out.id='owgModelChangeResults';
     box.append(row,statusLine,out);
@@ -8153,7 +8195,7 @@
     let revision=0;
     const reset=()=>{revision++;out.replaceChildren();run.disabled=false;statusLine.textContent='';};
     mode.onchange=()=>{sync();reset();};
-    split.oninput=groupA.oninput=groupB.oninput=noise.onchange=reset;
+    split.oninput=groupA.oninput=groupB.oninput=noise.onchange=shown.onchange=reset;
     function showCrossFit(report,names){
       const number=value=>value.toLocaleString();
       const ids=Object.keys(names);
@@ -8192,7 +8234,7 @@
         if(!groupA.value.includes('=')||!groupB.value.includes('=')){statusLine.textContent='Enter both groups as attribute=value.';out.replaceChildren();return;}
         run.disabled=true;statusLine.textContent='Discovering both groups…';out.replaceChildren();
         try{
-          const r=await getJSON(logPath('model-comparison',{group_a:groupA.value.trim(),group_b:groupB.value.trim(),noise:noise.value}));
+          const r=await getJSON(logPath('model-comparison',{group_a:groupA.value.trim(),group_b:groupB.value.trim(),noise:noise.value,activities:shown.value}));
           if(!current())return;
           const c=r.cross_fit,A=r.groups.a,B=r.groups.b;
           statusLine.textContent=A.filter+' ('+Number(A.cases).toLocaleString()+' cases) against '+B.filter+' ('+Number(B.cases).toLocaleString()+'): '+r.orderings.changed+' of '+r.orderings.pairs_compared+' activity orderings differ. '+B.filter+' cases fit the '+A.filter+' model '+pct(c.b_cases_on_a_model.fitness)+', against '+pct(c.a_cases_on_a_model.fitness)+' for its own cases.';
@@ -8208,7 +8250,7 @@
       }
       run.disabled=true;statusLine.textContent='Discovering both periods…';out.replaceChildren();
       try{
-        const params={noise:noise.value};if(split.value)params.split=split.value+'T00:00:00Z';
+        const params={noise:noise.value,activities:shown.value};if(split.value)params.split=split.value+'T00:00:00Z';
         const r=await getJSON(logPath('model-change',params));
         if(!current())return;
         const c=r.cross_fit,drop=r.fitness_drop_on_earlier_model;
@@ -9187,7 +9229,9 @@
       try{
         const r=await getJSON(logPath('quality/timestamp-ties'));
         if(generation!==state.generation||!tieOut.isConnected)return;
-        tieOut.replaceChildren(el('p',Number(r.tied_case_event_occurrences).toLocaleString()+' of '+Number(r.case_event_occurrences).toLocaleString()+' case-event occurrences share a timestamp in '+Number(r.cases_with_ties).toLocaleString()+' of '+Number(r.cases).toLocaleString()+' cases. '+Number(r.groups_with_different_activities).toLocaleString()+' timestamp groups contain different activity labels.','muted'),
+        const tieDownload=button('Download timestamp ordering JSON','secondary');tieDownload.id='owgQualityTiesJson';
+        tieDownload.onclick=()=>download('event-log-timestamp-ordering.json',JSON.stringify(r,null,2),'application/json');
+        tieOut.replaceChildren(tieDownload,el('p','The download contains this analysis snapshot, including activity names and any active case filter.','muted'),el('p',Number(r.tied_case_event_occurrences).toLocaleString()+' of '+Number(r.case_event_occurrences).toLocaleString()+' case-event occurrences share a timestamp in '+Number(r.cases_with_ties).toLocaleString()+' of '+Number(r.cases).toLocaleString()+' cases. '+Number(r.groups_with_different_activities).toLocaleString()+' timestamp groups contain different activity labels.','muted'),
           el('p',r.interpretation,'muted'),
           ...(r.activities_truncated?[el('p','Showing the 100 activities with the most tied occurrences; other activities are omitted.','muted')]:[]),
           table(['Activity','Occurrences','Tied occurrences','Cases with ties'],r.activities.map(a=>[a.activity,Number(a.occurrences).toLocaleString(),Number(a.tied_occurrences).toLocaleString(),Number(a.cases_with_ties).toLocaleString()])));
@@ -9233,6 +9277,8 @@
       const integrityLabel=integrity.status==='verified'?'Verified: current saved content matches the recorded import digest.':
         integrity.status==='mismatch'?'Mismatch: saved content differs from the recorded import digest. Investigate before relying on this log.':
         'Not verifiable: the available reports cannot establish current saved-content integrity.';
+      const qualityDownload=button('Download quality overview JSON','secondary');qualityDownload.id='owgQualityOverviewJson';
+      qualityDownload.onclick=()=>download('event-log-quality-overview.json',JSON.stringify(r,null,2),'application/json');
       const integrityStatus=el('p',integrityLabel,'muted');integrityStatus.id='owgQualityIntegrity';
       integrityStatus.setAttribute('role','status');
       integrityStatus.dataset.status=['verified','mismatch'].includes(integrity.status)?integrity.status:'not_verifiable';
@@ -9241,6 +9287,7 @@
       out.replaceChildren(
         ...(r.log.source_identity?[el('p','Source-ID deduplication compares declared namespace and supplied event ID. The content-duplicate diagnostic below compares payloads; distinct source IDs with identical payloads remain separate events. Neither establishes verified provider identity or complete history.')]:[]),
         el('div','Showing '+Number(r.window.batch_count).toLocaleString()+' of '+Number(r.window.total_batches).toLocaleString()+' batches. Use Compare batches below to browse older history.','muted'),
+        qualityDownload,el('p','The download contains this overview snapshot, including its batch window, mapping and attribute names; it does not include rejected rows.','muted'),
         integrityStatus,
         table(['Batch','Format','Accepted','Rejected','Duplicates skipped','Transform','Content v1','Content v2'],reports),
         ...(r.batches_without_report.length?[el('div','No report was stored on this page for '+r.batches_without_report.map(b=>b?'append '+b:'the import').join(', ')+' (imported before reports existed, or the report could not be written).','muted')]:[]),
@@ -12568,6 +12615,35 @@
     const run=button('Predict');run.id='owgPredictRun';
     const watch=button('Monitor quality over time','secondary');watch.id='owgPredictMonitor';
     const f={hours:field('Hours',hours),activity:field('Activity',activity)};
+    const outcomeExact=input('owgPredictOutcomeExact','text','Exact activity label (optional)');outcomeExact.maxLength=400;
+    const outcomeLookup=activityLabelLookup(outcomeExact,{id:part=>'owgPredictOutcomeActivity'+part,subject:'prediction outcome activity'});
+    const outcomeNote=el('div','An exact label overrides the suggestion; matching is literal.','muted');
+    f.activity.append(field('Exact outcome activity',outcomeExact),outcomeLookup.wrap,outcomeNote);
+    let suggestion=activity.value,addedOutcome=null;
+    outcomeExact.addEventListener('input',()=>{
+      outcomeLookup.reset();
+      if(addedOutcome){addedOutcome.remove();addedOutcome=null;}
+      const value=outcomeExact.value;
+      if(value&&Array.from(value).length<=200){
+        if(!Array.from(activity.options).some(option=>option.value===value)){
+          addedOutcome=document.createElement('option');addedOutcome.value=value;addedOutcome.textContent=value;activity.appendChild(addedOutcome);
+        }
+        activity.value=value;outcomeNote.textContent='An exact label overrides the suggestion; matching is literal.';
+      }else{
+        activity.value=value?'':suggestion;
+        outcomeNote.textContent=value?'Activity labels must have at most 200 characters.':'An exact label overrides the suggestion; matching is literal.';
+      }
+      activity.dispatchEvent(new Event('input',{bubbles:true}));
+      ++watchTurn;monitorOut.replaceChildren();watch.disabled=false;
+    });
+    activity.addEventListener('change',()=>{
+      const selected=activity.value;
+      if(addedOutcome){addedOutcome.remove();addedOutcome=null;}
+      if(Array.from(activity.options).some(option=>option.value===selected))suggestion=selected;
+      activity.value=suggestion;outcomeExact.value='';outcomeLookup.reset();
+      outcomeNote.textContent='An exact label overrides the suggestion; matching is literal.';
+      ++watchTurn;monitorOut.replaceChildren();watch.disabled=false;
+    });
     const sync=()=>{
       show(f.hours,outcome.value==='duration_over');show(f.activity,outcome.value==='contains_activity');
       rankBy.querySelector('option[value="outcome"]').disabled=!outcome.value;
