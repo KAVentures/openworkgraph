@@ -166,8 +166,8 @@ def project(receipt,now):
     at=_ms(receipt.get("verified_at"))
     if at is None or at>now or now-at>300000:
         return {**result,"reason":"invalid_source_read_time"}
-    if (receipt.get("provider"),receipt.get("object_type"),receipt.get("verification_method"),
-            receipt.get("source_state_reported"))!=("jira","issue","explicit_opt_in_site_verified_oauth_jira_issue_status_read",True):
+    if (receipt.get("provider"),receipt.get("object_type"),receipt.get("verification_method"))!=(
+            "jira","issue","explicit_opt_in_site_verified_oauth_jira_issue_status_read") or receipt.get("source_state_reported") is not True:
         return {**result,"reason":"unrecognized_source_provenance"}
     state=receipt.get("source_state")
     if state not in ("new","indeterminate","done"):
