@@ -188,6 +188,13 @@ const path=require('node:path');
    assert.equal(multiEvidence.multi_instance_activities[0].sequential,true);
    assert.deepEqual(multiEvidence.multi_instance_activities[0].call_path,['approval']);
    assert.equal(multiEvidence.multi_instance_activities[0].visible_transition_ids.length,2);
+   await page.getByText('Exact completed-trace membership audit',{exact:true}).click();
+   await page.locator('#owgPetriAuditRun').click();
+   await page.locator('#owgPetriAuditStatus').filter({hasText:'0 accepted · 30 rejected · 0 inconclusive · 0 excluded'}).waitFor();
+   const [auditDownload]=await Promise.all([page.waitForEvent('download'),page.getByRole('button',{name:'Download exact trace audit (JSON)',exact:true}).click()]);
+   const traceAudit=JSON.parse(await fs.readFile(await auditDownload.path(),'utf8'));
+   assert.equal(traceAudit.pnml_sha256,multiEvidence.pnml_sha256);
+   assert.equal(traceAudit.accepted_fraction_bounds.upper,0);
    // The most common path (Register, Check, Pay, Close; 24 of 30 cases) as the reference model.
    await page.locator('#owgPetriHappy').click();
    await page.locator('#owgPetriStatus').filter({hasText:'on the most common path (followed by 80% of cases): 24 of 30 cases'}).waitFor();
