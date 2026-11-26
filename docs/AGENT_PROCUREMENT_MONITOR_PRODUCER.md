@@ -59,3 +59,10 @@ revoked/expired), 100 observations per batch, existing bounded journal
 capacity. No automatic pruning or silent evidence rewrite. Local database
 administrators remain trusted. No scheduler, remote collector or deployment
 authority is created; automated evaluation occurs on accepted submissions.
+
+An operator may use router-journal-refresh (monitor_id, expected_head_sha256,
+confirmed=true) to advance the retained cutoff to the local server clock and
+recompute missing/overdue windows without accepting new observations or
+uploading the upstream bundle. This is explicit, not a background scheduler.
+Credential management rejects AI-context-marked requests in addition to
+requiring the dashboard session. Clock refresh consumes a journal audit entry.

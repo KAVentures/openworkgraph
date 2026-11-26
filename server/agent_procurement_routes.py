@@ -135,10 +135,12 @@ def _inspect(operation, workflow_id, revision, payload):
 
 
 @router.post("/v1/process-catalog/procurement/{operation}")
-async def inspect_procurement(request: Request, operation: Literal["compare","freeze","review","nominate","assess","decide","outcome-review","rollout-review","deployment-review","deployment-decide","operating-cost","router-freeze","router-review","router-change-freeze","router-change-assess","router-change-decide","router-pilot-freeze","router-pilot-review","router-pilot-decide","router-monitor-freeze","router-monitor-review","router-monitor-decide","router-journal-list","router-journal-append","router-journal-detail","router-journal-decide","router-journal-forget","router-producer-grant","router-producer-revoke"],
+async def inspect_procurement(request: Request, operation: Literal["compare","freeze","review","nominate","assess","decide","outcome-review","rollout-review","deployment-review","deployment-decide","operating-cost","router-freeze","router-review","router-change-freeze","router-change-assess","router-change-decide","router-pilot-freeze","router-pilot-review","router-pilot-decide","router-monitor-freeze","router-monitor-review","router-monitor-decide","router-journal-list","router-journal-append","router-journal-refresh","router-journal-detail","router-journal-decide","router-journal-forget","router-producer-grant","router-producer-revoke"],
                               workflow_id: str = Query(pattern=r"^[A-Za-z0-9_-]{1,80}$"),
                               revision: int = Query(ge=1,le=2**31-1)):
     _require_dashboard(request)
+    if operation.startswith("router-producer-") and str(request.headers.get("X-OpenWorkGraph-Context") or "").strip().lower()=="ai":
+        raise HTTPException(403,"Producer credentials require an explicit dashboard operator")
     payload=await _envelope(request)
     _require_dashboard(request)
     result=await run_in_threadpool(_inspect,operation,workflow_id,revision,payload)

@@ -111,3 +111,18 @@ def test_stale_revision_and_unrecognized_credentials(producer,local_db):
                    "Bearer "+grant["producer_token"][:-1]+("a" if grant["producer_token"][-1]!="a" else "b")):
         with pytest.raises(journal.JournalError) as e:telemetry.authenticate(header)
         assert e.value.status==401
+
+
+def test_clock_refresh_detects_overdue_without_new_producer_evidence(producer,monkeypatch):
+    grant,batch,clock,_=producer
+    telemetry.ingest(credential(grant),batch)
+    detail=journal.detail("process_1",1,{"monitor_id":"monitor-1"})
+    monkeypatch.setattr(journal.time,"time",lambda:4.2)
+    result=journal.refresh("process_1",1,{"monitor_id":"monitor-1",
+        "expected_head_sha256":detail["head_sha256"],"confirmed":True})
+    assert result["latest_report"]["as_of_ms"]==4200
+    assert result["latest_report"]["recorded_cases"]==len(batch["observations"])
+    assert result["history"][-1]["kind"]=="clock_checkpoint"
+    assert result["credential_authenticated_observations"]==len(batch["observations"])
+    assert result["overdue_window_history"]==["w1","w2"]
+    assert not result["eligible_for_continued_monitoring_review"]

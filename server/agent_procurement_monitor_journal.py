@@ -13,7 +13,7 @@ from typing import Annotated, Literal
 from pydantic import Field, StrictBool
 
 from shared.agent_procurement import Alias, Strict, digest
-from shared.agent_procurement_router_monitor import _normalize, review
+from shared.agent_procurement_router_monitor import _normalize, _review_verified, review
 from shared.process_shadow_review import Hash
 from . import db
 
@@ -43,6 +43,12 @@ class Decision(Strict):
     expected_head_sha256: Hash
     disposition: Literal["refer_for_continued_monitoring_review","refer_for_rollback_review","hold"]
     reviewer_alias: Alias
+    confirmed: StrictBool
+
+
+class Refresh(Strict):
+    monitor_id: Alias
+    expected_head_sha256: Hash
     confirmed: StrictBool
 
 
@@ -98,7 +104,7 @@ def _read(conn,key):
 def _view(key,state,history):
     return {"format":FORMAT,"workflow_id":key[0],"revision":key[1],"monitor_id":key[2],
         "plan_sha256":state["plan_sha256"],"head_sha256":history[-1]["entry_sha256"],
-        "checkpoint_count":sum(e["kind"] in ("checkpoint","producer_checkpoint") for e in history),"entry_count":len(history),
+        "checkpoint_count":sum(e["kind"] in ("checkpoint","producer_checkpoint","clock_checkpoint") for e in history),"entry_count":len(history),
         "capacity":MAX_ENTRIES,"latest_report":state["report"],
         "sticky_rollback_triggers":state["sticky_rollback_triggers"],
         "rollback_referral_recorded":state["rollback_referral_recorded"],
@@ -203,6 +209,32 @@ def append(packet,workflow_id,revision,doc):
             "overdue_windows":[w["window_id"] for w in report["windows"] if w["state"]=="overdue"]})
 
 
+def refresh(workflow_id,revision,doc):
+    """Advance the cutoff without new observations using the local server clock."""
+    req=Refresh.model_validate(doc)
+    if not req.confirmed:raise JournalError("Explicit checkpoint confirmation required",403)
+    key=_key(workflow_id,revision,req.monitor_id)
+    with db.connect() as conn:
+        conn.execute("BEGIN IMMEDIATE");_schema(conn);state,history=_read(conn,key)
+        if state is None:raise JournalError("Monitoring journal not found",404)
+        _check_head(history,req.expected_head_sha256);_require_current(conn,workflow_id,revision)
+        if "monitor_plan" not in state:
+            raise JournalError("Retain a new verified checkpoint before refreshing",409)
+        now=int(time.time()*1000)
+        if now<=state["snapshot"]["as_of_ms"]:
+            raise JournalError("Server clock has not advanced past retained cutoff",409)
+        plan=state["monitor_plan"];sources=set(state["initial_sources"])
+        snapshot=_normalize({**state["snapshot"],"as_of_ms":now})
+        report=_review_verified(plan,snapshot,sources,{"snapshot":state["snapshot"],
+            "expected_snapshot_sha256":state["report"]["snapshot_sha256"]})
+        updated=_next_state(state,plan,snapshot,report,sources)
+        return _save(conn,key,updated,history,"clock_checkpoint",{
+            "snapshot_sha256":report["snapshot_sha256"],"report_sha256":report["report_sha256"],
+            "as_of_ms":now,"recorded_cases":report["recorded_cases"],
+            "recommended_review":report["recommended_review"],"rollback_triggers":report["rollback_review_triggers"],
+            "overdue_windows":[w["window_id"] for w in report["windows"] if w["state"]=="overdue"]})
+
+
 def detail(workflow_id,revision,doc):
     req=Identify.model_validate(doc);key=_key(workflow_id,revision,req.monitor_id)
     with db.connect() as conn:
@@ -265,6 +297,7 @@ def list_journals(workflow_id,revision,doc):
 def operation(packet,workflow_id,revision,action,doc):
     if action=="router-journal-list":return list_journals(workflow_id,revision,doc)
     if action=="router-journal-append":return append(packet,workflow_id,revision,doc)
+    if action=="router-journal-refresh":return refresh(workflow_id,revision,doc)
     if action=="router-journal-detail":return detail(workflow_id,revision,doc)
     if action=="router-journal-decide":return decide(workflow_id,revision,doc)
     if action=="router-journal-forget":return forget(workflow_id,revision,doc)
