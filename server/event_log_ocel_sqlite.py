@@ -18,12 +18,12 @@ directory and streamed to the owner; nothing is kept.
 """
 from __future__ import annotations
 
-import io
-import json
 import re
 import sqlite3
 from pathlib import Path
 from typing import Any
+
+from shared.event_log_formats import ocel_json_document
 
 from . import event_log_workspace as workspace
 
@@ -49,11 +49,28 @@ def _q(name: str) -> str:
     return '"' + name.replace('"', '""') + '"'
 
 
+def _document(log_id: str) -> dict[str, Any]:
+    """The log's OCEL 2.0 JSON document as data. Building it directly, instead of writing JSON text and
+    parsing it again, avoids most of the export time on large logs."""
+    with workspace._LOCK:
+        conn = workspace._connect()
+        try:
+            workspace._check_log(conn, log_id)
+            objects, events = workspace._ocel_export_projection(conn, log_id)
+        finally:
+            conn.close()
+    return ocel_json_document(objects, events)
+
+
 def write(log_id: str, path: Path) -> dict[str, Any]:
-    buffer = io.StringIO()
-    workspace.export_log(log_id, "ocel", buffer)
-    doc = json.loads(buffer.getvalue())
+    doc = _document(log_id)
     events, objects = doc["events"], doc["objects"]
+    events_by_type: dict[str, list[dict[str, Any]]] = {}
+    for e in events:
+        events_by_type.setdefault(e["type"], []).append(e)
+    objects_by_type: dict[str, list[dict[str, Any]]] = {}
+    for o in objects:
+        objects_by_type.setdefault(o["type"], []).append(o)
     event_types = _table_names(sorted({e["type"] for e in events}))
     object_types = _table_names(sorted({o["type"] for o in objects}))
     # Attribute names are SQL column identifiers in OCEL SQLite. SQLite treats column names
@@ -88,7 +105,7 @@ def write(log_id: str, path: Path) -> dict[str, Any]:
         conn.executemany("INSERT INTO event_map_type VALUES (?, ?)", event_types.items())
         conn.executemany("INSERT INTO object_map_type VALUES (?, ?)", object_types.items())
         for kind, suffix in event_types.items():
-            rows = [e for e in events if e["type"] == kind]
+            rows = events_by_type[kind]
             names = sorted({a["name"] for e in rows for a in e["attributes"]})
             table = _q("event_" + suffix)
             conn.execute(f"CREATE TABLE {table} (ocel_id TEXT PRIMARY KEY, ocel_time TIMESTAMP"
@@ -97,7 +114,7 @@ def write(log_id: str, path: Path) -> dict[str, Any]:
                              [[e["id"], e["time"], *[{a["name"]: a["value"] for a in e["attributes"]}.get(n) for n in names]]
                               for e in rows])
         for kind, suffix in object_types.items():
-            rows = [o for o in objects if o["type"] == kind]
+            rows = objects_by_type[kind]
             names = sorted({a["name"] for o in rows for a in o["attributes"]})
             table = _q("object_" + suffix)
             conn.execute(f"CREATE TABLE {table} (ocel_id TEXT, ocel_time TIMESTAMP, ocel_changed_field TEXT"

@@ -52,10 +52,21 @@ const path=require('node:path');
    const idea=await page.evaluate(async()=>{const r=await (await fetch('/v1/automation-pipeline')).json();const list=r.ideas||r.items||[];return list.map(i=>[i.title,i.source&&i.source.kind,i.description]);});
    assert.equal(idea.length,1);assert.equal(idea[0][0],'Automate Check');assert.equal(idea[0][1],'event_log');
    assert(idea[0][2].includes('From event log “invoices”: 20 occurrences in 20 cases'),idea[0][2]);
+   // Benefit ranges from the owner's own assumptions.
+   await page.locator('#owgAutomationMinutesHigh').fill('2');
+   await page.locator('#owgAutomationEstimateRun').click();
+   await page.locator('#owgAutomationEstimateResults').getByText('Enter a low and a high number of minutes').waitFor();
+   await page.locator('#owgAutomationMinutesHigh').fill('10');await page.locator('#owgAutomationHourlyCost').fill('50');
+   await page.locator('#owgAutomationEstimateRun').click();
+   const estimate=page.locator('#owgAutomationEstimateResults');
+   await estimate.getByText(/hours a week across these \d+ activities, about .* a year at 50 an hour/).waitFor();
+   const estimateText=await estimate.textContent();
+   assert(estimateText.includes('Per week (measured)')&&estimateText.includes('Share automatable (assumed)'),estimateText);
+   assert(estimateText.includes('not measured savings'),estimateText);
    await page.addScriptTag({content:axeSource});
    const audit=await page.evaluate(async()=>window.axe.run(document.querySelector('#owgAutomation'),{runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21aa']}}));
    assert.deepEqual(audit.violations.map(v=>v.id+': '+v.nodes.map(n=>n.target).join(',')),[]);
    assert.deepEqual(errors,[]);
-   console.log('Automation candidates browser acceptance passed: ranked activities with components, routing pattern and waiting, sent to the automation pipeline with evidence, CSV ranking, WCAG audit.');
+   console.log('Automation candidates browser acceptance passed: ranked activities with components, routing pattern and waiting, sent to the automation pipeline with evidence, CSV ranking, benefit ranges from stated assumptions, WCAG audit.');
  }finally{if(browser)await browser.close();server.kill();}
 })().catch(error=>{console.error(error);process.exit(1);});
