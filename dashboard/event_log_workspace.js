@@ -2641,6 +2641,22 @@
           state.follows=follows;state.attr=attr;state.caseActivity=activity;
           analyse().catch(error=>status(error.message));
         };
+        const update=button('Update from active filter','secondary');
+        update.setAttribute('aria-label','Update saved filter '+set.name+' from active filter');
+        update.disabled=!filterOn();
+        update.onclick=async()=>{
+          if(!window.confirm('Replace the saved filter “'+set.name+'” with the current active filter?'))return;
+          update.disabled=true;
+          try{
+            const body={name:set.name,cohort:globalCohort(),case_type:state.caseType||null,
+              expected_definition_sha256:set.definition_sha256};
+            await api(base()+'/'+encodeURIComponent(set.set_id)+'/update',{
+              method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+            if(generation!==state.generation)return;
+            message.textContent='Updated "'+set.name+'" from the active filter.';await refresh();
+          }catch(error){if(generation===state.generation){message.textContent=error.message;await refresh();}}
+          finally{if(generation===state.generation&&update.isConnected)update.disabled=!filterOn();}
+        };
         const del=button('Delete','secondary');del.setAttribute('aria-label','Delete saved filter '+set.name);
         del.onclick=async()=>{try{await api(base()+'/'+encodeURIComponent(set.set_id)+'/delete',{method:'POST'});message.textContent='Saved filter deleted.';await refresh();}catch(error){message.textContent=error.message;}};
         const notes=[...(!available?['Saved case notion is unavailable']:[]),
@@ -2655,7 +2671,7 @@
         };
         const showCases=button('Preview','secondary');showCases.setAttribute('aria-label','Preview saved filter '+set.name);
         showCases.disabled=!available;showCases.onclick=()=>previewFilter(set);
-        const actions=el('span');actions.append(use,' ',showCases,' ',exportButton,' ',del);
+        const actions=el('span');actions.append(use,' ',showCases,' ',update,' ',exportButton,' ',del);
         return [set.name,set.case_type||'Current selection',[...follows.map(followText),...(activity?['contains activity '+JSON.stringify(activity)]:[]),attr.attribute||'',attr.attribute_range?rangeText(attr.attribute_range):'',attr.starts_with?'starts with '+JSON.stringify(attr.starts_with):'',attr.ends_with?'ends with '+JSON.stringify(attr.ends_with):'',attr.duration?durationText(attr.duration):'',moreFilterText(attr)].filter(Boolean).join('; ')||'—',notes.join('. ')||'—',actions];
       })):el('div','No saved filters yet.','muted'));
     }
@@ -4667,6 +4683,19 @@
     const sync=()=>{show(f.sla,metric.value==='sla_breach');show(f.activity,metric.value==='activity_count');};metric.onchange=sync;sync();
     const row=el('div',null,'row');row.style.alignItems='end';
     row.append(field('Change went live (UTC)',date),field('Measure',metric),...Object.values(f),field('Days on each side',windowDays),field('Leave out the last … days',recent),field('Change applies to',treatedActivity),field('…or to resource',treatedResource),run);
+    const profileOn=input('owgImpactProfileOn','checkbox');
+    const binDays=input('owgImpactBinDays','number'),beforeBins=input('owgImpactBeforeBins','number'),afterBins=input('owgImpactAfterBins','number');
+    const refBin=input('owgImpactReferenceBin','number'),minCases=input('owgImpactProfileMinCases','number');
+    for(const [c,min,max,value] of [[binDays,1,90,7],[beforeBins,1,12,4],[afterBins,1,12,4],[refBin,-12,-1,-1],[minCases,1,10000,10]]){
+      c.min=String(min);c.max=String(max);c.step='1';c.value=String(value);}
+    const profileFields=el('div',null,'row');
+    profileFields.append(field('Days per bin',binDays),field('Baseline bins',beforeBins),field('Follow-up bins',afterBins),
+      field('Baseline reference bin',refBin),field('Minimum cases per bin',minCases));
+    profileFields.hidden=true;
+    const profilePanel=el('div');profilePanel.append(field('Include time-resolved impact profile',profileOn),profileFields,
+      el('p','Equal-width case-start bins around the intervention; no bin-specific confidence intervals or causal inference.','muted'));
+    profileOn.onchange=()=>{profileFields.hidden=!profileOn.checked;};
+    const profileOut=el('div');
     const out=el('div');out.id='owgImpactResults';out.setAttribute('role','status');
     // Change markers: pick a saved date, or save this one with a label, so the change is recorded once.
     const markerPick=select('owgImpactMarker',[['','Pick a saved change']]);
@@ -4683,9 +4712,13 @@
       ...Object.entries(packet.report.groups).flatMap(([group,values])=>
         ['baseline','follow_up'].map(period=>[
           group,period,values[period].cases,values[period].mean,values[period].median,packet.report.unit
-        ]))
+        ])),
+      ...(packet.report.time_profile?[
+        [],['relative_bin','from_utc','before_utc','group','cases','mean','median','change_from_reference_mean','treated_minus_control_mean','control_adjusted_change_from_reference','profile_sha256'],
+        ...packet.report.time_profile.bins.flatMap(b=>Object.entries(b.groups).map(([g,s])=>[b.relative_bin,b.from_utc,b.before_utc,g,s.cases,s.mean,s.median,s.change_from_reference_mean,b.treated_minus_control_mean,b.control_adjusted_change_from_reference,packet.report.time_profile.profile_sha256]))
+      ]:[])
     ]);
-    box.append(markerRow,markerStatus,row,out,evidence,exports.node);
+    box.append(markerRow,markerStatus,row,profilePanel,out,profileOut,evidence,exports.node);
     const markersBase='/v1/event-logs/'+encodeURIComponent(state.logId)+'/change-markers';let markerList=[];
     const showMarkers=r=>{markerList=r.markers;
       setOptions(markerPick,[['',r.markers.length?'Pick a saved change':'No saved changes yet'],...r.markers.map(m=>[m.marker_id,m.marked_at.slice(0,10)+' — '+m.label+(m.within_log?'':' (outside this log)')])]);
@@ -4706,17 +4739,58 @@
     const markersGeneration=state.generation;
     getJSON(markersBase).then(r=>{if(markersGeneration===state.generation)showMarkers(r);}).catch(error=>{markerStatus.textContent=error.message;});
     const generation=state.generation,logId=state.logId;let turn=0;
-    const invalidate=()=>{turn++;lastReport=null;exports.enable(false);run.disabled=false;out.replaceChildren();evidence.replaceChildren();};
-    for(const control of [date,metric,sla,activity,windowDays,recent,treatedActivity,treatedResource]){
+    const invalidate=()=>{turn++;lastReport=null;exports.enable(false);run.disabled=false;out.replaceChildren();profileOut.replaceChildren();evidence.replaceChildren();};
+    for(const control of [date,metric,sla,activity,windowDays,recent,treatedActivity,treatedResource,profileOn,binDays,beforeBins,afterBins,refBin,minCases]){
       control.addEventListener('input',invalidate);control.addEventListener('change',invalidate);
     }
     markerPick.addEventListener('change',invalidate);
+    function showTimeProfile(profile,spec,t,unit){
+      const metricValue=v=>v==null?'—':unit==='seconds'?(v<0?'−':'')+duration(Math.abs(v)):Number(v).toLocaleString(undefined,{maximumFractionDigits:4});
+      function reviewBin(bin,group){
+        const panel=el('div'),status=el('p','Loading reviewed cases…','muted'),list=el('div'),next=button('Next bin case page','secondary');
+        panel.append(el('h4',group+' · relative bin '+bin.relative_bin),status,list,next);evidence.replaceChildren(panel);
+        let cursor=null;
+        async function load(after){
+          next.disabled=true;
+          try{
+            const data=await (await api('/v1/event-logs/'+encodeURIComponent(logId)+'/impact/cases',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({analysis:spec,group,period:bin.period,relative_bin:bin.relative_bin,expected_profile_sha256:profile.profile_sha256,after})})).json();
+            if(t!==turn||generation!==state.generation||!panel.isConnected)return;
+            if(data.profile_sha256!==profile.profile_sha256)throw Error('Profile changed; rerun impact analysis.');
+            cursor=data.next_after;status.textContent=data.selected_cases+' matching cases.';
+            list.replaceChildren(table(['Case','Started','Ended','Value'],data.cases.map(c=>{
+              const open=button(c.case_id,'secondary');open.onclick=()=>inspection.open(c.case_id);
+              return [open,c.started_at,c.ended_at,metricValue(c.value)];
+            })));next.disabled=cursor===null;
+          }catch(error){if(t===turn&&panel.isConnected){list.replaceChildren();status.textContent=error.message;}}
+        }
+        next.onclick=()=>load(cursor);load(null);
+      }
+      const names=Object.keys(profile.reference_group_cells);
+      const rows=profile.bins.flatMap(bin=>names.map(g=>{
+        const s=bin.groups[g],open=button(String(s.cases),'secondary');
+        open.disabled=!s.cases;open.setAttribute('aria-label','Review '+g+' bin '+bin.relative_bin+' cases');open.onclick=()=>reviewBin(bin,g);
+        return [bin.relative_bin+(bin.reference_bin?' (reference)':''),bin.from_utc,bin.before_utc,g,open,
+          metricValue(s.mean),metricValue(s.median),metricValue(s.change_from_reference_mean),
+          bin.inside_visible_event_span?'Inside visible span':'Boundary / outside span',
+          bin.recent_follow_up_exclusion_overlaps_bin?'Recent exclusion overlaps':'—',
+          s.baseline_spanning_intervention_cases_before_exclusion,s.minimum_support_met?'Supported':'Below minimum'];
+      }));
+      profileOut.replaceChildren(el('h4','Time-resolved intervention profile'),
+        el('p',profile.population.all_projected_cases+' projected cases · '+profile.population.selected_group_cases+' in selected groups · '+profile.population.outside_selected_groups+' outside selected groups · '+profile.population.included_profile_cases+' included in profile.','muted'),
+        el('p','Reference bin '+profile.reference_bin+' · minimum '+profile.minimum_cases_per_cell+' cases per cell · '+unit,'muted'),
+        table(['Relative bin','From UTC','Before UTC','Group','Cases','Mean','Median','Change vs reference','Visible span','Recent exclusion','Spanning before exclusion','Support'],rows),
+        ...(names.includes('control')?[table(['Relative bin','Treated minus control','Gap change vs reference'],profile.bins.map(b=>[b.relative_bin,metricValue(b.treated_minus_control_mean),metricValue(b.control_adjusted_change_from_reference)]))]:[]),
+        table(['Group','Selected','Included','Outside profile','Outside main window','Recent','Spanning excluded'],
+          Object.entries(profile.accounting).map(([g,a])=>[g,a.selected_group_cases,a.included_cases,a.excluded.outside_profile,a.excluded.outside_window,a.excluded.recent_possibly_running,a.excluded.spanning_intervention])),
+        ...profile.interpretation.map(x=>el('p',x,'muted')));
+    }
     run.onclick=async()=>{
       const t=++turn;
-      lastReport=null;exports.enable(false);evidence.replaceChildren();
+      lastReport=null;exports.enable(false);evidence.replaceChildren();profileOut.replaceChildren();
       let spec;try{spec=impactSpec({date:date.value,metric:metric.value,slaHours:sla.value,activity:activity.value,window:windowDays.value,recent:recent.value,treatedActivity:treatedActivity.value,treatedResource:treatedResource.value.trim()});}
       catch(error){out.replaceChildren(el('div',error.message,'muted'));return;}
       if(state.caseType)spec.case_type=state.caseType;
+      if(profileOn.checked)spec.time_profile={bin_days:Number(binDays.value),baseline_bins:Number(beforeBins.value),follow_up_bins:Number(afterBins.value),reference_bin:Number(refBin.value),minimum_cases:Number(minCases.value)};
       run.disabled=true;out.replaceChildren(el('div','Measuring…','muted'));
       try{
         const r=await (await api('/v1/event-logs/'+encodeURIComponent(logId)+'/impact',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)})).json();
@@ -4724,6 +4798,7 @@
         lastReport={format:'openworkgraph.intervention-impact-report.v1',settings:spec,report:r};
         exports.enable(true);
         const v=impactRows(r);
+        if(r.time_profile)showTimeProfile(r.time_profile,spec,t,r.unit);
         const rows=Object.entries(r.groups).map(([group,values],index)=>{
           const open=(period,count)=>{
             if(!count)return '0';
@@ -6225,6 +6300,16 @@
     const seed=input('owgCapacitySeed','number');seed.min='0';seed.max='2147483640';seed.step='1';seed.value='1';
     const basis=select('owgCapacityBasis',TIME_BASES);
     const dist=select('owgCapacityDist',[['exponential','Variable (exponential)'],['fixed','Fixed']]);
+    const decisionEnabled=input('owgCapacityDecisionEnabled','checkbox');
+    const currency=input('owgCapacityCurrency','text','SEK');currency.maxLength=3;
+    const hourCost=input('owgCapacityHourCost','number');hourCost.min='0';hourCost.max='1000000000';hourCost.step='any';
+    const budget=input('owgCapacityBudget','number');budget.min='0';budget.max='1000000000000000';budget.step='any';
+    const weights=input('owgCapacityWeights','text','One positive weight per entered demand rate, e.g. 1, 2, 1');
+    const thresholds=input('owgCapacityThresholds','text','e.g. 80, 90, 95');
+    const decisionControls=el('div',null,'row');decisionControls.style.alignItems='end';decisionControls.hidden=true;
+    decisionControls.append(field('Currency code',currency),field('Default cost per resource-hour',hourCost),field('Maximum cost per staffed hour',budget),
+      field('Demand weights (same order as demand rates)',weights),field('Service share sensitivity (%)',thresholds));
+    decisionEnabled.onchange=()=>{decisionControls.hidden=!decisionEnabled.checked;};
     const prepare=button('Prepare capacity grid','secondary');prepare.id='owgCapacityPrepare';
     const file=input('owgCapacityFile','file');file.accept='.json,application/json';
     const draft=document.createElement('textarea');draft.id='owgCapacityInputs';draft.rows=10;draft.style.width='100%';
@@ -6263,8 +6348,19 @@
           const overrides=Object.create(null);overrides[activity.value]={resources:n};
           return {label:String(n)+' resources',activities:overrides};
         });
-        draft.value=JSON.stringify({format:CAPACITY_FORMAT,baseline,designs,arrival_rates_per_hour:rates,
-          replications:repCount,target:{cycle_time_minutes:minutes,minimum_completion_share:percent/100}},null,2);
+        const packet={format:CAPACITY_FORMAT,baseline,designs,arrival_rates_per_hour:rates,
+          replications:repCount,target:{cycle_time_minutes:minutes,minimum_completion_share:percent/100}};
+        if(decisionEnabled.checked){
+          const w=numbers(weights.value,'demand weights'),t=numbers(thresholds.value,'service-share percentages');
+          if(!/^[A-Z]{3}$/.test(currency.value)||[hourCost,budget].some(n=>!n.value||!n.checkValidity())||
+            w.length!==rates.length||w.some(x=>x<.000001||x>1e9)||t.length<1||t.length>8||
+            t.some(x=>x<1||x>100)||new Set(t).size!==t.length||!t.includes(percent))
+            throw Error('Enter currency, explicit costs and budget, one positive weight per rate, and distinct service thresholds including the grid target.');
+          packet.decision_review={currency:currency.value,default_resource_hour_cost:Number(hourCost.value),
+            maximum_staffed_hour_cost:Number(budget.value),demand_weights:rates.map((r,i)=>({arrival_rate_per_hour:r,weight:w[i]})),
+            service_share_thresholds:t.map(v=>v/100),dedicated_hour_costs:{},pool_hour_costs:{}};
+        }
+        draft.value=JSON.stringify(packet,null,2);
         readTurn++;clearResult();status.textContent='Review the exact inputs below. Nothing has run yet.';sync();
       }catch(error){status.textContent=error.message;}
     };
@@ -6281,6 +6377,30 @@
         draft.value=JSON.stringify(packet,null,2);status.textContent='Loaded for review. Rerunning recalibrates from the selected log.';sync();
       }catch(error){if(current()&&turn===readTurn)status.textContent=error.message;}
     };
+    function showDecisionReview(review){
+      const section=el('div');
+      if(!review)return section;
+      const range=b=>pct(b.lower)+' – '+pct(b.upper);
+      const money=x=>x===null?'None':x+' '+review.currency;
+      const status=s=>s.replaceAll('_',' ');
+      section.append(el('h4','Cost-constrained staffing decision review'),
+        el('p','Budget: '+money(review.maximum_staffed_hour_cost_decimal)+' per staffed hour. Service gates require every tested rate and seed; weights do not override an individual failed rate.','muted'),
+        table(['Design','Staffed resources','Cost / staffed hour','Budget','Every-rate service gate','Worst rate / seed bounds','Worst seed demand mix bounds'],
+          review.designs.map(d=>[d.design,d.staffed_resources,money(d.staffed_hour_cost_decimal),d.within_budget?'Within':'Over',status(d.service_status_all_tested_rates),range(d.worst_rate_and_seed_target_bounds),range(d.worst_seed_demand_mix_target_bounds)])),
+        el('h4','Declared demand mixture'),table(['Demand / hour','Normalized weight'],review.normalized_demand_weights.map(r=>[r.arrival_rate_per_hour,pct(r.weight)])),
+        el('h4','Service threshold sensitivity'),table(['Service threshold','Demonstrated within budget','Minimum qualifying tested cost','Equal minimum cost designs'],review.service_threshold_sensitivity.map(r=>[pct(r.service_share_threshold),r.demonstrated_designs.join(', ')||'None',money(r.minimum_tested_qualifying_staffed_hour_cost_decimal),r.equal_minimum_cost_designs.join(', ')||'None'])),
+        el('h4','Robust dominance among tested stable designs'),
+        el('p','Not robustly dominated: '+review.not_robustly_dominated_tested_designs.join(', ')+'. Not a staffing recommendation.'),
+        ...(review.robust_dominance_witnesses.length?[table(['Dominant','Dominated','Matched rate/seed cells','Minimum service advantage','Cost advantage / hour'],review.robust_dominance_witnesses.map(w=>[w.dominant_design,w.dominated_design,w.matched_rate_seed_cells,pct(w.minimum_service_advantage_lower_bound),money(w.staffed_hour_cost_advantage_decimal)]))]:[el('p','No strict robust dominance established.')]),
+        el('h4','Inspect effective cost and demand evidence'));
+      const picker=select('owgCapacityDecisionDesign',review.designs.map((d,i)=>[String(i),d.design]));const details=el('div');
+      const draw=()=>{const d=review.designs[Number(picker.value)];if(!d)return;
+        details.replaceChildren(table(['Resource basis','Exact resource name','Resources','Unit hourly cost','Staffed hourly cost','Rate source'],d.cost_basis.map(r=>[status(r.kind),r.name,r.resources,money(r.unit_hour_cost_decimal),money(r.staffed_hour_cost_decimal),r.explicit_override?'Explicit override':'Declared default'])),
+          table(['Demand / hour','Weight','Service gate','Overloaded runs','Worst seed bounds'],d.demand_evidence.map(r=>[r.arrival_rate_per_hour,pct(r.normalized_weight),status(r.service_status),r.overloaded_replications,range(r.worst_seed_target_bounds)])),
+          table(['Shared seed','Demand-mix target bounds'],d.demand_mix_by_seed.map(r=>[r.seed,range(r.target_bounds)])));
+      };picker.onchange=draw;draw();section.append(field('Exact staffing design',picker),details);
+      const notes=el('ul');review.interpretation.forEach(t=>notes.append(el('li',t)));section.append(notes);return section;
+    }
     function showReport(report){
       const grid=table(['Design','Demand / hour','Target status','Worst run target share (bounds)','Completed-case p90 range','Overloaded runs'],
         report.cells.map(c=>[
@@ -6321,7 +6441,7 @@
           [el('p','At least one design passed a higher tested rate but did not pass a lower rate. Inspect individual runs; do not assume monotonic behavior.','note')]:[]),
         el('h4','Paired changes against baseline'),comparisons,
         el('p','Target-share differences are percentage-point bounds across the tested seeds. Cycle-time differences are withheld unless every pair has complete, stable completion populations.','muted'),
-        el('h4','Inspect every replication'),field('Design and demand',cellSelect),details,el('h4','Assumptions'),assumptions);
+        el('h4','Inspect every replication'),field('Design and demand',cellSelect),details,showDecisionReview(report.decision_review),el('h4','Assumptions'),assumptions);
     }
     run.onclick=async()=>{
       if(busy)return;
@@ -6346,7 +6466,9 @@
       field('First seed',seed),field('Measured time basis',basis),field('Activity-time distribution',dist),prepare);
     panel.append(el('summary','Demand and capacity stress testing'),
       el('p','Test a grid of staffing designs and explicit arrival rates using one calibration. Targets count every post-warm-up arrival. This uses complete-path routing and fixed or exponential activity times.','muted'),
-      controls,field('Import capacity inputs or report JSON',file),field('Review or edit exact capacity inputs',draft),
+      controls,field('Include cost-constrained decision review',decisionEnabled),decisionControls,
+      el('p','Optional cost review uses one currency, a default resource-hour rate and explicit demand weights. Exact dedicated/pool rate overrides can be edited in the reviewed JSON. Prepare the grid again after changing controls.','muted'),
+      field('Import capacity inputs or report JSON',file),field('Review or edit exact capacity inputs',draft),
       run,status,exports.node,inputs,out);
     return panel;
   }
@@ -7693,7 +7815,13 @@
     const statusLine=el('div',null,'muted');statusLine.id='owgPathsStatus';statusLine.setAttribute('role','status');statusLine.setAttribute('aria-live','polite');
     const out=el('div');out.id='owgPathsResults';
     const review=el('div');review.id='owgPathsCaseReview';
-    box.append(row,trail,statusLine,out,review);
+    // The branches at the current point, with the path that led there on every row.
+    let lastStep=null;
+    const exports=exportButtons('owgPathsReport',()=>lastStep,r=>[
+      ['path','anchor','next','cases','share','median_hours_from_previous','median_hours_to_case_end'],
+      ...r.next.map(x=>[r._path.join(' → '),r._anchor,x.is_end?'(case ends)':x.activity,x.cases,x.share,
+        x.hours_from_previous?x.hours_from_previous.median:'',x.hours_to_case_end?x.hours_to_case_end.median:''])]);
+    box.append(row,trail,statusLine,out,review,exports.node);
     let path=[],anchored=0,request=0,reviewTurn=0;
     const pct=x=>x===null||x===undefined?'—':Math.round(x*1000)/10+'%';
     const hrs=x=>x===null||x===undefined?'—':(x<48?(Math.round(x*10)/10)+' h':(Math.round(x/24*10)/10)+' d');
@@ -7734,6 +7862,7 @@
       const generation=state.generation,turn=++request;
       const current=()=>generation===state.generation&&turn===request;
       start.disabled=back.disabled=true;statusLine.textContent='Following cases…';out.replaceChildren();review.replaceChildren();
+      lastStep=null;exports.enable(false);
       trail.textContent=path.length?'Path: '+(anywhere.checked?'… → ':'(start) → ')+path.join(' → '):'';
       try{
         const params={step:path,anchor:anywhere.checked?'anywhere':'start'};
@@ -7751,6 +7880,7 @@
           inspect.onclick=()=>showCases(url,x,current);tr.cells[5].appendChild(inspect);
         });
         out.appendChild(t);
+        lastStep={...r,_path:[...path],_anchor:anywhere.checked?'anywhere':'start'};exports.enable(true);
       }catch(error){if(current())statusLine.textContent=error.message;}
       finally{if(current()){start.disabled=false;back.disabled=!path.length;}}};
     start.onclick=()=>{path=[];anchored=0;anywhere.checked=false;show();};
@@ -8839,6 +8969,19 @@
             const boundary=b?(b.change_point?'Change point · ':'')+'distance '+b.distance.toFixed(3)+', p '+p(b.p_value):skip?'Skipped · '+reason(skip)+(side?' ('+side+')':''):'—';
             return [w.window,Number(w.cases).toLocaleString(),Number(w.sampled_cases).toLocaleString(),Number(w.sampled_cases_with_paths).toLocaleString(),duration(w.median_case_duration_seconds),boundary,inspect(w.window)];
           })));
+        if(windowKind.value!=='cases'){
+          const note=el('div');note.id='owgConceptDriftMarkers';out.appendChild(note);
+          getJSON('/v1/event-logs/'+encodeURIComponent(state.logId)+'/change-markers').then(m=>{
+            if(!current()||!m.markers.length)return;
+            const starts=r.windows.map(w=>w.window);
+            const windowOf=day=>{let found=null;starts.forEach(s=>{if(s<=day)found=s;});return found;};
+            const points=new Set(r.change_points.map(c=>c.after));
+            note.append(el('h4','Your recorded changes'),table(['Change','Date','Window','At a change point'],m.markers.map(x=>{
+              const day=x.marked_at.slice(0,10),w=x.within_log?windowOf(day):null;
+              return [x.label,day,w||'Outside the analysed windows',w&&(points.has(w)||points.has(starts[starts.indexOf(w)+1]))?'Yes':'No'];
+            })),el('div','A change you recorded near a change point may help explain it; it does not prove the cause.','muted'));
+          }).catch(()=>{});
+        }
         r.change_points.forEach(c=>{
           out.appendChild(el('h4','Paths that moved most: '+c.before+' → '+c.after));
           out.appendChild(table(['Path','Sampled share before','Sampled share after','Before cases','After cases'],c.paths_that_moved.map(m=>[
@@ -11277,6 +11420,8 @@
     const deliveryRefresh=button('Refresh delivery status','secondary');deliveryRefresh.id='owgSignalDeliveryRefresh';
     const deliveryRemove=button('Remove webhook and erase queued alerts','secondary');deliveryRemove.id='owgSignalDeliveryRemove';deliveryRemove.disabled=true;
     const deliveryResume=button('Resume paused webhook','secondary');deliveryResume.id='owgSignalDeliveryResume';deliveryResume.disabled=true;
+    const deliveryPause=button('Pause webhook without deleting queue','secondary');deliveryPause.id='owgSignalDeliveryPause';deliveryPause.disabled=true;
+    const deliveryQueue=el('div');deliveryQueue.id='owgSignalDeliveryQueue';
     const deliveryStatus=el('p','No external delivery is enabled by default.','muted');
     deliveryStatus.id='owgSignalDeliveryStatus';deliveryStatus.setAttribute('role','status');
     const deliverySecret=input('owgSignalDeliverySecret','password');deliverySecret.readOnly=true;deliverySecret.autocomplete='off';
@@ -11289,7 +11434,7 @@
     deliveryPanel.append(deliveryHeading,deliveryNote,field('HTTPS webhook receiver',deliveryUrl),
       field('I authorize OWG to send external signal attention notifications',deliveryConsent),
       field('I reviewed the outbound disclosure: only counts and opaque notification IDs, no saved work or case evidence',countsConsent),
-      deliveryEnable,deliveryRefresh,deliveryResume,deliveryRemove,deliveryStatus,secretPane);
+      deliveryEnable,deliveryRefresh,deliveryPause,deliveryResume,deliveryRemove,deliveryStatus,deliveryQueue,secretPane);
     const transitionHeading=el('h4','Signal state changes');
     const transitionNote=el('p','Locally recorded triggered and cleared transitions from explicit or scheduled evaluations. Repeated unchanged results do not create alerts. This is not live source monitoring or a notification feed. Up to 5,000 transitions are retained per log.','muted');
     const transitionRefresh=button('Refresh signal changes','secondary');transitionRefresh.id='owgSignalTransitionRefresh';
@@ -11323,11 +11468,71 @@
     timelineStatus.id='owgSignalTimelineStatus';timelineStatus.setAttribute('role','status');timelineStatus.setAttribute('aria-live','polite');
     const timelineResults=el('div');timelineResults.id='owgSignalTimelineResults';
     const timelineControls=el('div',null,'actions');timelineControls.append(timelineFilter,timelineRefresh,timelinePrevious,timelineNext);
+    const episodePanel=el('details');episodePanel.append(el('summary','Historical signal episode review'));
+    const episodeStart=input('owgSignalEpisodeStart','date'),episodeEnd=input('owgSignalEpisodeEnd','date');
+    const episodeFilter=select('owgSignalEpisodeFilter',[
+      ['all','All evidence'],['cleared','Observed trigger to clearance'],['unresolved_at_window_end','Unresolved trigger'],
+      ['interrupted_by_repeated_trigger','Repeated trigger boundary'],['interrupted_by_ambiguous_timestamp','Interrupted by timestamp tie'],
+      ['clearance_without_retained_trigger','Clearance without retained trigger'],['ambiguous_timestamp','Ambiguous timestamp group']]);
+    episodeFilter.setAttribute('aria-label','Episode evidence status');
+    const episodeLog=input('owgSignalEpisodeLog','text','Exact log ID'),episodeRule=input('owgSignalEpisodeRule','text','Exact rule ID');
+    episodeLog.maxLength=128;episodeRule.maxLength=128;
+    const episodeClearScope=button('Clear log and rule filters','secondary');
+    const episodeRun=button('Review retained episodes','secondary'),episodeOutput=el('div');
+    episodeOutput.setAttribute('role','status');episodeOutput.setAttribute('aria-live','polite');
+    let episodeTurn=0,episodeReport=null;
+    const episodeDownload=exportButtons('owg-signal-episode-review',()=>episodeReport,r=>[
+      ['log_id','rule_id','status','trigger_at','clear_at','elapsed_seconds','ambiguous_at','ambiguous_trigger_count','ambiguous_clear_count','review_sha256'],
+      ...r.page.rows.map(x=>[x.log_id,x.rule_id,x.status,x.trigger_at,x.clear_at,x.elapsed_seconds,x.ambiguous_at,x.ambiguous_trigger_count,x.ambiguous_clear_count,r.review_sha256])]);
+    function clearEpisodes(){episodeTurn++;episodeReport=null;episodeOutput.replaceChildren();episodeDownload.enable(false);episodeRun.disabled=false;}
+    for(const c of [episodeStart,episodeEnd])c.addEventListener('input',clearEpisodes);
+    async function loadEpisodes(offset=0,pinned=false){
+      const old=episodeReport,t=++episodeTurn;
+      const live=()=>generation===state.generation&&t===episodeTurn;
+      episodeReport=null;episodeDownload.enable(false);episodeRun.disabled=true;
+      episodeOutput.replaceChildren(el('p','Reading retained signal journal…','muted'));
+      try{
+        if(!episodeStart.value||!episodeEnd.value)throw Error('Choose UTC start and exclusive end dates.');
+        const params=new URLSearchParams({start_date:episodeStart.value,end_date:episodeEnd.value,status:episodeFilter.value,offset:String(offset),limit:'50'});
+        if(episodeLog.value)params.set('log_id',episodeLog.value);
+        if(episodeRule.value)params.set('rule_id',episodeRule.value);
+        if(pinned&&old)params.set('expected_review_sha256',old.review_sha256);
+        const r=await getJSON('/v1/event-logs/signal-episode-review?'+params);
+        if(!live())return;
+        episodeReport=r;
+        const p=r.page,d=r.observed_trigger_to_clear_seconds;
+        const format=v=>v==null?'—':duration(v);
+        const prev=button('Previous episode page','secondary'),next=button('Next episode page','secondary');
+        prev.disabled=p.offset===0;next.disabled=p.next_offset===null;
+        prev.onclick=()=>loadEpisodes(Math.max(0,p.offset-50),true);
+        next.onclick=()=>loadEpisodes(p.next_offset,true);
+        episodeOutput.replaceChildren(el('p',r.retained_transition_count+' retained changes across '+r.retained_rule_count+
+          ' rules and '+r.retained_log_count+' logs; '+r.accounted_transitions+' accounted for. Summary covers the whole selected date window; filters affect evidence rows only.'),
+          table(['Evidence status','Rows'],Object.entries(r.status_counts).map(([k,v])=>[k.replaceAll('_',' '),v])),
+          table(['Observed trigger-to-clear pairs','Minimum','Median','Maximum','Mean'],[[d.count,format(d.minimum),format(d.p50),format(d.maximum),format(d.mean)]]),
+          el('p',p.matching_rows+' matching evidence rows; offset '+p.offset+' · exact review '+r.review_sha256,'muted'),
+          table(['Dataset','Signal','Status','Trigger (UTC)','Clear (UTC)','Observed elapsed','Ambiguous timestamp','Ambiguous changes','Evidence'],
+            p.rows.map(x=>{const open=button('Open log','secondary');open.onclick=async()=>{await refreshLogs(x.log_id);};
+              const focus=button('Filter this rule','secondary');focus.onclick=()=>{episodeLog.value=x.log_id;episodeRule.value=x.rule_id;loadEpisodes(0,true);};
+              const actions=el('div');actions.append(open,focus);
+              return [x.log_name,x.rule_name,x.status.replaceAll('_',' '),x.trigger_at||'—',x.clear_at||'—',format(x.elapsed_seconds),
+                x.ambiguous_at||'—',x.ambiguous_trigger_count+x.ambiguous_clear_count,actions];})),
+          prev,next,...r.interpretation.map(x=>el('p',x,'muted')));
+        episodeDownload.enable(true);
+      }catch(error){if(live())episodeOutput.replaceChildren(el('p',error.message,'note'));}
+      finally{if(live())episodeRun.disabled=false;}
+    }
+    episodeRun.onclick=()=>loadEpisodes();
+    for(const c of [episodeLog,episodeRule])c.addEventListener('input',clearEpisodes);
+    episodeClearScope.onclick=()=>{episodeLog.value=episodeRule.value='';if(episodeReport)loadEpisodes(0,true);else clearEpisodes();};
+    episodeFilter.onchange=()=>{if(episodeReport)loadEpisodes(0,true);else clearEpisodes();};
+    episodePanel.append(el('p','Read only retained evaluated changes in a UTC window (end exclusive). Elapsed time is not outage duration. JSON/CSV downloads contain the current evidence page.','muted'),
+      field('UTC start date',episodeStart),field('UTC end date (exclusive)',episodeEnd),field('Evidence status',episodeFilter),field('Filter by exact log ID (optional)',episodeLog),field('Filter by exact rule ID (optional)',episodeRule),episodeClearScope,episodeRun,episodeOutput,episodeDownload.node);
     const allControls=el('div',null,'actions');allControls.append(allFilter,allRefresh,allPrevious,allNext);
     box.append(row,previewStatus,previewEvidence,message,rules,evaluate,out,reviewHeading,reviewNote,reviewRefresh,inbox,
       deliveryPanel,transitionHeading,transitionNote,transitionRefresh,transitionPrevious,transitionNext,transitionStatus,transitionResults,
       allHeading,allNote,allControls,allStatus,allResults,
-      timelineHeading,timelineNote,timelineControls,timelineStatus,timelineResults);
+      timelineHeading,timelineNote,timelineControls,timelineStatus,timelineResults,episodePanel);
     const selectedLogId=state.logId;
     const base=()=>'/v1/event-logs/'+encodeURIComponent(selectedLogId)+'/signals';
     let checkingSaved=false,savedCount=0;
@@ -11338,10 +11543,12 @@
     rules.after(signalPackControls(selectedLogId,refresh));
     const inboxBase=()=>'/v1/event-logs/'+encodeURIComponent(selectedLogId)+'/signal-inbox';
     const deliveryBase=()=>'/v1/schedules/signal-delivery/'+encodeURIComponent(selectedLogId);
-    let deliveryRequestId=0,hasDelivery=false;
+    let deliveryRequestId=0,hasDelivery=false,deliveryChannel=null,deliveryMutation=false;
     const deliverySync=()=>{
       deliveryEnable.disabled=hasDelivery||!deliveryConsent.checked||!countsConsent.checked||!deliveryUrl.value.trim();
-      deliveryRemove.disabled=!hasDelivery;
+      deliveryRemove.disabled=!hasDelivery||deliveryMutation;
+      deliveryPause.disabled=deliveryMutation||!deliveryChannel?.enabled;
+      deliveryResume.disabled=deliveryMutation||!deliveryChannel||deliveryChannel.enabled!==false;
     };
     deliveryConsent.onchange=countsConsent.onchange=deliveryUrl.oninput=deliverySync;
     const refreshDelivery=async()=>{
@@ -11349,7 +11556,8 @@
       const value=await getJSON(deliveryBase());
       if(generation!==state.generation||requestId!==deliveryRequestId)return;
       hasDelivery=value.configured===true;
-      deliveryResume.disabled=!hasDelivery||value.enabled!==false;
+      deliveryChannel=hasDelivery?value:null;
+      renderDeliveryQueue(value);
       deliveryStatus.textContent=hasDelivery
         ?'Counts-only webhook: '+(value.enabled?'enabled':'paused')+' for '+value.recipient_host+
           '; '+value.pending_notifications+' pending, '+value.delivered_notifications+
@@ -11357,6 +11565,47 @@
           ' No source facts or identities are included.'
         :'External alerts are disabled. Create an explicit saved-signal schedule first, then review the two delivery acknowledgements.';
       deliverySync();
+    };
+    const renderDeliveryQueue=value=>{
+      deliveryQueue.replaceChildren();
+      if(!value.configured)return;
+      deliveryQueue.append(el('h4','Pending external notifications'),
+        el('p','These are queued counts, not current signal evaluations. Delivery may already have reached a receiver after an unacknowledged attempt. Pause before dismissing a group. Dismissal does not acknowledge or clear signals.','muted'),
+        el('p',(value.dismissed_state_keys||0)+' exact states dismissed in this channel (limit '+(value.max_dismissed_state_keys||2000)+').'));
+      const groups=value.pending_groups||[];
+      if(!groups.length)deliveryQueue.append(el('p','No queued notification groups.'));
+      for(const group of groups){
+        const item=el('div');item.append(el('p',group.notification_id+' · '+group.unreviewed_signal_states_at_queue+
+          ' states at queue time · '+group.attempts+' attempts · queued '+group.created_at+' · next eligible retry '+group.next_attempt_at+
+          (group.previous_delivery_may_have_arrived?' · previous receipt possible':'')));
+        const discard=button('Dismiss this pending notification','secondary');
+        discard.setAttribute('aria-label','Dismiss '+group.notification_id);
+        discard.disabled=value.enabled||deliveryMutation;
+        discard.onclick=async()=>{
+          if(generation!==state.generation||deliveryMutation||deliveryChannel?.channel_id!==value.channel_id||deliveryChannel.enabled)return;
+          if(!window.confirm('Dismiss this exact pending group? These exact states will not be queued again in this channel. Their local review status is unchanged; earlier deliveries cannot be recalled.'))return;
+          await deliveryControl('/dismiss',{expected_channel_id:value.channel_id,notification_id:group.notification_id,
+            expected_queue_sha256:group.expected_queue_sha256,confirm_dismiss:true});
+        };
+        item.append(discard);deliveryQueue.append(item);
+      }
+    };
+    async function deliveryControl(suffix,body){
+      if(deliveryMutation||generation!==state.generation)return;
+      deliveryMutation=true;deliverySync();deliveryQueue.querySelectorAll('button').forEach(b=>b.disabled=true);
+      try{
+        await api(deliveryBase()+suffix,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+        if(generation===state.generation)await refreshDelivery();
+      }catch(error){
+        if(generation===state.generation){deliveryStatus.textContent=error.message;deliveryQueue.replaceChildren(el('p','Refresh delivery status before another queue action.','muted'));deliveryChannel=null;}
+      }finally{
+        deliveryMutation=false;
+        if(generation===state.generation){deliverySync();if(deliveryChannel)renderDeliveryQueue(deliveryChannel);}
+      }
+    }
+    deliveryPause.onclick=async()=>{
+      if(!deliveryChannel?.enabled||deliveryMutation)return;
+      await deliveryControl('/pause',{expected_channel_id:deliveryChannel.channel_id});
     };
     deliveryEnable.onclick=async()=>{
       if(!deliveryConsent.checked||!countsConsent.checked||hasDelivery||generation!==state.generation)return;
@@ -11387,14 +11636,9 @@
       finally{if(generation===state.generation)deliverySync();}
     };
     deliveryResume.onclick=async()=>{
-      if(generation!==state.generation||!hasDelivery)return;
+      if(generation!==state.generation||!deliveryChannel||deliveryChannel.enabled||deliveryMutation)return;
       if(!window.confirm('Resume outbound counts-only notification delivery to the previously approved webhook?'))return;
-      deliveryResume.disabled=true;
-      try{
-        await api(deliveryBase()+'/resume',{method:'POST',headers:{'Content-Type':'application/json'},
-          body:JSON.stringify({confirm_external_delivery:true})});
-        if(generation===state.generation)await refreshDelivery();
-      }catch(error){deliveryStatus.textContent=error.message;}
+      await deliveryControl('/resume',{confirm_external_delivery:true,expected_channel_id:deliveryChannel.channel_id});
     };
     deliveryRefresh.onclick=()=>refreshDelivery().catch(error=>{deliveryStatus.textContent=error.message;});
     const transitionBase=()=>'/v1/event-logs/'+encodeURIComponent(selectedLogId)+'/signal-history';
@@ -11967,7 +12211,7 @@
           offset=start;following=result.next_offset;
           progress.textContent=result.total+' cases in this selection.';
           rows.replaceChildren(table(['Case','Last known activity','Model top 3','Current-activity baseline','Recorded next activity','Outcome / abstention','Evidence'],
-            result.cases.map(c=>[c.case_id,c.last_activity,predicted(c.model),predicted(c.last_activity_baseline),
+            result.cases.map(c=>[c.case_id,c.last_activity,predicted(c.model)+(c.distribution_scores?.model?' · Brier '+c.distribution_scores.model.brier.map(v=>v.toFixed(3)).join(' – '):''),predicted(c.last_activity_baseline),
               c.actual_next_activity??'Unresolved', [c.outcome_reason,c.abstention_reason].filter(Boolean).join(' · ')||'Resolved',
               predictionCaseButton(inspection,c.case_id)])));
         }catch(error){if(live()){progress.textContent=error.message;rows.replaceChildren();following=null;}}
@@ -11999,6 +12243,21 @@
             [label,s.paired_predictions,s.paired_resolved,delta(s.paired_hit_share_change_bounds)])),
         el('h5','Top prediction calibration'),table(['Probability bin','Predicted','Resolved','Mean probability','Observed hit-share bounds'],
           l.calibration.bins.map(b=>[share(b.lower)+' – '+share(b.upper),b.predicted,b.resolved,share(b.mean_top1_probability),bounds(b.observed_hit_share_bounds)])),
+        ...(l.distribution_validation?[
+          el('h5','Full next-activity probability distribution validation'),
+          el('p','Lower loss is better. The full empirical distribution is scored, including probability on synthetic case end; unresolved observations are not scored as case end.','muted'),
+          table(['Estimator','Predicted / open','Resolved','Zero actual probability','Mean END mass','Resolved Brier','Brier bounds','Resolved clipped log loss','Log-loss bounds'],
+            Object.entries(l.distribution_validation.estimators).map(([key,s])=>{
+              const n=v=>v==null?'—':Number(v).toFixed(4);
+              const b=v=>n(v.lower)+' – '+n(v.upper);
+              return [key.replaceAll('_',' '),s.predicted+' / '+s.population,s.resolved,s.resolved_zero_actual_probability,share(s.mean_synthetic_end_mass),
+                n(s.brier.resolved_mean),b(s.brier.predicted_population_mean_bounds),n(s.clipped_log_loss.resolved_mean),b(s.clipped_log_loss.predicted_population_mean_bounds)];})),
+          table(['Paired history minus baseline','Common predictions','Resolved pairs','Brier difference bounds','Log-loss difference bounds'],
+            Object.entries(l.distribution_validation.paired_comparisons).map(([k,s])=>{
+              const b=v=>v.lower==null?'—':v.lower.toFixed(4)+' – '+v.upper.toFixed(4);
+              return [k.replaceAll('_',' '),s.paired_predictions,s.paired_resolved,b(s.brier.paired_population_mean_difference_bounds),b(s.clipped_log_loss.paired_population_mean_difference_bounds)];})),
+          ...l.distribution_validation.interpretation.map(t=>el('p',t,'muted'))
+        ]:[]),
         el('h5','Outcome and abstention accounting'),table(['Outcome','Cases'],Object.entries(l.outcomes)),
         table(['Abstention','Cases'],Object.entries(l.abstentions)),actions);
     }
@@ -12191,6 +12450,32 @@
             if(paired)parts.push(el('div','Paired time comparison: '+paired.paired_cases+' finished cases with both estimates · '+
               duration(paired.model_mae_seconds)+' OWG vs '+duration(paired.baseline_mae_seconds)+' naive error · '+
               paired.model_better_cases+' better, '+paired.baseline_better_cases+' worse, '+paired.tied_cases+' tied.'));
+            const pop=e.paired_remaining_time_population;
+            if(pop&&pop.paired_cases){
+              const signed=v=>v===null?'—':(v<0?'−':v>0?'+':'')+duration(Math.abs(v));
+              parts.push(el('div','Whole paired population: '+pop.paired_cases+' valid pairs, '+pop.cases_without_valid_pair+
+                ' without a valid pair. Eventual OWG minus naive mean absolute error: '+
+                signed(pop.eventual_mean_absolute_error_difference_lower_seconds)+' to '+
+                signed(pop.eventual_mean_absolute_error_difference_upper_seconds)+
+                ' (negative favors OWG). Model better in '+pop.model_better_cases_lower+'–'+pop.model_better_cases_upper+
+                ' cases; baseline better in '+pop.baseline_better_cases_lower+'–'+pop.baseline_better_cases_upper+
+                '. These are identification bounds, not confidence intervals.'));
+            }
+            const proper=e.proper_remaining_time_scores;
+            if(proper&&proper.interval_80.eligible_cases){
+              const it=proper.interval_80;
+              parts.push(el('div','80% interval score (lower is better): '+(it.finished_mean_interval_score_seconds===null?'no finished scores':duration(it.finished_mean_interval_score_seconds))+
+                '; population minimum '+duration(it.eventual_mean_interval_score_lower_seconds)+
+                (it.eventual_mean_interval_score_upper_seconds===null?', upper bound unknown':' (all eligible cases finished)')+
+                '. Mean frozen range width '+duration(it.mean_frozen_width_seconds)+
+                '; '+it.finished_early_misses+' early misses, '+it.finished_late_misses+' late misses, '+it.censored_known_late_misses+' open known late misses. '+it.ineligible_cases+' ineligible cases.'));
+              const quantiles=el('ul');
+              for(const q of proper.quantiles)quantiles.appendChild(el('li','P'+Math.round(q.quantile*100)+
+                ' pinball loss: '+(q.finished_mean_pinball_seconds===null?'—':duration(q.finished_mean_pinball_seconds))+
+                ' finished; population minimum '+(q.eventual_mean_pinball_lower_seconds===null?'—':duration(q.eventual_mean_pinball_lower_seconds))+
+                ' ('+q.eligible_cases+' eligible, '+q.ineligible_cases+' ineligible).'));
+              parts.push(quantiles);
+            }
             const ob=e.paired_outcome_bounds;
             if(ob)parts.push(el('div','Paired outcome risk: '+ob.known_outcome_cases+' known and '+ob.unknown_outcome_cases+
               ' unknown outcomes. Eventual OWG minus base-rate Brier difference between '+

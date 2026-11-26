@@ -317,6 +317,22 @@ def event_log_signal_timeline(
     return _respond(signal_timeline.timeline, transition=transition, limit=limit, before=before)
 
 
+@router.get("/v1/event-logs/signal-episode-review")
+def event_log_signal_episode_review(
+    request: Request, start_date: str = Query(max_length=10), end_date: str = Query(max_length=10),
+    status: str = Query(default="all",max_length=60),
+    log_id: str | None = Query(default=None,pattern=r"^[A-Za-z0-9_-]{1,128}$"),
+    rule_id: str | None = Query(default=None,pattern=r"^[A-Za-z0-9_-]{1,128}$"),
+    offset: int = Query(default=0,ge=0,le=100000), limit: int = Query(default=50,ge=1,le=100),
+    expected_review_sha256: str | None = Query(default=None,pattern=r"^[0-9a-f]{64}$"),
+):
+    """Bounded local journal episode review; no evaluation or action."""
+    from . import event_log_signal_episode_review as episodes
+    _require_dashboard(request)
+    return _respond(episodes.review,start_date=start_date,end_date=end_date,status=status,
+                    offset=offset,limit=limit,expected_review_sha256=expected_review_sha256,log_id=log_id,rule_id=rule_id)
+
+
 @router.post("/v1/event-logs/xlsx-to-csv")
 async def convert_xlsx_event_log(request: Request, sheet: str | None = Query(default=None, max_length=200)):
     """Convert one worksheet of an .xlsx file to CSV for the ordinary CSV import. Nothing is stored."""
@@ -3097,6 +3113,15 @@ async def event_log_import_filter_set(request: Request, log_id: str):
     _require_dashboard(request)
     spec = await _json_body(request, "filter file", strict=True, limit=65536)
     return await run_in_threadpool(_respond, filters.import_set, log_id, spec)
+
+
+@router.post("/v1/event-logs/{log_id}/filter-sets/{set_id}/update")
+async def event_log_update_filter_set(request: Request, log_id: str, set_id: str):
+    _require_dashboard(request)
+    spec = await _json_body(request, "saved filter update", strict=True, limit=65536)
+    response = await run_in_threadpool(_respond, filter_sets.update, log_id, set_id, spec)
+    _require_dashboard(request)
+    return response
 
 
 @router.post("/v1/event-logs/{log_id}/filter-sets/{set_id}/delete")

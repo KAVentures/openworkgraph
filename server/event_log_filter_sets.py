@@ -11,7 +11,9 @@ Saving or applying a set never changes events.
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import hashlib
 import json
+import re
 import secrets
 from typing import Any
 
@@ -29,6 +31,10 @@ def _name(value: Any) -> str:
     if not 0 < len(name) <= 120:
         raise workspace.EventLogWorkspaceError("a filter set needs a name of 1–120 characters")
     return name
+
+
+def _fingerprint(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
 def _activities(cohort: dict[str, Any]) -> set[str]:
@@ -78,16 +84,18 @@ def list_sets(log_id: str, case_type: str | None = None) -> dict[str, Any]:
             sets = []
             if rows:
                 current = workspace._case_type(conn, log_id, case_type)
-                entries = [(set_id, created, json.loads(definition)) for set_id, created, definition in rows]
+                entries = [(set_id, created, json.loads(definition), _fingerprint(definition))
+                           for set_id, created, definition in rows]
                 labels_by_id = {set_id: _activities(cohorts.parse_cohort(saved["cohort"]))
-                                for set_id, _, saved in entries}
-                notions = {saved.get("case_type") or current for _, _, saved in entries}
+                                for set_id, _, saved, _ in entries}
+                notions = {saved.get("case_type") or current for _, _, saved, _ in entries}
                 labels = set().union(*labels_by_id.values())
                 known = _known_labels(conn, log_id, labels, notions) if labels else {}
                 batches = _batches(conn, log_id)
-                for set_id, created, saved in entries:
+                for set_id, created, saved, fingerprint in entries:
                     notion = saved.get("case_type") or current
                     sets.append({"set_id": set_id, "created_at": created.isoformat() + "Z", "name": saved["name"],
+                                 "definition_sha256": fingerprint,
                                  "cohort": saved["cohort"],
                                  **({"case_type": saved["case_type"]} if "case_type" in saved else {}),
                                  "activities_not_in_log": sorted(labels_by_id[set_id] - known.get(notion, set())),
@@ -191,6 +199,49 @@ def delete(log_id: str, set_id: str) -> dict[str, Any]:
         finally:
             conn.close()
     return {"deleted": True, "set_id": set_id}
+
+
+def update(log_id: str, set_id: str, body: Any) -> dict[str, Any]:
+    if not isinstance(body, dict) or set(body) != {"name", "cohort", "case_type", "expected_definition_sha256"}:
+        raise workspace.EventLogWorkspaceError("provide name, cohort, case type and expected saved definition")
+    expected = body["expected_definition_sha256"]
+    if not isinstance(expected, str) or not re.fullmatch(r"[0-9a-f]{64}", expected):
+        raise workspace.EventLogWorkspaceError("invalid saved filter fingerprint")
+    name = _name(body["name"])
+    requested = body["case_type"]
+    if requested is not None and (not isinstance(requested, str) or not 0 < len(requested) <= 200):
+        raise workspace.EventLogWorkspaceError("choose a valid case notion")
+    cohort = cohorts.parse_cohort(body["cohort"])
+    cohort.pop("label", None)
+    if not cohort:
+        raise workspace.EventLogWorkspaceError("a filter set needs at least one filter")
+    with workspace._LOCK:
+        conn = workspace._connect()
+        try:
+            workspace._check_log(conn, log_id)
+            row = conn.execute("SELECT definition FROM filter_sets WHERE log_id=? AND set_id=?",
+                               [log_id, set_id]).fetchone()
+            if row is None:
+                raise workspace.EventLogWorkspaceError("unknown filter set")
+            if _fingerprint(row[0]) != expected:
+                raise workspace.EventLogWorkspaceError("the saved filter changed; reload it before updating")
+            if requested is not None:
+                requested = workspace._case_type(conn, log_id, requested)
+            others = conn.execute("SELECT definition FROM filter_sets WHERE log_id=? AND set_id<>?",
+                                  [log_id, set_id]).fetchall()
+            if name.casefold() in {json.loads(value)["name"].casefold() for (value,) in others}:
+                raise workspace.EventLogWorkspaceError("a filter set with this name already exists")
+            definition = {"format": FORMAT, "name": name, "cohort": cohorts.describe(cohort),
+                          **({"case_type": requested} if requested is not None else {}),
+                          "appended_batches_at_save": _batches(conn, log_id)}
+            encoded = json.dumps(definition, sort_keys=True)
+            conn.execute("UPDATE filter_sets SET definition=? WHERE log_id=? AND set_id=?",
+                         [encoded, log_id, set_id])
+        finally:
+            conn.close()
+    return {"set_id": set_id, "name": name, "cohort": definition["cohort"],
+            **({"case_type": requested} if requested is not None else {}),
+            "definition_sha256": _fingerprint(encoded)}
 
 
 __all__ = ["delete", "import_set", "list_sets", "save", "FORMAT", "MAX_SETS"]

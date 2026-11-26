@@ -42,6 +42,14 @@ const path=require('node:path');
    await page.locator('#owgImpactMarkerStatus').filter({hasText:'Saved the change on 2024-03-04.'}).waitFor();
    const options=await page.locator('#owgImpactMarker option').allTextContents();
    assert.deepEqual(options,['Pick a saved change','2024-03-04 \u2014 Automation went live'],options.join('|'));
+   // The drift section lists the recorded change against its window.
+   await page.locator('#owgConceptDriftWindow').selectOption('week');
+   await page.locator('#owgConceptDriftRun').click();
+   await page.locator('#owgConceptDriftMarkers').getByText('Automation went live').waitFor();
+   assert.match(await page.locator('#owgConceptDriftMarkers').textContent(),/2024-03-04\s*2024-03-04\s*No/);
+   await page.addScriptTag({content:axeSource});
+   const driftAudit=await page.evaluate(async()=>window.axe.run(document.querySelector('#owgConceptDrift'),{runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21aa']}}));
+   assert.deepEqual(driftAudit.violations.map(v=>v.id+': '+v.nodes.map(n=>n.target).join(',')),[]);
    // After re-analysis the saved change is still there and fills the date.
    await page.locator('#owgEventLogAnalyze').click();
    await page.waitForFunction(()=>{const s=document.querySelector('#owgImpactMarker');return !!s&&s.options.length===2;});
@@ -57,6 +65,6 @@ const path=require('node:path');
    const audit=await page.evaluate(async()=>window.axe.run(document.querySelector('#owgImpact'),{runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21aa']}}));
    assert.deepEqual(audit.violations.map(v=>v.id+': '+v.nodes.map(n=>n.target).join(',')),[]);
    assert.deepEqual(errors,[]);
-   console.log('Change markers browser acceptance passed: input checks, saved change kept after re-analysis, fills the impact date, removed, WCAG audit.');
+   console.log('Change markers browser acceptance passed: input checks, saved change kept after re-analysis, fills the impact date, listed against its drift window, removed, WCAG audit.');
  }finally{if(browser)await browser.close();server.kill();}
 })().catch(error=>{console.error(error);process.exit(1);});

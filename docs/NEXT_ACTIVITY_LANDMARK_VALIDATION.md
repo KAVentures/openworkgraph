@@ -11,3 +11,27 @@ Work limits: 300,000 visible events, 100,000 cases, 2,000 events per trace, 1.2M
 Synthetic case-end-only guesses have no possible hit against a recorded next activity, even for unresolved outcomes. The upper bounds exclude these guesses. HTTP regression coverage exercises dashboard-session authorization, stale review rejection, request size and unsupported retrospective cohort refusal.
 
 When completion and non-completion activities share the final visible timestamp, membership is unknown independent of event ID order. The report shows exact uncertain membership counts, open-population size bounds, membership-sensitive prediction bounds and up to 100 examples. No prediction or training example is produced for those cases.
+
+## Full distribution validation
+
+Every offered history, overall and current-activity prediction is now scored
+using its full empirical probability counter, not the displayed top one or
+three. Multiclass Brier loss sums squared errors across all labels, including
+synthetic END, and is between zero and two. Clipped natural log loss uses an
+explicit probability floor of 1e-12 and reports resolved zero-probability
+outcomes separately. The clipped score is a finite diagnostic, not the
+unclipped proper log score. The END probability is never reassigned to a
+recorded activity or treated as correct on missing observations.
+
+An unresolved outcome may be any actual activity, including a previously
+unseen label. Predicted-population bounds therefore use the maximum
+non-END probability and zero, without inspecting future outcome vocabulary.
+Abstentions are counted separately and do not become zero-loss predictions.
+Paired history-minus-baseline bounds are conservative marginal differences
+on common predictions, with exact cancellation for identical underlying
+counters; resolved pair differences are exact. No confidence interval or
+causal claim is made. Cached counter profiles bound additional work by the
+existing training model's distributions rather than repeatedly scanning the
+full label set per open case. Case evidence includes compact loss bounds and
+actual-label probability, and the existing report JSON includes all aggregate
+scores. No new data retention or changes to the model's predictions.

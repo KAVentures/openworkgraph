@@ -2935,6 +2935,11 @@ notion. Import validates the rules and case notion against the destination log.
 Filter names are unique within each log.
 
 
+Use **Update from active filter** to replace a saved filter's criteria with the
+current selection. The saved filter keeps its identity and name. If another
+edit changed it since the list was loaded, OWG asks you to reload and review
+before updating.
+
 The case evidence drill-down also uses the active case filter, so browsing cases shows the same
 cases the filtered views count ("N matching cases (case filter applied)"). Object-type maps keep
 their own case notion and are not filtered.
@@ -3258,6 +3263,15 @@ parameters as the summary. Send `{"activity":"Check"}` for a continuation or `{"
 for a case ending. Each response gives the exact branch total and up to `limit` cases (1–100,
 default 50) in literal case-key order. Send the returned `next_after` as `after` in the next body.
 Each page reflects the current log.
+
+**Download JSON** and **Download CSV** save the branches at the current point. Each CSV row gives:
+
+- the path that leads there and whether it is anchored at the case start or anywhere;
+- the next activity, or `(case ends)`;
+- its cases and share;
+- the median hours from the previous step and to the case end.
+
+Going deeper or back replaces the download with the new point.
 
 ## Due dates
 
@@ -3639,12 +3653,14 @@ Supported nodes:
 
 - `manualTask` (an activity) and `automaticTask` (a silent step);
 - `sequence`, `xor` and `and`;
+- `or` (inclusive choice): execute any nonempty subset of branches, with parallel interleaving of their activities;
+- `interleaved`: execute every child exactly once, in any order, with no overlap between whole child blocks;
 - `xorLoop` with two children (PM4Py: do, redo) or three (ProM: do, redo, exit). The exit runs
   once after the loop.
 
-Other operators (`or`, `interleaved`, …), a node with two parents, cycles, unconnected nodes,
+Other operators (such as `def`), a node with two parents, cycles, unconnected nodes,
 unknown references and XML with a DOCTYPE or entity declaration are refused with a message.
-Nothing is approximated.
+Nothing is approximated by the converter. PTML requires an ASCII-compatible XML encoding (such as UTF-8) and both parsers are bounded to 250 nesting levels.
 
 A tree can also be pasted as PM4Py prints it (`print(tree)`), for example
 `->( 'Register', X( 'Check', tau ), *( 'Fix', tau ), 'Close' )`. Its notation:
@@ -3654,9 +3670,9 @@ A tree can also be pasted as PM4Py prints it (`print(tree)`), for example
 - labels are single-quoted. A label ends at the quote followed by a comma or a closing bracket,
   so quotes inside a label are kept.
 
-`O` (or) and `<>` (interleaving) are refused, as in PTML. The dashboard field is
+`O` denotes inclusive choice and `<>` denotes interleaving. For example, `O( 'Pay', 'Ship' )` accepts either alone or both in either order, whereas `<>( ->( 'A', 'B' ), ->( 'C', 'D' ) )` accepts only the two whole-block orders. The compiled nets use linear-size branch selection/lock constructions. Exact net semantics do not make the downstream bounded token-replay heuristic complete: highly branching nets can exceed its silent-state budget; review alignments and their limits before interpreting apparent deviations. The dashboard field is
 **Or paste a PM4Py process tree**. Its endpoint is `POST /v1/event-logs/process-tree-to-pnml`
-with `{"notation": "…"}` (dashboard session only, at most 200,000 characters, nesting at most 500
+with `{"notation": "…"}` (dashboard session only, at most 200,000 characters, nesting at most 250
 levels). The response has the same shape as `ptml-to-pnml`.
 
 ## Temporal profile
