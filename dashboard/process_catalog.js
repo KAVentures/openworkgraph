@@ -2029,6 +2029,42 @@
         sourceSection.appendChild(row);
       }
       output.appendChild(sourceSection);
+      const sf=value.source_finance;
+      const financeSection=el('details');financeSection.append(el('summary','Source invoice amount reconciliation'),
+        el('p',sf.matched+' exact matches · '+sf.mismatched+' mismatches · '+sf.unknown+' unknown of '+sf.selected+' selected invoice lines'),
+        el('p','Amounts below are original currency minor units. They are invoice amount_paid values, not verified booked revenue, cash settlement or ROI. Only selected, previously confirmed live invoice predicates can be checked.'));
+      for(const g of sf.groups){
+        financeSection.appendChild(el('p',g.window_id+' · '+g.arm+' · '+g.currency+' · '+g.matched+'/'+g.selected+' matched · '+g.unknown+' unknown · known declared '+g.known_declared_minor_units+' · known source '+g.known_source_minor_units+' · difference '+g.known_difference_minor_units+' minor units'));
+      }
+      for(const b of value.source_outcome_bindings){
+        if(b.predicate!=='invoice_paid_in_window')continue;
+        const predicate=value.source_outcome_checks.find(x=>x.slot_id===b.slot_id&&x.status==='confirmed');
+        const statement=value.finance_reconciliations.find(x=>x.window_id===b.window_id);
+        if(!predicate||!statement)continue;
+        const latest=[...value.source_finance_checks].reverse().find(x=>x.slot_id===b.slot_id);
+        const row=el('div');row.appendChild(el('p',b.window_id+' · '+b.slot_id.slice(0,12)+' · '+statement.currency+' · '+(latest?latest.status+' / '+latest.reason:'not compared')));
+        if(latest&&latest.status!=='unknown'){
+          row.appendChild(el('p','Declared '+latest.declared_amount_paid_minor_units+' · source '+latest.source_amount_paid_minor_units+' · difference '+latest.difference_minor_units+' minor units'));
+        }else{
+          const input=el('input');input.type='text';input.inputMode='numeric';input.maxLength=19;
+          input.setAttribute('aria-label','Declared gross invoice paid amount in minor units');
+          if(latest){input.value=latest.declared_amount_paid_minor_units;input.readOnly=true;}
+          const label=el('label','Declared amount_paid ('+statement.currency+' minor units) ');label.appendChild(input);
+          row.append(label,button(latest?'Retry unknown source amount':'Compare source invoice amount',()=>perform(async()=>{
+            const raw=input.value.trim();
+            if(!/^(0|[1-9][0-9]{0,18})$/.test(raw)||BigInt(raw)>1000000000000000000n)throw new Error('Provide an exact nonnegative integer of at most 10^18 minor units.');
+            if(!window.confirm('Read the authorized live Stripe invoice amount and retain this immutable declaration? It is not booked revenue or cash settlement.'))return;
+            const attempt=++serial;
+            const prefix=JSON.stringify({...base,window_id:b.window_id,expected_report_sha256:value.latest_report.report_sha256,
+              expected_reconciliation_sha256:statement.reconciliation_sha256,confirm_source_amount_read:true,confirm_gross_invoice_amount_not_booked_revenue:true});
+            const document=prefix.slice(0,-1)+',"rows":[{"slot_id":'+JSON.stringify(b.slot_id)+',"declared_amount_paid_minor_units":'+raw+'}]}';
+            await request('/v1/process-catalog/procurement/router-source-finance-check?'+new URLSearchParams({workflow_id:scope.workflow_id,revision:String(scope.revision)}),{document});
+            if(valid(attempt))await loadDetail(value.monitor_id);
+          })));
+        }
+        financeSection.appendChild(row);
+      }
+      output.appendChild(financeSection);
       output.appendChild(el('h6','Producer credential management'));
       for(const g of value.producer_grants){
         const row=el('div');row.appendChild(el('p',g.producer_alias+' · '+g.window_id+' / '+g.arm+' · '+(g.revoked?'revoked':g.expires_ms<=Date.now()?'expired':'active')));
@@ -2286,6 +2322,7 @@
             el('p','Rollback triggers: '+(r.sticky_rollback_triggers.map(x=>(x.window_id||'cumulative')+': '+x.reason).join(' · ')||'none recorded')),
             el('p','Rollback referral: '+(r.rollback_referral_recorded?'recorded':'not recorded')+' · due for review: '+(r.due_for_review_windows.join(', ')||'none')),
             el('p','Source predicates: '+r.source_outcomes.confirmed+'/'+r.source_outcomes.bound+' confirmed'),
+            el('p','Source invoice amounts: '+r.source_finance.matched+' matched · '+r.source_finance.mismatched+' discrepancies · '+r.source_finance.unknown+' unknown'),
             el('p','Outcome corroboration: '+r.outcome_corroboration.matched+'/'+r.outcome_corroboration.enrolled+' matched · '+r.outcome_corroboration.conflicts+' conflicts'),
             el('p','Declared finance statements: '+(r.finance_reconciled_windows.join(', ')||'none')+' · scheduled review consent '+(r.scheduled_deadline_review_enabled?'enabled':'disabled')),
             button('Open saved revision',()=>load(r.workflow_id,r.revision)));
