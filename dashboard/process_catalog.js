@@ -2547,6 +2547,7 @@
         el('p',value.finding_count+' findings · '+value.rollback_referrals_retained+' historical rollback referrals retained'),
         el('p',Object.entries(value.counts_by_state).map(([k,v])=>k.replaceAll('_',' ')+': '+v).join(' · ')),
         el('p','Reported follow-up is not verified completion or incident clearance.'));
+      if(value.lineage)remediationOutput.appendChild(el('p','Successor of '+value.lineage.previous_worklist_sha256+' · prior revision '+value.lineage.previous_revision+' · '+value.lineage.carried_owner_finding_ids.length+' carried owner assignments'));
       const reviewer=el('input');reviewer.maxLength=80;reviewer.setAttribute('aria-label','Remediation reviewer alias');
       const filter=el('select');filter.setAttribute('aria-label','Remediation finding state');
       for(const v of ['all',...Object.keys(value.counts_by_state)]){const opt=el('option',v.replaceAll('_',' '));opt.value=v;filter.appendChild(opt);}
@@ -2643,6 +2644,88 @@
       });
       target.append(create,result);
     };
+    const renderContinuity=(target,value,document,attempt)=>{
+      const panel=el('details');panel.append(el('summary','Carry remediation into an appended audit history'),
+        el('p','Only an exact extension of the previous independently pinned manifest is accepted. Unchanged evidence may carry a selected owner as a new assignment; prior progress and references never carry automatically.'));
+      const prior=el('select');prior.setAttribute('aria-label','Previous remediation register');
+      const pin=el('input');pin.maxLength=64;pin.setAttribute('aria-label','Independently obtained previous manifest digest');
+      const reviewer=el('input');reviewer.maxLength=80;reviewer.setAttribute('aria-label','Continuity reviewer alias');
+      const output=el('div');output.setAttribute('aria-live','polite');
+      let registers=[],serial=0;
+      const invalidate=()=>{serial++;output.replaceChildren();};
+      const current=()=>registers.find(r=>r.worklist_sha256===prior.value);
+      const load=button('Load previous remediation registers',async()=>{
+        const token=++serial;output.replaceChildren();
+        try{
+          const result=await remediationCall('list',{});
+          if(token!==serial||attempt!==auditGeneration||!output.isConnected)return;
+          registers=result.registers.filter(r=>r.worklist_sha256!==value.worklist.worklist_sha256);
+          prior.replaceChildren();for(const r of registers){const opt=el('option',r.worklist_sha256.slice(0,16)+' · revision '+r.revision);opt.value=r.worklist_sha256;prior.appendChild(opt);}
+          output.appendChild(el('p',registers.length+' candidate prior registers. Enter the independently obtained prior manifest digest.'));
+        }catch(e){if(token===serial)output.replaceChildren(el('p',e.message));}
+      });
+      const base=()=>{
+        const r=current();
+        if(!r||!/^[a-f0-9]{64}$/.test(pin.value))throw new Error('Load and select a previous register and supply its independent manifest digest.');
+        return {previous_worklist_sha256:r.worklist_sha256,expected_previous_revision:r.revision,
+          expected_previous_history_sha256:r.history_sha256,previous_manifest_sha256:pin.value,
+          expected_current_worklist_sha256:value.worklist.worklist_sha256,confirmed:true};
+      };
+      const call=(action,body)=>{
+        const payload=document.slice(0,-1)+',"continuity":'+JSON.stringify(body)+'}';
+        if(new TextEncoder().encode(payload).length>auditMax)throw new Error('Combined continuity request exceeds browser limit.');
+        return inboxCall('remediation-continuity-'+action,payload);
+      };
+      const preview=button('Compare exact appended remediation history',async()=>{
+        const token=++serial;output.replaceChildren();
+        try{
+          const req=base();
+          if(!window.confirm('Compare the prior register against the exact prefix of the current verified history?'))return;
+          const result=await call('preview',req);
+          if(token!==serial||attempt!==auditGeneration||!output.isConnected)return;
+          output.append(el('h5','Verified remediation continuity preview'),
+            el('p',Object.entries(result.counts_by_relation).map(([k,v])=>k.replaceAll('_',' ')+': '+v).join(' · ')),
+            el('p',result.verified_prefix_snapshot_count+' verified prior snapshots · '+result.owner_carry_eligible_count+' eligible owner assignments'),
+            el('p','Missing findings remain in the previous register. No progress or clearance is inferred.'));
+          const chosen=new Set(),list=el('div'),count=el('p','0 selected');let page=0;
+          const filter=el('select');filter.setAttribute('aria-label','Continuity finding relation');
+          for(const k of ['all','same_evidence_pin','changed_evidence_pin','new_finding','not_in_successor','eligible']){const opt=el('option',k.replaceAll('_',' '));opt.value=k;filter.appendChild(opt);}
+          const draw=()=>{
+            const rows=result.findings.filter(r=>filter.value==='all'||(filter.value==='eligible'?r.owner_carry_eligible:r.relation===filter.value));
+            const per=25,pages=Math.max(1,Math.ceil(rows.length/per));page=Math.min(page,pages-1);
+            list.replaceChildren(el('p',rows.length+' continuity findings · page '+(page+1)+' of '+pages));
+            for(const r of rows.slice(page*per,(page+1)*per)){
+              const item=el('div');item.append(el('p',r.kind.replaceAll('_',' ')+' · '+r.relation.replaceAll('_',' ')+' · '+Object.values(r.scope).join(' · ')),
+                el('p','Prior state: '+(r.previous_state||'none')+' · prior owner: '+(r.previous_owner_alias||'none')));
+              if(r.owner_carry_eligible){
+                const check=el('input');check.type='checkbox';check.checked=chosen.has(r.finding_id);check.setAttribute('aria-label','Carry owner '+r.finding_id);
+                check.addEventListener('change',()=>{if(check.checked&&chosen.size<200)chosen.add(r.finding_id);else{chosen.delete(r.finding_id);check.checked=false;}count.textContent=chosen.size+' selected';});
+                item.appendChild(auditLabel('Carry owner as new assignment',check));
+              }list.appendChild(item);
+            }
+            const back=button('Previous continuity page',()=>{page--;draw();}),next=button('Next continuity page',()=>{page++;draw();});
+            back.disabled=page===0;next.disabled=page+1===pages;list.append(back,next);
+          };
+          filter.addEventListener('change',()=>{page=0;draw();});
+          const message=el('div');let busy=false;
+          const carry=button('Create successor remediation register',async()=>{
+            if(busy||token!==serial||attempt!==auditGeneration)return;
+            try{
+              if(!/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$/.test(reviewer.value))throw new Error('Provide a declared reviewer alias.');
+              if(!window.confirm('Create a separate retained successor register with only the selected owners as new assignments? Prior history remains unchanged.'))return;
+              busy=true;
+              const next=await call('carry',{...req,expected_continuity_sha256:result.continuity_sha256,reviewer_alias:reviewer.value,carry_finding_ids:[...chosen],confirm_local_retention:true});
+              if(token!==serial||attempt!==auditGeneration||!output.isConnected)return;
+              message.replaceChildren(el('p','Separate successor remediation register created.'));carry.disabled=true;remediationSection.open=true;showRemediation(next);
+            }catch(e){if(token===serial)message.replaceChildren(el('p','Successor creation refused: '+e.message));}
+            finally{busy=false;}
+          });
+          output.append(auditLabel('Relation',filter),count,list,download(result,'owg-workforce-remediation-continuity'),carry,message);draw();
+        }catch(e){if(token===serial)output.replaceChildren(el('p','Continuity refused: '+e.message));}
+      });
+      prior.addEventListener('change',invalidate);pin.addEventListener('input',invalidate);
+      panel.append(load,auditLabel('Previous register',prior),auditLabel('Previous manifest digest',pin),auditLabel('Declared reviewer',reviewer),preview,output);target.appendChild(panel);
+    };
     const verifyAudit=button('Recompute selected historical audit evidence',async()=>{
       const attempt=++auditGeneration;auditOutput.replaceChildren();
       try{
@@ -2670,7 +2753,7 @@
             el('p','Historical review clock: '+new Date(receipt.reviewed_as_of_ms).toISOString()+' · current freshness and trusted timestamp not verified.'),
             download(value,'owg-workforce-verified-audit-dossier'));
           renderReview(auditOutput,value.report);
-        }else{renderAuditTimeline(auditOutput,value);renderAuditTriage(auditOutput,value,document,attempt);renderAuditReconciliation(auditOutput,document,attempt);addRemediationCreate(auditOutput,value,document,attempt);}
+        }else{renderAuditTimeline(auditOutput,value);renderAuditTriage(auditOutput,value,document,attempt);renderAuditReconciliation(auditOutput,document,attempt);addRemediationCreate(auditOutput,value,document,attempt);renderContinuity(auditOutput,value,document,attempt);}
       }catch(error){if(attempt===auditGeneration&&auditOutput.isConnected)auditOutput.replaceChildren(el('p','Historical review refused. Check file ordering, independent pins and size limits. '+error.message));}
     });
     auditMode.addEventListener('change',resetAuditFiles);auditDigest.addEventListener('input',invalidateAudit);auditTrust.addEventListener('change',invalidateAudit);
