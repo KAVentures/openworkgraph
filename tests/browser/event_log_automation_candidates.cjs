@@ -42,6 +42,11 @@ const path=require('node:path');
    const first=await results.locator('tbody tr').first().locator('td').allTextContents();
    assert.equal(first[0],'Check');assert.equal(first[4],'Mostly fixed');
    assert.equal(await results.locator('tbody tr').count(),4);
+   // The ranking downloads with every score component.
+   const [rankCsv]=await Promise.all([page.waitForEvent('download'),page.locator('#owgAutomationReportCsv').click()]);
+   const rankLines=(await fs.readFile(await rankCsv.path(),'utf8')).trim().split(/\r?\n/);
+   assert.match(rankLines[0],/^activity,score,volume_component,routine_component,waiting_component,occurrences,cases,per_week,routing_pattern,/);
+   assert.equal(rankLines.length,5);assert.match(rankLines[1],/^Check,[\d.]+,[\d.]+,[\d.]+,[\d.]+,20,20,[\d.]+,mostly_fixed,/);
    await results.getByRole('button',{name:'Add Check to the automation pipeline'}).click();
    await results.filter({hasText:'Added to the pipeline as an idea.'}).waitFor();
    const idea=await page.evaluate(async()=>{const r=await (await fetch('/v1/automation-pipeline')).json();const list=r.ideas||r.items||[];return list.map(i=>[i.title,i.source&&i.source.kind,i.description]);});
@@ -51,6 +56,6 @@ const path=require('node:path');
    const audit=await page.evaluate(async()=>window.axe.run(document.querySelector('#owgAutomation'),{runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21aa']}}));
    assert.deepEqual(audit.violations.map(v=>v.id+': '+v.nodes.map(n=>n.target).join(',')),[]);
    assert.deepEqual(errors,[]);
-   console.log('Automation candidates browser acceptance passed: ranked activities with components, routing pattern and waiting, sent to the automation pipeline with evidence, WCAG audit.');
+   console.log('Automation candidates browser acceptance passed: ranked activities with components, routing pattern and waiting, sent to the automation pipeline with evidence, CSV ranking, WCAG audit.');
  }finally{if(browser)await browser.close();server.kill();}
 })().catch(error=>{console.error(error);process.exit(1);});

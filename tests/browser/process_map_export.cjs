@@ -55,10 +55,16 @@ const path=require('node:path');
    assert(csvLines.includes('path,Check stock,Ship,4,4,3600,3600,3600'),csvLines.join('|'));
    assert(csvLines.includes('end,Invoice,,8,,,,'),csvLines.join('|'));
    assert.equal(csvLines.filter(l=>l.startsWith('path,')).length,5,csvLines.join('|'));
+   // The same map as a Graphviz graph with generated node ids and quoted labels.
+   const [dotDownload]=await Promise.all([page.waitForEvent('download'),page.locator('#owgMapDownloadDot').click()]);
+   assert.match(dotDownload.suggestedFilename(),/^process-map-[A-Za-z0-9_-]+\.dot$/);
+   const dotText=await fs.readFile(await dotDownload.path(),'utf8');
+   assert.match(dotText,/^digraph "/);assert.match(dotText,/label="Receive order\\n8"/);assert.match(dotText,/ -> end \[label="8"/);
+   await page.locator('#owgMapStatus').filter({hasText:'Graphviz graph (activities='}).waitFor();
    await page.addScriptTag({content:axeSource});
    const audit=await page.evaluate(async()=>window.axe.run(document.querySelector('#owgEventLogProcessMap'),{runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21aa']}}));
    assert.deepEqual(audit.violations.map(v=>v.id+': '+v.nodes.map(n=>n.target).join(',')),[]);
    assert.deepEqual(errors,[]);
-   console.log('Process map export browser acceptance passed: self-contained SVG with every activity, slider settings and interpretation, a real 2x PNG, map data as CSV, WCAG audit.');
+   console.log('Process map export browser acceptance passed: self-contained SVG with every activity, slider settings and interpretation, a real 2x PNG, map data as CSV, a Graphviz DOT graph, WCAG audit.');
  }finally{if(browser)await browser.close();server.kill();}
 })().catch(e=>{console.error(e);process.exitCode=1;});

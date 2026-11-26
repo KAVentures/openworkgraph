@@ -58,11 +58,13 @@
     mrow.append(field('Deployment',pick),field('Recent days',recent),field('Baseline days',baseline),view);
     const channelButton=button('Signed report channel','secondary');channelButton.id='owgMonitorChannel';
     const incidentButton=button('Show incidents','secondary');incidentButton.id='owgMonitorIncidents';
+    const objectiveButton=button('Service objectives','secondary');objectiveButton.id='owgMonitorObjectives';
     const releaseButton=button('Release inventory','secondary');releaseButton.id='owgMonitorRelease';
-    const arow=el('div',null,'row');arow.style.alignItems='end';arow.append(field('Attach reviewed design (workflow.spec.json)',design),toLog,channelButton,incidentButton,releaseButton,remove);
+    const arow=el('div',null,'row');arow.style.alignItems='end';arow.append(field('Attach reviewed design (workflow.spec.json)',design),toLog,channelButton,incidentButton,releaseButton,objectiveButton,remove);
     const channelHost=el('div');channelHost.id='owgMonitorChannelPanel';const incidentHost=el('div');incidentHost.id='owgMonitorIncidentPanel';
     const releaseHost=el('div');releaseHost.id='owgMonitorReleasePanel';
-    manage.append(mrow,arow,channelHost,incidentHost,releaseHost);show(manage,false);
+    const objectiveHost=el('div');objectiveHost.id='owgMonitorObjectivePanel';
+    manage.append(mrow,arow,channelHost,incidentHost,releaseHost,objectiveHost);show(manage,false);
     const portfolio=el('div');portfolio.id='owgMonitorPortfolio';
     const portfolioDays=input('owgMonitorPortfolioDays','number');portfolioDays.min='1';portfolioDays.max='365';portfolioDays.value='30';
     const portfolioButton=button('Review all deployment evidence','secondary');portfolioButton.id='owgMonitorPortfolioShow';
@@ -75,7 +77,7 @@
 
     let deployments=[],renderVersion=0,loadVersion=0,incidentVersion=0,releaseVersion=0,portfolioVersion=0;
     let incidentScope='selected',incidentStatus='',incidentSearch='';
-    const clearResults=()=>{portfolioVersion++;portfolio.replaceChildren();renderVersion++;incidentVersion++;incidentScope='selected';incidentStatus='';incidentSearch='';results.replaceChildren();channelHost.replaceChildren();incidentHost.replaceChildren();releaseVersion++;releaseHost.replaceChildren();};
+    const clearResults=()=>{portfolioVersion++;portfolio.replaceChildren();renderVersion++;incidentVersion++;incidentScope='selected';incidentStatus='';incidentSearch='';results.replaceChildren();channelHost.replaceChildren();incidentHost.replaceChildren();releaseVersion++;releaseHost.replaceChildren();objectiveHost.replaceChildren();document.getElementById('owgMonitorRunEvidencePanel')?.replaceChildren();};
     const refresh=()=>{importButton.disabled=!(file.files&&file.files[0]&&consent.checked);};
     file.onchange=refresh;consent.onchange=refresh;
     async function load(select){
@@ -132,6 +134,16 @@
         parts.push(table(['Accepted','Refused','Highest sequence','Missing (retained)'],[[String(live.accepted_reports),String(live.refused_reports),String(live.highest_sequence),live.missing_count?live.missing_sequences.join(', ')+(live.missing_count>live.missing_sequences.length?' …':''):'none']]));
         if(live.missing_truncated)parts.push(el('p','Earlier missing sequence numbers were truncated from the 1,000-ID recovery window. The retained list cannot prove that all reports arrived, even when empty.','note'));
         if(live.versions.length)parts.push(el('h4','Versions seen'),table(['Version','Workflow spec','First seen','Last seen','Reports','Runs'],live.versions.map(v=>[v.version_label||'(none)',v.workflow_spec_sha256?v.workflow_spec_sha256.slice(0,12)+'…':'(none)',v.first_seen,v.last_seen,String(v.reports),String(v.runs)])));
+        const receipts=live.recent_sequence_receipts||[];
+        if(receipts.length){
+          const disposition={imported:'Accepted',refused_invalid:'Invalid report',refused_version_drift:'Specification mismatch',
+            refused_run_revision_conflict:'Conflicting run revision'};
+          parts.push(el('h4','Recent signed sequence dispositions'),
+            el('p','Highest '+receipts.length+' retained sequences, not execution or arrival order. Original refusal status is preserved even on an exact resend.','muted'),
+            table(['Sequence','Received','Disposition','Original HTTP status'],receipts.map(r=>[
+              r.sequence,r.received_at,disposition[r.outcome]||r.outcome,String(r.original_status)])));
+          if(live.receipt_list_truncated)parts.push(el('p',live.retained_receipt_count+' receipts retained; only the highest 50 are displayed.','muted'));
+        }
         const rotate=button('Rotate secret','secondary');rotate.id='owgMonitorChannelRotate';
         rotate.onclick=async()=>{if(!window.confirm('Replace the channel secret? The old one stops working immediately.'))return;try{const r=await api('/v1/automation-monitoring/channels/'+encodeURIComponent(live.channel_id)+'/rotate',{method:'POST'});await renderChannel(r.secret);}catch(error){status.textContent=error.message;}};
         const revoke=button('Revoke channel','secondary');revoke.id='owgMonitorChannelRevoke';
@@ -140,7 +152,7 @@
       }
       channelHost.replaceChildren(...parts);
     }
-    const KIND={run_failures:'Failed runs',run_handoffs:'Runs handed to a person',signature_rejected:'Rejected signatures',replay_conflict:'Reused sequence numbers',lost_reports:'Lost reports',version_drift:'Version drift'};
+    const KIND={run_failures:'Failed runs',run_handoffs:'Runs handed to a person',signature_rejected:'Rejected signatures',replay_conflict:'Reused sequence numbers',lost_reports:'Lost reports',version_drift:'Version drift',run_revision_conflict:'Conflicting run revisions'};
     async function renderIncidents(){
       const selected=pick.value;if(!selected)return;
       const version=++incidentVersion,requestedScope=incidentScope;
@@ -292,7 +304,164 @@
       }else parts.push(el('p','No deployments retained.','muted'));
       portfolio.replaceChildren(...parts);
     }
+    // Review exact report evidence without invoking the customer runtime.
+    const evidenceButton=button('Explore retained runs','secondary');evidenceButton.id='owgMonitorRunEvidence';
+    const evidenceHost=el('div');evidenceHost.id='owgMonitorRunEvidencePanel';arow.appendChild(evidenceButton);manage.appendChild(evidenceHost);
+    let evidenceGeneration=0;
+    function openRunEvidence(){
+      const dep=pick.value;if(!dep)return;
+      const generation=++evidenceGeneration;
+      const root=el('div');evidenceHost.replaceChildren(root);
+      const active=()=>root.isConnected&&pick.value===dep&&generation===evidenceGeneration;
+      const path='/v1/automation-monitoring/deployments/'+encodeURIComponent(dep)+'/runs';
+      const post=(url,body)=>api(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+      const selectField=(id,values)=>{const s=document.createElement('select');s.id=id;setOptions(s,values);return s;};
+      const runStatus=selectField('owgRunEvidenceStatus',[['','Any status'],...['succeeded','failed','handed_to_human','cancelled','running'].map(v=>[v,v])]);
+      const stepStatus=selectField('owgRunEvidenceStepStatus',[['','Any step status'],...['completed','failed','skipped','handed_to_human'].map(v=>[v,v])]);
+      const attribution=selectField('owgRunEvidenceAttribution',[['any','Any attribution'],['attached_design','Matches attached design digest'],['declared_other','Different declared digest'],['unknown','No declared digest']]);
+      const runId=input('owgRunEvidenceId','text','Exact run ID');runId.maxLength=128;
+      const stepId=input('owgRunEvidenceStep','text','Exact step ID');stepId.maxLength=128;
+      const from=input('owgRunEvidenceFrom','text','2026-01-01T00:00:00Z');
+      const before=input('owgRunEvidenceBefore','text','2026-02-01T00:00:00Z');
+      const searchButton=button('Search retained runs','secondary'),prev=button('Previous page','secondary'),next=button('Next page','secondary');
+      const message=el('p',null,'muted');message.setAttribute('role','status');
+      const list=el('div'),detailHost=el('div'),compareHost=el('div');
+      let serial=0,detailSerial=0,compareSerial=0,population=null,offset=0,nextOffset=null,left=null,right=null,selectedFilters=null;
+      const compareButton=button('Compare two pinned runs','secondary');compareButton.disabled=true;
+      const clearPins=button('Clear compared runs','secondary');
+      const pinsLabel=el('p','No comparison runs pinned.','muted');
+      function renderPins(){
+        pinsLabel.textContent='Left: '+(left?left.run_id:'none')+' · Right: '+(right?right.run_id:'none');
+        compareButton.disabled=!(left&&right&&(left.deployment_id!==right.deployment_id||left.run_id!==right.run_id));
+        compareSerial++;compareHost.replaceChildren();
+      }
+      clearPins.onclick=()=>{left=right=null;renderPins();};
+      function reset(){
+        serial++;detailSerial++;population=null;offset=0;nextOffset=null;selectedFilters=null;
+        prev.disabled=next.disabled=true;list.replaceChildren();detailHost.replaceChildren();left=right=null;renderPins();
+      }
+      function filterValues(){
+        const values={attribution:attribution.value};
+        for(const [key,node] of [['status',runStatus],['step_status',stepStatus],['run_id',runId],['step_id',stepId],['started_from',from],['started_before',before]])
+          if(node.value)values[key]=node.value;
+        return values;
+      }
+      for(const node of [runStatus,stepStatus,attribution,runId,stepId,from,before])node.addEventListener('input',()=>{reset();message.textContent='Filters changed; search again.';});
+      async function openDetail(ref){
+        const n=++detailSerial;detailHost.replaceChildren(el('p','Loading exact report…'));
+        try{
+          const data=await api(path+'/detail?'+new URLSearchParams({run_id:ref.run_id,expected_sha256:ref.run_sha256}));
+          if(!active()||n!==detailSerial)return;
+          if(data.reference.run_sha256!==ref.run_sha256||data.reference.deployment_id!==dep||data.reference.run_id!==ref.run_id)throw Error('Unexpected run evidence reference.');
+          const run=data.run,pinLeft=button('Use as left run','secondary'),pinRight=button('Use as right run','secondary');
+          pinLeft.onclick=()=>{left=data.reference;renderPins();};pinRight.onclick=()=>{right=data.reference;renderPins();};
+          detailHost.replaceChildren(el('h4','Reported run '+run.run_id),
+            el('p',run.status+' · '+data.attribution+' · SHA-256 '+data.reference.run_sha256),
+            el('p','Reported outcome verification: '+String(run.outcome_reported_verified)+' · Reported source: '+(run.outcome_source||'not supplied')),
+            el('p','Reported spec: '+(run.reported_spec_sha256||'unknown')+' · Attached design: '+(data.attached_design_sha256||'none')),
+            table(['Sequence','Step ID','Activity','Reported status','Reported time (UTC)'],run.steps.map(s=>[s.seq,s.step_id,s.activity,s.status,s.at])),
+            pinLeft,pinRight,el('p','No outcome or source-system state is independently verified.','muted'));
+        }catch(error){if(active()&&n===detailSerial)detailHost.replaceChildren(el('p',error.message,'note'));}
+      }
+      async function searchPage(page=0){
+        const n=++serial;detailSerial++;detailHost.replaceChildren();list.replaceChildren();prev.disabled=next.disabled=true;
+        message.textContent='Reading matching retained evidence…';
+        if(page===0){population=null;selectedFilters=filterValues();left=right=null;renderPins();}
+        try{
+          const data=await post(path+'/search',{...selectedFilters,offset:page,limit:30,...(population?{expected_population_sha256:population}:{})});
+          if(!active()||n!==serial)return;
+          if(data.deployment_id!==dep||(population&&data.population_sha256!==population))throw Error('Unexpected evidence population.');
+          population=data.population_sha256;offset=data.offset;nextOffset=data.next_offset;
+          message.textContent=data.matching_runs+' matching runs · '+data.matching_steps+' reported steps · snapshot '+population;
+          const summary=el('p',Object.entries(data.status_counts).map(([k,v])=>k+': '+v).join(' · '));
+          const grid=table(['Run ID','Start (UTC)','Status','Spec attribution','First reported issue','Steps','Evidence'],
+            data.rows.map(row=>[row.run_id,row.started_at,row.status,row.attribution,
+              row.first_reported_issue?row.first_reported_issue.step_id+' · '+row.first_reported_issue.status:'none reported',row.step_count,'']));
+          const body=grid.querySelector('tbody');
+          data.rows.forEach((row,i)=>{const open=button('Inspect','secondary');open.onclick=()=>openDetail(row.reference);body.rows[i].cells[6].appendChild(open);});
+          list.replaceChildren(summary,grid);prev.disabled=offset===0;next.disabled=nextOffset===null;
+        }catch(error){if(active()&&n===serial){reset();message.textContent=error.message;}}
+      }
+      searchButton.onclick=()=>searchPage(0);prev.onclick=()=>searchPage(Math.max(0,offset-30));next.onclick=()=>{if(nextOffset!==null)searchPage(nextOffset);};
+      compareButton.onclick=async()=>{
+        if(!left||!right)return;
+        const n=++compareSerial;compareHost.replaceChildren(el('p','Comparing exact reported step sequences…'));
+        try{
+          const data=await post('/v1/automation-monitoring/runs/compare',{left,right});
+          if(!active()||n!==compareSerial)return;
+          if(data.left.reference.run_sha256!==left.run_sha256||data.right.reference.run_sha256!==right.run_sha256)throw Error('Unexpected pinned comparison.');
+          const describe=step=>step?step.seq+' · '+step.step_id+' · '+step.activity+' · '+step.status+' · '+step.at:'—';
+          compareHost.replaceChildren(el('h4','Paired run evidence'),
+            el('p','Same declared spec: '+String(data.same_reported_spec)+' · Minimum step ID edits: '+data.minimum_step_id_edits+
+              ' · Matched status changes: '+data.matched_status_changes+' · Matched label changes: '+data.matched_activity_label_changes),
+            table(['Alignment','Left reported step','Right reported step','Status changed'],
+              data.alignment.map(a=>[a.kind,describe(a.left),describe(a.right),a.status_changed?'yes':''])),
+            el('p','One minimum insertion/deletion alignment on reported IDs; equal-cost alternatives may exist. This is not verified business-case equivalence.','muted'));
+        }catch(error){if(active()&&n===compareSerial)compareHost.replaceChildren(el('p',error.message,'note'));}
+      };
+      root.append(el('h3','Retained run evidence'),el('p','Filter exact imported reports. Dates are timezone-qualified, with an exclusive upper bound. Nothing is executed.','muted'),
+        field('Run status',runStatus),field('Exact run ID',runId),field('Exact step ID',stepId),field('Step status',stepStatus),
+        field('Started from',from),field('Started before',before),field('Spec attribution',attribution),
+        searchButton,prev,next,message,list,detailHost,pinsLabel,compareButton,clearPins,compareHost);
+      prev.disabled=next.disabled=true;
+    }
+    evidenceButton.onclick=openRunEvidence;
     portfolioButton.onclick=renderPortfolio;
+    objectiveButton.onclick=()=>{
+      const selected=pick.value;if(!selected)return;
+      const root=el('section');objectiveHost.replaceChildren(root);
+      let generation=0,report=null,settings=null,offset=0;
+      const active=()=>root.isConnected&&pick.value===selected;
+      const start=input('owgObjectiveStart','datetime-local'),end=input('owgObjectiveEnd','datetime-local'),asOf=input('owgObjectiveAsOf','datetime-local');
+      const localStamp=d=>{const t=new Date(d.getTime()-d.getTimezoneOffset()*60000);return t.toISOString().slice(0,16);};
+      const now=new Date();end.value=asOf.value=localStamp(now);start.value=localStamp(new Date(now.getTime()-7*86400000));
+      const deadline=input('owgObjectiveDeadline','number');deadline.min='1';deadline.max='2592000';deadline.value='3600';
+      const target=input('owgObjectiveTarget','number');target.min='1';target.max='10000';target.value='9500';
+      const verified=input('owgObjectiveVerified','checkbox');const digest=input('owgObjectiveSpec','text','Optional exact specification SHA-256');digest.maxLength=64;
+      const filter=el('select');filter.id='owgObjectiveFilter';setOptions(filter,[['','All runs'],['met','Met'],['missed','Missed'],['pending','Pending'],['unknown','Unknown']]);
+      const run=button('Evaluate service objective','secondary'),prev=button('Previous page','secondary'),next=button('Next page','secondary'),download=button('Download current evidence page','secondary');
+      const note=el('p');note.setAttribute('role','status');const output=el('div');
+      const grid=el('div',null,'row');grid.append(field('Cohort start (local time)',start),field('Cohort end (exclusive)',end),field('Observation cutoff (local time)',asOf),
+        field('Deadline in seconds',deadline),field('Target in basis points (9500 = 95%)',target),field('Require reported verified outcome',verified),field('Exact spec digest',digest),field('Evidence filter',filter));
+      const reset=()=>{generation++;report=null;settings=null;offset=0;output.replaceChildren();prev.disabled=next.disabled=download.disabled=true;run.disabled=false;note.textContent='Settings changed; evaluate again.';};
+      grid.addEventListener('input',reset);grid.addEventListener('change',reset);
+      async function page(n){
+        const k=++generation;run.disabled=prev.disabled=next.disabled=download.disabled=true;note.textContent='Reading the retained run cohort…';
+        try{
+          const result=await api('/v1/automation-monitoring/deployments/'+encodeURIComponent(selected)+'/service-objectives',
+            {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...settings,offset:n,limit:30,...(report?{expected_population_sha256:report.population_sha256}:{})})});
+          if(!active()||k!==generation)return;
+          if(result.deployment_id!==selected||(report&&result.population_sha256!==report.population_sha256))throw Error('Retained cohort changed.');
+          report=result;offset=n;const a=result.summary;
+          output.replaceChildren(el('h4','Retained cohort objective'),el('p',a.verdict.replaceAll('_',' ')),
+            el('p','Objective attainment bounds: '+pct(a.lower_met_fraction)+' to '+pct(a.upper_met_fraction)+' · '+a.runs+' retained starts.'),
+            table(['Met','Missed','Pending','Unknown','Required met','Permitted misses','Remaining budget (known misses)','Remaining budget (worst case)'],
+              [[a.counts.met,a.counts.missed,a.counts.pending,a.counts.unknown,a.required_met_runs,a.permitted_misses,a.remaining_error_budget_after_known_misses,a.remaining_error_budget_if_unresolved_miss]]),
+            el('h4','Daily start cohorts'),
+            table(['Start (UTC)','End (UTC)','Runs','Met','Missed','Pending','Unknown','Attainment bounds','Verdict'],result.daily_start_cohorts.map(d=>[d.start,d.end,d.runs,d.counts.met,d.counts.missed,d.counts.pending,d.counts.unknown,pct(d.lower_met_fraction)+' – '+pct(d.upper_met_fraction),d.verdict])),
+            el('h4','Run evidence · '+result.matching_runs+' matching rows'),
+            table(['Run ID','Start','Finish','Reported status','Reported verified outcome','Objective','Reason'],result.rows.map(r=>[r.run_id,r.started_at,r.finished_at??'Unknown',r.reported_status,r.reported_outcome_verified===null?'Unknown':String(r.reported_outcome_verified),r.objective_status,r.reason])),
+            el('p',result.interpretation,'muted'));
+          note.textContent='Exact retained population digest: '+result.population_sha256;
+          prev.disabled=n===0;next.disabled=result.next_offset===null;download.disabled=false;
+        }catch(error){if(active()&&k===generation){reset();note.textContent=error.message;}}
+        finally{if(active()&&k===generation)run.disabled=false;}
+      }
+      run.onclick=()=>{
+        reset();
+        if(!start.value||!end.value||!asOf.value||!deadline.value||!target.value||!deadline.checkValidity()||!target.checkValidity()||(digest.value&&!/^[a-f0-9]{64}$/.test(digest.value))){
+          note.textContent='Enter valid dates, integer deadline and target, and an optional lowercase SHA-256.';return;
+        }
+        settings={start:new Date(start.value).toISOString(),end:new Date(end.value).toISOString(),as_of:new Date(asOf.value).toISOString(),
+          deadline_seconds:Number(deadline.value),target_basis_points:Number(target.value),require_reported_verified_outcome:verified.checked};
+        if(digest.value)settings.exact_spec_sha256=digest.value;if(filter.value)settings.status=filter.value;
+        page(0);
+      };
+      prev.onclick=()=>page(Math.max(0,offset-30));next.onclick=()=>{if(report?.next_offset!==null&&report?.next_offset!==undefined)page(report.next_offset);};
+      download.onclick=()=>{if(!report||!active())return;const url=URL.createObjectURL(new Blob([JSON.stringify(report,null,2)],{type:'application/json'}));const a=el('a');a.href=url;a.download='owg-service-objective-page-'+offset+'.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);};
+      prev.disabled=next.disabled=download.disabled=true;
+      root.append(el('h3','Reported automation service objectives'),el('p','This is a retrospective review of currently retained reports, not a live service guarantee or reconstructed historical reporting state. Unknown and pending runs remain in the denominator.','muted'),grid,run,note,output,prev,next,download);
+    };
     releaseButton.onclick=()=>renderRelease().catch(error=>{status.textContent=error.message;});
     channelButton.onclick=()=>renderChannel().catch(error=>{status.textContent=error.message;});
     incidentButton.onclick=()=>{incidentScope='selected';incidentStatus='';incidentSearch='';renderIncidents();};

@@ -749,6 +749,85 @@
       }catch(e){status.textContent=e.message;}
       finally{portfolioButton.disabled=false;}
     };
+    const budgetScenarioButton=button('Plan a budget-constrained portfolio','secondary');
+    budgetScenarioButton.id='owgPipelineBudgetScenario';
+    const budgetScenarioHost=el('div');budgetScenarioHost.id='owgPipelineBudgetScenarioResult';
+    let budgetGeneration=0;
+    budgetScenarioButton.onclick=async()=>{
+      const n=++budgetGeneration,root=el('div');budgetScenarioHost.replaceChildren(root);
+      const active=()=>n===budgetGeneration&&root.isConnected;
+      root.append(el('p','Loading current portfolio revisions…','muted'));
+      try{
+        const inv=await(await api('/v1/automation-pipeline/budget-scenario/inventory')).json();
+        if(!active())return;
+        const heading=el('h4','Budget-constrained portfolio planner');
+        const description=el('p','Select up to 18 opportunities, assign explicit priority points, and choose a single currency and budget basis. Include unfinished prerequisites; implemented ones do not consume this scenario budget. This is not a delivery plan or approval.','muted');
+        const currency=el('input');currency.type='text';currency.maxLength=3;currency.placeholder='SEK';currency.id='owgBudgetCurrency';
+        const basis=el('select');basis.id='owgBudgetBasis';
+        for(const value of ['estimate','approved_budget']){const opt=el('option',value);opt.value=value;basis.append(opt);}
+        const limit=el('input');limit.type='number';limit.min='0';limit.max='1000000000000';limit.step='any';limit.id='owgBudgetLimit';
+        const max=el('input');max.type='number';max.min='1';max.max='18';max.value='18';max.id='owgBudgetMax';
+        const labelled=(label,node)=>{const wrapper=el('label',label+' ');wrapper.append(node);return wrapper;};
+        const controls=el('div',null,'row');controls.append(labelled('Currency',currency),labelled('Budget basis',basis),labelled('Budget limit',limit),labelled('Maximum selected ideas',max));
+        const options=el('div'),out=el('div'),status=el('p');status.setAttribute('role','status');
+        const run=button('Evaluate exact portfolio combinations','secondary'),download=button('Download scenario report','secondary');download.disabled=true;
+        let attempt=0,report=null;const controlsById=new Map();
+        function invalidate(){attempt++;report=null;download.disabled=true;out.replaceChildren();status.textContent='Review inputs and evaluate again.';run.disabled=false;}
+        for(const control of [currency,basis,limit,max])control.addEventListener('input',invalidate);
+        const query=el('input');query.type='search';query.placeholder='Find opportunity by name or ID';query.setAttribute('aria-label','Find opportunities');
+        function renderChoices(){
+          options.replaceChildren();
+          const term=query.value.toLowerCase();
+          for(const idea of inv.ideas.filter(i=>['idea','assessing','approved','on_hold'].includes(i.state))){
+            if(term&&!(idea.title+' '+idea.idea_id).toLowerCase().includes(term))continue;
+            let entry=controlsById.get(idea.idea_id);
+            if(!entry){
+              const selected=el('input');selected.type='checkbox';selected.setAttribute('aria-label','Select '+idea.title);
+              const priority=el('input');priority.type='number';priority.min='0';priority.max='100';priority.step='1';priority.value='0';priority.disabled=true;
+              priority.setAttribute('aria-label','Priority points for '+idea.title);
+              const required=el('input');required.type='checkbox';required.disabled=true;required.setAttribute('aria-label','Require '+idea.title);
+              selected.onchange=()=>{priority.disabled=required.disabled=!selected.checked;if(!selected.checked)required.checked=false;invalidate();};
+              priority.oninput=invalidate;required.onchange=invalidate;entry={idea,selected,priority,required};controlsById.set(idea.idea_id,entry);
+            }
+            const row=el('fieldset');row.append(el('legend',idea.title),labelled('Include candidate',entry.selected),
+              el('p',idea.idea_id+' · revision '+idea.revision+' · '+idea.state+' · '+(idea.budget?idea.budget.amount+' '+idea.budget.currency+' ('+idea.budget.basis+')':'No budget'),'muted'),
+              labelled('Priority points (0–100)',entry.priority),labelled('Required in every scenario',entry.required));
+            if(idea.depends_on.length)row.append(el('p','Declared prerequisites: '+idea.depends_on.map(id=>inv.ideas.find(i=>i.idea_id===id)?.title||id).join('; '),'muted'));
+            options.append(row);
+          }
+        }
+        query.oninput=renderChoices;renderChoices();
+        download.onclick=()=>{if(!report)return;const url=URL.createObjectURL(new Blob([JSON.stringify(report,null,2)],{type:'application/json'}));const a=el('a');a.href=url;a.download='owg-portfolio-budget-scenario.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);};
+        run.onclick=async()=>{
+          invalidate();const k=attempt;
+          const candidates=[...controlsById.values()].filter(c=>c.selected.checked).map(c=>({idea_id:c.idea.idea_id,revision:c.idea.revision,priority:Number(c.priority.value),required:c.required.checked}));
+          if(!/^[A-Z]{3}$/.test(currency.value)||!limit.value||!max.value||!candidates.length||candidates.length>18||
+            [...controlsById.values()].some(c=>c.selected.checked&&!c.priority.value)){
+            status.textContent='Enter an uppercase currency, budget, selection limit and priorities for 1–18 candidates.';return;
+          }
+          run.disabled=true;status.textContent='Evaluating all bounded candidate subsets…';
+          try{
+            const data=await(await api('/v1/automation-pipeline/budget-scenario',{method:'POST',headers:{'Content-Type':'application/json'},
+              body:JSON.stringify({snapshot_sha256:inv.snapshot_sha256,currency:currency.value,budget_basis:basis.value,budget_limit:Number(limit.value),max_selected:Number(max.value),candidates})})).json();
+            if(!active()||k!==attempt)return;
+            if(data.snapshot_sha256!==inv.snapshot_sha256)throw Error('Unexpected portfolio snapshot.');
+            report=data;download.disabled=false;status.textContent=data.feasible_subsets+' feasible subsets of '+data.subsets_considered+' examined.';
+            const titles=new Map(data.candidates.map(i=>[i.idea_id,i.title]));
+            const show=(row)=>{const item=el('div');item.append(el('strong',row.priority_points+' priority points · '+row.budget_used+' '+data.currency),
+              el('p',row.selected_idea_ids.map(id=>titles.get(id)||id).join('; ')||'No ideas selected'),
+              el('p',row.budget_remaining+' '+data.currency+' remaining; '+row.selected_count+' ideas','muted'));return item;};
+            out.replaceChildren(el('h4',data.status==='feasible'?'Highest-ranked feasible alternatives':'No feasible portfolio under these constraints'),
+              ...data.alternatives.map(show));
+            const details=el('details');details.append(el('summary','Best feasible alternative by selected count'),...data.best_by_selected_count.map(show));out.append(details);
+            for(const candidate of data.candidates.filter(c=>c.blockers.length))out.append(el('p',candidate.title+': '+candidate.blockers.map(b=>b.code+(b.dependency_id?' ('+(titles.get(b.dependency_id)||b.dependency_id)+')':'')).join('; ')));
+            out.append(el('p','Required ideas and unfinished selected prerequisites: '+data.required_closure_ids.map(id=>titles.get(id)||id).join('; ')));
+            out.append(el('p','Priority points are entered by you; no measured or modeled savings are summed. This scenario makes no changes to the portfolio.','muted'));
+          }catch(e){if(active()&&k===attempt)status.textContent=e.message;}
+          finally{if(active()&&k===attempt)run.disabled=false;}
+        };
+        root.replaceChildren(heading,description,controls,query,options,run,download,status,out);
+      }catch(e){if(active())root.replaceChildren(el('p',e.message,'muted'));}
+    };
     const benefitOverlapButton=button('Review overlapping benefit evidence','secondary');
     benefitOverlapButton.id='owgPipelineBenefitOverlap';
     const benefitOverlapHost=el('div');
@@ -846,8 +925,10 @@
     dependencyScheduleHost.setAttribute('aria-live','polite');
     dependencyScheduleButton.onclick=async()=>{
       dependencyScheduleButton.disabled=true;
+      const generation=refreshGeneration;
       try{
         const r=await (await api('/v1/automation-pipeline/dependency-schedule')).json();
+        if(generation!==refreshGeneration)return;
         if(!Array.isArray(r.risk_candidates)||typeof r.active_ideas!=='number')
           throw new Error('Unexpected dependency schedule review');
         const name=id=>(latestIdeas.find(idea=>idea.idea_id===id)||{}).title||id;
@@ -859,19 +940,60 @@
             ' ('+finding.dependency_state.replaceAll('_',' ')+')';
           lines.appendChild(el('li',finding.kind.replaceAll('_',' ')+': '+path+'. '+basis+'.'));
         }
+        const wavesHost=el('section');wavesHost.append(el('h5','Prerequisite planning waves'));
+        const w=r.dependency_waves;
+        if(w){
+          wavesHost.append(el('p',w.layered_idea_count+' ideas assigned to '+w.wave_count+
+            ' precedence waves · '+w.blocked_idea_count+' blocked · '+w.cycle_or_downstream_idea_count+
+            ' unresolved solely by cycle precedence. These are not durations, dates or execution approvals.','muted'));
+          if(w.cycle_groups?.length){
+            const cycles=el('details');cycles.append(el('summary','Exact dependency cycles ('+w.cycle_groups.length+' groups)'));
+            cycles.append(el('p',w.exact_cycle_member_count+' cycle members and '+w.exact_cycle_downstream_count+
+              ' additional ideas depending on cycles, including ideas with separate state blockers.','muted'));
+            const cycleList=el('ul');
+            for(const group of w.cycle_groups)cycleList.append(el('li','Cycle group '+group.group+': '+group.idea_ids.map(name).join(', ')));
+            cycles.append(cycleList);wavesHost.append(cycles);
+          }
+          const choose=el('select');choose.setAttribute('aria-label','Dependency planning wave');
+          for(const group of w.waves){
+            const option=el('option','Wave '+group.wave+' ('+group.idea_ids.length+' ideas)');
+            option.value=String(group.wave);choose.append(option);
+          }
+          if(w.blocked_idea_count||w.cycle_or_downstream_idea_count){
+            const option=el('option','Blocked or unresolved ideas');option.value='blocked';choose.append(option);
+          }
+          const waveRows=el('ul');
+          const renderWave=()=>{
+            waveRows.replaceChildren();
+            const selected=w.ideas.filter(i=>choose.value==='blocked'?i.wave===null:String(i.wave)===choose.value);
+            for(const idea of selected){
+              const item=el('li',name(idea.idea_id)+' · '+idea.state.replaceAll('_',' ')+
+                ' · '+idea.status.replaceAll('_',' ')+'. Target '+(idea.target_quarter||'not set')+
+                '; latest declared target in unfinished chain '+(idea.latest_declared_target_in_unfinished_chain||'unknown')+'.');
+              if(idea.unfinished_prerequisite_ids.length)item.append(el('p','Unfinished prerequisites: '+idea.unfinished_prerequisite_ids.map(name).join(', '),'muted'));
+              if(idea.cycle_group!==null)item.append(el('p','Member of exact cycle group '+idea.cycle_group+'.','muted'));
+              if(idea.depends_on_cycle)item.append(el('p','Depends on a cyclic prerequisite.','muted'));
+              if(idea.direct_blockers.length)item.append(el('p','Direct blockers: '+idea.direct_blockers.map(b=>name(b.idea_id)+' ('+b.state.replaceAll('_',' ')+')').join(', '),'muted'));
+              waveRows.append(item);
+            }
+          };
+          if(choose.options.length){choose.addEventListener('change',renderWave);wavesHost.append(choose,waveRows);renderWave();}
+          else wavesHost.append(el('p','No active ideas.'));
+          wavesHost.append(el('p','Snapshot basis: '+w.portfolio_basis_sha256.slice(0,12)+'… · implementation states are reviewer declarations.','muted'));
+        }
         const caveat=r.risk_candidates_truncated||!r.review_complete?
-          'The review was truncated or reached a depth boundary: unlisted issues remain unknown.':
+          'The review has unresolved integrity findings or bounded risk paths; unlisted issues may remain unknown.':
           'No live source was queried. These are plan consistency candidates, not forecast delivery dates.';
         dependencyScheduleHost.replaceChildren(el('h4','Dependency schedule review'),
           el('p',r.active_ideas+' active ideas; '+r.active_ideas_with_dependencies+
             ' declare dependencies, '+r.active_ideas_with_target_quarter+
             ' have target quarters; '+r.risk_candidates.length+' candidates shown.','muted'),
           ...(r.risk_candidates.length?[lines]:[]),
-          el('p',caveat,'muted'),el('p',r.interpretation,'muted'));
-      }catch(e){dependencyScheduleHost.replaceChildren(el('p',e.message,'muted'));}
+          el('p',caveat,'muted'),el('p',r.interpretation,'muted'),wavesHost);
+      }catch(e){if(generation===refreshGeneration)dependencyScheduleHost.replaceChildren(el('p',e.message,'muted'));}
       finally{dependencyScheduleButton.disabled=false;}
     };
-    card.append(row,resumeSection,auditSection,tools,planningFilters,status,counts,portfolioButton,portfolioHost,benefitOverlapButton,benefitOverlapHost,benefitReadinessButton,benefitReadinessHost,dependencyScheduleButton,dependencyScheduleHost,viewCount,list,comparison,detail);
+    card.append(row,resumeSection,auditSection,tools,planningFilters,status,counts,portfolioButton,portfolioHost,budgetScenarioButton,budgetScenarioHost,benefitOverlapButton,benefitOverlapHost,benefitReadinessButton,benefitReadinessHost,dependencyScheduleButton,dependencyScheduleHost,viewCount,list,comparison,detail);
     panel.appendChild(card);
 
     let latestIdeas=[],refreshGeneration=0,resumeGeneration=0,auditGeneration=0,auditPageIndex=0,auditAbort=null;
@@ -1280,6 +1402,7 @@
 
     async function refresh(){
       clearCumulative('Portfolio review cleared; explicitly check again after the list refresh.');
+      if(dependencyScheduleHost.childNodes.length)dependencyScheduleHost.replaceChildren(el('p','Dependency review cleared; run it again after the portfolio refresh.','muted'));
       const generation=++refreshGeneration;
       const requested=filter.value;
       loadedState=currentView=null;shortlistLink.disabled=shortlistJson.disabled=true;
@@ -1417,10 +1540,42 @@
                   fmt(cc.case_volume_change_per_month)+'.')
               );
               analysis.appendChild(stats);
+              const sensitivity=adjusted.sensitivity;
+              if(sensitivity){
+                const decomposition=sensitivity.monthly_hours_change_decomposition;
+                const coverage=sensitivity.calendar_coverage;
+                const omitted=sensitivity.leave_one_period_out;
+                analysis.append(el('h5','Measurement sensitivity and volume effects'),
+                  el('p','Reported baseline minus after hours/month: '+fmt(decomposition.reported_baseline_minus_after_hours)+
+                    ' = effort per case '+fmt(decomposition.effort_per_case_component_hours)+
+                    ' + case volume '+fmt(decomposition.case_volume_component_hours)+' (rounded).'),
+                  el('p','Measured days: baseline '+coverage.baseline.measured_days+' of '+coverage.baseline.span_days+
+                    '; after '+coverage.after.measured_days+' of '+coverage.after.span_days+
+                    '. Unmeasured days are not treated as zero activity.'),
+                  el('p','Declared measurement sources: baseline '+Object.keys(coverage.baseline.source_kind_exposure).join(', ')+
+                    '; after '+Object.keys(coverage.after.source_kind_exposure).join(', ')+
+                    (sensitivity.declared_source_kind_sets_match?'.':'. Source composition differs; review comparability.'),'muted'));
+                if(omitted.scenario_count){
+                  analysis.append(el('p','Leave-one-period-out: '+omitted.scenario_count+' comparisons, effort change at after-volume '+
+                    omitted.scenario_range_hours_per_month.map(fmt).join(' to ')+' hours/month.'+
+                    (omitted.direction_differs_from_full_comparison?' Direction differs from the full comparison; review influential periods.':''),
+                    'muted'));
+                  const details=el('details');details.append(el('summary','Inspect omitted-period scenarios'));
+                  const list=el('ul');
+                  for(const scenario of omitted.scenarios){
+                    const measurement=r.measurements.find(m=>m.measurement_id===scenario.measurement_id);
+                    list.append(el('li',scenario.omitted_period+' '+(measurement?measurement.start+' – '+measurement.end:scenario.measurement_id)+
+                      ': '+fmt(scenario.effort_change_at_after_volume_hours_per_month)+' hours/month · '+scenario.direction.replaceAll('_',' ')));
+                  }
+                  details.append(list);analysis.append(details);
+                }
+                if(!omitted.baseline_period_omission_supported||!omitted.after_period_omission_supported)
+                  analysis.append(el('p','At least two periods on each side are needed for omission sensitivity on both sides.','muted'));
+              }
             }else{
               const reasons={
                 missing_periods:'Record both a baseline and an after period to compare.',
-                overlapping_periods:'Overlapping dates within one period type. Correct duplicate calendar coverage before interpreting adjusted results.',
+                overlapping_periods:'Overlapping dates within or across period types. Correct duplicate calendar coverage before interpreting adjusted results.',
                 zero_case_period:'At least one measurement has zero cases. Verify the case-exposure denominator before comparing.'
               };
               const warning=el('p',reasons[adjusted.status]||'Coverage-adjusted comparison unavailable.','muted');
@@ -1442,6 +1597,96 @@
             parts.push(list);
             if(c.single_period_each)parts.push(el('div','Only one baseline and one after period: no range of variation yet.','muted'));
           }else if(r.measurements.length)parts.push(el('div','Record at least one baseline and one after period to compare.','muted'));
+          if(idea.state==='implemented'){
+            const launch=button('Review quality, adoption and cost','secondary');
+            launch.id='owgQualityBenefitOpen';
+            const scenarioHost=el('div');scenarioHost.id='owgQualityBenefitResult';
+            let invocation=0;
+            launch.onclick=async()=>{
+              const current=++invocation;scenarioHost.replaceChildren(el('p','Reading retained measurement snapshot…','muted'));
+              const active=()=>current===invocation&&generation===detailGeneration&&scenarioHost.isConnected;
+              const path='/v1/automation-pipeline/'+encodeURIComponent(idea.idea_id)+'/quality-benefit';
+              try{
+                const inv=await(await api(path+'/inventory')).json();
+                if(!active())return;
+                if(inv.idea_revision!==idea.revision)throw Error('Idea changed; reopen it before comparing.');
+                const output=el('div'),message=el('p');message.setAttribute('role','status');
+                const numeric=(label,max,step='any')=>{const i=el('input');i.type='number';i.min='0';i.max=String(max);i.step=step;i.required=true;i.setAttribute('aria-label',label);return i;};
+                const label=(name,node)=>{const l=el('label',name+' ');l.appendChild(node);return l;};
+                const currency=el('input');currency.maxLength=3;currency.placeholder='SEK';currency.setAttribute('aria-label','Currency');
+                const hourly=numeric('Loaded labor cost per hour',1e12),investment=numeric('One-time cost',1e12),
+                  coverage=numeric('Minimum quality coverage percent',100),adoption=numeric('Minimum attempted adoption percent',100),
+                  failure=numeric('Maximum failure-rate increase percentage points',100);
+                const fields=el('div',null,'row');
+                fields.append(label('Currency',currency),label('Loaded labor cost per hour',hourly),label('One-time cost',investment),
+                  label('Minimum quality coverage (%)',coverage),label('Minimum after attempted adoption (%)',adoption),
+                  label('Maximum failure rate increase (percentage points)',failure));
+                const selections=[];
+                const periodHost=el('div');
+                for(const period of inv.measurements){
+                  const group=el('fieldset');group.appendChild(el('legend',period.period+' · '+period.start+' – '+period.end+' · '+period.cases+' cases'));
+                  const include=el('input');include.type='checkbox';
+                  const names=[['eligible_cases','Eligible cases'],['automation_attempted_cases','Cases with automation attempted'],
+                    ['automation_handoff_cases','Attempted cases handed to a human'],['quality_checked_cases','Quality checked cases'],
+                    ['quality_failed_cases','Checked cases failing quality'],['extra_review_hours','Additional review hours'],['nonlabor_cost','Nonlabor operating cost for period']];
+                  const inputs={};const controls=el('div');
+                  for(const [key,title] of names){const isCount=key.endsWith('_cases');const node=numeric(title,isCount?period.cases:1e12,isCount?'1':'any');node.disabled=true;inputs[key]=node;controls.appendChild(label(title,node));}
+                  const basis=el('select');basis.disabled=true;basis.setAttribute('aria-label','Review effort accounting basis');
+                  for(const [v,t] of [['','Choose basis'],['already_in_retained_effort','Review already included in retained effort'],['additional_to_retained_effort','Review effort additional to retained effort']]){
+                    const o=el('option',t);o.value=v;basis.appendChild(o);}
+                  include.onchange=()=>{Object.values(inputs).forEach(n=>n.disabled=!include.checked);basis.disabled=!include.checked;};
+                  group.append(label('Include measurement',include),controls,label('Review effort accounting basis',basis));periodHost.appendChild(group);
+                  selections.push({period,include,inputs,basis});
+                }
+                const run=button('Calculate quality and adoption scenario','secondary'),download=button('Download scenario JSON','secondary');download.disabled=true;
+                let serial=0,result=null;
+                const invalidate=()=>{serial++;result=null;output.replaceChildren();download.disabled=true;run.disabled=false;message.textContent='Inputs changed; calculate again.';};
+                for(const n of [fields,periodHost])n.addEventListener('input',invalidate);
+                for(const n of [fields,periodHost])n.addEventListener('change',invalidate);
+                download.onclick=()=>{if(!active()||!result)return;const url=URL.createObjectURL(new Blob([JSON.stringify(result,null,2)],{type:'application/json'}));const a=el('a');a.href=url;a.download='owg-quality-benefit-scenario.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);};
+                run.onclick=async()=>{
+                  invalidate();const ticket=serial;
+                  const selected=selections.filter(p=>p.include.checked);
+                  const required=[hourly,investment,coverage,adoption,failure,...selected.flatMap(p=>Object.values(p.inputs))];
+                  if(!/^[A-Z]{3}$/.test(currency.value)||required.some(n=>n.value===''||!n.checkValidity())||
+                      selected.some(p=>!p.basis.value)||!selected.some(p=>p.period.period==='baseline')||!selected.some(p=>p.period.period==='after')){
+                    message.textContent='Enter all values explicitly, including zeros, and select both a baseline and after period.';return;
+                  }
+                  const body={snapshot_sha256:inv.snapshot_sha256,currency:currency.value,labor_cost_per_hour:Number(hourly.value),
+                    one_time_cost:Number(investment.value),minimum_quality_coverage:Number(coverage.value)/100,
+                    minimum_after_adoption:Number(adoption.value)/100,maximum_quality_failure_rate_increase:Number(failure.value)/100,
+                    periods:selected.map(p=>({measurement_id:p.period.measurement_id,review_effort_basis:p.basis.value,
+                      ...Object.fromEntries(Object.entries(p.inputs).map(([k,v])=>[k,Number(v.value)]))}))};
+                  run.disabled=true;message.textContent='Calculating against selected measurement snapshot…';
+                  try{
+                    const data=await post(path,body);
+                    if(!active()||ticket!==serial)return;
+                    if(data.snapshot_sha256!==inv.snapshot_sha256||data.idea_id!==idea.idea_id)throw Error('Unexpected measurement snapshot.');
+                    result=data;download.disabled=false;message.textContent=data.all_declared_gates_met?'Entered evidence meets all selected review gates.':'One or more selected review gates are unmet or unknown.';
+                    const pct=v=>v===null?'Unknown':(v*100).toFixed(2)+'%';
+                    const table=el('table'),thead=el('thead'),tr=el('tr');['Metric','Baseline','After'].forEach(x=>tr.appendChild(el('th',x)));thead.appendChild(tr);table.appendChild(thead);
+                    const tbody=el('tbody');for(const [key,name] of [['cases','Cases'],['eligible','Eligible'],['attempts','Attempted'],['handoffs','Handoffs'],['checked','Quality checked'],['failed','Quality failures'],['quality_coverage','Quality coverage'],['quality_failure_rate','Failure among checked'],['attempted_share_of_eligible','Attempted adoption'],['handoff_share_of_attempts','Handoff share'],['non_handoff_share_of_eligible','Non-handoff share of eligible']]){
+                      const row=el('tr');const ratio=['quality_coverage','quality_failure_rate','attempted_share_of_eligible','handoff_share_of_attempts','non_handoff_share_of_eligible'].includes(key);
+                      for(const v of [name,ratio?pct(data.baseline[key]):data.baseline[key],ratio?pct(data.after[key]):data.after[key]])row.appendChild(el('td',String(v)));tbody.appendChild(row);
+                    }table.appendChild(tbody);
+                    const wrap=el('div',null,'table-wrap');wrap.appendChild(table);
+                    const money=data.financial_scenario;output.replaceChildren(el('h5','Pooled period evidence'),wrap,el('h5','Review gates'));
+                    for(const g of data.review_gates)output.appendChild(el('p',g.gate+' · '+g.status+' · observed '+pct(g.observed)+' · threshold '+pct(g.threshold)));
+                    output.append(el('h5','Conditional cost and effort scenario'),
+                      el('p','Retained effort change at after volume: '+money.retained_effort_change_hours_at_after_volume+' hours/month'),
+                      el('p','Including additional review effort: '+money.effort_change_with_extra_review_hours_at_after_volume+' hours/month'),
+                      el('p','Modeled net value change: '+money.modeled_net_monthly_value_change+' '+data.currency+'/month'),
+                      el('p','Modeled simple payback: '+(money.modeled_simple_payback_months===null?'No positive modeled payback':money.modeled_simple_payback_months+' months')),
+                      el('p',data.interpretation,'muted'));
+                  }catch(e){if(active()&&ticket===serial)message.textContent=e.message;}
+                  finally{if(active()&&ticket===serial)run.disabled=false;}
+                };
+                scenarioHost.replaceChildren(el('h5','Quality and adoption review'),
+                  el('p','Use comparable periods and consistent quality criteria. Enter every count and cost explicitly. Non-handoff does not prove successful completion. Financial arithmetic does not monetize quality.','muted'),fields,periodHost,run,download,message,output);
+              }catch(e){if(active())scenarioHost.replaceChildren(el('p',e.message));}
+            };
+            parts.push(launch,scenarioHost);
+          }
           parts.push(el('p',r.interpretation,'muted'));host.replaceChildren(...parts);
         };
         addMeasure.onclick=async()=>{
@@ -1452,7 +1697,70 @@
         };
         const grid=el('div',null,'row');grid.style.alignItems='end';
         grid.append(field('Period',kind),field('From',start),field('To',end),field('Cases handled',cases),field('Minutes per case',minutes),field('Source',source),field('Reference',ref),addMeasure);
-        value.append(grid,measStatus,host);box.appendChild(value);
+        const effortPanel=el('details');effortPanel.append(el('summary','Derive effort from a retained event log'),
+          el('p','Use a numeric event attribute that records additive work effort. Never use elapsed case time. All cases starting during the selected UTC dates must finish during the period with the exact completion activity; missing or shared effort evidence blocks recording.','muted'));
+        const effortLog=select('owgRetainedEffortLog',[['','Choose retained log']]);
+        const loadLogs=button('Load local logs','secondary');
+        const notion=input('owgRetainedEffortType','text','case');notion.value='case';notion.maxLength=200;
+        const terminal=input('owgRetainedEffortCompletion','text','Exact stored activity');terminal.maxLength=200;
+        const effortActivity=input('owgRetainedEffortActivity','text','Exact stored effort activity');effortActivity.maxLength=200;
+        const attr=input('owgRetainedEffortAttribute','text','Exact event attribute');attr.maxLength=120;
+        const unit=select('owgRetainedEffortUnit',[['seconds','Seconds'],['minutes','Minutes'],['hours','Hours']]);
+        const confirm=input('owgRetainedEffortConsent','checkbox');
+        const effortStatus=el('div',null,'muted');effortStatus.setAttribute('role','status');
+        const effortPreview=button('Preview retained effort','secondary'),effortSave=button('Record reviewed measurement','secondary');
+        effortSave.disabled=true;
+        let effortSnapshot=null,effortTurn=0;
+        const currentEffort=()=>generation===detailGeneration&&effortPanel.isConnected;
+        const clearEffort=()=>{effortTurn++;effortSnapshot=null;effortSave.disabled=true;effortStatus.replaceChildren();};
+        for(const control of [kind,start,end,effortLog,notion,terminal,effortActivity,attr,unit]){
+          control.addEventListener('input',()=>{confirm.checked=false;clearEffort();});
+          control.addEventListener('change',()=>{confirm.checked=false;clearEffort();});
+        }
+        confirm.addEventListener('change',clearEffort);
+        loadLogs.onclick=async()=>{
+          clearEffort();const turn=effortTurn;loadLogs.disabled=true;
+          try{
+            const data=await (await api('/v1/event-logs')).json();
+            if(!currentEffort()||turn!==effortTurn)return;
+            effortLog.replaceChildren(el('option','Choose retained log'));effortLog.options[0].value='';
+            for(const log of data.logs||[]){const opt=el('option',log.name+' · '+log.events+' events');opt.value=log.log_id;effortLog.appendChild(opt);}
+            confirm.checked=false;
+          }catch(e){if(currentEffort()&&turn===effortTurn)effortStatus.textContent=e.message;}
+          finally{loadLogs.disabled=false;}
+        };
+        const effortSpec=()=>({expected_revision:idea.revision,log_id:effortLog.value,case_type:notion.value,
+          period:kind.value,start:start.value,end:end.value,completion_activity:terminal.value,
+          effort_activity:effortActivity.value,effort_attribute:attr.value,unit:unit.value,effort_semantics_confirmed:confirm.checked});
+        const effortBase='/v1/automation-pipeline/'+encodeURIComponent(idea.idea_id)+'/retained-effort';
+        effortPreview.onclick=async()=>{
+          clearEffort();const turn=effortTurn;const spec=effortSpec();
+          if(!spec.effort_semantics_confirmed){effortStatus.textContent='Confirm the attribute measures additive work effort.';return;}
+          effortPreview.disabled=true;effortStatus.textContent='Checking complete retained cohort…';
+          try{
+            const result=await post(effortBase+'/preview',spec);
+            if(!currentEffort()||turn!==effortTurn)return;
+            effortStatus.replaceChildren(el('p',result.counts.started_cases+' started cases; '+result.counts.complete_cases+' complete. '+result.counts.effort_events+' effort-event links.'),
+              el('p',Object.entries(result.counts).map(([key,count])=>key.replaceAll('_',' ')+': '+count).join(' · ')),
+              el('p',result.recordable?result.total_hours+' reported effort hours · '+result.minutes_per_case+' minutes/case':('Blocked: '+result.blockers.join(', '))),
+              el('p','Retained log revision '+result.log_revision+' · '+result.preview_sha256),el('p',result.interpretation));
+            if(result.recordable){effortSnapshot={spec,digest:result.preview_sha256};effortSave.disabled=false;}
+          }catch(e){if(currentEffort()&&turn===effortTurn)effortStatus.textContent=e.message;}
+          finally{effortPreview.disabled=false;}
+        };
+        effortSave.onclick=async()=>{
+          const snap=effortSnapshot;
+          if(!snap||!currentEffort()||JSON.stringify(effortSpec())!==JSON.stringify(snap.spec))return;
+          const turn=++effortTurn;effortSave.disabled=true;effortSnapshot=null;
+          try{const result=await post(effortBase+'/record',{...snap.spec,expected_preview:snap.digest});
+            if(currentEffort()){draw(result);if(turn===effortTurn)effortStatus.textContent='Retained effort measurement recorded. Preview again before another save.';}
+          }catch(e){if(currentEffort()&&turn===effortTurn)effortStatus.textContent=e.message;}
+        };
+        const effortFields=el('div',null,'row');effortFields.append(loadLogs,field('Retained log',effortLog),field('Case type',notion),
+          field('Final completion activity',terminal),field('Effort-bearing activity',effortActivity),field('Numeric event attribute',attr),field('Effort unit',unit));
+        effortPanel.append(effortFields,el('p','Uses the Period, From and To controls above.'),
+          field('I confirm the selected attribute measures additive effort, not elapsed or waiting time',confirm),effortPreview,effortSave,effortStatus);
+        value.append(grid,measStatus,effortPanel,host);box.appendChild(value);
         api('/v1/automation-pipeline/'+encodeURIComponent(idea.idea_id)+'/realized-value').then(r=>r.json()).then(r=>{if(generation===detailGeneration)draw(r);}).catch(e=>{measStatus.textContent=e.message;});
       }
       // These selections are navigation hints only, never an authorization or a source read.
@@ -2151,7 +2459,36 @@
           }catch(e){if(generation===detailGeneration)message.textContent=e.message;}
           finally{download.disabled=!['approved','implemented'].includes(idea.state);}
         };
-        projects.append(download,message,exports);
+        const archiveFile=input('owgPipelineArchiveReviewFile','file');
+        archiveFile.accept='.zip,application/zip';
+        const archiveReview=button('Verify original project ZIP','secondary');
+        const archiveStatus=el('div');archiveStatus.setAttribute('role','status');
+        let archiveVersion=0;
+        archiveFile.onchange=()=>{archiveVersion++;archiveStatus.replaceChildren();};
+        archiveReview.onclick=async()=>{
+          const file=archiveFile.files?.[0],version=++archiveVersion;
+          if(!file||!file.size||file.size>16*1024*1024){
+            archiveStatus.textContent='Choose the original project ZIP of at most 16 MiB.';return;
+          }
+          archiveReview.disabled=true;
+          try{
+            const result=await (await api('/v1/automation-pipeline/'+encodeURIComponent(idea.idea_id)+'/project-archive-review',{
+              method:'POST',headers:{'Content-Type':'application/zip'},body:file})).json();
+            if(generation!==detailGeneration||version!==archiveVersion)return;
+            archiveStatus.replaceChildren(
+              el('p','Exact retained project ZIP matches · '+result.exported_at),
+              el('p',result.generated_file_inventory_status==='complete_generated_file_inventory_matches'?
+                result.verified_generated_file_count+' generated files match the complete release inventory.':
+                'Historical ZIP without a generated-file manifest; original archive digest matches.'),
+              el('p','Idea revision '+result.idea_revision_at_export+' (current '+result.current_idea_revision+
+                ') · saved design '+result.process_reference_status.replaceAll('_',' ')+'.'),
+              el('p','No extraction, execution, remote deployment or business outcome was verified.','muted'));
+          }catch(e){if(generation===detailGeneration&&version===archiveVersion)archiveStatus.textContent=e.message;}
+          finally{archiveReview.disabled=false;if(version===archiveVersion)archiveFile.value='';}
+        };
+        projects.append(download,message,exports,el('h5','Verify a previous project export'),
+          el('p','Select the unchanged original ZIP. OWG compares the retained archive hash and complete generated-file inventory without extracting or running its contents.','muted'),
+          field('Original tracked project ZIP',archiveFile),archiveReview,archiveStatus);
         const reviewReports=button('Review imported run reports','secondary');reviewReports.id='owgPipelineReviewReports';
         const reports=el('div');reports.id='owgPipelineReportLinks';let reportVersion=0;
         const renderReports=async()=>{
@@ -2212,6 +2549,34 @@
             const confirmed=input('owgPipelineSourceConsent','checkbox');const consentText=el('label');consentText.append(confirmed,document.createTextNode(' Read this exact observed record and download the minimized source-check document. Existing provider opt-ins still apply.'));
             const run=button('Read source and download check','secondary');run.id='owgPipelineSourceExport';run.disabled=true;
             const note=el('div',null,'muted');note.setAttribute('role','status');const history=el('div');
+            const reviewFile=input('owgPipelineSourceReviewFile','file');reviewFile.accept='.json,application/json';
+            const reviewButton=button('Reconcile original downloaded check','secondary');
+            const reviewResult=el('div');reviewResult.setAttribute('role','status');
+            let reviewVersion=0;
+            reviewFile.onchange=()=>{reviewVersion++;reviewResult.replaceChildren();};
+            reviewButton.onclick=async()=>{
+              const file=reviewFile.files?.[0],path=base(),version=++reviewVersion;
+              if(!file||!file.size||file.size>65536){reviewResult.textContent='Choose the original JSON download of at most 64 KiB.';return;}
+              if(!selected.value){reviewResult.textContent='Choose the original exported project first.';return;}
+              reviewButton.disabled=true;
+              try{
+                const response=await api(path+'/source-check-review',{method:'POST',
+                  headers:{'Content-Type':'application/json'},body:file});
+                const value=await response.json();
+                if(generation!==detailGeneration||view!==sourceView||version!==reviewVersion)return;
+                reviewResult.replaceChildren(
+                  el('p','Exact retained export bytes match · exported '+value.exported_at),
+                  el('p','Historical source operation: '+(value.historical_source_operation_reported_verified?'reported verified':'not established')+
+                    ' · '+(value.historical_source_availability||'unknown')),
+                  el('p','Saved design: '+value.current_process_reference_status.replaceAll('_',' ')+
+                    (value.latest_process_revision!==null?' · latest revision '+value.latest_process_revision:'')),
+                  el('p','Historical expectation: '+value.process_expectation_status.replaceAll('_',' ')+
+                    ' · Run association: '+value.run_attribution_status.replaceAll('_',' ')),
+                  el('p','Idea revision at export '+value.idea_revision_at_export+'; current '+value.current_idea_revision+
+                    '. No fresh source read, agent causality or business outcome verified.','muted'));
+              }catch(e){if(generation===detailGeneration&&view===sourceView&&version===reviewVersion)reviewResult.textContent=e.message;}
+              finally{reviewButton.disabled=false;if(version===reviewVersion)reviewFile.value='';}
+            };
             let entries=[],formVersion=0,optionsVersion=0,pending=false;
             const ready=()=>{run.disabled=pending||!entries.length||!confirmed.checked||!/^owg:r:[0-9a-f]{32}$/.test(sourceRef.value.trim());confirmed.disabled=pending||!entries.length;};
             const invalidate=()=>{formVersion++;confirmed.checked=false;ready();};
@@ -2237,7 +2602,7 @@
               }
               ready();
             };
-            selected.onchange=()=>{sourceRef.value='';loadOptions().catch(e=>{if(generation===detailGeneration)note.textContent=e.message;});};
+            selected.onchange=()=>{sourceRef.value='';reviewVersion++;reviewFile.value='';reviewResult.replaceChildren();loadOptions().catch(e=>{if(generation===detailGeneration)note.textContent=e.message;});};
             run.onclick=async()=>{
               if(run.disabled)return;
               const entry=entries[Number(expectation.value)],path=base(),version=formVersion;
@@ -2256,7 +2621,9 @@
               finally{pending=false;ready();}
             };
             checkHost.replaceChildren(el('h4','Selected source-state check'),el('div','This performs an explicitly authorized read through existing source adapters. The receipt is downloaded only; OWG retains a checksum, not the receipt or a verified-state value.','muted'),
-              field('Exported project for source check',selected),field('Confirmed source-state expectation',expectation),field('Reported run (only runs that reported this project\'s exact specification, from linked reports)',runChoice),field('Observed record reference (owg:r:…)',sourceRef),consentText,run,note,history);
+              field('Exported project for source check',selected),field('Confirmed source-state expectation',expectation),field('Reported run (only runs that reported this project\'s exact specification, from linked reports)',runChoice),field('Observed record reference (owg:r:…)',sourceRef),consentText,run,note,history,
+              el('h5','Review a previous download'),el('p','Select the unchanged original file to compare its bytes with the retained export hash. This local review does not retain the file or contact a provider.','muted'),
+              field('Original source-check JSON file',reviewFile),reviewButton,reviewResult);
             await loadOptions();
           }catch(e){if(generation===detailGeneration&&view===sourceView)status.textContent=e.message;}
         };
