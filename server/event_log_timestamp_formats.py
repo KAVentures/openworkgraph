@@ -60,6 +60,8 @@ def _unix_regex(pattern: str) -> str:
 
 # (pattern, order); listed most specific first so the suggestion prefers the fuller pattern.
 KNOWN: list[tuple[str, str]] = [
+    ("%d/%m/%Y %H:%M:%S.%f", "day-first"), ("%d.%m.%Y %H:%M:%S,%f", "day-first"),
+    ("%d-%m-%Y %H:%M:%S.%f", "day-first"), ("%m/%d/%Y %H:%M:%S.%f", "month-first"),
     ("%d/%m/%Y %H:%M:%S", "day-first"), ("%d/%m/%Y %H:%M", "day-first"),
     ("%d.%m.%Y %H:%M:%S.%f", "day-first"), ("%d.%m.%Y %H:%M:%S", "day-first"), ("%d.%m.%Y %H:%M", "day-first"),
     ("%d-%m-%Y %H:%M:%S", "day-first"), ("%d-%m-%Y %H:%M", "day-first"),
@@ -158,7 +160,13 @@ def sample_column(text: str, delimiter: str, column: str, limit: int = MAX_SAMPL
     if "\n" in text and not text.endswith("\n"):
         text = text[:text.rfind("\n") + 1]
     reader = csv.reader(io.StringIO(text), delimiter=delimiter)
-    header = next(reader, None) or []
+    # The header is the first of the first 50 lines that names the column (title rows or an Excel
+    # "sep=" line may come before it).
+    header: list[str] = []
+    for _ in range(50):
+        header = next(reader, None) or []
+        if column in header or not header and reader.line_num > 50:
+            break
     if column not in header:
         raise TimestampFormatError("the timestamp column is not in the file header")
     if time_column and time_column not in header:
