@@ -193,8 +193,8 @@ def to_pnml(data: bytes):
             nodes[ident] = kind
             elements[ident] = element
             label = element.get("name", "")
-            if kind in TASKS and (not label.strip() or len(label) > 200 or any(ord(c) < 32 for c in label)):
-                _fail("every task needs an exact nonempty name of at most 200 characters")
+            if kind in TASKS and (not label.strip() or label != label.strip() or len(label) > 200 or any(ord(c) < 32 for c in label)):
+                _fail("every task needs a nonempty name of at most 200 characters without surrounding whitespace")
             labels[ident] = label if kind in TASKS else None
             if len(nodes) > MAX_NODES:
                 _fail("too many BPMN flow nodes")
