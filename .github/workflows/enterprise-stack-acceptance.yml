@@ -30,7 +30,7 @@ jobs:
   integrated-contract:
     # Validate the consolidated candidate even while it remains a draft.
     # Ordinary feature drafts continue to use the existing cheap smoke path.
-    if: github.event_name == 'workflow_dispatch' || startsWith(github.head_ref, 'integration/enterprise-connectors-')
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.head_ref, 'integration/enterprise-connectors-') || github.head_ref == 'feat/enterprise-databricks-approved-views'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     services:
@@ -87,6 +87,7 @@ jobs:
             tests/test_sap_procurement_feed.py \
             tests/test_dataverse_audit_feed.py \
             tests/test_hubspot_history_feed.py \
+            tests/test_databricks_event_feed.py \
             tests/test_gateway_connector_jobs.py \
             tests/test_enterprise_connector_worker.py \
             tests/test_connector_event_publications.py \

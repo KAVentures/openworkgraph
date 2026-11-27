@@ -13,6 +13,7 @@ from . import servicenow_operations_feed as sn
 from . import sap_procurement_feed as sap
 from . import dataverse_audit_feed as dv
 from . import hubspot_history_feed as hs
+from . import databricks_event_feed as dbx
 from . import enterprise_sql_feed as sql
 from . import enterprise_connector_operations as operations
 from .event_log_routes import _json_body
@@ -77,6 +78,18 @@ async def sql_create(request:Request):
     require(request)
     body=await _json_body(request,"SQL feed configuration",strict=True,limit=4096)
     return await call(request,sql.create,body)
+
+
+@router.get("/v1/enterprise-connectors/databricks/catalog")
+async def databricks_catalog(request:Request):
+    return await call(request,dbx.catalog_public)
+
+
+@router.post("/v1/enterprise-connectors/databricks")
+async def databricks_create(request:Request):
+    require(request)
+    body=await _json_body(request,"Databricks approved view profile",strict=True,limit=4096)
+    return await call(request,dbx.create,body)
 
 
 @router.get("/v1/enterprise-connectors/hubspot/catalog")
