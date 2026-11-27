@@ -144,6 +144,8 @@ def inventory(freshness_hours=24,*,now=None):
         flags=[]
         if state in ("failed","interrupted","dataset_deleted","disabled","checking_credentials"):
             flags.append("profile_"+state)
+        if details and details.get("routine_intent_requires_reconciliation"):
+            flags.append("expired_routine_intent_requires_reconciliation")
         if credential is False:
             flags.append("credential_binding_unavailable")
         if valid_log and "retained_workspace" not in errors and valid_log not in logs:
@@ -174,7 +176,8 @@ def inventory(freshness_hours=24,*,now=None):
         row(p.get("provider","rest"),"enterprise_rest_feed",p["profile_id"],p["log_id"],p["status"],p["last_success_at"],
             p["checkpoint"],p["revision"],p["credential_binding_available"],
             details={**({"schema_pin_observed":bool(p.get("source_schema_sha256"))} if p.get("provider")=="sql" else {}),
-                     "integrity_hold":bool(p.get("integrity_hold"))})
+                     "integrity_hold":bool(p.get("integrity_hold")),
+                     "routine_intent_requires_reconciliation":bool(p.get("routine_intent_requires_reconciliation"))})
     for p in jira:
         target=_id(p.get("profile_id"),r"jira_[a-f0-9]{24}")
         if not target:

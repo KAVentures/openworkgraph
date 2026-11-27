@@ -97,7 +97,7 @@ def test_failed_read_records_safe_error_and_cooldown_without_advancing():
     assert history.history(profile_id=p["profile_id"])["matching_retained_runs"] == 1
 
 
-def test_expired_intent_passive_then_replacement_preserves_distinction():
+def test_expired_intent_passive_then_reviewed_replacement_preserves_distinction():
     p = profile()
     old, since, until = rest._begin(p["profile_id"], p["revision"], rest._now())
     data = history.history(state="running")
@@ -116,13 +116,21 @@ def test_expired_intent_passive_then_replacement_preserves_distinction():
                       [old["lease_until"], old["run_id"]])
         finally:
             c.close()
-    replacement = run(p)
+    from server import enterprise_routine_reconciliation as recovery
+    with pytest.raises(rest.FeedError,match="expired_routine_intent"):
+        run(p)
+    target={"profile_id":p["profile_id"],"revision":p["revision"],"run_id":old["run_id"]}
+    plan=recovery.preview(target)
+    receipt=recovery.apply({**target,"reviewed_at":plan["reviewed_at"],"plan_sha256":plan["plan_sha256"],
+        "confirm_exact_intent":True,"confirm_workers_reconciled":True,
+        "confirm_uncertain_remote_outcome":True,"confirm_disable_and_reauthorize":True})
+    replacement = run(rest.change(p["profile_id"],receipt["revision"],True))
     records = history.history(profile_id=p["profile_id"])["runs"]
     assert len(records) == 2
     states = {r["state"]: r for r in records}
     assert states["interrupted"]["stored_state"] == "interrupted"
     assert not states["interrupted"]["local_intent_unreconciled"]
-    assert states["interrupted"]["error_code"] == "lease_expired_before_replacement"
+    assert states["interrupted"]["error_code"] == "expired_intent_reviewed_reconciliation"
     assert states["succeeded"]["checkpoint_after"] == replacement["checkpoint"]
     # A late result from the old attempt cannot replace the terminal receipt.
     rest._fail(old, rest.FeedError("late_failure"))

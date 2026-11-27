@@ -436,3 +436,31 @@ async def catchup_execute(request:Request):
     require(request)
     body=await _json_body(request,"Execute one reviewed advancing window",strict=True,limit=4096)
     return await call(request,catchup.execute,body)
+
+
+@router.get("/v1/enterprise-connectors/routine-reconciliation")
+async def routine_reconciliation_inventory(request:Request):
+    from . import enterprise_routine_reconciliation as recovery
+    return await call(request,recovery.inventory)
+
+
+@router.post("/v1/enterprise-connectors/routine-reconciliation/preview")
+async def routine_reconciliation_preview(request:Request):
+    from . import enterprise_routine_reconciliation as recovery
+    require(request)
+    body=await _json_body(request,"Expired routine intent review",strict=True,limit=2048)
+    return await call(request,recovery.preview,body)
+
+
+@router.post("/v1/enterprise-connectors/routine-reconciliation/apply")
+async def routine_reconciliation_apply(request:Request):
+    from . import enterprise_routine_reconciliation as recovery
+    require(request)
+    body=await _json_body(request,"Reviewed routine intent reconciliation",strict=True,limit=4096)
+    return await call(request,recovery.apply,body)
+
+
+@router.get("/v1/enterprise-connectors/routine-reconciliation/{profile_id}/receipts")
+async def routine_reconciliation_receipts(request:Request,profile_id:str):
+    from . import enterprise_routine_reconciliation as recovery
+    return await call(request,recovery.receipts,profile_id)

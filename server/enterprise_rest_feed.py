@@ -251,6 +251,7 @@ def _public(p,now):
     out["credential_management"]=metadata(p)
     from .enterprise_connector_history import public_status
     out.update(public_status(p,now))
+    out["routine_intent_requires_reconciliation"]=bool(p.get("run_id") and not p.get("historical_active") and p["lease_until"]<=now)
     out.update(provider_live_health="unknown", source_completeness_verified=False,
                credentials_exposed=False, execution_authorized=False)
     return out
@@ -318,6 +319,8 @@ def change(profile_id,revision,enabled):
             p=_get(c,profile_id)
             if revision!=p["revision"]:
                 raise FeedError("profile_changed")
+            if p.get("run_id") and not p.get("historical_active") and p["lease_until"]<=time.time():
+                raise FeedError("expired_routine_intent_requires_reconciliation")
             if enabled:
                 if p.get("integrity_hold"):
                     raise FeedError("retained_integrity_hold_requires_reviewed_release")
@@ -386,6 +389,7 @@ def forget_dataset(conn,log_id):
             p.pop("excluded_case_keys",None)
             p.pop("historical_active",None)
             p.pop("historical_receipts",None)
+            p.pop("routine_reconciliation_receipts",None)
             p.update(enabled=False,status="dataset_deleted",revision=p["revision"]+1,run_id=None,lease_until=0,
                      log_id=None,checkpoint=None,last_result=None,last_success_at=None,
                      source_schema_sha256=None)
@@ -439,8 +443,10 @@ def _begin(profile_id,revision,now,*,_review_guard=None):
                 raise FeedError("profile_changed_or_disabled")
             if p.get("historical_active"):
                 raise FeedError("historical_run_requires_completion_or_reconciliation")
-            if p["run_id"] and p["lease_until"]>time.time():
-                raise FeedError("rest_run_in_progress")
+            if p["run_id"]:
+                if p["lease_until"]>time.time():
+                    raise FeedError("rest_run_in_progress")
+                raise FeedError("expired_routine_intent_requires_reconciliation")
             if p["retry_not_before"]>time.time():
                 raise FeedError("provider_retry_cooldown")
             _check_binding(p)
@@ -749,6 +755,7 @@ def run_scheduled(profile_id,revision):
     except FeedError as error:
         if error.code in {"unknown_rest_profile","rest_profile_disabled","retained_integrity_hold_requires_reviewed_release","profile_changed_or_disabled",
                            "credential_changed_reconfigure_required","rest_run_invalidated",
+                           "expired_routine_intent_requires_reconciliation",
                            "endpoint_not_deployment_allowlisted","invalid_rest_endpoint_credential_catalog","rest_endpoint_credential_pair_not_approved","rest_endpoint_credential_catalog_required",
                            "unknown_enterprise_connector_provider","invalid_connector_secret_catalog","invalid_connector_secret_root",
                            "unsafe_connector_secret_ancestor","connector_secret_root_must_be_owner_only","unsafe_connector_secret_file",
