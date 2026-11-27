@@ -195,3 +195,22 @@ def test_score_cli_jsonl(tmp_path):
     assert cohort.main(args)==0
     assert cohort._load(o)==score(plan,truth,runs)
     with pytest.raises(SystemExit):cohort.main(args)
+
+
+def test_prepare_from_real_episode_shape_and_template(tmp_path):
+    p,truth,runs=paired()
+    assignments=[{k:v for k,v in r.items() if k!="truth_sha256"} for r in p["episodes"]]
+    assert cohort.prepare(truth,assignments,confirmed=True)==p
+    template=cohort.disposition_template(p,expected_plan_sha256=p["plan_sha256"],confirmed=True)
+    assert len(template)==9 and all(r["status"]=="not_started" for r in template)
+    assert review(p,template)["arm_dispositions"]=={a:{"not_started":3} for a in cohort.ARMS}
+    with pytest.raises(ValueError):cohort.prepare(truth,assignments[:-1],confirmed=True)
+    with pytest.raises(ValueError):cohort.prepare(truth,[{**assignments[0],"name":"employee"},*assignments[1:]],confirmed=True)
+    e=tmp_path/"episodes.jsonl";e.write_text("\n".join(map(json.dumps,truth)))
+    a=tmp_path/"assignments.json";a.write_text(json.dumps(assignments))
+    plan=tmp_path/"plan.json";output=tmp_path/"template.json"
+    assert cohort.main(["prepare","--episodes",str(e),"--assignments",str(a),"--out",str(plan),"--confirm"])==0
+    assert cohort._load(plan)==p
+    assert cohort.main(["template","--plan",str(plan),"--plan-sha256",p["plan_sha256"],
+                        "--out",str(output),"--confirm"])==0
+    assert cohort._load(output)==template
