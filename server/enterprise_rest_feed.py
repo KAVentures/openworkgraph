@@ -588,7 +588,7 @@ def _retain(p,rows,counts,until):
                 added=result["added_events"]
                 duplicates=result["duplicate_events_skipped"]
             else:
-                result=workspace.import_log(source,name={"google":"Google Workspace audit ","sql":"Enterprise SQL ","slack":"Slack activity ","salesforce":"Salesforce field history ","servicenow":"ServiceNow operations ","sap":"SAP procurement day evidence ","dataverse":"Dataverse audit ","hubspot":"HubSpot property history ","databricks":"Databricks event view ","snowflake":"Snowflake event view ","netsuite":"NetSuite event record ","workday":"Workday RaaS event report ","oracle_fusion":"Oracle Fusion procurement ","bigquery":"BigQuery event view "}.get(p.get("provider"),"Enterprise REST ")+p["profile_id"],source_format="csv",
+                result=workspace.import_log(source,name={"google":"Google Workspace audit ","sql":"Enterprise SQL ","slack":"Slack activity ","salesforce":"Salesforce field history ","servicenow":"ServiceNow operations ","sap":"SAP procurement day evidence ","dataverse":"Dataverse audit ","hubspot":"HubSpot property history ","databricks":"Databricks event view ","snowflake":"Snowflake event view ","netsuite":"NetSuite event record ","workday":"Workday RaaS event report ","oracle_fusion":"Oracle Fusion procurement ","bigquery":"BigQuery event view ","zendesk":"Zendesk ticket audit "}.get(p.get("provider"),"Enterprise REST ")+p["profile_id"],source_format="csv",
                                             mapping=mapping,_transaction_hook=checkpoint)
                 added=result["events"]
                 duplicates=0
@@ -703,6 +703,7 @@ def run_scheduled(profile_id,revision):
                            "dataverse_source_definition_changed","dataverse_secret_unavailable","dataverse_application_auth_failed","dataverse_application_identity_mismatch",
                            "sap_source_definition_changed","sap_credential_unavailable","sap_metadata_changed_requires_review",
                            "servicenow_grant_unavailable","servicenow_grant_scope_mismatch","servicenow_reconnect_required",
+                           "zendesk_grant_unavailable","zendesk_grant_scope_mismatch","zendesk_reconnect_required","zendesk_principal_mismatch","zendesk_principal_not_active_agent",
                            "salesforce_grant_unavailable","salesforce_grant_scope_mismatch","salesforce_reconnect_required","salesforce_principal_mismatch",
                            "slack_credential_unavailable","slack_enterprise_mismatch","slack_workspace_mismatch","slack_channel_scope_not_verified","slack_principal_changed_during_read",
                            "sql_source_not_deployment_allowlisted","sql_source_definition_changed",
