@@ -15,6 +15,9 @@ from server import event_log_workspace as workspace
 from test_enterprise_rest_feed import config, event, page, provider, URL, ENV, TOKEN
 
 
+pytestmark=pytest.mark.skipif(os.name!="posix",reason="dedicated POSIX worker")
+
+
 @pytest.fixture
 def deployed(tmp_path,monkeypatch):
     data=tmp_path/"local"

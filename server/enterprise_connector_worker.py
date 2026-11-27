@@ -119,17 +119,23 @@ class Worker:
             raise WorkerError("invalid_worker_readiness_reply")
 
     def _api(self,client,path,payload):
+        if path not in ("inspect","readiness","claim","complete"):
+            raise WorkerError("invalid_gateway_worker_operation")
         try:
-            response=client.post(self.gateway+"/v1/connector-worker/"+path,
-                                 json=payload,headers={"Authorization":"Bearer "+self.token})
+            with client.stream("POST",self.gateway+"/v1/connector-worker/"+path,
+                               json=payload,headers={"Authorization":"Bearer "+self.token}) as response:
+                if response.status_code!=200:
+                    raise WorkerError("gateway_refused_"+str(response.status_code))
+                data=bytearray()
+                for chunk in response.iter_bytes(chunk_size=16384):
+                    data.extend(chunk)
+                    if len(data)>65536:
+                        raise WorkerError("gateway_reply_budget_exceeded")
         except httpx.HTTPError:
             raise WorkerError("gateway_transport_failure_retry_receipt_only") from None
-        if response.status_code!=200:
-            # Do not log server errors, which may contain remote identifiers.
-            raise WorkerError("gateway_refused_"+str(response.status_code))
         try:
-            value=response.json()
-        except ValueError:
+            value=rest._strict_json(bytes(data))
+        except rest.FeedError:
             raise WorkerError("invalid_gateway_reply") from None
         if not isinstance(value,dict):
             raise WorkerError("invalid_gateway_reply")

@@ -187,14 +187,18 @@ class Publications:
             raise JobError("explicit_event_export_required",403)
         with self.jobs._tx(org) as c:
             rows=[]
-            manifests=[]
+            manifests=[];expires=[]
             for pin in spec.snapshots:
                 j=self.jobs._get(c,org,pin.job_id)
                 d,payload=self._row(c,org,pin.job_id)
                 if (not d or payload is None or d["manifest_sha256"]!=pin.manifest_sha256
                         or d["revision"]!=pin.publication_revision or d["grant_id"]!=pin.grant_id):
                     raise JobError("snapshot_missing_or_changed")
-                snap=Snapshot.model_validate_json(payload)
+                try:
+                    snap=Snapshot.model_validate_json(payload)
+                except ValueError:
+                    raise JobError("retained_snapshot_integrity_failure") from None
+                expires.append(d["expires_at"])
                 if manifest_digest(snap.manifest)!=pin.manifest_sha256:
                     raise JobError("retained_snapshot_integrity_failure")
                 if len(rows)+len(snap.events)>MAX_EXPORT_EVENTS:
@@ -205,6 +209,8 @@ class Publications:
                 manifests.append({"job_id":pin.job_id,"grant_id":d["grant_id"],"manifest":snap.manifest.model_dump(),"manifest_sha256":pin.manifest_sha256})
                 self.jobs._audit(c,j,principal,"event_publication.exported",{"event_count":len(snap.events),"grant_id":d["grant_id"]})
             rows.sort(key=lambda r:(r["source_namespace"],r["observed_at"],r["event_id"]))
+            if self.jobs.clock()>=min(expires):
+                raise JobError("snapshot_expired_during_export")
             return {"format":"openworkgraph.connector-event-bundle.v1","manifests":manifests,"events":rows,
                     "event_count":len(rows),"cross_source_identity_verified":False,"provider_completeness_verified":False,
                     "mapping":{"event_id_column":"event_id","case_column":"case_id","activity_column":"activity",

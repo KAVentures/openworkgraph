@@ -34,6 +34,8 @@
       el('p',r.inventory_complete?'Local inventory sources available.':'Incomplete local inventory: '+r.inventory_sources_unavailable.join(', ')),
       el('p','Local scheduler running: '+fmt(r.scheduler_running)+'. Live provider health is unknown.'),
       table(['Provider','Implemented adapter scope','Stored OAuth sign-ins','Reconnect required','Retained profiles','Local configuration observed'],r.providers.map(p=>[p.label,p.implemented_adapter_scope,p.stored_oauth_connections,p.oauth_reconnect_required,p.retained_profiles_observed,p.local_configuration_observed])),
+      el('h3','Retained adapter capabilities'),
+      table(['Provider','Recurring dispatch','Snapshot publication','Native crosswalk','Private file delivery','Reviewed rotation','Live acceptance verified'],(r.retained_adapter_capabilities||[]).map(p=>[p.provider,p.recurring_dispatch,p.exact_snapshot_publication,p.private_native_crosswalk,p.deployment_secret_file_delivery,p.reviewed_in_place_credential_rotation,p.live_provider_acceptance_verified])),
       el('h3','Operational worklist'),
       table(['Provider','Exact target','State','Retained events','Last success','Checkpoint','Scheduled jobs','Review flags'],r.profiles.map(p=>[p.provider,p.target_id,p.local_state,p.retained_event_count,p.last_retained_success_at,p.checkpoint_at,p.schedules.map(s=>s.schedule_id+' '+(s.enabled?'enabled':'paused')).join('; '),flags(p.review_flags)])),
       el('h3','Unmatched local schedules'),
