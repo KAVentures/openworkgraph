@@ -14,6 +14,7 @@ from . import sap_procurement_feed as sap
 from . import dataverse_audit_feed as dv
 from . import hubspot_history_feed as hs
 from . import databricks_event_feed as dbx
+from . import snowflake_event_feed as snow
 from . import enterprise_sql_feed as sql
 from . import enterprise_connector_operations as operations
 from .event_log_routes import _json_body
@@ -78,6 +79,18 @@ async def sql_create(request:Request):
     require(request)
     body=await _json_body(request,"SQL feed configuration",strict=True,limit=4096)
     return await call(request,sql.create,body)
+
+
+@router.get("/v1/enterprise-connectors/snowflake/catalog")
+async def snowflake_catalog(request:Request):
+    return await call(request,snow.catalog_public)
+
+
+@router.post("/v1/enterprise-connectors/snowflake")
+async def snowflake_create(request:Request):
+    require(request)
+    body=await _json_body(request,"Snowflake approved view profile",strict=True,limit=4096)
+    return await call(request,snow.create,body)
 
 
 @router.get("/v1/enterprise-connectors/databricks/catalog")
