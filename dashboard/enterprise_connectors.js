@@ -987,8 +987,8 @@
         el('p',s.included_profiles+' of '+s.selected_profiles+' profiles included; '+s.excluded_inconsistent_profiles+' excluded due to inconsistent coverage state.'),
         table(['Coverage classification','Profile-hours'],Object.entries(s.microseconds_by_kind).map(([k,v])=>[coverageKinds[k]||k,coverageHours(v)])),
         el('p','Committed request-window fraction: '+(s.committed_request_window_fraction===null?'Unknown':(100*s.committed_request_window_fraction).toFixed(2)+'%')),
-        table(['Profile / provider','Index consistent','Recorded commits','Intervals retained','Checkpoint','Uncheckpointed planning hours','Estimated advancing windows'],result.profiles.map(p=>
-          [p.profile_id+' / '+p.provider,p.coverage_index_consistent,p.recorded_commits,p.retained_interval_count,p.checkpoint,coverageHours(p.backlog?.uncheckpointed_microseconds),p.backlog?.estimated_advancing_windows])),
+        table(['Profile / provider','Index consistent','Recorded commits','Historical commits','Intervals retained','Checkpoint','Uncheckpointed planning hours','Estimated advancing windows'],result.profiles.map(p=>
+          [p.profile_id+' / '+p.provider,p.coverage_index_consistent,p.recorded_commits,p.historical_commits,p.retained_interval_count,p.checkpoint,coverageHours(p.backlog?.uncheckpointed_microseconds),p.backlog?.estimated_advancing_windows])),
         el('h3','Exact interval partition'),
         table(['Profile','Classification','From UTC','Until UTC','Hours'],result.profiles.flatMap(p=>
           p.segments.map(x=>[p.profile_id,coverageKinds[x.kind]||x.kind,x.since,x.until,coverageHours(x.microseconds)]))),
