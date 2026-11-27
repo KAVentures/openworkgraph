@@ -21,7 +21,7 @@ class Pin(Strict):
     grant_id:str=Field(pattern=GRANT)
     publication_revision:StrictInt=Field(ge=1)
     manifest_sha256:str=Field(pattern=DIGEST)
-    expires_at:StrictFloat=Field(gt=0,allow_inf_nan=False)
+    expires_at:StrictInt|StrictFloat=Field(gt=0)
 
 
 class Member(Strict):
@@ -49,6 +49,8 @@ class Envelope(Strict):
 
     @model_validator(mode="after")
     def shape(self):
+        if any(not __import__("math").isfinite(p.expires_at) for p in self.pins):
+            raise ValueError("invalid publication expiry")
         src={s.job_id:s for s in self.source_bundle.manifests}
         if len({p.job_id for p in self.pins})!=len(self.pins) or set(src)!={p.job_id for p in self.pins}:
             raise ValueError("portable publication scope mismatch")
