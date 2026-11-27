@@ -353,7 +353,7 @@
       controls.append(button(p.enabled?'Disable feed':'Enable feed',()=>action(async()=>{
         if(!window.confirm('Change this exact feed revision? Existing recurring authorization will not follow a new revision.'))return 'Cancelled.';
         await api(base+'/rest/'+p.profile_id+'/state',{revision:p.revision,enabled:!p.enabled,confirm_change:true});return 'Feed revision changed.';
-      }),!p.enabled&&p.status==='dataset_deleted'),button('Remove configuration',()=>action(async()=>{
+      }),!p.enabled&&(p.status==='dataset_deleted'||!!p.integrity_hold)),button('Remove configuration',()=>action(async()=>{
         if(!window.confirm('Remove this feed configuration? Retained event log stays.'))return 'Cancelled.';
         await api(base+'/rest/'+p.profile_id+'/remove',{revision:p.revision,confirm_remove:true});return 'Feed removed; retained log not deleted.';
       })));
@@ -800,6 +800,71 @@
   $('onboardingExport').onclick=()=>onboardingLoad(true);
   $('onboardingProvider').onchange=onboardingRender;
   $('onboardingFilter').onchange=onboardingRender;
+  let integrityRows=[],integrityBusy=false,integrityGeneration=0;
+  function integrityReset(){
+    integrityGeneration++;$('integrityResults').replaceChildren();
+    $('integrityPreview').disabled=integrityBusy||!integrityRows.some(x=>x.box.checked);
+  }
+  function integrityLock(value){
+    integrityBusy=value;$('integrityRefresh').disabled=value;$('integrityAction').disabled=value;
+    for(const x of integrityRows)x.box.disabled=value||!x.profile.log_id;
+    $('integrityPreview').disabled=value||!integrityRows.some(x=>x.box.checked);
+  }
+  async function integrityLoad(){
+    if(integrityBusy)return;integrityReset();integrityLock(true);
+    try{
+      const data=await api(base+'/integrity');integrityRows=[];
+      const cards=data.profiles.map(p=>{
+        const item=check(p.provider+' / '+p.profile_id+' · revision '+p.revision+
+          (p.integrity_hold?' · integrity hold':'')+(!p.log_id?' · no retained log':''));
+        item.box.disabled=!p.log_id;item.box.onchange=integrityReset;
+        integrityRows.push({profile:p,box:item.box});return item.node;
+      });
+      $('integrityTargets').replaceChildren(...cards.length?cards:[el('p','No configured retained feeds.')]);
+      $('integrityStatus').textContent='Profiles loaded. Structural checks are explicitly requested.';
+    }catch(error){integrityRows=[];$('integrityTargets').replaceChildren();$('integrityStatus').textContent=error.message;}
+    finally{integrityLock(false);}
+  }
+  $('integrityRefresh').onclick=integrityLoad;$('integrityAction').onchange=integrityReset;
+  $('integrityPreview').onclick=async()=>{
+    if(integrityBusy)return;integrityReset();const turn=integrityGeneration;
+    const actionName=$('integrityAction').value;
+    const targets=integrityRows.filter(x=>x.box.checked).map(x=>({profile_id:x.profile.profile_id,revision:x.profile.revision}));
+    if(!targets.length||targets.length>5){$('integrityStatus').textContent='Select one to five profiles.';return;}
+    integrityLock(true);
+    try{
+      const plan=await api(base+'/integrity/preview?action='+actionName,{targets});
+      if(turn!==integrityGeneration)return;
+      const root=$('integrityResults');
+      root.replaceChildren(el('h3','Exact retained structural findings'),
+        table(['Profile','Status','Events','Objects','Source keys','Eligible for action'],plan.targets.map(x=>
+          [x.profile_id,x.status,x.counts.events,x.counts.objects,x.counts.event_source_keys,x.eligible])),
+        table(['Profile','Violation','Affected population / difference'],plan.targets.flatMap(x=>
+          Object.entries(x.violations).map(([k,v])=>[x.profile_id,k.replaceAll('_',' '),v]))),
+        el('p','Plan SHA-256: '+plan.plan_sha256),el('p','This is a structural audit, not a proof of provider completeness or original content authenticity.'));
+      if(plan.all_eligible){
+        const exact=check('I reviewed the exact structural findings.');
+        const local=check('I approve this local revision change and understand feeds remain disabled.');
+        const remote=check('I will separately coordinate remote workers, publication copies and scheduling authorization.');
+        const apply=button(actionName==='hold'?'Apply integrity holds':'Release reviewed integrity holds',async()=>{
+          if(integrityBusy||turn!==integrityGeneration||![exact,local,remote].every(x=>x.box.checked))return;
+          integrityLock(true);apply.disabled=true;
+          try{
+            const result=await api(base+'/integrity/apply?action='+actionName,{targets,plan_sha256:plan.plan_sha256,
+              confirm_exact_findings:true,confirm_local_containment:true,confirm_remote_coordination:true});
+            integrityLock(false);await integrityLoad();
+            $('integrityStatus').textContent=result.changed.length+' profiles changed atomically; retained data unchanged. Separate reauthorization required.';
+            if(!busy)await load();
+          }catch(error){integrityReset();$('integrityStatus').textContent=error.message;}
+          finally{integrityLock(false);}
+        },true);
+        for(const x of [exact,local,remote])x.box.onchange=()=>apply.disabled=integrityBusy||![exact,local,remote].every(y=>y.box.checked);
+        root.append(exact.node,local.node,remote.node,apply);
+      }else root.append(el('p','Not every selected profile is eligible. Narrow the selection or investigate the findings.'));
+      $('integrityStatus').textContent='Structural review completed. No provider reads or mutations.';
+    }catch(error){$('integrityStatus').textContent=error.message;}
+    finally{integrityLock(false);}
+  };
   $('refresh').onclick=load;
   $('freshness').oninput=()=>{generation++;latest=null;$('download').disabled=true;$('refresh').disabled=busy;$('inventory').replaceChildren();$('profiles').replaceChildren();$('status').textContent='Threshold changed. Refresh local inventory.';};
   $('download').onclick=async()=>{
