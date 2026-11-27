@@ -744,6 +744,62 @@
   }
   $('historyRefresh').onclick=()=>historyLoad(false);
   $('historyDownload').onclick=()=>historyLoad(true);
+  // Local source onboarding is distinct from live provider health or dispatch.
+  let onboardingData=null,onboardingBusy=false;
+  function onboardingRender(){
+    if(!onboardingData)return;
+    const d=onboardingData,s=d.summary,provider=$('onboardingProvider').value,filter=$('onboardingFilter').value;
+    const sources=d.sources.filter(x=>(!provider||x.provider===provider)&&
+      (!filter||filter==='ready'&&x.local_credential_state==='locally_available'&&!x.profile_ids.length&&!x.definition_drift_profiles.length||
+       filter==='blocked'&&x.local_credential_state==='blocked'||filter==='drift'&&x.definition_drift_profiles.length||
+       filter==='shared'&&x.shared_credential_reference));
+    const profiles=d.profiles.filter(x=>!provider||x.provider===provider);
+    $('onboardingSummary').replaceChildren(
+      el('h3','Provider onboarding coverage'),
+      table(['Provider','Catalog','Approved sources','Locally available','Blocked','Ready without profile','Existing profiles','Profiles to review'],
+        s.providers.filter(x=>!provider||x.provider===provider).map(x=>[x.provider,x.catalog_state,x.configured_sources,x.ready_local_sources,
+          x.blocked_local_sources,x.unconfigured_ready_sources,x.retained_profiles,x.profiles_requiring_review])),
+      el('h3','REST endpoint policy'),
+      table(['Local policy measure','Value'],Object.entries(s.rest_endpoint_policy).map(([k,v])=>[k.replaceAll('_',' '),v])),
+      el('h3','Managed secret-file inventory'),
+      table(['Local measure','Value'],Object.entries(s.secret_file_inventory).map(([k,v])=>[k.replaceAll('_',' '),v])),
+      el('p','Unreferenced mappings may belong to workers or other configured services. Do not remove them based on this report alone.'));
+    $('onboardingResults').replaceChildren(
+      el('h3','Catalog diagnostics'),
+      table(['Provider','Setting present','State','Sources','Error'],d.catalogs.filter(x=>!provider||x.provider===provider).map(x=>[x.provider,x.deployment_setting_present,x.state,x.source_count,x.error_code])),
+      el('h3','Approved source readiness'),
+      table(['Provider / alias','Definition SHA-256','Local credential','Delivery','Matching profiles','Drifted profiles','Shared reference','Diagnostic'],
+        sources.map(x=>[x.provider+' / '+x.source_alias,x.definition_sha256,x.local_credential_state,x.credential_delivery,
+          x.profile_ids.join(', '),x.definition_drift_profiles.join(', '),x.shared_credential_reference,x.error_code])),
+      el('h3','Existing profile binding and drift'),
+      table(['Provider','Profile ID','Revision','Alias','Definition','Binding','Enabled','Diagnostic'],profiles.map(x=>[x.provider,x.profile_id,x.revision,x.source_alias,x.definition_state,x.binding_state,x.enabled,x.error_code])),
+      el('p',d.interpretation));
+  }
+  async function onboardingLoad(support=false){
+    if(onboardingBusy)return;onboardingBusy=true;
+    $('onboardingRefresh').disabled=true;$('onboardingExport').disabled=true;
+    try{
+      const data=await api(base+'/onboarding'+(support?'?support_only=true':''));
+      if(support){
+        if(data.scope!=='counts_only_support'||'sources' in data||'profiles' in data||'catalogs' in data)throw Error('Support projection rejected.');
+        const url=URL.createObjectURL(new Blob([JSON.stringify(data,null,2)],{type:'application/json'}));
+        try{const a=el('a');a.href=url;a.download='owg-connector-onboarding-support.json';a.click();}finally{URL.revokeObjectURL(url);}
+        $('onboardingStatus').textContent='Fresh counts-only support report downloaded.';
+      }else{
+        onboardingData=data;
+        const select=$('onboardingProvider'),previous=select.value;
+        const all=el('option','All providers');all.value='';select.replaceChildren(all);
+        for(const x of data.summary.providers){const opt=el('option',x.provider);opt.value=x.provider;select.append(opt);}
+        select.value=data.summary.providers.some(x=>x.provider===previous)?previous:'';
+        onboardingRender();$('onboardingStatus').textContent='Local inspection completed. Provider access and live health remain unknown.';
+      }
+    }catch(error){if(!support){onboardingData=null;$('onboardingSummary').replaceChildren();$('onboardingResults').replaceChildren();}$('onboardingStatus').textContent=error.message;}
+    finally{onboardingBusy=false;$('onboardingRefresh').disabled=false;$('onboardingExport').disabled=!onboardingData;}
+  }
+  $('onboardingRefresh').onclick=()=>onboardingLoad(false);
+  $('onboardingExport').onclick=()=>onboardingLoad(true);
+  $('onboardingProvider').onchange=onboardingRender;
+  $('onboardingFilter').onchange=onboardingRender;
   $('refresh').onclick=load;
   $('freshness').oninput=()=>{generation++;latest=null;$('download').disabled=true;$('refresh').disabled=busy;$('inventory').replaceChildren();$('profiles').replaceChildren();$('status').textContent='Threshold changed. Refresh local inventory.';};
   $('download').onclick=async()=>{

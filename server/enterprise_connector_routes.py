@@ -286,3 +286,9 @@ async def ingestion_run_history(request:Request,profile_id:str|None=None,
                                 state:str|None=None):
     from . import enterprise_ingestion_run_history as history
     return await call(request,history.history,profile_id=profile_id,days=days,limit=limit,state=state)
+
+
+@router.get("/v1/enterprise-connectors/onboarding")
+async def onboarding_readiness(request:Request,support_only:bool=Query(default=False)):
+    from . import enterprise_source_onboarding as onboarding
+    return await call(request,onboarding.inspect,support_only=support_only)
