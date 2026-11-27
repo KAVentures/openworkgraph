@@ -169,7 +169,9 @@ def calendar(record,as_of):
         future_dates=bool((reported_start and reported_start>d) or (reported_finish and reported_finish>d))
         if future_report:flags.append("report_recorded_after_review_date")
         if future_dates:flags.append("reported_date_after_review_date")
-        usable=not future_report and not future_dates
+        baseline_future=record["saved_at"][:10]>as_of
+        if baseline_future:flags.append("selected_revision_saved_after_review_date")
+        usable=not future_report and not future_dates and not baseline_future
         terminal=status in ("completed","cancelled")
         if usable:
             if d>start and reported_start is None and not terminal:flags.append("planned_start_passed_without_reported_start")
@@ -206,8 +208,11 @@ def build(records,root,access,request,current_source):
                          "cost":cost,"effort":effort,
                          "baseline_reassessed_since_previous":prev is not None and prev["assessed_in_revision"]!=r["assessed_in_revision"],
                          "stored_review_changed_since_previous":prev is not None and prev["review"]!=r["review"]})
+    currency_history={r["baseline"]["currency"] for r in records}
+    # The existing report schema does not store a separate currency on each
+    # report. Across currency changes, withhold budget conclusions.
     budget=None
-    if current_source and after["revision"]==records[-1]["revision"] and current_source["currency"]==after["baseline"]["currency"] and current_source["implementation_budget"] is not None:
+    if len(currency_history)==1 and current_source and after["revision"]==records[-1]["revision"] and current_source["currency"]==after["baseline"]["currency"] and current_source["implementation_budget"] is not None:
         cap=dec(current_source["implementation_budget"])
         values=metric_snapshot(after,METRICS["cost"])
         lower=dec(values["forecast"]["nonnegative_known_lower_bound"])
@@ -219,6 +224,8 @@ def build(records,root,access,request,current_source):
     return {"format":FORMAT,"root_workflow_id":root,"access_revision":access,"history_sha256":pin,
             "latest_revision":records[-1]["revision"],"timeline":timeline,"comparison":transition(before,after),
             "calendar":calendar(after,request.as_of_date),"current_budget_review":budget,
+            "multiple_currencies_in_history":len(currency_history)>1,
+            "currency_warning":"Reported costs lack separate currency provenance; do not aggregate or compare monetary reports across currency changes." if len(currency_history)>1 else None,
             "review_sha256":content_digest({"history":pin,"request":request.model_dump(mode="json"),"source":current_source}),
             "actual_values_independently_verified":False,"spending_authorized":False,"execution_authorized":False,
             "realized_savings_verified":False,
