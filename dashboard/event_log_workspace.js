@@ -13407,8 +13407,8 @@
   }
 
   function predictionSpec(values){
-    const ends=String(values.ends||'').split(',').map(x=>x.trim()).filter(Boolean);
-    if(!ends.length)throw new Error('List the activities that end a case.');
+    const ends=values.ends;
+    if(!Array.isArray(ends)||!ends.length||ends.length>20||ends.some(label=>typeof label!=='string'||!label.length||label.length>200))throw new Error('List the activities that end a case.');
     const spec={end_activities:ends,limit:50};
     if(values.outcome==='duration_over'){const h=Number(values.hours);if(!(h>0))throw new Error('Enter the hours for the outcome.');spec.outcome={kind:'duration_over',seconds:Math.round(h*3600)};}
     if(values.outcome==='contains_activity'){if(!values.activity)throw new Error('Choose the outcome activity.');spec.outcome={kind:'contains_activity',activity:values.activity};}
@@ -13558,15 +13558,18 @@
   function nextActivitySection(activityNames,inspection){
     const box=section('Next activity in open cases');box.id='owgNextActivity';
     box.appendChild(el('div','Estimate what usually comes next in each open case, from completed cases that had the same recent activities. Check the backtest before relying on it.','muted'));
-    const ends=input('owgNextEnds','text','for example Pay, Close');ends.maxLength=2000;
+    const ends=input('owgNextEnds','text','Choose or enter one exact activity');ends.maxLength=200;
+    const endLabels=[];const endListView=el('ul');endListView.id='owgNextEndLabels';
+    const addEnd=button('Add end activity','secondary');addEnd.id='owgNextAddEnd';
+    const endStatus=el('div',null,'muted');endStatus.setAttribute('role','status');
     const listId='owgNextEndsList';const list=document.createElement('datalist');list.id=listId;activityNames.slice(0,500).forEach(a=>{const o=document.createElement('option');o.value=a;list.appendChild(o);});ends.setAttribute('list',listId);
     const history=select('owgNextHistory',[['1','1 activity'],['2','2 activities'],['3','3 activities'],['4','4 activities']]);history.value='2';
     const exact=input('owgNextCaseKey','text');exact.maxLength=200;
     const run=button('Predict next activities','secondary');run.id='owgNextRun';
     const out=el('div');out.id='owgNextResults';out.setAttribute('role','status');
     const evidence=el('div');evidence.id='owgNextTrainingEvidence';
-    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Activities that end a case (comma-separated)',ends),field('Recent history to match',history),field('Exact case key (optional)',exact),run);
-    box.append(row,list,out,evidence);
+    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Activity that ends a case',ends),addEnd,field('Recent history to match',history),field('Exact case key (optional)',exact),run);
+    box.append(row,list,endListView,endStatus,out,evidence);
     const generation=state.generation;
     const base='/v1/event-logs/'+encodeURIComponent(state.logId)+'/next-activity';
     const post=async(path,spec)=>(await api(base+path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)})).json();
@@ -13574,13 +13577,31 @@
     const historyText=list=>list.length?list.map(value=>JSON.stringify(value)).join(' → '):'All completed-case steps';
     let turn=0,selection=0;
     const current=t=>generation===state.generation&&box.isConnected&&t===turn;
+    const exactEndSelection=()=>{
+      if(ends.value.length)throw new Error('Add the entered end activity before predicting.');
+      if(!endLabels.length)throw new Error('Add the activities that end a case.');
+      return [...endLabels];
+    };
     const landmarks=nextActivityLandmarksPanel(post,()=>({
-      end_activities:ends.value.split(',').map(x=>x.trim()).filter(Boolean),history:Number(history.value),
+      end_activities:exactEndSelection(),history:Number(history.value),
       ...(state.caseType?{case_type:state.caseType}:{})}),()=>generation===state.generation&&box.isConnected,inspection);
     box.append(landmarks.panel);
     for(const control of [ends,history,exact])control.addEventListener('input',()=>{
       ++turn;run.disabled=false;out.replaceChildren();evidence.replaceChildren();landmarks.clear();
     });
+    const invalidate=()=>{++turn;run.disabled=false;out.replaceChildren();evidence.replaceChildren();landmarks.clear();};
+    const drawEnds=()=>endListView.replaceChildren(...endLabels.map((label,index)=>{
+      const item=el('li',JSON.stringify(label)+' '),remove=button('Remove','secondary');
+      remove.setAttribute('aria-label','Remove end activity '+label);
+      remove.onclick=()=>{endLabels.splice(index,1);drawEnds();invalidate();};item.appendChild(remove);return item;
+    }));
+    addEnd.onclick=()=>{
+      const value=ends.value;
+      if(!value.length){endStatus.textContent='Enter an activity label.';return;}
+      if(endLabels.includes(value)){endStatus.textContent='This activity is already selected.';return;}
+      if(endLabels.length>=20){endStatus.textContent='Select at most 20 end activities.';return;}
+      endLabels.push(value);ends.value='';endStatus.textContent='';drawEnds();invalidate();
+    };
     function inspect(t,settings,snapshot,prediction){
       const selected=++selection,active=()=>current(t)&&selected===selection;
       const title=el('h4','Training observations for '+prediction.case_id);title.tabIndex=-1;
@@ -13608,9 +13629,7 @@
       const t=++turn;
       run.disabled=true;out.replaceChildren(el('div','Estimating next activities…','muted'));evidence.replaceChildren();
       try{
-        const endList=ends.value.split(',').map(x=>x.trim()).filter(Boolean);
-        if(!endList.length)throw new Error('List the activities that end a case.');
-        const spec={end_activities:endList,history:Number(history.value),limit:50};
+        const spec={end_activities:exactEndSelection(),history:Number(history.value),limit:50};
         if(state.caseType)spec.case_type=state.caseType;
         if(filterOn())spec.cohort=globalCohort();
         const caseId=exact.value;
@@ -13652,7 +13671,16 @@
   function predictionSection(activityNames,inspection){
     const box=section('Predict open cases');box.id='owgEventLogPredictions';
     box.appendChild(el('div','Estimate how much longer open cases will take, and how likely an outcome is, from cases that were at the same point. Learning from completed cases only is biased toward short times when long cases are still open; including still-open cases corrects for that and takes into account how long each case has already waited. A backtest shows how accurate these estimates have been. Estimates are not commitments, and nobody is rated.','muted'));
-    const ends=input('owgPredictEnds','text','Close, Cancel');
+    const ends=input('owgPredictEnds','text','Choose or enter one exact activity');ends.maxLength=200;
+    const endLabels=[];const endListView=el('ul');endListView.id='owgPredictEndLabels';
+    const addEnd=button('Add end activity','secondary');addEnd.id='owgPredictAddEnd';
+    const endStatus=el('div',null,'muted');endStatus.setAttribute('role','status');
+    const listId='owgPredictEndsList';const list=document.createElement('datalist');list.id=listId;
+    activityNames.slice(0,500).forEach(a=>{const o=document.createElement('option');o.value=a;list.appendChild(o);});ends.setAttribute('list',listId);
+    const selectedEnds=()=>{
+      if(ends.value.length)throw new Error('Add the entered end activity before predicting.');
+      return [...endLabels];
+    };
     const outcome=select('owgPredictOutcome',[['','Remaining time only'],['duration_over','Case takes longer than…'],['contains_activity','Case will include activity…']]);
     const hours=input('owgPredictHours','number');hours.min='0';hours.step='any';
     const activity=select('owgPredictActivity',activityNames.slice(0,500).map(x=>[x,x]));
@@ -13699,14 +13727,14 @@
       if(!outcome.value&&rankBy.value==='outcome')rankBy.value='automatic';
       rankBy.disabled=limit.disabled=Boolean(exact.value);
     };
-    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Activities that end a case',ends),field('Also predict',outcome),f.hours,f.activity,field('Learn from',estimator),field('Exact case key (optional)',exact),
+    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Activity that ends a case',ends),addEnd,field('Also predict',outcome),f.hours,f.activity,field('Learn from',estimator),field('Exact case key (optional)',exact),
       field('Rank estimates by',rankBy),field('Maximum estimates shown',limit),run,watch);
     const out=el('div');out.id='owgPredictResults';out.setAttribute('role','status');
     const monitorOut=el('div');monitorOut.id='owgPredictMonitoring';monitorOut.setAttribute('role','status');
     const snapButton=button('Save a snapshot to score later','secondary');snapButton.id='owgPredictSnapshot';
     const snapOut=el('div');snapOut.id='owgPredictSnapshots';
     const snapStatus=el('div',null,'muted');snapStatus.id='owgPredictSnapshotStatus';snapStatus.setAttribute('role','status');snapStatus.setAttribute('aria-live','polite');
-    box.append(row,out,monitorOut,el('h4','Prediction snapshots'),
+    box.append(row,list,endListView,endStatus,out,monitorOut,el('h4','Prediction snapshots'),
       el('div','A snapshot freezes today\u2019s estimates for every open case (completed-cases learning). After you append newer events, score it to see how the estimates held up against what actually happened.','muted'),
       snapButton,snapStatus,snapOut);
     const generation=state.generation;
@@ -13784,7 +13812,7 @@
     };
     snapButton.onclick=async()=>{
       try{
-        const spec={...predictionSpec({ends:ends.value,outcome:outcome.value,hours:hours.value,activity:activity.value,estimator:'completed_cases'})};
+        const spec={...predictionSpec({ends:selectedEnds(),outcome:outcome.value,hours:hours.value,activity:activity.value,estimator:'completed_cases'})};
         delete spec.limit;if(state.caseType)spec.case_type=state.caseType;
         const sn=await (await api(snapBase(),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)})).json();
         snapStatus.textContent='Saved a snapshot of '+Number(sn.predicted_cases).toLocaleString()+' open cases'+(sn.unsupported_open_cases?' ('+sn.unsupported_open_cases+' without enough comparable history)':'')+'.';
@@ -13792,17 +13820,30 @@
       }catch(error){snapStatus.textContent=error.message;}
     };
     listSnapshots().catch(()=>{});
-    let predictTurn=0;
-    for(const control of [ends,outcome,hours,activity,estimator,exact,rankBy,limit])control.addEventListener('input',()=>{
-      ++predictTurn;out.replaceChildren();run.disabled=false;sync();
-    });
+    let predictTurn=0,watchTurn=0;
+    const invalidate=()=>{
+      ++predictTurn;++watchTurn;out.replaceChildren();monitorOut.replaceChildren();run.disabled=false;watch.disabled=false;sync();
+    };
+    const drawEnds=()=>endListView.replaceChildren(...endLabels.map((label,index)=>{
+      const item=el('li',JSON.stringify(label)+' '),remove=button('Remove','secondary');
+      remove.setAttribute('aria-label','Remove end activity '+label);
+      remove.onclick=()=>{endLabels.splice(index,1);drawEnds();invalidate();};item.appendChild(remove);return item;
+    }));
+    addEnd.onclick=()=>{
+      const value=ends.value;
+      if(!value.length){endStatus.textContent='Enter an activity label.';return;}
+      if(endLabels.includes(value)){endStatus.textContent='This activity is already selected.';return;}
+      if(endLabels.length>=20){endStatus.textContent='Select at most 20 end activities.';return;}
+      endLabels.push(value);ends.value='';endStatus.textContent='';drawEnds();invalidate();
+    };
+    for(const control of [ends,outcome,hours,activity,estimator,exact,rankBy,limit])control.addEventListener('input',invalidate);
     sync();
     run.onclick=async()=>{
       const t=++predictTurn;
       const current=()=>generation===state.generation&&box.isConnected&&t===predictTurn;
       run.disabled=true;out.replaceChildren(el('div','Estimating open cases…','muted'));
       try{
-        const spec=predictionSpec({ends:ends.value,outcome:outcome.value,hours:hours.value,activity:activity.value,estimator:estimator.value});
+        const spec=predictionSpec({ends:selectedEnds(),outcome:outcome.value,hours:hours.value,activity:activity.value,estimator:estimator.value});
         if(exact.value){spec.case_id=exact.value;spec.limit=1;}else spec.limit=Number(limit.value);
         const rank=spec.case_id?'automatic':rankBy.value;
         if(state.caseType)spec.case_type=state.caseType;
@@ -13846,12 +13887,11 @@
       }catch(error){if(current())out.replaceChildren(el('div',error.message,'muted'));}
       finally{if(current())run.disabled=false;}
     };
-    let watchTurn=0;
     watch.onclick=async()=>{
       const t=++watchTurn;watch.disabled=true;monitorOut.replaceChildren(el('div','Replaying past windows…','muted'));
       try{
         // Monitoring scores the completed-cases estimator, whatever the live setting.
-        const spec={...predictionSpec({ends:ends.value,outcome:outcome.value,hours:hours.value,activity:activity.value,estimator:'completed_cases'}),windows:6};
+        const spec={...predictionSpec({ends:selectedEnds(),outcome:outcome.value,hours:hours.value,activity:activity.value,estimator:'completed_cases'}),windows:6};
         delete spec.estimator;if(state.caseType)spec.case_type=state.caseType;
         const r=await (await api('/v1/event-logs/'+encodeURIComponent(state.logId)+'/predictions/monitoring',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)})).json();
         if(generation!==state.generation||t!==watchTurn)return;
