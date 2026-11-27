@@ -257,3 +257,14 @@ def test_endpoint_credential_catalog_change_during_read_prevents_commit(local,mo
         run(p,change)
     assert rest.inventory()["profiles"][0]["checkpoint"] is None
     assert ws.list_logs()["logs"]==[]
+
+
+def test_new_profile_keeps_required_pair_catalog_when_removed(local,monkeypatch):
+    monkeypatch.setenv("OWG_REST_ENDPOINT_CREDENTIALS",json.dumps({URL:ENV}))
+    p=rest.create(config())
+    assert p["config"]["credential_pair_policy"] is True
+    monkeypatch.delenv("OWG_REST_ENDPOINT_CREDENTIALS")
+    assert not rest.inventory()["profiles"][0]["credential_binding_available"]
+    with pytest.raises(rest.FeedError,match="rest_endpoint_credential_catalog_required"):
+        rest.run(p["profile_id"],p["revision"],confirm_reads=True,confirm_retention=True,
+                 client_factory=lambda **_:pytest.fail("no source read"))
