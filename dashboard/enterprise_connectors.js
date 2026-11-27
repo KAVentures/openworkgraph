@@ -91,7 +91,7 @@
       const recurring=check('Authorize recurring reads and local retention for this exact feed revision while recording is enabled.');
       const schedule=button('Create recurring schedule',()=>action(async()=>{
         const n=Number(interval.value);if(!recurring.box.checked||!Number.isInteger(n)||n<15||n>10080)throw Error('Confirm recurring consent and a valid interval.');
-        await api('/v1/schedules',{kind:'enterprise_rest_feed',target_id:p.profile_id,interval_minutes:n,confirm_scheduled_runs:true,confirm_rest_read_retention:true});
+        await api('/v1/schedules',{kind:'enterprise_rest_feed',target_id:p.profile_id,interval_minutes:n,confirm_scheduled_runs:true,confirm_rest_read_retention:true,expected_rest_profile_revision:p.revision});
         return 'Recurring schedule created for this profile revision.';
       }),true);
       recurring.box.onchange=()=>schedule.disabled=busy||!p.enabled||!p.credential_binding_available||jobs.length>0||!recurring.box.checked;
