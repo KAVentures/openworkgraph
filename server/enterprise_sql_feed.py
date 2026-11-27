@@ -149,7 +149,7 @@ def _postgres_params(source):
         from psycopg.conninfo import conninfo_to_dict
     except ImportError:
         raise rest.FeedError("sql_postgresql_driver_unavailable") from None
-    dsn=os.environ.get(source.dsn_env,"")
+    dsn=rest.resolve_secret(source.dsn_env)
     if not dsn or len(dsn)>MAX_DSN:
         raise rest.FeedError("sql_credential_unavailable")
     try:
