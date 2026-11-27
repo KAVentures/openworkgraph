@@ -32,7 +32,7 @@ CATALOGS = {
     "bigquery": ("OWG_BIGQUERY_CATALOG", "catalog", "key_material"),
 }
 OTHER = {"google": "stored_oauth_grant", "salesforce": "stored_oauth_grant",
-         "servicenow": "stored_oauth_grant", "slack": "reviewed_token_profile"}
+         "servicenow": "stored_oauth_grant", "zendesk": "stored_oauth_grant", "slack": "reviewed_token_profile"}
 SAFE_ALIAS = re.compile(r"[A-Za-z][A-Za-z0-9_-]{0,39}\Z")
 # Never return an arbitrary exception's message, even if it matches a regex.
 # Known codes come from the deployment parsers and local credential contract.
@@ -64,6 +64,7 @@ KNOWN_ERRORS = frozenset({
     "google_grant_unavailable", "google_grant_scope_mismatch", "google_reconnect_required",
     "salesforce_grant_unavailable", "salesforce_grant_scope_mismatch", "salesforce_reconnect_required",
     "servicenow_grant_unavailable", "servicenow_grant_scope_mismatch", "servicenow_reconnect_required",
+    "zendesk_grant_unavailable", "zendesk_grant_scope_mismatch", "zendesk_reconnect_required",
     "slack_credential_unavailable", "slack_principal_changed_during_read",
     "invalid_sap_deployment_catalog", "invalid_dataverse_deployment_catalog",
     "invalid_hubspot_deployment_catalog", "invalid_databricks_deployment_catalog",
