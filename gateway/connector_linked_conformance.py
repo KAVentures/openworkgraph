@@ -123,7 +123,28 @@ def catalog(reviewed,org,spec,principal):
                 "source_completeness_verified":False}
 
 
+class Worklist(Review):
+    expected_conformance_sha256:str=Field(pattern=DIGEST)
+    confirm_worklist_export:StrictBool
+
+    @model_validator(mode="after")
+    def whole_scope(self):
+        if self.offset!=0 or self.filter_status!="all":
+            raise ValueError("worklist export requires complete unfiltered review")
+        return self
+
+
 def review(reviewed,org,spec,principal):
+    return _review(reviewed,org,spec,principal,worklist=False)
+
+
+def worklist(reviewed,org,spec,principal):
+    if not spec.confirm_worklist_export:
+        raise JobError("explicit_conformance_worklist_export_required",403)
+    return _review(reviewed,org,spec,principal,worklist=True)
+
+
+def _review(reviewed,org,spec,principal,*,worklist):
     if not spec.confirm_conformance_review:
         raise JobError("explicit_conformance_rule_review_required",403)
     with reviewed.jobs._tx(org) as c:
@@ -161,10 +182,21 @@ def review(reviewed,org,spec,principal):
                  "evaluations":len(rows)*len(ordered),"group_outcomes":counts(rows),
                  "rule_outcomes":counts([check for r in rows for check in r["checks"]])}
         reviewed._fresh(expires)
-        reviewed._audit(c,org,spec,principal,"conformance_review",
+        reviewed._audit(c,org,spec,principal,"conformance_worklist_export" if worklist else "conformance_review",
                         {"conformance_sha256":pin,"groups":len(rows),"rules":len(ordered),
                          "groups_returned":len(page)})
         reviewed._fresh(expires)
+        if worklist:
+            # One row per non-satisfied or indeterminate rule. No source
+            # labels, raw records or pseudonymous source-case membership.
+            exceptions=[{"linked_case_id":r["linked_case_id"],**check}
+                        for r in rows for check in r["checks"]
+                        if check["status"] in ("not_satisfied","indeterminate")]
+            return {"format":"openworkgraph.linked-conformance-worklist.v1",
+                    "review_sha256":base["review_sha256"],"conformance_sha256":pin,
+                    "scope_sha256":scope,"expires_at":expires,"summary":summary,
+                    "exceptions":exceptions,"exception_count":len(exceptions),
+                    "actual_process_compliance_verified":False}
         return {"format":FORMAT,"scope_sha256":scope,"review_sha256":base["review_sha256"],
                 "conformance_sha256":pin,"expires_at":expires,"rules":ordered,
                 "summary":summary,"rule_summary":summaries,"groups":page,
@@ -173,3 +205,16 @@ def review(reviewed,org,spec,principal):
                 "source_completeness_verified":False,"business_identity_verified":False,
                 "actual_process_compliance_verified":False,"unlinked_cases_included":False,
                 "interpretation":"These are rule outcomes for selected reported evidence only. Missing observations do not prove missing actions. Date-only evidence and timestamp ties cannot establish strict occurrence order. No actual compliance, misconduct, causal relationship or business identity is verified."}
+
+
+def worklist_csv(report):
+    """Spreadsheet-safe counts-only worklist: identifiers and fixed codes only."""
+    from io import StringIO
+    import csv
+    out=StringIO(newline="")
+    writer=csv.DictWriter(out,fieldnames=["linked_case_id","rule_id","status","reason",
+        "left_count","right_count","conformance_sha256"])
+    writer.writeheader()
+    for row in report["exceptions"]:
+        writer.writerow({**row,"conformance_sha256":report["conformance_sha256"]})
+    return out.getvalue()
