@@ -67,6 +67,49 @@ async function loadFollowups(){
         check.input.checked=false;b.disabled=true;
       });b.disabled=true;check.input.onchange=()=>b.disabled=busy||!check.input.checked;a.append(check.l,b);
     }
+    if(p.state==='completed_unverified'&&p.item_pins_current){
+      const review=el('details');
+      review.append(el('summary','Compare independently reviewed later evidence'),
+        el('p','Use a separate later linked-case review with publication windows starting after reported completion. Both original and later grants must remain active. Case and coded-selector correspondence is human asserted.'),
+        el('p','Download baseline and later linkage requests from the linked review console. Complete the comparison template with the baseline request, later request and mapped rules, sources and cases.'),
+        table([['Queue revision',active.revision],['Packet revision',p.revision],['Required baseline cases',[...new Set(p.items.map(i=>i.linked_case_id))].join(', ')],['Required rules',[...new Set(p.items.map(i=>i.rule_id))].join(', ')]]));
+      const template=btn('Download comparison input template',async()=>{
+        const value={expected_queue_revision:active.revision,expected_packet_revision:p.revision,
+          baseline:{},subsequent:{},jobs:[],cases:[...new Set(p.items.map(i=>i.linked_case_id))].map(before=>({before,after:''})),
+          confirm_case_and_selector_correspondence:false};
+        const url=URL.createObjectURL(new Blob([JSON.stringify(value,null,2)],{type:'application/json'}));
+        try{const l=el('a');l.href=url;l.download='owg-followup-reassessment-input.json';l.click();}finally{URL.revokeObjectURL(url);}
+      });
+      const label=el('label','Reviewed comparison input (JSON)'),file=el('input');file.type='file';file.accept='.json,application/json';label.append(file);
+      const consent=approval('I assert the exact mapped cases and activity selectors correspond; this is not independently verified.');
+      const report=el('div');let selectedInput=null,selectedReport=null;
+      const preview=btn('Preview later evidence comparison',async()=>{
+        if(!file.files[0]||file.files[0].size>2*1024*1024||!consent.input.checked)throw Error('Choose a bounded reviewed JSON file and approve correspondence.');
+        selectedInput=JSON.parse(await file.files[0].text());
+        selectedInput={...selectedInput,expected_queue_revision:active.revision,expected_packet_revision:p.revision,confirm_case_and_selector_correspondence:true};
+        selectedReport=await api(packetPath()+'/'+p.packet_id+'/reassessment-preview',selectedInput);
+        report.replaceChildren(el('h4','Later sample assessment'),el('p',selectedReport.interpretation),
+          table(Object.entries(selectedReport.summary)),el('p','Review SHA-256: '+selectedReport.reassessment_sha256));
+        for(const row of selectedReport.rows)report.append(table([['Rule',row.rule_id],['Baseline',row.baseline_status],['Later sample',row.subsequent_status],['Observed reason',row.subsequent_reason]]));
+        const exact=approval('I approve recording this exact comparison digest and downloading the report.');
+        const sample=approval('I understand this does not verify corrective action, case identity, causation or completeness.');
+        const record=btn('Record reassessment and download report',async()=>{
+          if(!selectedReport||!exact.input.checked||!sample.input.checked)throw Error('Review the exact comparison first.');
+          const result=await api(packetPath()+'/'+p.packet_id+'/reassessment-record',{...selectedInput,
+            expected_reassessment_sha256:selectedReport.reassessment_sha256,confirm_record_reassessment:true,confirm_sample_only:true});
+          const url=URL.createObjectURL(new Blob([JSON.stringify(result.report,null,2)],{type:'application/json'}));
+          try{const l=el('a');l.href=url;l.download='owg-followup-reassessment-report.json';l.click();}finally{URL.revokeObjectURL(url);}
+          active=result.queue;await loadPage(0,true);$('status').textContent='Exact reassessment receipt recorded. Remediation remains unverified.';
+        });
+        record.disabled=true;exact.input.onchange=sample.input.onchange=()=>record.disabled=busy||!exact.input.checked||!sample.input.checked;
+        report.append(exact.l,sample.l,record);
+      });
+      preview.disabled=true;
+      file.onchange=consent.input.onchange=()=>{selectedReport=selectedInput=null;report.replaceChildren();preview.disabled=busy||!file.files[0]||!consent.input.checked;};
+      review.append(template,label,consent.l,preview,report);
+      for(const receipt of p.reassessment_receipts||[])review.append(el('p','Recorded comparison digest: '+receipt.reassessment_sha256+' · '+new Date(receipt.recorded_at*1000).toLocaleString()));
+      a.append(review);
+    }
     nodes.push(a);
   }
   $('followupPackets').replaceChildren(...(nodes.length?nodes:[el('p','No follow-up packets in this queue.')]));
