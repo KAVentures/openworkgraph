@@ -98,6 +98,37 @@ def decode(raw):
 
 def inspect(raw):
     value=parse_json(raw)
+    if isinstance(value,dict) and "quality_review" in value:
+        from shared.connector_quality_verification import verify_quality
+        from shared.connector_portable_linkage import Envelope,FORMAT as LINKED
+        original={k:v for k,v in value.items() if k!="quality_review"}
+        kind=original.get("format")
+        if kind==LINKED:
+            try:
+                envelope=Envelope.model_validate(original)
+            except ValueError:
+                raise ValueError("portable_linkage_integrity_failure") from None
+            source=envelope.source_bundle
+            pins=[p.model_dump() for p in envelope.pins]
+            checked,policy_pin=verify_quality(value["quality_review"],source,
+                expected_org=envelope.organization_id,expected_pins=pins)
+        elif kind==FORMAT:
+            source=decode_value(original)
+            checked,policy_pin=verify_quality(value["quality_review"],source)
+        else:
+            raise ValueError("unsupported_quality_bundle_format")
+        projected,report=_inspect_value(original,raw)
+        report.update(quality_report_recomputed=True,quality_sha256=checked["quality_sha256"],
+                      quality_policy_sha256=policy_pin,quality_review=checked,
+                      quality_applies_to_original_source_sample=True,
+                      quality_is_not_current_log_certification=True)
+        report["canonical_bundle_sha256"]=digest({"bundle_sha256":report["canonical_bundle_sha256"],
+                                                   "quality_sha256":checked["quality_sha256"]})
+        return projected,report
+    return _inspect_value(value,raw)
+
+
+def _inspect_value(value,raw):
     from shared.connector_portable_linkage import FORMAT as LINKED,inspect_portable
     if isinstance(value,dict) and value.get('format')==LINKED:
         return inspect_portable(value,raw)

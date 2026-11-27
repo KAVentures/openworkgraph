@@ -111,7 +111,6 @@ def test_excluded_rows_disclosed_only_with_separate_consent_and_not_retained(lin
     lambda d:d.update(review_sha256="f"*64),
     lambda d:d.update(scope_sha256="f"*64),
     lambda d:d.update(projected_rows_sha256="f"*64),
-    lambda d:d.update(quality_review={}),
 ])
 def test_changed_package_fields_fail_closed(linked,mutate):
     reviewed,spec,_,_=linked

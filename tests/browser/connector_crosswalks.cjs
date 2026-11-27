@@ -1,7 +1,7 @@
 const {chromium}=require('playwright');
 const assert=require('node:assert/strict');
 const fs=require('node:fs/promises');
-const {spawn}=require('node:child_process');
+const {spawn,spawnSync}=require('node:child_process');
 const os=require('node:os');
 const path=require('node:path');
 (async()=>{
@@ -73,6 +73,23 @@ const path=require('node:path');
   assert.ok(/^[a-f0-9]{64}$/.test(portable.projected_rows_sha256));
   await page.locator('#status').filter({hasText:'Complete portable linkage package exported.'}).waitFor();
   assert.ok(await page.locator('#portable').isDisabled());
+  const portablePath=path.join(scratch,'portable-export.json'),qualityPath=path.join(scratch,'quality-report.json');
+  await fs.writeFile(portablePath,JSON.stringify(portable));
+  // Preserve the original Gateway response's numeric pin encoding.
+  await fs.copyFile(await portableDownload.path(),portablePath);
+  const generate=spawnSync(process.env.OWG_BROWSER_PYTHON||'python',['tests/browser/quality_report_fixture.py',portablePath,qualityPath],{encoding:'utf8'});
+  assert.equal(generate.status,0,generate.stderr);
+  await page.locator('#portableQualityFile').setInputFiles(qualityPath);
+  await page.locator('#portableQualityStatus').filter({hasText:'Attached passing report'}).waitFor();
+  await page.locator('#portableConsent').check();
+  assert.ok(await page.locator('#portable').isDisabled());
+  await page.locator('#portableQualityConsent').check();
+  const [gatedDownload]=await Promise.all([page.waitForEvent('download'),page.locator('#portable').click()]);
+  const gated=JSON.parse(await fs.readFile(await gatedDownload.path(),'utf8'));
+  const quality=JSON.parse(await fs.readFile(qualityPath,'utf8'));
+  assert.equal(gated.quality_review.quality_sha256,quality.quality_sha256);
+  assert.equal(gated.review_sha256,portable.review_sha256);
+  assert.equal(gated.quality_review.all_selected_sources_pass,true);
   await page.locator('#unlinked').uncheck();
   assert.ok(await page.locator('#exportPanel').isHidden());
   await page.setViewportSize({width:390,height:844});

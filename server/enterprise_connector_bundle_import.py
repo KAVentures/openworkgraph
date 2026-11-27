@@ -46,6 +46,9 @@ def metadata(c,log_id,current_count):
             "latest_bundle_sha256":last["canonical_bundle_sha256"],
             "bundle_kind":last.get("bundle_kind","ordinary"),
             "review_sha256":last.get("review_sha256"),
+            "quality_sha256":last.get("quality_sha256"),
+            "quality_policy_sha256":last.get("quality_policy_sha256"),
+            "original_quality_sample_only":bool(last.get("quality_report_recomputed")),
             "events_after_last_verified_import":last["retained_event_count"],
             "current_event_count_matches_last_receipt":current_count==last["retained_event_count"],
             "gateway_origin_authenticated":False,"live_grants_verified":False,
@@ -63,6 +66,8 @@ def _history_check(c,log_id,report):
         raise FeedError("target_log_changed_outside_verified_import")
     # Bind exact source namespaces, provider profile pins and label mode.
     # A rotated profile or newly linked case scope requires a new log.
+    if report.get("quality_policy_sha256")!=history[0].get("quality_policy_sha256"):
+        raise FeedError("bundle_quality_policy_changed_new_log_required")
     if report.get("bundle_kind","ordinary")!=history[0].get("bundle_kind","ordinary"):
         raise FeedError("bundle_source_scope_changed_new_log_required")
     if report.get("bundle_kind")=="reviewed_linkage" and report["canonical_bundle_sha256"]!=history[0]["canonical_bundle_sha256"]:
@@ -120,12 +125,15 @@ def _verify_retained(c,log_id,bundle):
 
 
 def retain(raw,*,file_sha256,canonical_bundle_sha256,request_id,target=None,expected_revision=0,name=None,
-           confirm_retention=False,confirm_origin_review=False,confirm_linkage_review=False):
+           confirm_retention=False,confirm_origin_review=False,confirm_linkage_review=False,
+           confirm_quality_review=False):
     if not isinstance(request_id,str) or not re.fullmatch(r"[a-f0-9]{32}",request_id):
         raise FeedError("invalid_bundle_import_request_id",422)
     if confirm_retention is not True or confirm_origin_review is not True:
         raise FeedError("explicit_bundle_retention_and_origin_review_required",403)
     bundle,report=_inspect(raw)
+    if report.get("quality_report_recomputed") and confirm_quality_review is not True:
+        raise FeedError("explicit_offline_quality_review_required",403)
     if report.get("bundle_kind")=="reviewed_linkage" and confirm_linkage_review is not True:
         raise FeedError("explicit_offline_linkage_review_required",403)
     if report["file_sha256"]!=file_sha256 or report["canonical_bundle_sha256"]!=canonical_bundle_sha256:
