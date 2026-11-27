@@ -92,7 +92,7 @@ def install(app,jobs,admin):
     async def case_export_portable(organization_id:str,request:Request,authorization:str|None=Header(default=None)):
         from .connector_portable_linkage import PortableExport,export_portable
         principal=owner(authorization,True)
-        result=await reply(export_portable,reviewed,organization_id,await parse(request,PortableExport,maximum=MAX_REQUEST+4096),principal)
+        result=await reply(export_portable,reviewed,organization_id,await parse(request,PortableExport,maximum=MAX_REQUEST+131072),principal)
         result.headers["Content-Disposition"]='attachment; filename="owg-portable-reviewed-linked-evidence.json"'
         return result
 
