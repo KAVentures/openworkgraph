@@ -52,8 +52,12 @@ def prepare(profile_id,since,until,*,activity_mode="coded",confirm_labels=False)
                 LIMIT ?""",[log,start,end,MAX_EVENTS+1]).fetchall()
             if len(records)!=total or any(ns!=profile_id or typ!="source_case" for _,ns,_,_,_,typ in records):
                 raise ValueError("retained source identity or case shape changed")
+            from . import enterprise_case_exclusions as exclusions
+            excluded={"src:"+profile_id+":"+key for key in exclusions.keys(p)}
             rows=[]
             for event_id,ns,activity,stamp,case_id,typ in records:
+                if case_id in excluded:
+                    raise ValueError("excluded case found in retained snapshot window; review integrity")
                 if not case_id.startswith("src:"+profile_id+":"):
                     raise ValueError("retained case namespace changed")
                 rows.append(Event(event_id=rest._key(p,"publication_event",event_id),
