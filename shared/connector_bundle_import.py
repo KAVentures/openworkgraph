@@ -65,7 +65,7 @@ class Bundle(Strict):
         return self
 
 
-def decode(raw):
+def parse_json(raw):
     if not isinstance(raw,(bytes,bytearray)) or not 1<=len(raw)<=MAX_BYTES:
         raise ValueError("invalid_bundle_size")
     def pairs(items):
@@ -80,6 +80,10 @@ def decode(raw):
         value=json.loads(raw.decode("utf-8"),object_pairs_hook=pairs,parse_constant=constant)
     except (ValueError,UnicodeError,RecursionError):
         raise ValueError("invalid_bundle_json") from None
+    return value
+
+
+def decode_value(value):
     if not isinstance(value,dict) or value.get("format")!=FORMAT:
         raise ValueError("unsupported_bundle_format")
     try:
@@ -88,10 +92,19 @@ def decode(raw):
         raise ValueError("bundle_manifest_or_row_integrity_failure") from None
 
 
+def decode(raw):
+    return decode_value(parse_json(raw))
+
+
 def inspect(raw):
-    bundle=decode(raw)
+    value=parse_json(raw)
+    from shared.connector_portable_linkage import FORMAT as LINKED,inspect_portable
+    if isinstance(value,dict) and value.get('format')==LINKED:
+        return inspect_portable(value,raw)
+    bundle=decode_value(value)
     report={
         "format":"openworkgraph.connector-bundle-import-review.v1",
+        "bundle_kind":"ordinary",
         "file_sha256":sha256(raw).hexdigest(),
         "canonical_bundle_sha256":digest(bundle.model_dump()),
         "event_count":bundle.event_count,
