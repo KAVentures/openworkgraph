@@ -191,9 +191,19 @@ def test_interrupted_lease_recovery(monkeypatch):
     try:
         pending["lease_until"]=0
         rest._put(c,pending)
+        c.execute("UPDATE enterprise_ingestion_runs SET lease_until=0 WHERE run_id=?",[pending["run_id"]])
     finally:
         c.close()
     assert rest.inventory()["profiles"][0]["status"]=="interrupted"
+    from server import enterprise_routine_reconciliation as recovery
+    with pytest.raises(rest.FeedError,match="expired_routine_intent"):
+        run(p,lambda _:pytest.fail("unreconciled lease"))
+    target={"profile_id":p["profile_id"],"revision":p["revision"],"run_id":pending["run_id"]}
+    plan=recovery.preview(target)
+    receipt=recovery.apply({**target,"reviewed_at":plan["reviewed_at"],"plan_sha256":plan["plan_sha256"],
+        "confirm_exact_intent":True,"confirm_workers_reconciled":True,
+        "confirm_uncertain_remote_outcome":True,"confirm_disable_and_reauthorize":True})
+    p=rest.change(p["profile_id"],receipt["revision"],True)
     result=run(p,lambda _:page([event(p)]))
     assert result["events_added"]==1
 
