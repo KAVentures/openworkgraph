@@ -948,6 +948,71 @@
     const url=URL.createObjectURL(new Blob([JSON.stringify(coverageResult,null,2)],{type:'application/json'}));
     try{const a=el('a');a.href=url;a.download='owg-committed-window-coverage.json';a.click();}finally{URL.revokeObjectURL(url);}
   };
+  let exclusionProfiles=[],exclusionGeneration=0,exclusionBusy=false;
+  function exclusionReset(){
+    exclusionGeneration++;$('exclusionResults').replaceChildren();
+    $('exclusionPreview').disabled=exclusionBusy||!$('exclusionProfile').value||!$('exclusionCases').value.trim();
+  }
+  function exclusionLock(value){
+    exclusionBusy=value;$('exclusionRefresh').disabled=value;$('exclusionProfile').disabled=value;$('exclusionCases').disabled=value;
+    $('exclusionPreview').disabled=value||!$('exclusionProfile').value||!$('exclusionCases').value.trim();
+  }
+  $('exclusionProfile').onchange=exclusionReset;$('exclusionCases').oninput=exclusionReset;
+  async function exclusionLoad(){
+    if(exclusionBusy)return;exclusionReset();exclusionLock(true);
+    try{
+      const data=await api(base+'/case-exclusions');
+      exclusionProfiles=data.profiles.filter(p=>p.supported&&p.status!=='dataset_deleted'&&!p.integrity_hold&&!p.active_or_unreconciled_run);
+      const select=$('exclusionProfile');select.replaceChildren();
+      for(const p of exclusionProfiles){const opt=el('option',p.provider+' / '+p.profile_id+' · '+p.excluded_cases+' excluded · revision '+p.revision);opt.value=p.profile_id;select.append(opt);}
+      $('exclusionStatus').textContent='Select an eligible profile. Use exact native IDs; typed sources require their reviewed native type.';
+    }catch(error){exclusionProfiles=[];$('exclusionProfile').replaceChildren();$('exclusionStatus').textContent=error.message;}
+    finally{exclusionLock(false);}
+  }
+  $('exclusionRefresh').onclick=exclusionLoad;
+  $('exclusionPreview').onclick=async()=>{
+    if(exclusionBusy)return;exclusionReset();const turn=exclusionGeneration;
+    try{
+      const p=exclusionProfiles.find(x=>x.profile_id===$('exclusionProfile').value);
+      if(!p)throw Error('Load and select a profile.');
+      const cases=$('exclusionCases').value.split(/\r?\n/).filter(x=>x.length).map(x=>{
+        const parts=x.split('\t');if(parts.length===1)return {native_case_id:parts[0]};
+        if(parts.length===2)return {native_type:parts[0],native_case_id:parts[1]};
+        throw Error('Use an exact identifier or type and identifier separated by one tab.');
+      });
+      if(!cases.length||cases.length>100)throw Error('Select 1–100 cases.');
+      const payload={profile_id:p.profile_id,revision:p.revision,cases};
+      exclusionLock(true);
+      const plan=await api(base+'/case-exclusions/preview',payload);
+      if(turn!==exclusionGeneration)return;
+      const root=$('exclusionResults');
+      root.replaceChildren(el('h3','Exact prospective exclusion review'),
+        table(['Measure','Value'],[['Requested cases',plan.requested_cases],['Already excluded',plan.already_excluded_cases],['New exclusions',plan.new_exclusions],
+          ['Existing retained matches',plan.retained_matches],['Retained integrity',plan.retained_integrity_state],['Eligible',plan.eligible],['After apply',plan.total_exclusions_after_apply]]),
+        el('p','Plan SHA-256: '+plan.plan_sha256),el('p','This does not erase source records or existing copies. The feed will be disabled and must be separately reauthorized.'));
+      if(plan.eligible){
+        const exact=check('I reviewed these exact native case exclusions.');
+        const prospective=check('I understand these exclusions only prevent future retention in this profile, not source access or erasure.');
+        const dispatch=check('I will separately review enablement and recurring authorization.');
+        const apply=button('Apply prospective exclusions',async()=>{
+          if(exclusionBusy||turn!==exclusionGeneration||![exact,prospective,dispatch].every(x=>x.box.checked))return;
+          exclusionLock(true);apply.disabled=true;
+          try{
+            await api(base+'/case-exclusions/apply',{...payload,plan_sha256:plan.plan_sha256,
+              confirm_exact_exclusions:true,confirm_prospective_only:true,confirm_dispatch_reauthorization:true});
+            $('exclusionCases').value='';exclusionLock(false);await exclusionLoad();
+            $('exclusionStatus').textContent='Exclusions saved. Feed disabled; retained evidence unchanged. Reauthorize separately.';
+            if(!busy)await load();
+          }catch(error){exclusionReset();$('exclusionStatus').textContent=error.message;}
+          finally{exclusionLock(false);}
+        },true);
+        for(const x of [exact,prospective,dispatch])x.box.onchange=()=>apply.disabled=exclusionBusy||![exact,prospective,dispatch].every(y=>y.box.checked);
+        root.append(exact.node,prospective.node,dispatch.node,apply);
+      }else root.append(el('p','No changes authorized. Existing evidence, inconclusive integrity or an unchanged exclusion set blocks this operation.'));
+      $('exclusionStatus').textContent='Review complete. No provider reads or mutations.';
+    }catch(error){$('exclusionStatus').textContent=error.message;}
+    finally{exclusionLock(false);}
+  };
   $('refresh').onclick=load;
   $('freshness').oninput=()=>{generation++;latest=null;$('download').disabled=true;$('refresh').disabled=busy;$('inventory').replaceChildren();$('profiles').replaceChildren();$('status').textContent='Threshold changed. Refresh local inventory.';};
   $('download').onclick=async()=>{

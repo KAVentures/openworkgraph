@@ -232,6 +232,7 @@ def _public(p,now):
     out={k:p[k] for k in ("profile_id","revision","enabled","created_at","status","log_id",
                            "checkpoint","last_success_at","last_attempt_at","last_result","retry_not_before")}
     out["integrity_hold"] = p.get("integrity_hold")
+    out["excluded_case_count"] = len(p.get("excluded_case_keys", []))
     out["config"] = p["config"]
     out["provider"] = p.get("provider", "rest")
     out["adapter_capabilities"]=capabilities(out["provider"]) if out["provider"] in PROVIDERS else None
@@ -371,6 +372,7 @@ def forget_dataset(conn,log_id):
             from . import enterprise_ingestion_coverage as coverage
             coverage.erase(conn,p["profile_id"])
             p.pop("integrity_hold",None)
+            p.pop("excluded_case_keys",None)
             p.update(enabled=False,status="dataset_deleted",revision=p["revision"]+1,run_id=None,lease_until=0,
                      log_id=None,checkpoint=None,last_result=None,last_success_at=None,
                      source_schema_sha256=None)
@@ -551,7 +553,10 @@ def _extract(p,since,until,client_factory):
 
 
 def _retain(p,rows,counts,until):
+    from . import enterprise_case_exclusions as exclusions
+    rows,excluded=exclusions.filter_rows(p,rows)
     counts=dict(counts)
+    counts["excluded_case_events_in_window"]=excluded
     principal_pin=counts.pop("_slack_principal_pin",None)
     stream=StringIO(newline="")
     writer=csv.writer(stream,lineterminator="\n")

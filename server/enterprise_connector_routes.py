@@ -336,3 +336,25 @@ async def coverage_review(request:Request):
     require(request)
     body=await _json_body(request,"Committed request window review",strict=True,limit=8192)
     return await call(request,coverage.review,body)
+
+
+@router.get("/v1/enterprise-connectors/case-exclusions")
+async def case_exclusion_inventory(request:Request):
+    from . import enterprise_case_exclusions as exclusions
+    return await call(request,exclusions.inventory)
+
+
+@router.post("/v1/enterprise-connectors/case-exclusions/preview")
+async def case_exclusion_preview(request:Request):
+    from . import enterprise_case_exclusions as exclusions
+    require(request)
+    body=await _json_body(request,"Prospective native case exclusion review",strict=True,limit=65536)
+    return await call(request,exclusions.preview,body)
+
+
+@router.post("/v1/enterprise-connectors/case-exclusions/apply")
+async def case_exclusion_apply(request:Request):
+    from . import enterprise_case_exclusions as exclusions
+    require(request)
+    body=await _json_body(request,"Reviewed prospective native case exclusions",strict=True,limit=65536)
+    return await call(request,exclusions.apply,body)
