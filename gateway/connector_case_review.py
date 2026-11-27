@@ -196,21 +196,25 @@ class ReviewedCases:
             raise JobError("explicit_link_assertion_and_export_required",403)
         with self.jobs._tx(org) as c:
             loaded=self._read(c,org,spec)
-            assigned,report=self._compute(org,spec,loaded)
-            if report["review_sha256"]!=spec.expected_review_sha256:
-                raise JobError("cross_source_review_changed")
-            cases,manifests,providers,count,scope,expires=loaded
-            from shared.connector_case_projection import project_rows
-            rows=project_rows(spec,loaded,assigned)
-            self._fresh(expires)
-            self._audit(c,org,spec,principal,"export",{"review_sha256":report["review_sha256"],
-                        "export_events":len(rows),"linked_groups":len(spec.groups)})
-            return {**report,"events":rows,"event_count":len(rows),
-                    "mapping":{"event_id_column":"event_id","case_column":"case_id","activity_column":"activity",
-                               "timestamp_column":"observed_at","source_namespace_column":"source_namespace",
-                               "case_namespace":"reviewed_"+report["review_sha256"][:24]},
-                    "new_log_required_for_changed_plan":True,"source_activity_labels_namespaced":True,
-                    "local_copies_not_revoked_by_gateway_expiry":True}
+            return self._export_loaded(c,org,spec,principal,loaded)
+
+    def _export_loaded(self,c,org,spec,principal,loaded):
+        """Export under the caller's existing organization transaction."""
+        assigned,report=self._compute(org,spec,loaded)
+        if report["review_sha256"]!=spec.expected_review_sha256:
+            raise JobError("cross_source_review_changed")
+        cases,manifests,providers,count,scope,expires=loaded
+        from shared.connector_case_projection import project_rows
+        rows=project_rows(spec,loaded,assigned)
+        self._fresh(expires)
+        self._audit(c,org,spec,principal,"export",{"review_sha256":report["review_sha256"],
+                    "export_events":len(rows),"linked_groups":len(spec.groups)})
+        return {**report,"events":rows,"event_count":len(rows),
+                "mapping":{"event_id_column":"event_id","case_column":"case_id","activity_column":"activity",
+                           "timestamp_column":"observed_at","source_namespace_column":"source_namespace",
+                           "case_namespace":"reviewed_"+report["review_sha256"][:24]},
+                "new_log_required_for_changed_plan":True,"source_activity_labels_namespaced":True,
+                "local_copies_not_revoked_by_gateway_expiry":True}
 
 
 def linked_csv(bundle):
