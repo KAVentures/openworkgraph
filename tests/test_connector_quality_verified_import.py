@@ -190,3 +190,31 @@ def test_linked_quality_exact_pins_org_and_expiry_required(linked):
         inspect(raw({**package,"quality_review":wrong}))
     with pytest.raises(JobError,match="invalid_bundle_json"):
         portable(reviewed,spec,quality_review_json='{"format":"x","format":"y"}',confirm_quality_gated_export=True)
+
+
+def test_live_quality_console_report_roundtrips_into_both_export_paths(linked):
+    """Use the actual Gateway report rather than a synthetic offline report."""
+    from gateway.connector_publication_quality import Review, LinkedExport, review, linked_export
+    reviewed,spec,_,_=linked
+    quality_spec={"snapshots":spec["snapshots"],"policy":{"min_events":1,"min_cases":1},
+                  "confirm_inspection":True}
+    quality=review(reviewed.publications,"customer",Review.model_validate(quality_spec),"owner")
+    assert quality["all_selected_sources_pass"]
+    report=reviewed.preview("customer",Plan.model_validate(spec),"owner")
+    direct=linked_export(reviewed,"customer",LinkedExport.model_validate({
+        **spec,"expected_review_sha256":report["review_sha256"],
+        "confirm_link_assertions":True,"confirm_export":True,"quality":quality_spec,
+        "expected_quality_sha256":quality["quality_sha256"],
+        "confirm_quality_gated_export":True}),"owner")
+    package=portable(reviewed,spec,quality_review_json=json.dumps(quality),
+                     confirm_quality_gated_export=True)
+    projection,preview=inspect(raw(package))
+    assert direct["quality_review"]==package["quality_review"]==quality
+    assert [r.model_dump() for r in projection.events]==direct["events"]
+    assert projection.mapping==direct["mapping"]
+    assert preview["quality_report_recomputed"]
+    data,args=retain_args(package)
+    result=importer.retain(data,**{**args,"confirm_quality_review":True})
+    assert result["log"]["events"]==direct["event_count"]
+    assert result["receipt"]["quality_sha256"]==quality["quality_sha256"]
+    assert result["receipt"]["review_sha256"]==report["review_sha256"]
