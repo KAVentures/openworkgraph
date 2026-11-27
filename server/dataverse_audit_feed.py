@@ -24,7 +24,7 @@ CATALOG="OWG_DATAVERSE_CATALOG"
 PATH="/api/data/v9.2/"
 FIELDS="auditid,_objectid_value,objecttypecode,createdon,operation,action,_userid_value"
 # Audit operation codes, not inferred business outcomes.
-OPS={1:"create",2:"update",3:"delete",5:"upsert",6:"archive",7:"retain",8:"rollback_retain",9:"restore"}
+OPS={1:"create",2:"update",3:"delete",5:"upsert",115:"archive",116:"retain",117:"rollback_retain",118:"restore"}
 
 
 def guid(value):
@@ -73,7 +73,7 @@ class Create(rest.Strict):
     source_alias:str=Field(pattern=r"^[a-z][a-z0-9_]{0,39}$")
     source_sha256:str=Field(pattern=r"^[a-f0-9]{64}$")
     selections:list[Selection]=Field(min_length=1,max_length=10)
-    operations:list[Literal[1,2,3,5,6,7,8,9]]=Field(default_factory=lambda:[1,2,3],min_length=1,max_length=8)
+    operations:list[Literal[1,2,3,5,115,116,117,118]]=Field(default_factory=lambda:[1,2,3],min_length=1,max_length=8)
     initial_since:str=Field(min_length=20,max_length=40)
     window_hours:StrictInt=Field(ge=1,le=168,default=24)
     overlap_minutes:StrictInt=Field(ge=0,le=1440,default=60)
