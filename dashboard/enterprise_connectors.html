@@ -1,0 +1,363 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer"><title>Enterprise connectors · OpenWorkGraph</title>
+<style>
+:root{color-scheme:light dark;--border:light-dark(#a6b1a9,#657970);--panel:light-dark(#fff,#23352a);--bg:light-dark(#f3f6f3,#17251c);--text:light-dark(#203029,#e9efe8);--accent:light-dark(#255e48,#b7ebc6)}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:16px/1.5 system-ui,sans-serif}
+header,main{max-width:1180px;margin:auto;padding:16px}h1{font-size:clamp(1.5rem,3vw,2.1rem)}h2{font-size:1.2rem}a{color:var(--accent)}
+section{background:var(--panel);border:1px solid var(--border);padding:16px;border-radius:10px;margin-bottom:16px;min-width:0}
+label{display:block;font-weight:600;min-width:0}input:not([type=checkbox]),select{display:block;max-width:100%;width:100%;font:inherit;margin:5px 0;padding:8px}
+button{font:inherit;font-weight:600;padding:9px 14px;min-height:42px;border:1px solid var(--accent);border-radius:7px;cursor:pointer}button:disabled{opacity:.65;cursor:default}
+:focus-visible{outline:3px solid #4179ca;outline-offset:3px}.row{display:flex;flex-wrap:wrap;gap:12px;align-items:center;margin-top:12px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,240px),1fr));gap:12px}
+.tablewrap{overflow-x:auto;border:1px solid var(--border);border-radius:6px;max-width:100%}table{width:100%;border-collapse:collapse;min-width:760px}
+th,td{text-align:left;vertical-align:top;padding:8px;border-bottom:1px solid var(--border);overflow-wrap:anywhere;max-width:280px}
+p{overflow-wrap:anywhere;max-width:94ch}.profile{border:1px solid var(--border);padding:12px;border-radius:8px;margin:12px 0}
+[hidden]{display:none!important}
+</style><script src="/enterprise-connectors.js" defer></script></head><body>
+<header><a href="/">Back to OpenWorkGraph</a> · <a href="/enterprise-bundle-import">Import published connector evidence</a><h1>Enterprise connector operations</h1><p>Review local grants, retained sources and scheduled ingestion separately. Opening this page does not contact business systems or renew credentials.</p></header>
+<main><section aria-labelledby="healthHeading"><h2 id="healthHeading">Connector inventory and worklist</h2>
+<div class="grid"><label>Flag last success or checkpoint older than (hours)<input id="freshness" type="number" min="1" max="720" step="1" value="24"></label></div>
+<div class="row"><button id="refresh" type="button">Refresh local inventory</button><button id="download" type="button" disabled>Recheck and download inventory JSON</button></div>
+<p role="status" id="status">Open from the authenticated local dashboard.</p><div id="inventory"></div></section>
+<section aria-labelledby="routineReconcileHeading"><h2 id="routineReconcileHeading">Expired routine ingestion recovery</h2>
+<p>Inspect interrupted routine leases before allowing another run. Reconciliation preserves retained evidence and checkpoints, records an uncertain remote outcome, and disables the feed with a new revision. It cannot recall a previously dispatched provider read.</p>
+<button id="routineRefresh" type="button">Load routine intents</button><p id="routineStatus" role="status">No provider read performed.</p><div id="routineIntents"></div><div id="routineReview"></div></section>
+<section aria-labelledby="catchupHeading"><h2 id="catchupHeading">Reviewed catch-up queue</h2>
+<p>Preview up to twenty profiles and their exact next advancing windows. Execute one reviewed window at a time; no automatic dispatch or schedule changes. Reviews expire after ten minutes and any intervening profile change invalidates them.</p>
+<div class="row"><button id="catchupRefresh" type="button">Load profiles</button><button id="catchupPreview" type="button" disabled>Review next windows</button></div><p id="catchupStatus" role="status">No provider read performed.</p><div id="catchupTargets"></div><div id="catchupResults"></div></section>
+<section aria-labelledby="slaHeading"><h2 id="slaHeading">Ingestion service levels and alert inbox</h2>
+<p>Opt in to recurring local monitoring of committed success age, checkpoint age, consecutive failures, expired local intents, integrity holds, historical recovery failures and unknown prior request coverage. No provider reads, notifications or execution authorization. Unknown observations are not recovery.</p>
+<div class="row"><button id="slaRefresh" type="button">Load monitoring policies</button><button id="slaEvaluate" type="button" disabled>Evaluate enabled policies now</button></div>
+<p role="status" id="slaStatus">Load local policies to begin.</p>
+<form id="slaForm"><div class="grid"><label>Profile<select id="slaProfile" required></select></label>
+<label>Evaluation interval (minutes)<input id="slaInterval" type="number" min="5" max="1440" value="15" required></label>
+<label>Maximum success age (hours, blank disables)<input id="slaSuccess" type="number" min="1" max="720" value="24"></label>
+<label>Maximum checkpoint age (hours, blank disables)<input id="slaCheckpoint" type="number" min="1" max="8760" value="48"></label>
+<label>Consecutive failures (blank disables)<input id="slaFailures" type="number" min="1" max="20" value="3"></label><label>Historical failure streak (blank disables)<input id="slaHistoricalFailures" type="number" min="1" max="20"></label><label>Unknown prior coverage hours (blank disables)<input id="slaUnknownHours" type="number" min="1" max="8784"></label><label>Coverage lookback (days)<input id="slaLookback" type="number" min="1" max="366" value="30" required></label></div>
+<label><input id="slaExpired" type="checkbox" checked> Watch expired local intents</label>
+<label><input id="slaHold" type="checkbox" checked> Watch integrity holds</label>
+<label><input id="slaEnabled" type="checkbox" checked> Enable local recurring monitoring</label>
+<label><input id="slaConfirm" type="checkbox" required> I approve this local policy for the selected profile, including subsequent profile revisions. Replacing the policy supersedes previous active alerts.</label>
+<button id="slaSave" type="submit" disabled>Save reviewed policy</button></form>
+<div id="slaResults"></div></section>
+<section aria-labelledby="exclusionHeading"><h2 id="exclusionHeading">Prospective case exclusions</h2>
+<p>Prevent future local retention of selected native cases. Existing retained evidence is not erased; a case already in the dataset cannot be excluded using this workflow. Provider requests may still return these cases transiently. Existing publications, backups and other profiles are unaffected.</p>
+<div class="row"><button id="exclusionRefresh" type="button">Load eligible profiles</button><button id="exclusionPreview" type="button" disabled>Review exclusions</button></div>
+<label>Retained profile<select id="exclusionProfile"></select></label>
+<label>Native identifiers, one per line (optional native type followed by tab and ID)<textarea id="exclusionCases" rows="6" maxlength="30000" autocomplete="off" spellcheck="false"></textarea></label>
+<p id="exclusionStatus" role="status">No provider read is performed.</p><div id="exclusionResults"></div></section>
+<section aria-labelledby="coverageHeading"><h2 id="coverageHeading">Committed ingestion coverage and backlog</h2>
+<p>Review the exact union of locally committed ingestion request windows. Unknown prior coverage is not a proven gap in source events. The clock-based backlog estimate is not a provider availability or completion forecast.</p>
+<div class="row"><button id="coverageRefresh" type="button">Load profiles</button><button id="coverageReview" type="button" disabled>Review selected range</button><button id="coverageExport" type="button" disabled>Download reviewed coverage</button></div>
+<div class="grid"><label>From (ISO UTC)<input id="coverageSince" required maxlength="64"></label><label>Until (ISO UTC)<input id="coverageUntil" required maxlength="64"></label></div>
+<p role="status" id="coverageStatus">Load profiles to begin.</p><div id="coverageTargets"></div><div id="coverageResults"></div></section>
+<section aria-labelledby="integrityHeading"><h2 id="integrityHeading">Retained evidence integrity and containment</h2>
+<p>Inspect the local retained source-key index, event and case shape, and row-count consistency. Select up to five profiles. Holds disable future local ingestion and invalidate revision pins; no retained data is removed. Release requires a new clean structural review and leaves feeds disabled. Existing remote copies are not withdrawn.</p>
+<div class="row"><button id="integrityRefresh" type="button">Load retained profiles</button><button id="integrityPreview" type="button" disabled>Review selected profiles</button></div>
+<label>Review action<select id="integrityAction"><option value="hold">Inspect and optionally hold affected feeds</option><option value="release">Inspect and optionally release repaired feeds</option></select></label>
+<p id="integrityStatus" role="status">Load profiles to begin.</p><div id="integrityTargets"></div><div id="integrityResults"></div></section>
+<section aria-labelledby="onboardingHeading"><h2 id="onboardingHeading">Source onboarding and configuration drift</h2>
+<p>Inspect deployment-approved sources before creating a feed. Checks only local catalog definitions, credential format and existing profile bindings. No provider authentication, source database connection or job dispatch is performed.</p>
+<div class="row"><button id="onboardingRefresh" type="button">Inspect local source readiness</button><button id="onboardingExport" type="button" disabled>Download fresh counts-only support report</button></div>
+<p role="status" id="onboardingStatus">Inspect approved sources and profile bindings.</p>
+<div class="grid"><label>Provider<select id="onboardingProvider"><option value="">All providers</option></select></label>
+<label>Source review<select id="onboardingFilter"><option value="">All approved sources</option><option value="ready">Locally available, not configured</option><option value="blocked">Blocked credentials</option><option value="drift">Definition drift</option><option value="shared">Shared credential reference</option></select></label></div>
+<div id="onboardingSummary"></div><div id="onboardingResults"></div></section>
+<section aria-labelledby="runHistoryHeading"><h2 id="runHistoryHeading">Ingestion run history</h2>
+<p>Review admitted local source reads, committed checkpoint changes, failures and expired run intents. Opening this workspace does not contact providers. Pre-upgrade runs and refused dispatches before admission are not reconstructed.</p>
+<div class="grid"><label>Profile ID (optional)<input id="historyProfile" maxlength="29" placeholder="All retained feeds"></label>
+<label>Lookback days<input id="historyDays" type="number" min="1" max="90" value="30"></label>
+<label>Outcome<select id="historyState"><option value="">All outcomes</option><option value="succeeded">Succeeded</option><option value="failed">Failed</option><option value="running">Running</option><option value="interrupted">Interrupted</option><option value="invalidated">Invalidated</option></select></label>
+<label>Maximum returned rows<input id="historyLimit" type="number" min="1" max="1000" value="200"></label></div>
+<div class="row"><button id="historyRefresh" type="button">Load run history</button><button id="historyDownload" type="button" disabled>Recheck and download history</button></div>
+<p role="status" id="historyStatus">Load the retained run journal to begin.</p><div id="historyResults"></div></section>
+<section aria-labelledby="tuningHeading"><h2 id="tuningHeading">Reviewed ingestion tuning</h2>
+<p>Adjust existing feed windows, overlap, lag and page sizes without recreating retained datasets. Preview exact changes across selected feeds before applying. No provider reads. Old recurring authorizations will not follow the new revision. Already published copies are not withdrawn.</p>
+<div class="row"><button id="tuningRefresh" type="button">Load tuning workspace</button><button id="tuningPreview" type="button" disabled>Preview selected changes</button></div>
+<p id="tuningStatus" role="status">Load the local profiles to begin.</p><div id="tuningProfiles"></div><div id="tuningPlan"></div><div id="tuningHistory"></div></section>
+<section aria-labelledby="restHeading"><h2 id="restHeading">Enterprise event feeds</h2>
+<p>For a customer API that implements OWG's event-feed contract. Configure its exact HTTPS endpoint in the deployment allowlist and supply its read-only bearer in a named environment variable. Nothing is read until separately confirmed. All source event, case and resource identifiers are pseudonymized; activity labels are retained as entered by the source.</p>
+<details><summary>Create a feed</summary><form id="create">
+<div class="grid"><label>Profile name<input id="name" maxlength="100" required></label>
+<label>Allowlisted fixed HTTPS endpoint<input id="endpoint" type="url" maxlength="500" required placeholder="https://api.example.com/events"></label>
+<label>Credential environment variable<input id="credential" maxlength="64" required placeholder="OWG_REST_TOKEN_EXAMPLE"></label>
+<label>First change-window start (ISO 8601 UTC)<input id="since" required placeholder="2026-11-01T00:00:00Z"></label>
+<label>Event ID field<input id="eventId" value="event_id" required maxlength="80"></label>
+<label>Case ID field<input id="caseId" value="case_id" required maxlength="80"></label>
+<label>Activity label field<input id="activity" value="activity" required maxlength="80"></label>
+<label>Event time field<input id="eventTime" value="event_time" required maxlength="80"></label>
+<label>Change time field<input id="changeTime" value="updated_at" required maxlength="80"></label>
+<label>Optional resource ID field<input id="resource" maxlength="80"></label>
+<label>Advancing window (hours)<input id="window" type="number" min="1" max="168" step="1" value="24" required></label>
+<label>Late-change overlap (minutes)<input id="overlap" type="number" min="0" max="1440" step="1" value="60" required></label>
+<label>Maximum records per page<input id="pageSize" type="number" min="1" max="500" value="200" required></label></div>
+<p><label><input id="confirmConfig" type="checkbox" required> I reviewed the exact endpoint, credential reference, mapping and bounded windows.</label></p>
+<p><label><input id="confirmLabels" type="checkbox" required> I approve retention of the selected source's activity labels in the local log.</label></p>
+<button type="submit" id="createButton">Save feed configuration</button></form></details>
+<details><summary>Create native Google Workspace audit feed</summary>
+<p>Connect Google Workspace audit in the main dashboard's Business system sign-in first. The Google Admin SDK Reports API must be enabled for your registered app. This connector reads audit event metadata, not mail, chat or document contents.</p>
+<form id="googleCreate"><div class="grid">
+<label>Profile name<input id="googleName" maxlength="100" required></label>
+<label>Stored Google sign-in<select id="googleConnection" required></select></label>
+<label>Exact Google Workspace customer ID<input id="googleCustomer" required maxlength="64" placeholder="C012abc34"></label>
+<label>Report user scope<input id="googleUser" required maxlength="64" placeholder="Exact numeric profile ID or all"></label>
+<label>Audit application<select id="googleApplication"><option value="drive">Drive</option><option value="calendar">Calendar</option><option value="admin">Admin console</option><option value="login">Login</option><option value="gmail">Gmail audit</option><option value="chat">Chat audit</option><option value="meet">Meet audit</option></select></label>
+<label>Declared case notion<select id="googleCase"><option value="actor">Pseudonymous actor</option><option value="audit_record">Audit record</option><option value="drive_document">Exact Drive document (Drive only)</option></select></label>
+<label>First audit window start (ISO 8601 UTC)<input id="googleSince" required placeholder="2026-11-01T00:00:00Z"></label>
+<label>Advancing window (hours)<input id="googleWindow" type="number" min="1" max="168" value="24" required></label>
+<label>Late-arrival overlap (minutes)<input id="googleOverlap" type="number" min="0" max="1440" value="60" required></label>
+<label>Reporting lag (minutes)<input id="googleLag" type="number" min="0" max="1440" value="60" required></label>
+<label>Maximum records per page<input id="googlePage" type="number" min="1" max="500" value="200" required></label></div>
+<p><label><input id="googleConfirm" type="checkbox" required> I reviewed the exact customer, sign-in, application and user scope.</label></p>
+<p><label><input id="googleRetention" type="checkbox" required> I approve retention of pseudonymous audit event identifiers, event labels and timestamps locally.</label></p>
+<p><label><input id="googleDomain" type="checkbox"> I separately authorize domain-wide audit reads if scope is all.</label></p>
+<p><label><input id="googleParameters" type="checkbox"> For Drive document cases, I approve transient retrieval of ordinary string event parameters; only exact document IDs are used.</label></p>
+<button id="googleCreateButton" type="submit">Save Google audit profile</button></form></details>
+<details><summary>Create native SQL event feed</summary>
+<p>Choose a deployment-approved SQL source. Your administrator defines its exact relation and columns in the local source catalog. No arbitrary SQL, passwords, database paths or connection strings are entered here. PostgreSQL uses a verified TLS connection and read-only snapshot. SQLite reads a strict local table in read-only mode.</p>
+<form id="sqlCreate"><div class="grid">
+<label>Profile name<input id="sqlName" maxlength="100" required></label>
+<label>Approved SQL source<select id="sqlSource" required disabled></select></label>
+<label>First change-window start (ISO 8601 UTC)<input id="sqlSince" required placeholder="2026-11-01T00:00:00Z"></label>
+<label>Advancing window (hours)<input id="sqlWindow" type="number" min="1" max="168" value="24" required></label>
+<label>Late-change overlap (minutes)<input id="sqlOverlap" type="number" min="0" max="1440" value="60" required></label>
+<label>Records per batch<input id="sqlPage" type="number" min="1" max="500" value="500" required></label></div>
+<div id="sqlSourceReview" aria-live="polite"></div>
+<p><label><input id="sqlConfirm" type="checkbox" required> I reviewed the exact approved source, mapped columns and time-window settings.</label></p>
+<p><label><input id="sqlRetention" type="checkbox" required> I approve retention of the selected activity labels, pseudonymous identifiers and timestamps locally.</label></p>
+<button id="sqlCreateButton" type="submit" disabled>Save SQL feed configuration</button></form></details>
+<details><summary>Create native Slack feed</summary>
+<p>Choose either Enterprise Audit Logs (organization-owner user token with auditlogs:read) or one explicitly approved, non-shared channel (member token with the appropriate channel read/history permissions). The deployment provides a dedicated token environment variable. Message content may be returned transiently by Slack's history API; only activity metadata is retained. Direct messages, externally shared channels and thread-reply traversal are excluded.</p>
+<form id="slackCreate"><div class="grid">
+<label>Profile name<input id="slackName" maxlength="100" required></label>
+<label>Native Slack source<select id="slackMode"><option value="enterprise_audit">Enterprise audit events</option><option value="channel_activity">Selected channel activity</option></select></label>
+<label>Token environment variable<input id="slackEnv" required maxlength="70" placeholder="OWG_SLACK_TOKEN_AUDIT"></label>
+<label>Exact enterprise ID<input id="slackEnterprise" maxlength="64" placeholder="E123ABC"></label>
+<label>Exact workspace ID (channel only)<input id="slackTeam" maxlength="64" placeholder="T123ABC"></label>
+<label>Exact channel ID (channel only)<input id="slackChannel" maxlength="64" placeholder="C123ABC"></label>
+<label>Case grouping<select id="slackCase"><option value="actor">Audit actor</option><option value="entity">Audit entity</option><option value="location">Audit location</option></select></label>
+<label>Audit action filters (optional, comma separated)<input id="slackActions" maxlength="3000" placeholder="user_login,file_uploaded"></label>
+<label>Audit actor ID (optional)<input id="slackActor" maxlength="64" placeholder="U123ABC"></label>
+<label>First event window start (ISO 8601 UTC)<input id="slackSince" required placeholder="2026-11-01T00:00:00Z"></label>
+<label>Advancing window (hours)<input id="slackWindow" type="number" min="1" max="168" value="24" required></label>
+<label>Late-arrival overlap (minutes)<input id="slackOverlap" type="number" min="0" max="1440" value="60" required></label>
+<label>Reporting lag (minutes)<input id="slackLag" type="number" min="0" max="1440" value="15" required></label>
+<label>Maximum page records<input id="slackPage" type="number" min="1" max="500" value="100" required></label>
+</div>
+<p><label><input id="slackConfirm" type="checkbox" required> I reviewed the exact credential reference, organization/workspace and selected scope.</label></p>
+<p><label><input id="slackRetention" type="checkbox" required> I authorize local retention of pseudonymous activity identities, event labels and timestamps.</label></p>
+<p><label><input id="slackOrg" type="checkbox"> I separately authorize organization-wide Enterprise audit reads if selected.</label></p>
+<p><label><input id="slackTransient" type="checkbox"> I separately authorize transient retrieval of message payloads for the selected channel; message content will not be retained.</label></p>
+<button id="slackCreateButton" type="submit">Save Slack profile</button></form></details>
+<details><summary>Create native Salesforce CRM history feed</summary>
+<p>Use an approved Salesforce API and identity-scoped OAuth sign-in with a read-only integration user. Select tracked field names and optional exact CRM record IDs. This connector requests field-change metadata, not old/new values or record contents. An empty record list requires separate unrestricted-record approval.</p>
+<form id="sfCreate"><div class="grid">
+<label>Profile name<input id="sfName" required maxlength="100"></label>
+<label>Salesforce OAuth connection<select id="sfConnection" required></select></label>
+<label>Exact API instance host<input id="sfHost" required maxlength="253" placeholder="customer.my.salesforce.com"></label>
+<label>Salesforce organization ID<input id="sfOrg" required maxlength="18"></label>
+<label>Integration user ID<input id="sfUser" required maxlength="18"></label>
+<label>First history window (whole-second ISO UTC)<input id="sfSince" required placeholder="2026-11-01T00:00:00Z"></label>
+<label>Window (hours)<input id="sfWindow" type="number" min="1" max="168" value="24" required></label>
+<label>Overlap (minutes)<input id="sfOverlap" type="number" min="0" max="1440" value="60" required></label>
+<label>Reporting lag (minutes)<input id="sfLag" type="number" min="0" max="1440" value="15" required></label>
+<label>Requested page size<input id="sfPage" type="number" min="200" max="2000" value="200" required></label></div>
+<div id="sfSelections"></div>
+<p><label><input id="sfConfirm" type="checkbox" required> I reviewed this exact OAuth connection, instance, organization, integration user, objects and record scopes.</label></p>
+<p><label><input id="sfLabels" type="checkbox" required> I approve retention of selected field-change labels, pseudonymous identities and timestamps.</label></p>
+<p><label><input id="sfIdentity" type="checkbox" required> I approve transient identity metadata readback to verify the integration user and organization.</label></p>
+<p><label><input id="sfAll" type="checkbox"> I separately authorize reads across all visible records for any selected object without a record-ID restriction.</label></p>
+<button id="sfCreateButton" type="submit" disabled>Save Salesforce profile</button></form></details>
+<details><summary>Create native Zendesk ticket audit feed</summary>
+<p>Choose up to four exact ticket IDs and the approved audit fields. Zendesk may return transient ticket comments, identity metadata and other audit payloads; only selected status, priority, type and assignment-action labels with pseudonymous identities and timestamps are retained. The bounded reader repeats each ticket scan and verifies the configured agent identity. Large audit histories may exceed the read budget.</p>
+<form id="zdCreate"><div class="grid">
+<label>Profile name<input id="zdName" required maxlength="100"></label>
+<label>Zendesk OAuth connection<select id="zdConnection" required></select></label>
+<label>Exact tenant host<input id="zdHost" required maxlength="80" placeholder="customer.zendesk.com"></label>
+<label>Integration agent numeric ID<input id="zdPrincipal" required maxlength="18"></label>
+<label>Selected ticket IDs (comma-separated, maximum four)<input id="zdTickets" required maxlength="80"></label>
+<label>First history window (ISO UTC)<input id="zdSince" required placeholder="2026-11-01T00:00:00Z"></label>
+<label>Window (hours)<input id="zdWindow" type="number" min="1" max="168" value="24" required></label>
+<label>Overlap (minutes)<input id="zdOverlap" type="number" min="0" max="1440" value="60" required></label>
+<label>Reporting lag (minutes)<input id="zdLag" type="number" min="0" max="1440" value="15" required></label></div>
+<fieldset><legend>Approved fields</legend><label><input id="zdFieldstatus" type="checkbox" checked> Status</label><label><input id="zdFieldpriority" type="checkbox"> Priority</label><label><input id="zdFieldtype" type="checkbox"> Ticket type</label><label><input id="zdFieldassignee_id" type="checkbox"> Assignment set / cleared</label><label><input id="zdFieldgroup_id" type="checkbox"> Group set / cleared</label></fieldset>
+<label><input id="zdConfirm" type="checkbox" required> I reviewed the exact tenant, connection, agent and selected tickets.</label>
+<label><input id="zdTransient" type="checkbox" required> I authorize transient full ticket audit and agent identity payload reads.</label>
+<label><input id="zdRetention" type="checkbox" required> I approve retention of selected activity labels, pseudonymous identities and timestamps.</label>
+<button id="zdCreateButton" type="submit" disabled>Save Zendesk profile</button></form></details>
+<details><summary>Create native ServiceNow operations feed</summary>
+<p>Choose exact tables, tracked field names, optional creation events and record IDs. The integration account must be configured for UTC. Source reads use fixed Table API projections; field values, descriptions, usernames and approval decisions are not retained. The stricter repeat-read option checks whether the same projected records are returned twice within one bounded window.</p>
+<form id="snCreate"><div class="grid">
+<label>Profile name<input id="snName" required maxlength="100"></label>
+<label>ServiceNow OAuth connection<select id="snConnection" required></select></label>
+<label>Exact instance host<input id="snHost" required maxlength="253" placeholder="customer.service-now.com"></label>
+<label>First history window (whole-second ISO UTC)<input id="snSince" required placeholder="2026-11-01T00:00:00Z"></label>
+<label>Window (hours)<input id="snWindow" type="number" min="1" max="168" value="24" required></label>
+<label>Overlap (minutes)<input id="snOverlap" type="number" min="0" max="1440" value="60" required></label>
+<label>Reporting lag (minutes)<input id="snLag" type="number" min="0" max="1440" value="15" required></label>
+<label>Requested page size<input id="snPage" type="number" min="1" max="500" value="200" required></label></div>
+<div id="snSelections"></div>
+<p><label><input id="snRepeat" type="checkbox" checked> Require a matching repeat read for every selected stream (uses additional page budget).</label></p>
+<p><label><input id="snConfirm" type="checkbox" required> I reviewed this exact stored sign-in, instance, tables, fields and record scopes.</label></p>
+<p><label><input id="snUTC" type="checkbox" required> I verified that this integration account uses UTC for Table API query boundaries.</label></p>
+<p><label><input id="snAudit" type="checkbox"> I approve retention of selected audit field-change labels and pseudonymous identities.</label></p>
+<p><label><input id="snCreation" type="checkbox"> I separately approve retention of record-creation events for selected tables.</label></p>
+<p><label><input id="snAll" type="checkbox"> I separately approve unrestricted visible records for any selected table without a record-ID restriction.</label></p>
+<button id="snCreateButton" type="submit" disabled>Save ServiceNow profile</button></form></details>
+<details><summary>Create native SAP procurement feed</summary>
+<p>Choose a deployment-approved SAP OData V2 source, exact purchase orders and evidence streams. The dates are day-level business dates represented at midnight UTC for storage, not actual execution times. Material and invoice header reads may receive unselected references transiently; only selected purchase-order events are retained.</p>
+<form id="sapCreate"><div class="grid">
+<label>Profile name<input id="sapName" required maxlength="100"></label>
+<label>Approved SAP source<select id="sapSource" required></select></label>
+<label>Exact purchase order numbers (comma separated)<input id="sapOrders" required maxlength="1100"></label>
+<label>Initial date (UTC midnight)<input id="sapSince" type="date" required></label>
+<label>Window (days)<input id="sapWindow" type="number" min="1" max="7" value="1" required></label>
+<label>Overlap (days)<input id="sapOverlap" type="number" min="0" max="1" value="0" required></label>
+<label>Completed-day lag (days)<input id="sapLag" type="number" min="0" max="7" value="1" required></label>
+<label>Accepted maximum provider page size<input id="sapPage" type="number" min="1" max="500" value="500" required></label>
+</div><div id="sapReview"></div><fieldset><legend>Native streams</legend>
+<label><input id="sapPO" type="checkbox"> Purchase-order creation day</label>
+<label><input id="sapMovement" type="checkbox"> PO-referenced material movement posting day</label>
+<label><input id="sapInvoice" type="checkbox"> PO-referenced supplier invoice posting day</label>
+</fieldset>
+<p><label><input id="sapConfirm" type="checkbox" required> I reviewed the exact deployment source, SAP client, metadata pins, selected order numbers and streams.</label></p>
+<p><label><input id="sapPrecision" type="checkbox" required> I understand that these are day-level dates and cannot establish within-day timing or ordering.</label></p>
+<p><label><input id="sapRetention" type="checkbox" required> I approve retention of the selected pseudonymous PO case events.</label></p>
+<p><label><input id="sapTransient" type="checkbox"> I separately approve transient read of unrelated PO references in material and invoice headers during each selected date window.</label></p>
+<button id="sapCreateButton" type="submit" disabled>Save SAP profile</button></form></details>
+<details><summary>Create native Dynamics 365 / Dataverse audit feed</summary>
+<p>Choose a deployment-approved Dataverse environment and application user. Select audited tables and operation codes. Only audit metadata is retained, not changed field values or CRM record contents.</p>
+<form id="dvCreate"><div class="grid">
+<label>Profile name<input id="dvName" required maxlength="100"></label>
+<label>Approved Dataverse source<select id="dvSource" required></select></label>
+<label>First history timestamp (ISO UTC)<input id="dvSince" required placeholder="2026-11-01T00:00:00Z"></label>
+<label>Window (hours)<input id="dvWindow" type="number" min="1" max="168" value="24" required></label>
+<label>Overlap (minutes)<input id="dvOverlap" type="number" min="0" max="1440" value="60" required></label>
+<label>Reporting lag (minutes)<input id="dvLag" type="number" min="0" max="1440" value="15" required></label>
+<label>Maximum page size<input id="dvPage" type="number" min="1" max="500" value="200" required></label></div>
+<div id="dvReview"></div><fieldset><legend>Audit operations</legend><div id="dvOperations"></div></fieldset><div id="dvTables"></div>
+<p><label><input id="dvConfirm" type="checkbox" required> I reviewed the exact environment, deployment definition, selected tables and record scopes.</label></p>
+<p><label><input id="dvIdentity" type="checkbox" required> I authorize application authentication and organization/user identity checks.</label></p>
+<p><label><input id="dvRetention" type="checkbox" required> I approve retention of audit operation/action codes, timestamps and pseudonymous record and actor identities.</label></p>
+<p><label><input id="dvAll" type="checkbox"> I separately authorize reads of all visible audited records for selected tables with no exact record restriction.</label></p>
+<button id="dvCreateButton" type="submit" disabled>Save Dataverse profile</button></form></details>
+<details><summary>Create native HubSpot CRM history feed</summary>
+<p>Choose a deployment-approved private application, exact CRM record IDs and property names. HubSpot returns property values transiently; only property-change timestamps, activity labels and pseudonymous case identities are retained. The API's returned history is not a complete audit journal.</p>
+<form id="hsCreate"><div class="grid">
+<label>Profile name<input id="hsName" required maxlength="100"></label>
+<label>Approved HubSpot source<select id="hsSource" required></select></label>
+<label>First history timestamp (ISO UTC)<input id="hsSince" required placeholder="2026-11-01T00:00:00Z"></label>
+<label>Window (hours)<input id="hsWindow" type="number" min="1" max="168" value="24" required></label>
+<label>Overlap (minutes)<input id="hsOverlap" type="number" min="0" max="1440" value="60" required></label>
+<label>Reporting lag (minutes)<input id="hsLag" type="number" min="0" max="1440" value="15" required></label>
+<label>Batch size (records)<input id="hsBatch" type="number" min="1" max="100" value="50" required></label></div>
+<div id="hsReview"></div><div id="hsObjects"></div>
+<p><label><input id="hsCreated" type="checkbox" checked> Include record creation timestamps within the selected window.</label></p>
+<p><label><input id="hsConfirm" type="checkbox" required> I reviewed this exact account, application, scopes, object types, record IDs and properties.</label></p>
+<p><label><input id="hsTransient" type="checkbox" required> I approve transient receipt of property histories including values and change-source metadata, including versions outside the selected time window.</label></p>
+<p><label><input id="hsRetention" type="checkbox" required> I approve retention of selected property-change labels, timestamps and pseudonymous case identities.</label></p>
+<p><label><input id="hsTicket" type="checkbox"> I separately acknowledge the legacy tickets permission may allow writes, although this adapter only makes fixed read requests.</label></p>
+<button id="hsCreateButton" type="submit" disabled>Save HubSpot profile</button></form></details>
+<details><summary>Create native Databricks SQL warehouse event feed</summary>
+<p>Choose a deployment-approved event view, not arbitrary SQL. Only reviewed activity labels, exact timestamps and pseudonymous source identities are retained. The source must have STRING IDs and activity columns and a TIMESTAMP column.</p>
+<form id="dbxCreate"><div class="grid">
+<label>Profile name<input id="dbxName" required maxlength="100"></label>
+<label>Approved Databricks view<select id="dbxSource" required></select></label>
+<label>First history timestamp (ISO UTC)<input id="dbxSince" required placeholder="2026-11-01T00:00:00Z"></label>
+<label>Window (hours)<input id="dbxWindow" type="number" min="1" max="168" value="24" required></label>
+<label>Overlap (minutes)<input id="dbxOverlap" type="number" min="0" max="1440" value="60" required></label>
+<label>Reporting lag (minutes)<input id="dbxLag" type="number" min="0" max="1440" value="15" required></label></div>
+<div id="dbxReview"></div>
+<p><label><input id="dbxConfirm" type="checkbox" required> I reviewed this exact approved warehouse view and activity mapping.</label></p>
+<p><label><input id="dbxRead" type="checkbox" required> I approve bounded source reads and principal checks.</label></p>
+<p><label><input id="dbxRetention" type="checkbox" required> I approve retention of reviewed activity labels, timestamps and pseudonymous identities.</label></p>
+<button id="dbxCreateButton" type="submit" disabled>Save Databricks profile</button></form></details>
+<details><summary>Create native Snowflake SQL API event feed</summary>
+<p>Choose a deployment-approved event view, not arbitrary SQL. Only reviewed activity labels, exact timestamps and pseudonymous source identities are retained. The source must have STRING IDs and activity columns and a TIMESTAMP_LTZ or TIMESTAMP_TZ column.</p>
+<form id="snowCreate"><div class="grid">
+<label>Profile name<input id="snowName" required maxlength="100"></label>
+<label>Approved Snowflake view<select id="snowSource" required></select></label>
+<label>First history timestamp (ISO UTC)<input id="snowSince" required placeholder="2026-11-01T00:00:00Z"></label>
+<label>Window (hours)<input id="snowWindow" type="number" min="1" max="168" value="24" required></label>
+<label>Overlap (minutes)<input id="snowOverlap" type="number" min="0" max="1440" value="60" required></label>
+<label>Reporting lag (minutes)<input id="snowLag" type="number" min="0" max="1440" value="15" required></label></div>
+<div id="snowReview"></div>
+<p><label><input id="snowConfirm" type="checkbox" required> I reviewed this exact approved warehouse view and activity mapping.</label></p>
+<p><label><input id="snowRead" type="checkbox" required> I approve bounded source reads and principal checks.</label></p>
+<p><label><input id="snowRetention" type="checkbox" required> I approve retention of reviewed activity labels, timestamps and pseudonymous identities.</label></p>
+<button id="snowCreateButton" type="submit" disabled>Save Snowflake profile</button></form></details>
+<details><summary>Create native NetSuite SuiteQL event feed</summary>
+<p>Choose a deployment-approved curated custom event record, not arbitrary SQL. Only reviewed labels, exact UTC microseconds and pseudonymous identities are retained. The source must have stable internal IDs, immutable case identities and integer UTC epoch microseconds.</p>
+<form id="nsCreate"><div class="grid">
+<label>Profile name<input id="nsName" required maxlength="100"></label>
+<label>Approved NetSuite record<select id="nsSource" required></select></label>
+<label>First history timestamp (ISO UTC)<input id="nsSince" required placeholder="2026-11-01T00:00:00Z"></label>
+<label>Window (hours)<input id="nsWindow" type="number" min="1" max="168" value="24" required></label>
+<label>Overlap (minutes)<input id="nsOverlap" type="number" min="0" max="1440" value="60" required></label>
+<label>Reporting lag (minutes)<input id="nsLag" type="number" min="0" max="1440" value="15" required></label><label>SuiteQL page size<input id="nsPage" type="number" min="1" max="1000" value="500" required></label></div>
+<div id="nsReview"></div>
+<p><label><input id="nsConfirm" type="checkbox" required> I reviewed this exact approved custom record and activity mapping.</label></p>
+<p><label><input id="nsRead" type="checkbox" required> I approve bounded source reads and certificate authentication and two complete reads.</label></p>
+<p><label><input id="nsRetention" type="checkbox" required> I approve retention of reviewed activity labels, timestamps and pseudonymous identities.</label></p>
+<button id="nsCreateButton" type="submit" disabled>Save NetSuite profile</button></form></details>
+<details><summary>Create native Workday RaaS event and control reports</summary>
+<p>Choose deployment-approved business-event and independent population-count reports. Retains only reviewed labels, exact timestamps and pseudonymous identities.</p>
+<form id="wdCreate"><div class="grid">
+<label>Profile name<input id="wdName" required maxlength="100"></label>
+<label>Approved Workday report pair<select id="wdSource" required></select></label>
+<label>First history timestamp (ISO UTC)<input id="wdSince" required placeholder="2026-11-01T00:00:00Z"></label>
+<label>Window (hours)<input id="wdWindow" type="number" min="1" max="168" value="24" required></label>
+<label>Overlap (minutes)<input id="wdOverlap" type="number" min="0" max="1440" value="60" required></label>
+<label>Reporting lag (minutes)<input id="wdLag" type="number" min="0" max="1440" value="15" required></label></div>
+<div id="wdReview"></div>
+<p><label><input id="wdConfirm" type="checkbox" required> I reviewed this exact approved event report, control report, tenant and activity mapping.</label></p>
+<p><label><input id="wdRead" type="checkbox" required> I approve two bounded event-report reads and two control-count reads using the dedicated integration user.</label></p>
+<p><label><input id="wdRetention" type="checkbox" required> I approve retention of reviewed activity labels, timestamps and pseudonymous identities.</label></p>
+<button id="wdCreateButton" type="submit" disabled>Save Workday profile</button></form></details>
+<details><summary>Create native Oracle Fusion procurement feed</summary>
+<p>Choose exact requisition and purchase-order headers in approved business units. Retain documented creation, submission, communication and optionally latest-update date observations. These are not complete change histories.</p>
+<form id="oraCreate"><div class="grid">
+<label>Profile name<input id="oraName" required maxlength="100"></label>
+<label>Approved Oracle source<select id="oraSource" required></select></label>
+<label>First history timestamp (ISO UTC)<input id="oraSince" required placeholder="2026-11-01T00:00:00Z"></label>
+<label>Window (hours)<input id="oraWindow" type="number" min="1" max="168" value="24" required></label>
+<label>Overlap (minutes)<input id="oraOverlap" type="number" min="0" max="1440" value="60" required></label>
+<label>Reporting lag (minutes)<input id="oraLag" type="number" min="0" max="1440" value="15" required></label></div>
+<div id="oraReview"></div>
+<fieldset><legend>Purchase requisitions</legend>
+<label><input id="oraReq" type="checkbox"> Include exact requisition headers</label>
+<label>Requisitioning business unit<select id="oraReqBU"></select></label>
+<label>Header IDs, comma separated<input id="oraReqIDs" maxlength="180"></label>
+<label><input id="oraReqCreated" type="checkbox" checked> Creation date</label>
+<label><input id="oraReqMilestone" type="checkbox" checked> Observed submission date</label>
+<label><input id="oraReqUpdate" type="checkbox"> Observed most recent update date</label>
+</fieldset><fieldset><legend>Purchase orders</legend>
+<label><input id="oraPO" type="checkbox"> Include exact purchase order headers</label>
+<label>Procurement business unit<select id="oraPOBU"></select></label>
+<label>Header IDs, comma separated<input id="oraPOIDs" maxlength="180"></label>
+<label><input id="oraPOCreated" type="checkbox" checked> Creation date</label>
+<label><input id="oraPOMilestone" type="checkbox" checked> Observed supplier communication date</label>
+<label><input id="oraPOUpdate" type="checkbox"> Observed most recent update date</label>
+</fieldset>
+<p><label><input id="oraConfirm" type="checkbox" required> I reviewed this exact source, business units, header IDs and selected date fields.</label></p>
+<p><label><input id="oraRead" type="checkbox" required> I approve two bounded reads of the selected headers.</label></p>
+<p><label><input id="oraSnapshot" type="checkbox" required> I understand that mutable dates are observations, not complete status or approval history.</label></p>
+<p><label><input id="oraRetention" type="checkbox" required> I approve retention of selected timestamp observations and pseudonymous case identities.</label></p>
+<button id="oraCreateButton" type="submit" disabled>Save Oracle Fusion profile</button></form></details>
+<details><summary>Create native BigQuery approved warehouse event feed</summary>
+<p>Choose a deployment-approved BigQuery event view. Only reviewed labels, exact timestamps and pseudonymous identities are retained; queries may incur warehouse charges within the displayed per-query byte cap.</p>
+<form id="bqCreate"><div class="grid">
+<label>Profile name<input id="bqName" required maxlength="100"></label>
+<label>Approved BigQuery view<select id="bqSource" required></select></label>
+<label>First history timestamp (ISO UTC)<input id="bqSince" required placeholder="2026-11-01T00:00:00Z"></label>
+<label>Window (hours)<input id="bqWindow" type="number" min="1" max="168" value="24" required></label>
+<label>Overlap (minutes)<input id="bqOverlap" type="number" min="0" max="1440" value="60" required></label>
+<label>Reporting lag (minutes)<input id="bqLag" type="number" min="0" max="1440" value="15" required></label><label>Result page size<input id="bqPage" type="number" min="1" max="1000" value="500" required></label></div>
+<div id="bqReview"></div>
+<p><label><input id="bqConfirm" type="checkbox" required> I reviewed this exact approved view, billing project, location, query byte cap and activity mapping.</label></p>
+<p><label><input id="bqRead" type="checkbox" required> I approve bounded service-account authentication, billable read queries and result pagination.</label></p>
+<p><label><input id="bqRetention" type="checkbox" required> I approve retention of reviewed activity labels, timestamps and pseudonymous identities.</label></p>
+<button id="bqCreateButton" type="submit" disabled>Save BigQuery profile</button></form></details>
+<p id="restStatus" role="status"></p><div id="profiles"></div></section>
+<section><h2>Other configured adapters</h2><p>Use the main dashboard's Privacy → Business system sign-in and Evidence panels for the existing provider-specific consent and configuration workflows. CLI-only adapters remain outside this local inventory.</p><a href="/">Open the main dashboard</a></section>
+</main></body></html>

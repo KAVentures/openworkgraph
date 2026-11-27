@@ -1,0 +1,47 @@
+# Example for a dedicated Linux ingestion host. Review all paths and
+# permissions before installation. This unit is not enabled automatically.
+[Unit]
+Description=OpenWorkGraph dedicated enterprise connector worker
+Wants=network-online.target
+After=network-online.target
+ConditionPathExists=/etc/openworkgraph/connector-worker-%i.env
+
+[Service]
+Type=simple
+User=owg-connector-%i
+Group=owg-connector-%i
+WorkingDirectory=/opt/openworkgraph
+EnvironmentFile=/etc/openworkgraph/connector-worker-%i.env
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=OWG_CONNECTOR_REPORT_READINESS=true
+Environment=OWG_CONNECTOR_REQUIRE_EXPLICIT_RECORDING=true
+ExecStart=/opt/openworkgraph/.venv/bin/python -m server.enterprise_connector_worker
+Restart=on-failure
+RestartSec=30s
+TimeoutStopSec=150s
+KillSignal=SIGTERM
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+StateDirectory=openworkgraph-connectors/%i
+StateDirectoryMode=0700
+ReadWritePaths=/var/lib/openworkgraph-connectors/%i
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

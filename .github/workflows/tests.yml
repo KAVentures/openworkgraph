@@ -52,6 +52,63 @@ jobs:
           test ! -e data/workflow_observer.db
           test ! -e data/gateway/openworkgraph_gateway.db
 
+  enterprise-sql-tls:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: owg_sql_admin
+          POSTGRES_PASSWORD: synthetic-ci-sql-password
+          POSTGRES_DB: owg_sql_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U owg_sql_admin -d owg_sql_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install existing PostgreSQL driver and test runtime
+        run: python -m pip install -e ".[dev,gateway]"
+      - name: Enable verified TLS on the isolated PostgreSQL fixture
+        shell: bash
+        env:
+          PG_CONTAINER: ${{ job.services.postgres.id }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/owg-sql-tls"
+          cert="$RUNNER_TEMP/owg-sql-tls/server.crt"
+          key="$RUNNER_TEMP/owg-sql-tls/server.key"
+          openssl req -x509 -newkey rsa:2048 -nodes -days 2 -subj '/CN=localhost' \
+            -addext 'subjectAltName=DNS:localhost,IP:127.0.0.1' \
+            -keyout "$key" -out "$cert"
+          docker cp "$cert" "$PG_CONTAINER:/var/lib/postgresql/data/server.crt"
+          docker cp "$key" "$PG_CONTAINER:/var/lib/postgresql/data/server.key"
+          docker exec -u root "$PG_CONTAINER" chown postgres:postgres /var/lib/postgresql/data/server.crt /var/lib/postgresql/data/server.key
+          docker exec -u root "$PG_CONTAINER" chmod 0600 /var/lib/postgresql/data/server.key
+          docker exec "$PG_CONTAINER" psql -U owg_sql_admin -d owg_sql_test -v ON_ERROR_STOP=1 -c "ALTER SYSTEM SET ssl = on"
+          docker exec "$PG_CONTAINER" psql -U owg_sql_admin -d owg_sql_test -v ON_ERROR_STOP=1 -c "SELECT pg_reload_conf()"
+          export OWG_SQL_TEST_ADMIN_DSN="host=127.0.0.1 port=5432 dbname=owg_sql_test user=owg_sql_admin password=synthetic-ci-sql-password sslmode=verify-full sslrootcert=$cert"
+          python - <<'PY'
+          import os, time, psycopg
+          for _ in range(20):
+              try:
+                  with psycopg.connect(os.environ["OWG_SQL_TEST_ADMIN_DSN"], connect_timeout=3) as c:
+                      assert c.execute("SELECT ssl FROM pg_stat_ssl WHERE pid=pg_backend_pid()").fetchone() == (True,)
+                  break
+              except psycopg.OperationalError:
+                  time.sleep(1)
+          else:
+              raise SystemExit("TLS PostgreSQL fixture did not become ready")
+          PY
+          echo "OWG_SQL_TEST_ADMIN_DSN=$OWG_SQL_TEST_ADMIN_DSN" >> "$GITHUB_ENV"
+      - name: Verify native SQL retention and TLS database contract
+        run: python -m pytest -q tests/test_enterprise_sql_feed.py
+
   process-collaboration:
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: ubuntu-latest
@@ -77,6 +134,10 @@ jobs:
           node-version: "22"
       - name: Install Gateway and test dependencies
         run: python -m pip install -e ".[dev,gateway]"
+      - name: Verify connector job concurrency and recovery on SQLite and PostgreSQL
+        env:
+          OWG_PROCESS_TEST_DATABASE_URL: postgresql://owg_test:synthetic-ci-password@127.0.0.1:5432/owg_test
+        run: python -m pytest -q tests/test_gateway_connector_jobs.py tests/test_enterprise_connector_worker.py tests/test_connector_event_publications.py tests/test_connector_case_review.py tests/test_enterprise_connector_credentials.py tests/test_connector_crosswalks.py
       - name: Verify shared design transactions on SQLite and PostgreSQL
         env:
           OWG_PROCESS_TEST_DATABASE_URL: postgresql://owg_test:synthetic-ci-password@127.0.0.1:5432/owg_test
@@ -94,6 +155,8 @@ jobs:
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/event_log_linked_attributes.cjs
       - name: Verify the event attribute profile in Chromium
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/event_log_attribute_profile.cjs
+      - name: Verify private connector crosswalk proposals and saved reviews in Chromium
+        run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/connector_crosswalks.cjs
       - name: Verify shared process browser lifecycle
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/process_collaboration.cjs
       - name: Verify declared dependencies and change-impact navigation in Chromium
@@ -318,6 +381,8 @@ jobs:
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/interaction_playback.cjs
       - name: Verify the SAP order-to-cash source controls in Chromium
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/sap_o2c.cjs
+      - name: Verify enterprise connector operations and recurring feed controls in Chromium
+        run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/enterprise_connectors.cjs
       - name: Verify communications review examples and learned intents in Chromium
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/communications_review.cjs
       - name: Verify stuck open-case detection in Chromium
