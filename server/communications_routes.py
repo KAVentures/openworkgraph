@@ -78,22 +78,20 @@ async def put_taxonomy(request: Request):
         mining.parse_taxonomy(taxonomy)
     except ValueError as exc:
         raise HTTPException(422, str(exc) if isinstance(exc, mining.CommunicationsError) else "taxonomy is not valid JSON") from None
-    path = _taxonomy_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(".tmp")
-    temporary.write_text(json.dumps(taxonomy, ensure_ascii=False), encoding="utf-8")
-    try:
-        os.chmod(temporary, 0o600)
-    except OSError:
-        pass
-    os.replace(temporary, path)
+    with review._LOCK:
+        _save_taxonomy(taxonomy)
     return _no_store({"taxonomy": taxonomy, "is_default": False})
+
+
+def _save_taxonomy(taxonomy):
+    review._write(_taxonomy_path(), taxonomy)
 
 
 @router.post("/v1/communications/taxonomy/reset")
 def reset_taxonomy(request: Request):
     _require_dashboard(request)
-    _taxonomy_path().unlink(missing_ok=True)
+    with review._LOCK:
+        _taxonomy_path().unlink(missing_ok=True)
     return _no_store({"taxonomy": mining.DEFAULT_TAXONOMY, "is_default": True})
 
 
@@ -216,6 +214,37 @@ async def _json_body(request: Request, maximum: int = 1024 * 1024) -> Any:
         return json.loads(body)
     except ValueError:
         raise HTTPException(422, "invalid JSON") from None
+
+
+@router.post("/v1/communications/taxonomy/preview")
+async def preview_taxonomy(request: Request):
+    _require_dashboard(request)
+    from . import communications_taxonomy_change as change
+    candidate = await _json_body(request, 65536)
+    try:
+        result = await run_in_threadpool(change.preview, load_taxonomy, candidate)
+    except mining.CommunicationsError as exc:
+        raise HTTPException(422, str(exc)) from None
+    except review.ReviewError as exc:
+        raise HTTPException(409, str(exc)) from None
+    _require_dashboard(request)
+    return _no_store(result)
+
+
+@router.post("/v1/communications/taxonomy/apply-preview")
+async def apply_taxonomy_preview(request: Request):
+    _require_dashboard(request)
+    from . import communications_taxonomy_change as change
+    body = await _json_body(request, 70000)
+    if not isinstance(body, dict) or set(body) != {"taxonomy", "preview_sha256", "confirm"} or body["confirm"] is not True:
+        raise HTTPException(422, "explicit confirmation and preview digest required")
+    _require_dashboard(request)
+    try:
+        return _no_store(change.apply(load_taxonomy, _save_taxonomy, body["taxonomy"], body["preview_sha256"]))
+    except mining.CommunicationsError as exc:
+        raise HTTPException(422, str(exc)) from None
+    except review.ReviewError as exc:
+        raise HTTPException(409, str(exc)) from None
 
 
 def _review_call(operation, *args):

@@ -94,8 +94,17 @@
     const saveTaxonomy=button('Save taxonomy','secondary');saveTaxonomy.id='owgCommsTaxonomySave';
     const resetTaxonomy=button('Restore default','secondary');resetTaxonomy.id='owgCommsTaxonomyReset';
     const taxStatus=el('div',null,'muted');taxStatus.id='owgCommsTaxonomyStatus';taxStatus.setAttribute('role','status');
-    const taxRow=el('div',null,'row');taxRow.append(saveTaxonomy,resetTaxonomy);
-    taxonomyBox.append(el('div','One intent per line: "Name: term, term". A message gets the intent whose terms match best; ties are shown as ambiguous.','muted'),field('Intents and terms',taxonomy),taxRow,taxStatus);
+    const previewTaxonomy=button('Preview changes on reviewed training messages','secondary');
+    previewTaxonomy.id='owgCommsTaxonomyPreview';
+    const applyPreview=button('Apply reviewed taxonomy','secondary');applyPreview.id='owgCommsTaxonomyApply';applyPreview.disabled=true;
+    const taxPreview=el('div');taxPreview.id='owgCommsTaxonomyPreviewResult';taxPreview.setAttribute('aria-live','polite');
+    let previewGeneration=0, pinnedPreview=null;
+    function invalidateTaxPreview(){
+      previewGeneration++;pinnedPreview=null;applyPreview.disabled=true;previewTaxonomy.disabled=false;taxPreview.replaceChildren();
+    }
+    taxonomy.addEventListener('input',invalidateTaxPreview);
+    const taxRow=el('div',null,'row');taxRow.append(saveTaxonomy,resetTaxonomy,previewTaxonomy,applyPreview);
+    taxonomyBox.append(el('div','One intent per line: "Name: term, term". A message gets the intent whose terms match best; ties are shown as ambiguous.','muted'),field('Intents and terms',taxonomy),taxRow,taxStatus,taxPreview);
     const review=el('details');review.id='owgCommsReview';review.appendChild(el('summary','Review examples and learned model'));
     card.append(row,mapping,field('Intents from',classifier),qualityControls,consentLabel,saveLabel,sampleLabel,field('How many review examples',sampleCount),run,status,results,review,taxonomyBox);
     const anchor=document.getElementById('owgEventLogCard')||document.getElementById('owgProcessCSV');
@@ -139,9 +148,55 @@
       try{render(await api('/v1/communications/analyze?'+q,{method:'POST',body:chosen,headers}));status.textContent='';consent.checked=false;save.checked=false;if(sample.checked){sample.checked=false;loadReview();}}
       catch(error){status.textContent=error.message;}finally{refresh();}
     };
-    const loadTaxonomy=async()=>{try{const t=await api('/v1/communications/taxonomy');taxonomy.value=formatTaxonomy(t.taxonomy);taxStatus.textContent=t.is_default?'Default taxonomy.':'Your saved taxonomy.';}catch(error){taxStatus.textContent=error.message;}};
-    saveTaxonomy.onclick=async()=>{try{const t=await api('/v1/communications/taxonomy',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(parseTaxonomy(taxonomy.value))});taxonomy.value=formatTaxonomy(t.taxonomy);taxStatus.textContent='Taxonomy saved on this computer.';renderModel(await api('/v1/communications/review/model'));}catch(error){taxStatus.textContent=error.message;}};
-    resetTaxonomy.onclick=async()=>{try{const t=await api('/v1/communications/taxonomy/reset',{method:'POST'});taxonomy.value=formatTaxonomy(t.taxonomy);taxStatus.textContent='Default taxonomy restored.';renderModel(await api('/v1/communications/review/model'));}catch(error){taxStatus.textContent=error.message;}};
+    const loadTaxonomy=async()=>{invalidateTaxPreview();try{const t=await api('/v1/communications/taxonomy');taxonomy.value=formatTaxonomy(t.taxonomy);taxStatus.textContent=t.is_default?'Default taxonomy.':'Your saved taxonomy.';}catch(error){taxStatus.textContent=error.message;}};
+    saveTaxonomy.onclick=async()=>{invalidateTaxPreview();try{const t=await api('/v1/communications/taxonomy',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(parseTaxonomy(taxonomy.value))});taxonomy.value=formatTaxonomy(t.taxonomy);taxStatus.textContent='Taxonomy saved on this computer.';renderModel(await api('/v1/communications/review/model'));}catch(error){taxStatus.textContent=error.message;}};
+    resetTaxonomy.onclick=async()=>{invalidateTaxPreview();try{const t=await api('/v1/communications/taxonomy/reset',{method:'POST'});taxonomy.value=formatTaxonomy(t.taxonomy);taxStatus.textContent='Default taxonomy restored.';renderModel(await api('/v1/communications/review/model'));}catch(error){taxStatus.textContent=error.message;}};
+    previewTaxonomy.onclick=async()=>{
+      invalidateTaxPreview();
+      const generation=previewGeneration;
+      const original=taxonomy.value;
+      previewTaxonomy.disabled=true;
+      taxPreview.replaceChildren(el('p','Comparing existing labelled training examples…','muted'));
+      try{
+        const candidate=parseTaxonomy(original);
+        const data=await api('/v1/communications/taxonomy/preview',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(candidate)});
+        if(generation!==previewGeneration||taxonomy.value!==original)return;
+        const lang=select('owgCommsTaxonomyPreviewLanguage',[['','All reviewed languages'],...data.by_language.map(g=>[g.language,g.language])]);
+        const body=el('div');
+        const draw=()=>{
+          const m=lang.value?data.by_language.find(g=>g.language===lang.value):data.overall;
+          if(!m)return;
+          body.replaceChildren(el('p',m.messages+' labelled training messages · '+m.changed_decisions+' changed decisions · '+m.newly_correct+' newly correct · '+m.newly_not_correct+' no longer correct.'),
+            el('p','Strict complete-message accuracy: '+pct(m.baseline_strict_accuracy)+' → '+pct(m.candidate_strict_accuracy)+
+              '. Ambiguous '+m.baseline_ambiguous+' → '+m.candidate_ambiguous+'; unclassified '+m.baseline_unclassified+' → '+m.candidate_unclassified+'.'),
+            table(['Intent','Positive support','Current F1','Proposed F1','Current recall','Proposed recall','Current coverage','Proposed coverage'],
+              m.per_intent.map(x=>[x.intent,x.baseline.positive_support,pct(x.baseline.f1),pct(x.candidate.f1),pct(x.baseline.recall),pct(x.candidate.recall),pct(x.baseline.decision_coverage),pct(x.candidate.decision_coverage)])),
+            table(['Current primary result','Proposed primary result','Messages'],m.primary_transitions.map(x=>[x.baseline,x.candidate,x.messages])),
+            table(['Current correctness','Proposed correctness','Messages'],m.correctness_transitions.map(x=>[x.baseline,x.candidate,x.messages])));
+        };
+        lang.onchange=draw;draw();
+        taxPreview.replaceChildren(el('h3','Training-only change review'),el('p',data.interpretation,'note'),
+          el('p','Language groups shown: '+data.language_groups_displayed+' of '+data.language_groups_total+'. No message text or example IDs in this report.','muted'),
+          table(['Intent','Added normalized terms','Removed normalized terms'],data.term_changes.map(x=>[x.intent,x.added_normalized_terms,x.removed_normalized_terms])),
+          field('Review language',lang),body);
+        pinnedPreview={candidate,original,digest:data.preview_sha256};
+        applyPreview.disabled=false;
+      }catch(error){if(generation===previewGeneration)taxPreview.replaceChildren(el('p',error.message,'note'));}
+      finally{if(generation===previewGeneration)previewTaxonomy.disabled=false;}
+    };
+    applyPreview.onclick=async()=>{
+      const pin=pinnedPreview;
+      if(!pin||taxonomy.value!==pin.original)return;
+      invalidateTaxPreview();const generation=previewGeneration;
+      taxStatus.textContent='Saving the exact reviewed taxonomy…';
+      try{
+        const data=await api('/v1/communications/taxonomy/apply-preview',{method:'POST',headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({taxonomy:pin.candidate,preview_sha256:pin.digest,confirm:true})});
+        if(generation!==previewGeneration)return;
+        taxonomy.value=formatTaxonomy(data.taxonomy);taxStatus.textContent='Reviewed taxonomy saved on this computer.';
+        renderModel(await api('/v1/communications/review/model'));
+      }catch(error){if(generation===previewGeneration)taxStatus.textContent=error.message;}
+    };
     refresh();loadTaxonomy();
 
     // Review examples: separately consented, retention-bounded, redacted texts the user labels.
@@ -309,9 +364,9 @@
         const lang=input('owgCommsLang_'+x.example_id,'text','en');lang.value=x.language==='und'?'':x.language;lang.maxLength=12;
         box.appendChild(field('Language',lang));
         const saveLabel=button(x.labels===null?'Save labels (none ticked means no intent)':'Update labels','secondary');
-        saveLabel.onclick=async()=>{try{await api('/v1/communications/review/label',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({example_id:x.example_id,labels:picks.filter(c=>c.checked).map(c=>c.value),language:lang.value.trim()})});reviewOffset=0;await loadReview();reviewStatus.textContent='Labels saved. '+reviewStatus.textContent;}catch(error){reviewStatus.textContent=error.message;}};
+        saveLabel.onclick=async()=>{invalidateTaxPreview();try{await api('/v1/communications/review/label',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({example_id:x.example_id,labels:picks.filter(c=>c.checked).map(c=>c.value),language:lang.value.trim()})});reviewOffset=0;await loadReview();reviewStatus.textContent='Labels saved. '+reviewStatus.textContent;}catch(error){reviewStatus.textContent=error.message;}};
         const remove=button('Delete example','secondary');remove.setAttribute('aria-label','Delete example '+x.example_id);
-        remove.onclick=async()=>{try{await api('/v1/communications/review/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({example_ids:[x.example_id]})});reviewOffset=0;await loadReview();}catch(error){reviewStatus.textContent=error.message;}};
+        remove.onclick=async()=>{invalidateTaxPreview();try{await api('/v1/communications/review/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({example_ids:[x.example_id]})});reviewOffset=0;await loadReview();}catch(error){reviewStatus.textContent=error.message;}};
         box.append(saveLabel,remove);list.appendChild(box);
       });
       const intro=triageMode?
@@ -362,7 +417,7 @@
     newest.onclick=()=>{triageMode=false;reviewOffset=0;queuePin=null;loadReview();};
     previousReview.onclick=()=>{reviewOffset=Math.max(0,reviewOffset-20);loadReview();};
     nextReview.onclick=()=>{reviewOffset+=20;loadReview();};
-    saveReview.onclick=async()=>{
+    saveReview.onclick=async()=>{invalidateTaxPreview();
       if(!reviewOn.checked&&!window.confirm('Turn off review examples and delete every kept example and the model?'))return;
       ++reviewGeneration;examples.replaceChildren();reviewOffset=0;
       try{await api('/v1/communications/review/settings',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(reviewOn.checked?{enabled:true,acknowledgement_version:ackVersion,retention_days:Number(retention.value)}:{enabled:false})});await loadReview();}
