@@ -240,3 +240,29 @@ def test_github_retained_record_guard(monkeypatch,mode):
     install_record_events(monkeypatch,GH_RECORD,GH_REF,mode=mode)
     monkeypatch.setattr(source,"_gh_pr_snapshot",lambda *a,**k:pytest.fail("provider read without exact retained evidence"))
     assert source._read_source(GH_REF,GH_RECORD,"github_pr_merged_in_window")["availability"]=="unknown"
+
+
+@pytest.mark.parametrize("host,valid",[
+    ("a.atlassian.net",True),("example.atlassian.net",True),("a-b.atlassian.net",True),
+    ("a"*63+".atlassian.net",True),("a"*64+".atlassian.net",False),
+    ("-a.atlassian.net",False),("a-.atlassian.net",False),("A.atlassian.net",False),
+    ("exampleXatlassianXnet",False),("example.atlassian.net.evil.test",False),
+    ("https://example.atlassian.net",False),("example.atlassian.net:443",False),
+    ("example.atlassian.net\n",False),(r"example\.atlassian\.net",False),
+])
+@pytest.mark.parametrize("locator,valid_locator",[
+    ("OPS-123",True),("AB-1",True),("A"*21+"-99999999999",True),
+    ("OPS-0",False),("OPS-01",False),("ops-123",False),("OPS-123\n",False),
+    ("OPS-123/../comment",False),("OPS-123?x=y",False),
+])
+def test_jira_identity_uses_same_tenant_and_issue_rules_as_reader(host,valid,locator,valid_locator,monkeypatch):
+    import hashlib,hmac
+    monkeypatch.setattr(source,"ensure_api_token",lambda:"test-secret")
+    rec={**JIRA_RECORD,"host":host,"resolver_locator":locator}
+    pred="jira_issue_resolved_in_window"
+    if valid and valid_locator:
+        expected=hmac.new(b"test-secret",f"owg-source-jira-issue-v1:{host}:{locator}".encode("ascii"),
+                          hashlib.sha256).hexdigest()
+        assert source._identity(rec,pred)==expected
+    else:
+        with pytest.raises(ValueError):source._identity(rec,pred)

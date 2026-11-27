@@ -3008,6 +3008,16 @@
           if(ledger.register_history_sha256!==value.history_sha256)throw new Error('Register changed; reload it first.');
           handoffOutput.append(el('p',attempts.attempts.length+' retained external write attempts'),download(attempts,'owg-jira-handoff-attempts'));
           for(const row of attempts.attempts)handoffOutput.appendChild(el('p',row.operation+' · '+row.finding_id.slice(0,12)+' · '+row.status+(row.issue_key?' · '+row.issue_key:'')+(row.comment_id?' · comment '+row.comment_id:'')));
+          const previous=attempts.related_creation_attempts||[];
+          if(previous.length){
+            const related=el('details');related.open=true;
+            related.append(el('summary',previous.length+' matching creation attempts in other worklists'),
+              el('p','A matching structural finding ID prevents another create. It does not prove that the earlier issue refers to this incident. Inspect Jira and bind the exact locally observed issue explicitly.'));
+            for(const row of previous)related.appendChild(el('p',row.finding_id.slice(0,12)+' · '+row.status+
+              (row.destination_host?' · '+row.destination_host:'')+(row.destination_project?' · project '+row.destination_project:'')+
+              (row.issue_key?' · '+row.issue_key:' · no confirmed issue key')+' · prior worklist '+row.previous_worklist_sha256));
+            handoffOutput.appendChild(related);
+          }
           const finding=el('select');finding.setAttribute('aria-label','Jira handoff finding');
           const eligible=value.findings.filter(r=>r.state!=='unassigned');
           for(const r of eligible){const option=el('option',r.kind.replaceAll('_',' ')+' · '+r.finding_id.slice(0,12));option.value=r.finding_id;finding.appendChild(option);}
@@ -3015,7 +3025,13 @@
           for(const [v,label] of [['create','Create review ticket'],['comment','Append review comment to observed bound ticket']]){const opt=el('option',label);opt.value=v;operation.appendChild(opt);}
           const previewHost=el('div');let revision=0;
           const reset=()=>{revision++;previewHost.replaceChildren();};
-          finding.addEventListener('change',reset);operation.addEventListener('change',reset);
+          const existingCreation=()=>operation.value==='create'&&[...attempts.attempts,...previous].some(r=>r.finding_id===finding.value&&(r.operation==='create'||r.previous_worklist_sha256));
+          const selectionChanged=()=>{
+            reset();
+            preview.disabled=!eligible.length||existingCreation();
+            if(existingCreation())previewHost.appendChild(el('p','Creation already attempted for this finding. Inspect the retained attempt history and Jira before binding an observed issue.'));
+          };
+          finding.addEventListener('change',selectionChanged);operation.addEventListener('change',selectionChanged);
           const preview=button('Preview exact Jira handoff',async()=>{
             const version=++revision;previewHost.replaceChildren();
             try{
@@ -3040,7 +3056,7 @@
                 finally{handoffBusy=false;}
               });previewHost.appendChild(send);
             }catch(e){if(version===revision&&token===handoffSerial)previewHost.replaceChildren(el('p','Preview refused: '+e.message));}
-          });preview.disabled=!eligible.length;
+          });selectionChanged();
           handoffOutput.append(auditLabel('Finding',finding),auditLabel('Operation',operation),preview,previewHost);
         }catch(e){if(token===handoffSerial&&attempt===remediationGeneration)handoffOutput.replaceChildren(el('p',e.message));}
       };

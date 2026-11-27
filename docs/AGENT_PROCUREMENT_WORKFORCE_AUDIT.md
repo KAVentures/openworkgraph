@@ -514,7 +514,14 @@ evidence and uncertain previous attempts; comments once per finding per
 register-history revision. The conservative identity match may block creation
 in an unrelated worklist with the same structural finding ID. This is not
 semantic ticket matching or cross-installation deduplication. Reuse an existing
-observed Jira record by explicitly binding it to the successor. A timeout, malformed response,
+observed Jira record by explicitly binding it to the successor. The handoff
+attempt inventory exposes matching creation reservations from other local
+worklists, including their original worklist digest, provider-reported issue
+key (when available), and configured destination host/project for new
+attempts. Older attempt records can lack destination details. These matches
+are structural only and are not independently verified ticket mappings.
+The dashboard disables redundant creation when it knows about a previous
+attempt; the server independently refuses stale or concurrent approvals. A timeout, malformed response,
 non-201 result or crash is uncertain, not proof of failure. Inspect Jira and
 the retained attempt history manually. No automatic retry or rollback is
 provided, and a reservation cannot be cleared via ordinary register deletion.

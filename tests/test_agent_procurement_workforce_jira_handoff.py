@@ -190,4 +190,41 @@ def test_successor_cannot_create_duplicate_ticket_even_after_uncertain_result(lo
     with pytest.raises(journal.JournalError):handoff.preview(successor_body)
     with pytest.raises(journal.JournalError):handoff.dispatch(approved_successor)
     assert calls==[1]
-    assert handoff.status(scope(successor))["attempts"]==[]
+    status=handoff.status(scope(successor))
+    assert status["attempts"]==[]
+    related=status["related_creation_attempts"]
+    assert len(related)==1 and related[0]["finding_id"]==f["finding_id"]
+    assert related[0]["previous_worklist_sha256"]==prior["worklist_sha256"]
+    assert related[0]["status"]=="unconfirmed" and related[0]["issue_key"] is None
+    assert related[0]["destination_host"]==CONFIG[0]
+    assert not related[0]["ticket_mapping_verified"]
+    assert handoff.status(scope(prior))["related_creation_attempts"]==[]
+
+
+def test_related_creation_exact_key_and_legacy_rows(local_db):
+    import json
+    from server import db
+    from shared.agent_procurement import digest
+    finding="a"*64;other="b"*64;current="c"*64;prior="d"*64
+    row={"operation":"create","finding_id":finding,"status":"provider_reported_created",
+         "issue_key":"ABC-123","recorded_at_ms":12,"plan_sha256":"e"*64}
+    with db.connect() as conn:
+        handoff._schema(conn)
+        for worklist,key,value in (
+            (prior,digest(["create",finding]),row),
+            (current,digest(["create",finding]),row),
+            (prior,digest(["create",other]),{**row,"finding_id":other}),
+            (prior,digest(["comment",finding,"revision"]),{**row,"operation":"comment"}),
+        ):
+            conn.execute("INSERT INTO procurement_audit_jira_dispatch VALUES (?,?,?,?)",
+                         (worklist,key,row["plan_sha256"],json.dumps(value)))
+        result=handoff._related_creations(conn,current,[{"finding_id":finding}])
+        assert len(result)==1
+        assert result[0]["previous_worklist_sha256"]==prior
+        assert result[0]["issue_key"]=="ABC-123"
+        assert result[0]["destination_host"] is None
+        assert not result[0]["ticket_mapping_verified"]
+        assert handoff._related_creations(conn,current,[{"finding_id":"f"*64}])==[]
+        conn.execute("UPDATE procurement_audit_jira_dispatch SET result_json=? WHERE worklist_sha256=? AND operation_key=?",
+                     (json.dumps({**row,"finding_id":other}),prior,digest(["create",finding])))
+        with pytest.raises(ValueError):handoff._related_creations(conn,current,[{"finding_id":finding}])
