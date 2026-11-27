@@ -23,7 +23,7 @@ PROVIDERS = (
     ("microsoft","Microsoft 365","reviewed_outlook_delta"),
     ("atlassian","Jira","retained_selected_issue_profiles"),
     ("zendesk","Zendesk","selected_ticket_audit"),
-    ("sap","SAP S/4HANA","order_to_cash"),
+    ("sap","SAP S/4HANA","order_to_cash_and_purchase_order_procurement_day_evidence"),
     ("stripe","Stripe","selected_record_evidence"),
     ("rest","Customer REST","retained_event_feed"),
     ("google","Google Workspace","native_admin_reports_audit"),
