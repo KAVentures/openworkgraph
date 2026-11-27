@@ -14,6 +14,9 @@ previous one. The funnel describes recorded order and timing; it does not say wh
 from __future__ import annotations
 
 from collections import Counter
+import hashlib
+import json
+import re
 from datetime import datetime
 from typing import Any
 
@@ -47,7 +50,8 @@ def _seconds(ts: Any) -> float:
 
 def funnel(log_id: str, steps: list[str], case_type: str | None = None, *, within_hours: float | None = None,
            cohort: dict[str, Any] | None = None, evidence_step: int | None = None,
-           evidence_status: str = "reached") -> dict[str, Any]:
+           evidence_status: str = "reached", evidence_page: bool = False,
+           evidence_after: str | None = None, evidence_revision: str | None = None) -> dict[str, Any]:
     if not isinstance(steps, list) or not MIN_STEPS <= len(steps) <= MAX_STEPS:
         raise EventLogWorkspaceError(f"choose {MIN_STEPS} to {MAX_STEPS} steps")
     if any(not isinstance(s, str) or not s or len(s) > 500 for s in steps):
@@ -59,6 +63,16 @@ def funnel(log_id: str, steps: list[str], case_type: str | None = None, *, withi
         raise EventLogWorkspaceError("evidence step must identify a chosen step")
     if evidence_status not in ("reached", "dropped") or (evidence_status == "dropped" and evidence_step == 1):
         raise EventLogWorkspaceError("choose reached or dropped after a previous step")
+    if type(evidence_page) is not bool or (evidence_page and evidence_step is None):
+        raise EventLogWorkspaceError("choose an evidence step for pagination")
+    if evidence_after is not None and (not evidence_page or not isinstance(evidence_after, str)
+                                       or not evidence_after or len(evidence_after) > 200):
+        raise EventLogWorkspaceError("invalid evidence case cursor")
+    if evidence_revision is not None and (not evidence_page or not isinstance(evidence_revision, str)
+                                          or not re.fullmatch(r"[0-9a-f]{64}", evidence_revision)):
+        raise EventLogWorkspaceError("invalid evidence revision")
+    if evidence_after is not None and evidence_revision is None:
+        raise EventLogWorkspaceError("the evidence revision is required for later pages")
     window = within_hours * 3600 if within_hours is not None else None
 
     def run(conn):
@@ -84,6 +98,12 @@ def funnel(log_id: str, steps: list[str], case_type: str | None = None, *, withi
     recent_cut = None if first_ts is None or log_end is None else log_end - 0.05 * (log_end - first_ts)
     evidence = []
     evidence_total = 0
+    revision = hashlib.sha256()
+    if evidence_page:
+        context = json.dumps(["owg.funnel-evidence.v1", log_id, data.get("case_notion"), steps,
+                              within_hours, evidence_step, evidence_status, cohort],
+                             ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+        revision.update(len(context).to_bytes(8, "big")); revision.update(context)
     for case_id, activities, stamps in rows:
         times = [_seconds(t) for t in stamps]
         k, at, start_at = 0, None, None
@@ -105,9 +125,13 @@ def funnel(log_id: str, steps: list[str], case_type: str | None = None, *, withi
         if evidence_step is not None and ((evidence_status == "reached" and k >= evidence_step) or
                 (evidence_status == "dropped" and k == evidence_step - 1)):
             evidence_total += 1
-            if len(evidence) < 50:
-                evidence.append({"case_id": case_id, "last_activity": activities[-1],
-                                 "steps_reached": k})
+            item = {"case_id": case_id, "last_activity": activities[-1], "steps_reached": k}
+            if evidence_page:
+                encoded = json.dumps([case_id, activities[-1], k], ensure_ascii=False,
+                                     separators=(",", ":")).encode()
+                revision.update(len(encoded).to_bytes(8, "big")); revision.update(encoded)
+            if (evidence_after is None or case_id > evidence_after) and len(evidence) < (51 if evidence_page else 50):
+                evidence.append(item)
         if k == len(steps):
             total_seconds.append(at - start_at)
         elif k:
@@ -115,6 +139,12 @@ def funnel(log_id: str, steps: list[str], case_type: str | None = None, *, withi
             stopped_last[k][activities[-1]] += 1
             if recent_cut is not None and times[-1] >= recent_cut:
                 stopped_recent[k] += 1
+    if evidence_page:
+        current_revision = revision.hexdigest()
+        if evidence_revision is not None and evidence_revision != current_revision:
+            raise EventLogWorkspaceError("funnel case evidence changed; run the funnel again")
+        next_after = evidence[49]["case_id"] if len(evidence) > 50 else None
+        evidence = evidence[:50]
     cases = len(rows)
     out = []
     for k, step in enumerate(steps):
@@ -138,7 +168,8 @@ def funnel(log_id: str, steps: list[str], case_type: str | None = None, *, withi
         "format": FORMAT, "log_id": log_id, "case_notion": data.get("case_notion"),
         "cases": cases, "steps": out, "within_hours": within_hours,
         "evidence": ({"step": evidence_step, "status": evidence_status, "total": evidence_total,
-                      "cases": evidence, "truncated": evidence_total > len(evidence)}
+                      "cases": evidence, "truncated": evidence_total > len(evidence),
+                      **({"revision": current_revision, "next_after": next_after} if evidence_page else {})}
                      if evidence_step is not None else None),
         "completed": {"cases": reached[-1], "share_of_first_step": out[-1]["share_of_first_step"],
                       "hours_first_to_last": {"median": _hours(_quantile(total_seconds, 0.5)),
