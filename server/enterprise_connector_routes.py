@@ -109,7 +109,8 @@ async def bundle_retain(request:Request,target:str|None=Query(default=None,max_l
         file_sha256=request.headers.get("x-owg-bundle-file-sha256"),
         canonical_bundle_sha256=request.headers.get("x-owg-bundle-canonical-sha256"),
         request_id=request.headers.get("x-owg-bundle-request-id"),target=target,
-        expected_revision=expected_revision,name=name,confirm_retention=True,confirm_origin_review=True)
+        expected_revision=expected_revision,name=name,confirm_retention=True,confirm_origin_review=True,
+        confirm_linkage_review=request.headers.get("x-owg-bundle-linkage-reviewed")=="true")
 
 
 @router.get("/v1/enterprise-connectors")
