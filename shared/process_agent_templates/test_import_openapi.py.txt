@@ -1,0 +1,173 @@
+"""Synthetic offline contract compilation and actual direct adapter parity."""
+from copy import deepcopy
+import importlib.util
+import json
+from pathlib import Path
+import tempfile
+import unittest
+from unittest.mock import patch
+
+from execute import ImplementationError,digest
+from import_openapi import read_document,inventory,propose,approve,main
+
+ORIGIN="https://customer.example"
+SPEC={"workflow_id":"fixture","revision":1,"content_sha256":"a"*64}
+PATH="/cases/{case_id}"
+
+
+def param(name,loc,kind="string"):
+    return {"name":name,"in":loc,"required":True,"schema":{"type":kind}}
+
+
+def response():
+    return {"200":{"description":"ok","content":{"application/json":{"schema":{"type":"object"}}}}}
+
+
+def fixture():
+    return {"openapi":"3.1.0","info":{"title":"Private example","version":"1"},
+        "servers":[{"url":ORIGIN}],"security":[{"bearerAuth":[]}],
+        "components":{"securitySchemes":{"bearerAuth":{"type":"http","scheme":"bearer"}},
+            "schemas":{"Status":{"type":"string","description":"PRIVATE_SCHEMA_DESCRIPTION"},
+                "Update":{"type":"object","properties":{"status":{"$ref":"#/components/schemas/Status"},
+                    "priority":{"type":"integer"}},"required":["status","priority"],"additionalProperties":False}},
+            "parameters":{"CaseId":param("case_id","path")}},
+        "paths":{PATH:{"parameters":[{"$ref":"#/components/parameters/CaseId"}],
+            "get":{"operationId":"read_case","parameters":[param("verbose","query","boolean")],"responses":response()},
+            "patch":{"operationId":"update_case","parameters":[param("If-Match","header"),param("Idempotency-Key","header")],
+                "requestBody":{"required":True,"content":{"application/json":{"schema":{"$ref":"#/components/schemas/Update"}}}},
+                "responses":response()}}}}
+
+
+def selection(*methods):
+    return [{"path":PATH,"method":m} for m in methods]
+
+
+class OpenAPIProposalTests(unittest.TestCase):
+    def test_inventory_and_disabled_proposal(self):
+        doc=fixture();r=inventory(doc,ORIGIN)
+        self.assertEqual(r["candidate_count"],2)
+        p=propose(SPEC,doc,ORIGIN,selection("patch","get"))
+        self.assertEqual(p,propose(SPEC,doc,ORIGIN,selection("get","patch")))
+        self.assertFalse(p["operations"]["reviewed"])
+        self.assertFalse(p["operations"]["allow_writes"])
+        self.assertFalse(p["execution_authorized"])
+        self.assertNotIn("PRIVATE_SCHEMA_DESCRIPTION",json.dumps(p))
+        a,b=p["operations"]["operations"]
+        self.assertEqual(a["fields"],{"case_id":"string","query_verbose":"boolean"})
+        self.assertEqual(b["body"],{"body_priority":"priority","body_status":"status"})
+        self.assertEqual(b["expected_version_argument"],"owg_expected_version")
+        self.assertTrue(all(not op["reviewed_provider_contract"] for op in (a,b)))
+
+    def test_operation_scope_and_parameter_override(self):
+        doc=fixture();doc["paths"][PATH]["get"]["parameters"].append(param("case_id","path","integer"))
+        doc["paths"][PATH]["get"]["servers"]=[{"url":"https://other.example"}]
+        r=inventory(doc,ORIGIN)
+        self.assertEqual(r["candidate_count"],1)
+        p=propose(SPEC,doc,"https://other.example",selection("get"))
+        self.assertEqual(p["operations"]["operations"][0]["fields"]["case_id"],"integer")
+        with self.assertRaises(ImplementationError):propose(SPEC,doc,ORIGIN,selection("get"))
+
+    def test_strict_json_and_versions(self):
+        for raw in (b'{"openapi":"3.1.0","openapi":"3.0.0"}',b'{"x":NaN}',b'\xff',b'['*20000):
+            with self.assertRaises(ImplementationError):read_document(raw)
+        for version in ("2.0","3.2.0","3.1","unknown"):
+            with self.assertRaises(ImplementationError):read_document(json.dumps({**fixture(),"openapi":version}).encode())
+        for version in ("3.0.3","3.1.2"):
+            self.assertEqual(read_document(json.dumps({**fixture(),"openapi":version}).encode())["openapi"],version)
+        with self.assertRaises(ImplementationError):read_document(b" "* (2*1024*1024+1))
+
+    def test_unsupported_contracts_are_not_silently_weakened(self):
+        mutations=[
+            lambda d:d.update(security=[]),
+            lambda d:d.update(security=[{"bearerAuth":[]},{}]),
+            lambda d:d["components"]["securitySchemes"]["bearerAuth"].update(scheme="basic"),
+            lambda d:d["paths"][PATH]["get"]["parameters"][0].update(required=False),
+            lambda d:d["paths"][PATH]["get"]["parameters"][0].update(style="deepObject"),
+            lambda d:d["paths"][PATH]["get"]["parameters"][0]["schema"].update(enum=[True]),
+            lambda d:d["paths"][PATH]["get"]["parameters"][0]["schema"].update(type="array"),
+            lambda d:d["paths"][PATH]["get"]["parameters"][0]["schema"].update(nullable=True),
+            lambda d:d["paths"][PATH]["get"]["parameters"].append(param("cookie","cookie")),
+            lambda d:d["paths"][PATH]["get"]["parameters"].append(param("X-Tenant","header")),
+            lambda d:d["paths"][PATH]["get"].update(responses={"204":{"description":"empty"}}),
+            lambda d:d["paths"][PATH]["get"].update(callbacks={}),
+            lambda d:d["paths"][PATH]["get"].update(deprecated=True),
+            lambda d:d["paths"][PATH].update(servers=[{"url":"https://{region}.example","variables":{}}]),
+            lambda d:d["components"]["parameters"]["CaseId"].update(schema={"$ref":"https://evil.example/schema"}),
+            lambda d:d["components"]["parameters"]["CaseId"].update(schema={"$ref":"#/components/schemas/A"}),
+        ]
+        for change in mutations:
+            doc=fixture();change(doc)
+            with self.assertRaises(ImplementationError):propose(SPEC,doc,ORIGIN,selection("get"))
+
+    def test_write_needs_explicit_json_and_exact_headers(self):
+        for change in (
+            lambda d:d["paths"][PATH]["patch"]["parameters"].pop(),
+            lambda d:d["paths"][PATH]["patch"].pop("requestBody"),
+            lambda d:d["components"]["schemas"]["Update"].update(additionalProperties=True),
+            lambda d:d["components"]["schemas"]["Update"].update(required=["status"]),
+            lambda d:d["components"]["schemas"]["Status"].update(pattern="^valid$"),
+            lambda d:d["components"]["schemas"]["Status"].update(type="object"),
+            lambda d:d["components"]["schemas"]["Status"].update(default="unreviewed"),
+            lambda d:d["components"]["schemas"]["Status"].update({"$ref":"#/components/schemas/Status"}),
+        ):
+            doc=fixture();change(doc)
+            with self.assertRaises(ImplementationError):propose(SPEC,doc,ORIGIN,selection("patch"))
+
+    def test_duplicate_operation_and_ambiguous_template(self):
+        doc=fixture();doc["paths"]["/other"]={"get":{"operationId":"read_case","responses":response()}}
+        with self.assertRaises(ImplementationError):propose(SPEC,doc,ORIGIN,selection("get"))
+        doc=fixture();doc["paths"]["/cases/{other}"]={}
+        with self.assertRaises(ImplementationError):propose(SPEC,doc,ORIGIN,selection("get"))
+        doc=fixture()
+        with self.assertRaises(ImplementationError):propose(SPEC,doc,ORIGIN,selection("get","get"))
+        for origin in ("http://example.com","https://user:pass@example.com","https://customer.example/api","https://customer.example/"):
+            with self.assertRaises(ImplementationError):inventory(doc,origin)
+
+    def test_approval_recomputes_complete_proposal(self):
+        doc=fixture();p=propose(SPEC,doc,ORIGIN,selection("get","patch"))
+        names=["read_case","update_case"]
+        def attempt(proposal=p,expected=p["proposal_sha256"],review=names,contracts=True,writes=True,source=doc):
+            return approve(SPEC,source,proposal,expected,review,confirm_contracts=contracts,confirm_writes=writes)
+        for kw in ({"contracts":False},{"writes":False},{"review":["read_case"]},
+                   {"review":["read_case","read_case"]},{"expected":"f"*64}):
+            with self.assertRaises(ImplementationError):attempt(**kw)
+        changed=deepcopy(p);changed["operations"]["operations"][0]["path"]="/private"
+        changed["proposal_sha256"]=digest({k:v for k,v in changed.items() if k!="proposal_sha256"})
+        with self.assertRaises(ImplementationError):attempt(proposal=changed,expected=changed["proposal_sha256"])
+        changed=deepcopy(doc);changed["info"]["title"]="source changed"
+        with self.assertRaises(ImplementationError):attempt(source=changed)
+
+    @unittest.skipUnless(importlib.util.find_spec("httpx"),"httpx required for actual runtime parity")
+    def test_approved_catalog_runs_actual_adapter_request_mapping_without_network(self):
+        from execute_http import Operations
+        doc=fixture();p=propose(SPEC,doc,ORIGIN,selection("get","patch"))
+        with patch("httpx.AsyncClient",side_effect=AssertionError("network not allowed")):
+            out=approve(SPEC,doc,p,p["proposal_sha256"],["read_case","update_case"],
+                confirm_contracts=True,confirm_writes=True)
+            ops=Operations(SPEC,out,digest(out))
+            method,url,params,body,headers=ops.request("update_case",{"case_id":"123","body_status":"closed",
+                "body_priority":2,"owg_expected_version":'"3"',"owg_idempotency_key":"synthetic"})
+            self.assertEqual((method,url,params,body),("PATCH",ORIGIN+"/cases/123",{},{"status":"closed","priority":2}))
+            self.assertEqual(headers["If-Match"],'"3"')
+            self.assertEqual(headers["Idempotency-Key"],"synthetic")
+            self.assertFalse(ops.catalog(SPEC)["execution_authorized"])
+            self.assertEqual(ops.request("read_case",{"case_id":"123","query_verbose":True})[2],{"verbose":True})
+            with self.assertRaises(ImplementationError):
+                ops.request("read_case",{"case_id":"../private","query_verbose":True})
+
+    def test_cli_inspect_propose_exclusive_output(self):
+        with tempfile.TemporaryDirectory() as root:
+            d=Path(root);source=d/"api.json";source.write_text(json.dumps(fixture()))
+            spec=d/"spec.json";spec.write_text(json.dumps(SPEC))
+            select=d/"select.json";select.write_text(json.dumps({"operations":selection("get")}))
+            output=d/"proposal.json"
+            args=["propose","--openapi",str(source),"--origin",ORIGIN,"--spec",str(spec),
+                  "--selection",str(select),"--out",str(output)]
+            self.assertEqual(main(args),0)
+            self.assertFalse(json.loads(output.read_text())["operations"]["reviewed"])
+            with self.assertRaises(SystemExit) as exc:main(args)
+            self.assertEqual(exc.exception.code,2)
+
+
+if __name__=="__main__":
+    unittest.main()
