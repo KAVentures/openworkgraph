@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import json
+import csv
+import io
 from io import BytesIO
 
 import pytest
@@ -366,3 +368,32 @@ def test_event_attribute_sum_discloses_partial_coverage_and_complete_policy():
     assert complete["metrics"][0]["cases_without_value"] == 2
     with pytest.raises(workspace.EventLogWorkspaceError):
         calculate("ignore_everything")
+
+
+@pytest.mark.parametrize("attribute", ['amount"usd', r'amount\usd', 'amount/usd', 'amount~usd', 'amount.usd', 'amount" OR 1=1 --'])
+def test_numeric_metric_uses_literal_event_attribute_name(attribute):
+    data = io.StringIO(newline="")
+    writer = csv.writer(data)
+    writer.writerow(["case", "activity", "time", attribute])
+    writer.writerow(["a", "Start", "2024-01-01T00:00:00Z", "3"])
+    writer.writerow(["a", "End", "2024-01-01T01:00:00Z", "7"])
+    log = workspace.import_log(BytesIO(data.getvalue().encode()), name="literal", source_format="csv", mapping={
+        "case_column": "case", "activity_column": "activity", "timestamp_column": "time",
+        "attribute_columns": [attribute]})["log_id"]
+    result = query.run(log, {"level": "cases", "measures": [{"fn": "sum", "of": "metric:total"}],
+        "metrics": [{"name": "total", "kind": "event_attribute_sum", "attribute": attribute, "unit": "USD"}]})
+    assert result["rows"] == [[10.0]]
+    statistic = query.run(log, {"level": "cases", "measures": [{"fn": "sum", "of": "metric:mean"}],
+        "metrics": [{"name": "mean", "kind": "event_attribute_statistic", "attribute": attribute,
+                     "unit": "USD", "statistic": "average"}]})
+    assert statistic["rows"] == [[5.0]]
+
+
+def test_numeric_metric_uses_literal_case_attribute_name():
+    name = 'price/"~\\total'
+    source = {**OCEL, "objects": [dict(obj, attributes=[
+        {"name": name, "time": "1970-01-01T00:00:00Z", "value": "5"}]) for obj in OCEL["objects"]]}
+    log = workspace.import_log(BytesIO(json.dumps(source).encode()), name="literal", source_format="ocel")["log_id"]
+    result = query.run(log, {"level": "cases", "measures": [{"fn": "sum", "of": "metric:price"}],
+        "metrics": [{"name": "price", "kind": "case_attribute_number", "attribute": name, "unit": "USD"}]})
+    assert result["rows"] == [[15.0]]

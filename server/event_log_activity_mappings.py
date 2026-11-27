@@ -72,7 +72,7 @@ def _describe(mapping_id: str, created, definition: str, applied: bool) -> dict[
     body = json.loads(definition)
     return {"mapping_id": mapping_id, "created_at": created.isoformat() + "Z" if created else None, "applied": bool(applied),
             "definition_sha256": _digest(body), **body,
-            "mapped_activities": sum(len(g["activities"]) for g in body["groups"])}
+            "mapped_activities": len({activity for group in body["groups"] for activity in group["activities"]})}
 
 
 def _with_conn(log_id: str, fn):
@@ -188,11 +188,13 @@ def apply_to_case_events(conn, log_id: str) -> dict[str, Any] | None:
     described = applied_mapping(conn, log_id)
     if described is None:
         return None
-    pairs = [(a, g["label"]) for g in described["groups"] for a in g["activities"]]
+    # Previously saved definitions can repeat the same activity in groups with
+    # the same label. Keep their definition intact, but never multiply events.
+    pairs = list(dict.fromkeys((a, g["label"]) for g in described["groups"] for a in g["activities"]))
     before = conn.execute("SELECT count(*) FROM ce").fetchone()[0]
     conn.execute("CREATE OR REPLACE TEMP TABLE ce_map AS SELECT unnest(?) AS original, unnest(?) AS label",
                  [[p[0] for p in pairs], [p[1] for p in pairs]])
-    relabeled = conn.execute("SELECT count(*) FROM ce JOIN ce_map m ON ce.activity = m.original").fetchone()[0]
+    relabeled = conn.execute("SELECT count(*) FROM ce JOIN ce_map m ON ce.activity = m.original WHERE ce.activity <> m.label").fetchone()[0]
     conn.execute("UPDATE ce SET activity = m.label FROM ce_map m WHERE ce.activity = m.original")
     collapsed = 0
     if described["collapse_repeats"]:
