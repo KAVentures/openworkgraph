@@ -225,7 +225,8 @@ def test_exact_nondeterministic_marking_preserves_alternative_paths():
         "goal":"Choose a route", "baseline_path":["A","C"],"baseline_source":"user_declared",
         "activities":[{"id":"a","label":"A"},{"id":"x","label":"Choice","kind":"decision"},
                       {"id":"b","label":"B"},{"id":"c","label":"C"}],
-        "transitions":[{"source":"a","target":"x"},{"source":"x","target":"b"},{"source":"x","target":"c"}],
+        "business_rules":[{"id":"rb","text":"Choose B"},{"id":"rc","text":"Choose C"}],
+        "transitions":[{"source":"a","target":"x"},{"source":"x","target":"b","rule_id":"rb"},{"source":"x","target":"c","rule_id":"rc"}],
         "entry_activity_id":"a","terminal_activity_ids":["b","c"]})
     life = sync.Lifecycle(model,{"A":"A","B":"B","C":"C"})
     budget = sync.Budget()
