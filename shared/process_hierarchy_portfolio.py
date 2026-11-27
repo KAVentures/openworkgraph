@@ -69,7 +69,7 @@ def build(organization_id,catalog,maps,resolutions):
     occurrences=[]
     sets={}
     state_counts=Counter()
-    for artifact in sorted(maps,key=lambda m:m["hierarchy"]["nodes"][0]["id"] if not m.get("root_workflow_id") else m["root_workflow_id"]):
+    for artifact in sorted(maps,key=lambda m:m["root_workflow_id"]):
         root=artifact["root_workflow_id"]
         h=artifact["hierarchy"]
         paths=_paths(h["nodes"])
@@ -100,7 +100,7 @@ def build(organization_id,catalog,maps,resolutions):
                        "maximum_level":max(r["level"] for r in items)}
     processes=[]
     for wid in sorted(set(catalog)|set(by_process)):
-        rows=by_process[wid]
+        rows=by_process.get(wid,[])
         pin_counts=Counter((r["revision"],r["content_sha256"]) for r in rows)
         roots=sorted({r["root_workflow_id"] for r in rows})
         parent_contexts=sorted({r["parent_workflow_id"] for r in rows if r["parent_workflow_id"] is not None})

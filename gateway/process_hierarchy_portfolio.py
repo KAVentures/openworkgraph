@@ -1,6 +1,8 @@
 """Read a complete bounded organization repository portfolio in one snapshot."""
 from __future__ import annotations
 
+import json
+
 from shared import process_hierarchy_portfolio as core
 from .process_hierarchies import ProcessHierarchies,namespace
 from .process_collaboration import ProcessCollaborationError as Error,_now
@@ -63,6 +65,8 @@ class RepositoryPortfolio:
             except ValueError as exc:
                 raise Error(str(exc),409) from None
         result["checked_at"]=_now()
+        if len(json.dumps(result,ensure_ascii=True,separators=(",",":")).encode())>2*1024*1024:
+            raise Error("Repository portfolio page exceeds 2 MiB; use a smaller page",422)
         # Existing tenant process-read authorization applies, audit failures
         # withhold the response. No map titles, actor IDs, paths or model
         # payloads are added to audit details.
