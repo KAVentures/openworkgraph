@@ -253,7 +253,8 @@ def create(kind: str, target_id: str, *, interval_minutes: int, confirm_schedule
            confirm_unencrypted_local_backup: bool = False,
            quiet_hours: dict[str, str] | None = None,
            report_scope: dict[str, Any] | None = None,
-           confirm_rest_read_retention: bool = False) -> dict[str, Any]:
+           confirm_rest_read_retention: bool = False,
+           expected_rest_profile_revision: int | None = None) -> dict[str, Any]:
     if confirm_scheduled_runs is not True:
         raise ScheduleError("explicit confirmation required to run this job on a schedule")
     if kind not in KINDS:
@@ -279,6 +280,8 @@ def create(kind: str, target_id: str, *, interval_minutes: int, confirm_schedule
         from . import enterprise_rest_feed as rest
         try:
             rest_pin = rest.schedule_pin(target_id)
+            if type(expected_rest_profile_revision) is not int or expected_rest_profile_revision != rest_pin:
+                raise ScheduleError("REST profile changed; review its exact revision again")
         except rest.FeedError as exc:
             raise ScheduleError(exc.code) from None
     _check_target(kind, target_id)
