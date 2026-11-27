@@ -36,8 +36,8 @@ MAX_DSN = 8192
 MAX_READ_SECONDS = 75
 STATEMENT_MS = 10000
 EPOCH = datetime(1970,1,1,tzinfo=timezone.utc)
-PG_IDS = {"text","varchar","bpchar","int2","int4","int8","uuid"}
-PG_LABELS = {"text","varchar","bpchar"}
+PG_IDS = {"text","varchar","int2","int4","int8","uuid"}
+PG_LABELS = {"text","varchar"}
 SQLITE_IDS = {"TEXT","INTEGER"}
 
 
@@ -266,7 +266,7 @@ def _query(source):
             return q
         n=limits[column]+1
         return ("pg_catalog.left("+q+"::text, "+str(n)+")" if source.engine=="postgresql"
-                else "substr("+q+", 1, "+str(n)+")")
+                else "CASE WHEN instr("+q+", char(0))>0 THEN char(1) ELSE substr("+q+", 1, "+str(n)+") END")
     cols=", ".join(select(c) for c in _columns(source))
     changed=_quote(m.change_time)
     # A single snapshot cursor, no offset or keyset skipping of tied times.
