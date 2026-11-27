@@ -94,6 +94,9 @@ def create_enterprise_app(
             "explicit_operator_approval": True, "raw_source_payloads_received": False,
             "provider_credentials_received": False, "expired_leases_require_reconciliation": True,
             "worker_reported_receipts": True,
+            "separate_owner_approved_event_snapshots": True,
+            "event_snapshots_expire": True,
+            "cross_source_case_identity_inferred": False,
         }
         payload["enterprise_declared_policy"] = {
             "signed_bundle_distribution": True,
