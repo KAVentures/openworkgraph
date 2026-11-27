@@ -123,6 +123,9 @@ jobs:
             tests/test_connector_quality_verified_import.py \
             tests/test_connector_quality_verifier_pure.py \
             tests/test_connector_publication_quality.py \
+            tests/test_connector_linked_conformance.py \
+            tests/test_connector_exception_triage.py \
+            tests/test_connector_temporal_review.py \
             tests/test_enterprise_connector_integration.py
       - name: Install isolated Chromium runtime
         if: success() || failure()
@@ -145,7 +148,7 @@ jobs:
           test ! -e data/gateway/openworkgraph_gateway.db
 
   verified-bundle-import:
-    if: github.event_name == 'pull_request' && (startsWith(github.head_ref, 'feat/enterprise-verified-bundle-import-') || startsWith(github.head_ref, 'feat/enterprise-portable-linked-evidence-') || startsWith(github.head_ref, 'feat/enterprise-quality-verified-import-') || github.head_ref == 'integration/enterprise-connectors-quality-20261127')
+    if: github.event_name == 'pull_request' && (startsWith(github.head_ref, 'feat/enterprise-verified-bundle-import-') || startsWith(github.head_ref, 'feat/enterprise-portable-linked-evidence-') || startsWith(github.head_ref, 'feat/enterprise-quality-verified-import-') || github.head_ref == 'integration/enterprise-connectors-quality-20261127' || github.head_ref == 'integration/enterprise-connectors-process-20261127')
     runs-on: ubuntu-latest
     timeout-minutes: 25
     services:
