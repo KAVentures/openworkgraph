@@ -524,3 +524,33 @@ def run(profile_id,revision,*,confirm_reads,confirm_retention,client_factory=htt
         error=FeedError("retention_or_source_failed_inspect_checkpoint")
         _fail(p,error)
         raise error from None
+
+
+def schedule_pin(profile_id):
+    """No provider access; existing scheduler pins this exact configuration."""
+    with workspace._LOCK:
+        c=_connect()
+        try:
+            p=_get(c,profile_id)
+            if not p["enabled"]:
+                raise FeedError("rest_profile_disabled")
+            _check_binding(p)
+            return p["revision"]
+        finally:
+            c.close()
+
+
+def run_scheduled(profile_id,revision):
+    try:
+        if type(revision) is not int or schedule_pin(profile_id)!=revision:
+            return "paused:rest_profile_changed",0.0
+        result=run(profile_id,revision,confirm_reads=True,confirm_retention=True)
+        return "succeeded:"+str(result["events_added"])+"_events_added",0.0
+    except FeedError as error:
+        if error.code in {"unknown_rest_profile","rest_profile_disabled","profile_changed_or_disabled",
+                           "credential_changed_reconfigure_required","rest_run_invalidated",
+                           "endpoint_not_deployment_allowlisted"}:
+            return "paused:rest_profile_changed",0.0
+        if error.code=="no_new_checkpoint_window":
+            return "skipped_no_new_window",0.0
+        return "failed:"+error.code,float(error.retry_after)
