@@ -199,6 +199,19 @@ def test_overlength_value_refuses_instead_of_truncating(local_source):
     assert current()["checkpoint"] is None
 
 
+def test_embedded_nul_and_null_resource_are_not_confused(local_source):
+    path,_=local_source
+    p=sql.create(config())
+    insert(path,row(p,"bad\0identity"))
+    with pytest.raises(rest.FeedError,match="invalid_mapped_source_field"):
+        run(p)
+    assert current()["checkpoint"] is None
+    with sqlite3.connect(path) as c:
+        c.execute("DELETE FROM events")
+    insert(path,row(p,actor=None))
+    assert run(p)["events_added"]==1
+
+
 def test_catalog_retarget_and_credential_pin_fail_closed(local_source,monkeypatch):
     path,source=local_source
     reviewed=config()
@@ -217,6 +230,7 @@ def test_catalog_retarget_and_credential_pin_fail_closed(local_source,monkeypatc
     replacement=path.with_name("replacement.sqlite")
     with sqlite3.connect(replacement) as c:
         c.execute(TABLE)
+    c.close()
     os.replace(replacement,path)
     assert not current()["credential_binding_available"]
     with pytest.raises(rest.FeedError,match="credential_changed"):
