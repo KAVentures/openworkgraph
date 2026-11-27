@@ -1127,6 +1127,69 @@
       watch_integrity_hold:$('slaHold').checked,confirm_local_monitoring:true};
     slaAction(()=>api(base+'/service-levels/save',payload),'Reviewed local monitoring policy saved.');
   };
+  let catchupRows=[],catchupBusy=false,catchupGeneration=0;
+  function catchupReset(){
+    catchupGeneration++;$('catchupResults').replaceChildren();
+    $('catchupPreview').disabled=catchupBusy||!catchupRows.some(x=>x.box.checked);
+  }
+  function catchupLock(value){
+    catchupBusy=value;$('catchupRefresh').disabled=value;
+    for(const x of catchupRows)x.box.disabled=value;
+    $('catchupPreview').disabled=value||!catchupRows.some(x=>x.box.checked);
+    $('catchupResults').querySelectorAll('input,button').forEach(n=>n.disabled=true);
+  }
+  async function catchupLoad(){
+    if(catchupBusy)return;catchupReset();catchupLock(true);
+    try{
+      const data=await api(base+'/catchup');catchupRows=[];
+      const cards=data.profiles.map(p=>{
+        const item=check(p.provider+' / '+p.profile_id+' · revision '+p.revision+(p.enabled?'':' · disabled'));
+        item.box.onchange=catchupReset;catchupRows.push({profile:p,box:item.box});return item.node;
+      });
+      $('catchupTargets').replaceChildren(...cards.length?cards:[el('p','No configured retained feeds.')]);
+      $('catchupStatus').textContent='Select profiles to review their next advancing windows.';
+    }catch(error){catchupRows=[];$('catchupTargets').replaceChildren();$('catchupStatus').textContent=error.message;}
+    finally{catchupLock(false);}
+  }
+  $('catchupRefresh').onclick=catchupLoad;
+  $('catchupPreview').onclick=async()=>{
+    if(catchupBusy)return;catchupReset();const turn=catchupGeneration;
+    const targets=catchupRows.filter(x=>x.box.checked).map(x=>({profile_id:x.profile.profile_id,revision:x.profile.revision}));
+    if(!targets.length||targets.length>20){$('catchupStatus').textContent='Choose 1–20 profiles.';return;}
+    catchupLock(true);
+    try{
+      const plan=await api(base+'/catchup/preview',{targets});if(turn!==catchupGeneration)return;
+      const root=$('catchupResults');
+      root.replaceChildren(el('p',plan.eligible_count+' eligible; '+plan.blocked_count+' blocked. No provider reads performed.'),
+        table(['Profile / provider','Eligibility','From UTC','Until UTC','Advancing hours','Estimated outstanding windows','Reason'],plan.targets.map(p=>
+          [p.profile_id+' / '+p.provider,p.eligible,p.since,p.until,p.advancing_hours,p.backlog.estimated_advancing_windows,p.reason])));
+      for(const p of plan.targets.filter(x=>x.eligible)){
+        const item=el('details');item.append(el('summary',p.provider+' / '+p.profile_id+' · review exact window'),
+          table(['Reviewed field','Value'],[['Start',p.since],['End (exclusive)',p.until],['Checkpoint',p.checkpoint],
+            ['Excluded cases',p.excluded_case_count],['Review expires',p.expires_at],['Plan digest',p.plan_sha256]]));
+        const exact=check('I reviewed the exact advancing window.'),read=check('Authorize one provider read.'),retain=check('Authorize local retention.'),
+          workers=check('I reconciled competing workers and schedules for this profile.');
+        const approvals=[exact,read,retain,workers];
+        const run=button('Execute this reviewed window',async()=>{
+          if(catchupBusy||turn!==catchupGeneration||!approvals.every(a=>a.box.checked))return;
+          catchupLock(true);
+          try{
+            const r=await api(base+'/catchup/execute',{profile_id:p.profile_id,revision:p.revision,reviewed_at:p.reviewed_at,
+              since:p.since,until:p.until,plan_sha256:p.plan_sha256,confirm_exact_window:true,confirm_provider_read:true,
+              confirm_retention:true,confirm_competing_workers_reconciled:true});
+            catchupReset();
+            $('catchupStatus').textContent='Committed: '+r.events_added+' added, '+r.duplicates_skipped+' duplicates. Checkpoint '+r.checkpoint+'. Review again before another window.';
+            if(!busy)await load();
+          }catch(error){catchupReset();$('catchupStatus').textContent=error.message+' — inspect run history and refresh before retrying.';}
+          finally{catchupLock(false);}
+        },true);
+        for(const a of approvals){a.box.onchange=()=>run.disabled=catchupBusy||!approvals.every(x=>x.box.checked);item.append(a.node);}
+        item.append(run);root.append(item);
+      }
+      $('catchupStatus').textContent='Review complete. Each window requires independent consent.';
+    }catch(error){$('catchupStatus').textContent=error.message;}
+    finally{catchupLock(false);$('catchupResults').querySelectorAll('input').forEach(n=>n.disabled=false);}
+  };
   $('refresh').onclick=load;
   $('freshness').oninput=()=>{generation++;latest=null;$('download').disabled=true;$('refresh').disabled=busy;$('inventory').replaceChildren();$('profiles').replaceChildren();$('status').textContent='Threshold changed. Refresh local inventory.';};
   $('download').onclick=async()=>{
