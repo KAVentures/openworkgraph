@@ -126,7 +126,12 @@ def analyze(enrolled,observations,thresholds):
                 gates.append(decision_check(label+"_episode_"+gate,micro_lo,micro_hi,p[gate],direction))
                 gates.append(decision_check(label+"_equal_team_"+gate,macro_lo,macro_hi,p[gate],direction))
                 stress="min_leave_one_team_success_delta_bps" if good else "max_leave_one_team_wrong_action_delta_bps"
-                gates.append(decision_check(label+"_leave_one_team_"+stress,*loo,p[stress],direction) if loo else
+                # For an all-removals threshold, bound the worst removal,
+                # not the range of all removal estimates. A single known
+                # failing removal must fail even if another removal passes.
+                worst=(min(a for a,b in dropped),min(b for a,b in dropped)) if good and dropped else (
+                    (max(a for a,b in dropped),max(b for a,b in dropped)) if dropped else None)
+                gates.append(decision_check(label+"_leave_one_team_"+stress,*worst,p[stress],direction) if worst else
                              {"gate":label+"_leave_one_team_"+stress,"status":"indeterminate",
                               "direction":direction,"threshold_bps":p[stress],"identified_bounds":None})
     overall="fail" if any(g["status"]=="fail" for g in gates) else (
