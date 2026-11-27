@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta
+import json
 from statistics import median
 from typing import Literal
 
@@ -231,4 +232,7 @@ def review(deployment_id,payload):
             for rid,*step in steps:grouped[rid].append(step)
             runs=[e._run(row,grouped[row[0]]) for row in rows]
         finally:conn.close()
-    return summarize(deployment_id,runs,info,s)
+    result=summarize(deployment_id,runs,info,s)
+    if len(json.dumps(result,ensure_ascii=True,separators=(",",":")).encode())>2*1024*1024:
+        raise m.MonitoringError("recovery evidence page exceeds 2 MiB; choose a smaller page")
+    return result
