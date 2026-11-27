@@ -103,6 +103,8 @@ const path=require('node:path');
   const changed=JSON.parse(JSON.stringify(payload));changed.objects[1].relationships=[{objectId:'item1',qualifier:'contains'}];
   await load(changed);await page.locator('#owgEventLogAppend').click();await status('Added 0 new events');
   await page.locator('#owgEventLogCaseType').selectOption('order');await page.locator('#owgEventLogAnalyze').click();await page.locator('#owgObjectRules').waitFor();
+  assert.equal(await page.locator('#owgObjectRuleType').inputValue(),'order','graph primary type remains the default after append');
+  await page.locator('#owgObjectRuleType').selectOption('order');
   await page.locator('#owgObjectRuleRelated').selectOption('item');await page.locator('#owgObjectRuleMin').fill('1');await page.locator('#owgObjectRuleMax').fill('2');
   await page.locator('#owgObjectRuleAdd').click();data=await check();
   assert.equal(data.results[0].violating,0);assert.equal(data.supplied_relationship_basis.revision,1);assert.equal(data.supplied_relationship_basis.retained_relationships,5);

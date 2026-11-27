@@ -3974,7 +3974,11 @@
     const acts=[...new Set((graph.object_types||[]).flatMap(t=>t.activities.map(a=>a.activity)))].slice(0,500).map(a=>[a,a]);
     const template=select('owgObjectRuleTemplate',OBJECT_RULE_TEMPLATES);
     const activity=select('owgObjectRuleActivity',acts),objectType=select('owgObjectRuleType',types),relatedType=select('owgObjectRuleRelated',types);
-    if(types.length>1)relatedType.selectedIndex=1;
+    // Preserve the graph's primary type as the default even when the full retained list includes eventless types.
+    const primary=graph.object_types?.[0]?.object_type;
+    if(types.some(([value])=>value===primary))objectType.value=primary;
+    const related=types.find(([value])=>value!==objectType.value);
+    if(related)relatedType.value=related[0];
     const required=select('owgObjectRuleRequired',acts),via=select('owgObjectRuleVia',[['','Any shared event'],...acts]);
     const direction=select('owgObjectRuleDirection',[['outgoing','Outgoing supplied assertions'],['incoming','Incoming supplied assertions'],['both','Incoming and outgoing supplied assertions']]);
     const exact=input('owgObjectRuleExactQualifier','checkbox'),qualifier=input('owgObjectRuleQualifier','text','Exact relationship label');qualifier.maxLength=160;
