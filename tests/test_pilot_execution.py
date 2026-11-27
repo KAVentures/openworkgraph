@@ -161,3 +161,23 @@ def test_cli_exclusive_snapshots(tmp_path):
     assert cohort._load(out)["revision"]==1
     with pytest.raises(SystemExit):execution.main(args)
     assert cohort._load(ledger_path)==l
+
+
+def test_withdraw_remaining_keeps_completed_history_and_no_material_coverage():
+    p,s,l=setup(plan(1));eid=s["episodes"][0]["episode_id"];a,b,c=s["episodes"][0]["arm_order"]
+    l=append(p,s,l,[start(p,eid,a,1),finish(eid,a,2),start(p,eid,b,3)])
+    next=execution.withdraw_remaining(p,s,l,episode_id=eid,declared_at_ms=4,**kwargs(p,s,l))
+    assert next["events"][:l["revision"]]==l["events"]
+    report=execution.progress(p,s,next,**kwargs(p,s,next))
+    assert report["all_attempts_terminal"] and not report["all_attempts_completed"]
+    assert report["arm_counts"]=={a:{"completed":1},b:{"withdrawn":1},c:{"withdrawn":1}}
+    pos=report["position_diagnostics"][0]["positions"]
+    assert pos[a][0]=={"position":1,"planned":1,"started":1,"completed":1,"terminal_noncompletion":0}
+    assert pos[b][1]=={"position":2,"planned":1,"started":1,"completed":0,"terminal_noncompletion":1}
+    assert pos[c][2]=={"position":3,"planned":1,"started":0,"completed":0,"terminal_noncompletion":1}
+    coverage=execution.coverage_without_material(p,s,next,**kwargs(p,s,next))
+    assert coverage["coverage"]["arm_dispositions"]=={a:{"review_unavailable":1},b:{"withdrawn":1},c:{"withdrawn":1}}
+    assert not coverage["review_material_used"] and not coverage["canonical_scorer_invoked"]
+    assert all(coverage["coverage"]["bounds"][arm]["continuation_success"]["unknown"]==1 for arm in cohort.ARMS)
+    with pytest.raises(ValueError):execution.withdraw_remaining(p,s,next,episode_id=eid,declared_at_ms=5,**kwargs(p,s,next))
+    with pytest.raises(ValueError):append(p,s,next,[start(p,eid,b,5)])
