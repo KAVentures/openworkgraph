@@ -409,6 +409,7 @@
           ()=>load(selected.workflow_id,revision,previous.content_sha256)));
         host.replaceChildren(section);
         renderPolicyRegression(previous,selected,host,generation);
+        renderDecisionDifferential(previous,selected,host,generation);
       }catch(error){
         if(generation===revisionCompareGeneration&&record===selected)
           host.replaceChildren(el('p','Comparison unavailable: '+error.message));
@@ -416,6 +417,110 @@
       }
     });
   }
+  function renderDecisionDifferential(previous,selected,host,generation){
+    if(previous.revision>=selected.revision)return;
+    const panel=el('details');panel.id='owgDecisionDifferential';panel.append(el('summary','Compare synthetic decision domains across revisions'));
+    panel.append(el('p','Automatically compare both immutable designs on the same finite synthetic inputs and dates. Changed outcomes are not automatically errors or approved expectations. Do not enter real customer facts.'));
+    const field=(label,node)=>{const l=el('label',label+' ');l.append(node);return l;};
+    const dates=el('input');dates.type='text';dates.placeholder='2026-01-01,2026-07-01';dates.setAttribute('aria-label','Differential test dates');
+    const input=el('textarea');input.rows=10;input.style.cssText='width:100%;box-sizing:border-box;font-family:monospace';input.value='[]';input.setAttribute('aria-label','Differential synthetic dimensions JSON');
+    const limit=el('input');limit.type='number';limit.min='1';limit.max='50';limit.value='20';limit.setAttribute('aria-label','Compact witness budget');
+    const filter=el('select');filter.setAttribute('aria-label','Differential evidence filter');
+    for(const k of ['changed','all','selection_lost','selection_gained','target_changed','status_changed','diagnostics_changed','identity_changed','unchanged']){
+      const o=el('option',k.replaceAll('_',' '));o.value=k;filter.append(o);}
+    const focus=el('select');focus.setAttribute('aria-label','Differential table filter');const all=el('option','All tables');all.value='';focus.append(all);
+    const out=el('div');out.id='owgDecisionDifferentialResult';out.setAttribute('role','status');
+    let serial=0,report=null,basis=null;
+    const active=()=>panel.isConnected&&host.isConnected&&generation===revisionCompareGeneration&&record===selected;
+    const invalidate=()=>{serial++;report=basis=null;out.replaceChildren();focus.replaceChildren(all);focus.value='';};
+    for(const n of [dates,input,limit])n.addEventListener('input',invalidate);
+    const params=new URLSearchParams({workflow_id:selected.workflow_id,before_revision:String(previous.revision),after_revision:String(selected.revision),
+      before_sha256:previous.content_sha256,after_sha256:selected.content_sha256});
+    function table(headers,rows){
+      const wrap=el('div');wrap.style.cssText='overflow-x:auto;max-width:100%';
+      const t=el('table'),h=el('thead'),hr=el('tr'),b=el('tbody');
+      for(const x of headers){const th=el('th',x);th.scope='col';hr.append(th);}h.append(hr);
+      for(const row of rows){const tr=el('tr');for(const x of row)tr.append(el('td',x??'—'));b.append(tr);}
+      t.append(h,b);wrap.append(t);return wrap;
+    }
+    function download(data,name){
+      const url=URL.createObjectURL(new Blob([JSON.stringify(data,null,2)],{type:'application/json'})),a=el('a');
+      a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
+    }
+    async function evaluate(offset=0,reuse=false){
+      if(!active())return;
+      const n=++serial,prior=reuse?report:null;report=null;out.replaceChildren(el('p','Checking paired finite domain…'));
+      try{
+        if(!reuse){
+          const ds=dates.value.split(',').map(d=>d.trim());
+          if(ds.some(d=>!d)||!limit.checkValidity()||limit.value==='')throw Error('Choose explicit test dates and witness budget.');
+          basis={dates:ds,dimensions:JSON.parse(input.value),witness_limit:Number(limit.value)};
+        }
+        if(!basis)throw Error('Prepare the domain first.');
+        const value=await request('/v1/process-catalog/decision-domain/compare?'+params,{...basis,filter:filter.value,table_id:focus.value||null,offset,limit:25,
+          ...(prior?{expected_review_sha256:prior.review_sha256}:{})});
+        if(!active()||n!==serial)return;
+        if(value.before.content_sha256!==previous.content_sha256||value.after.content_sha256!==selected.content_sha256)throw Error('Unexpected exact revision references.');
+        report=value;const oldFocus=focus.value;
+        focus.replaceChildren(all,...value.tables.map(t=>{const o=el('option',t.table_id);o.value=t.table_id;return o;}));focus.value=oldFocus;
+        const w=value.witness_suite,p=value.evidence_page;
+        out.replaceChildren(el('h4','Paired synthetic behavior comparison'),el('p',value.changed_points+' / '+value.dated_points+' dated input points changed. '+value.table_points+' table/input evaluations compared.'),
+          table(['Date','Points','Changed points','Changed table points'],value.per_date.map(d=>[d.as_of_date,d.points,d.changed_points,d.changed_table_points])),
+          table(['Exclusive behavior category','Table/input points'],Object.entries(value.primary_counts)),
+          table(['Table','Selection lost','Selection gained','Target changed','Status changed','Diagnostics changed'],
+            value.tables.map(t=>[t.table_id,...['selection_lost','selection_gained','target_changed','status_changed','diagnostics_changed'].map(k=>t.flag_counts[k]||0)])));
+        const transitions=el('details');transitions.append(el('summary','Exact per-table status, target and row transitions'));
+        for(const t of value.tables){
+          transitions.append(el('h5',t.table_id),
+            table(['Before status','After status','Count'],t.status_transitions.map(x=>[x.before,x.after,x.count])),
+            table(['Before target','After target','Count'],t.target_transitions.map(x=>[x.before,x.after,x.count])),
+            table(['Row','Before diagnostic','After diagnostic','Count'],t.row_diagnostic_transitions.map(x=>[x.row_id,x.before,x.after,x.count])));
+        }
+        out.append(transitions,el('h4','Compact synthetic witness set'),
+          el('p',w.selected_points+' points cover '+w.covered_obligations+' / '+w.distinct_obligations+' distinct dated transition obligations; '+w.uncovered_obligations+' uncovered.'),
+          el('p',w.optimal_point_count_proven?'Minimum witness count established by matching lower bound.':'Greedy witness selection; minimum size not established.'),
+          table(['Point index','Date','Choice indices','New obligations','Changed tables'],w.selected.map(x=>[x.point_index,x.as_of_date,x.choice_indices.join(', '),x.new_obligations_covered,x.changed_table_ids.join(', ')])),
+          el('h4','Exact input-point evidence'),el('p',p.matching_points+' matching points; '+p.rows.length+' shown at offset '+p.offset+'.'));
+        for(const point of p.rows){
+          const details=el('details');details.append(el('summary','Point '+point.point_index+' · '+point.as_of_date+' · ['+point.choice_indices.join(', ')+']'),
+            table(['Table','Before status / target','After status / target','Findings'],point.matching_tables.map(x=>[x.table_id,x.before_status+' / '+(x.before_target||'—'),
+              x.after_status+' / '+(x.after_target||'—'),x.flags.join(', ')||'unchanged'])));
+          for(const row of point.matching_tables)if(row.changed_rows.length)details.append(el('h6',row.table_id),
+            table(['Row','Before','After'],row.changed_rows.map(x=>[x.row_id,x.before,x.after])));
+          out.append(details);
+        }
+        const prev=button('Previous differential evidence page',()=>evaluate(Math.max(0,p.offset-25),true));
+        const next=button('Next differential evidence page',()=>evaluate(p.next_offset,true));
+        prev.disabled=p.offset===0;next.disabled=p.next_offset===null;
+        out.append(prev,next,button('Download minimized differential report',()=>{if(report===value&&active())download(value,'owg-decision-differential.json');}),
+          el('p',value.interpretation),el('p','Review digest: '+value.review_sha256));
+      }catch(error){if(active()&&n===serial)out.replaceChildren(el('p',error instanceof SyntaxError?'Invalid synthetic dimensions JSON.':error.message));}
+    }
+    filter.onchange=focus.onchange=()=>{if(report)evaluate(0,true);else{serial++;out.replaceChildren();}};
+    const suggest=button('Load boundary examples from both revisions',async()=>{
+      if(!active())return;
+      if(input.value.trim()!=='[]'&&!window.confirm('Replace current synthetic dimensions?'))return;
+      invalidate();const n=serial;
+      try{
+        const get=r=>request('/v1/process-catalog/decision-domain/suggestions?'+new URLSearchParams({workflow_id:r.workflow_id,revision:String(r.revision),content_sha256:r.content_sha256}));
+        const [a,b]=await Promise.all([get(previous),get(selected)]);
+        if(!active()||n!==serial)return;
+        const merged=new Map();
+        for(const d of [...a.dimensions,...b.dimensions]){
+          if(!merged.has(d.path))merged.set(d.path,new Map());
+          for(const c of d.choices)merged.get(d.path).set(JSON.stringify(c),c);
+        }
+        input.value=JSON.stringify(Array.from(merged,([path,choices])=>({path,choices:Array.from(choices.values())})),null,2);
+        out.replaceChildren(el('p','Combined editable boundary examples loaded. Review overlaps, dimension limits, omitted paths and total combinations before evaluating.'),
+          el('p','Omitted paths: '+[...a.omitted_paths,...b.omitted_paths].map(x=>x.path+' ('+x.reason+')').join(', ')),
+          el('p','Clipped paths: '+[...new Set([...a.clipped_paths,...b.clipped_paths])].join(', ')));
+      }catch(error){if(active()&&n===serial)out.replaceChildren(el('p',error.message));}
+    });
+    panel.append(field('Test dates (comma-separated)',dates),suggest,field('Synthetic dimensions JSON',input),field('Witness budget',limit),
+      field('Evidence filter',filter),field('Table filter',focus),button('Compare exact finite decision domains',()=>evaluate()),out);
+    host.append(panel);
+  }
+
   function renderPolicyRegression(previous,selected,host,generation){
     if(previous.revision>=selected.revision)return;
     const panel=el('details');panel.appendChild(el('summary','Test behavioral regression between saved revisions'));
