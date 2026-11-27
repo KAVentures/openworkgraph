@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import argparse
 from collections import Counter, defaultdict
-from itertools import permutations
 from pathlib import Path
 
 from . import prospective_pilot_cohort as cohort
@@ -16,7 +15,7 @@ ARMS = cohort.ARMS
 SCHEDULE = "owg.pilot-execution-schedule.v1"
 LEDGER = "owg.pilot-execution-ledger.v1"
 TERMINAL = ("completed", "model_failed", "source_unavailable", "withdrawn", "other")
-ORDERS = tuple(permutations(ARMS))
+REVIEW_PROTOCOLS = ("single", "dual_adjudication")
 
 
 def _confirmed(value):
@@ -28,7 +27,7 @@ def _rank(seed, *parts):
     return cohort.digest([seed, *parts])
 
 
-def schedule(plan, *, expected_plan_sha256, seed, confirmed):
+def schedule(plan, *, expected_plan_sha256, seed, confirmed, review_protocol="single"):
     """Deterministic blocked randomization using an independently chosen seed.
 
     Complete six-episode blocks use all permutations. A three-episode remainder
@@ -38,6 +37,8 @@ def schedule(plan, *, expected_plan_sha256, seed, confirmed):
     _confirmed(confirmed)
     enrolled = cohort._verify(plan, expected_plan_sha256)
     cohort.pin(seed)
+    if review_protocol not in REVIEW_PROTOCOLS:
+        raise ValueError("choose a frozen single or dual-adjudication review protocol")
     strata = defaultdict(list)
     for eid, row in enrolled.items():
         strata[row["team_id"], row["model_id"]].append(eid)
@@ -69,7 +70,7 @@ def schedule(plan, *, expected_plan_sha256, seed, confirmed):
         summaries.append({"team_id":team,"model_id":model,"episodes":len(members),
                           "arm_position_counts":positions,"pair_precedence_counts":pairs})
     body={"format":SCHEDULE,"plan_sha256":expected_plan_sha256,"seed":seed,
-          "episodes":rows,"strata":summaries,
+          "episodes":rows,"strata":summaries,"review_protocol":review_protocol,
           "protocol":"six_permutations_then_balanced_cyclic_remainder",
           "limitations":["Order is reproducible, not proof of concealed allocation or fresh sessions.",
                          "Partial blocks balance arm positions, not necessarily every pair precedence."]}
@@ -80,8 +81,9 @@ def verify_schedule(plan, document, *, expected_plan_sha256, expected_schedule_s
     cohort.pin(expected_schedule_sha256)
     if not isinstance(document,dict) or document.get("schedule_sha256")!=expected_schedule_sha256:
         raise ValueError("external schedule pin mismatch")
-    if document != schedule(plan,expected_plan_sha256=expected_plan_sha256,
-                            seed=document.get("seed"),confirmed=True):
+    expected=schedule(plan,expected_plan_sha256=expected_plan_sha256,
+                      seed=document.get("seed"),confirmed=True,review_protocol=document.get("review_protocol"))
+    if cohort.canonical(document)!=cohort.canonical(expected):
         raise ValueError("schedule differs from exact recomputation")
     return {r["episode_id"]:r for r in document["episodes"]}
 
@@ -321,6 +323,7 @@ def main(argv=None):
     s=sub.add_parser("schedule")
     _arguments(s,schedule_required=False)
     s.add_argument("--seed",required=True)
+    s.add_argument("--review-protocol",choices=REVIEW_PROTOCOLS,required=True)
     _arguments(sub.add_parser("initialize"))
     a=sub.add_parser("append")
     _arguments(a,ledger_required=True)
@@ -336,7 +339,7 @@ def main(argv=None):
         plan=cohort._load(args.plan)
         kw={"expected_plan_sha256":args.plan_sha256,"confirmed":args.confirm}
         if args.command=="schedule":
-            result=schedule(plan,seed=args.seed,**kw)
+            result=schedule(plan,seed=args.seed,review_protocol=args.review_protocol,**kw)
         else:
             doc=cohort._load(args.schedule)
             kw["expected_schedule_sha256"]=args.schedule_sha256
