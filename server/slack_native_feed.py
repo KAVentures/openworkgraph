@@ -74,7 +74,7 @@ class Create(rest.Strict):
 def _credential(env,mode):
     if not isinstance(env,str) or not ENV.fullmatch(env):
         raise rest.FeedError("slack_invalid_credential_reference")
-    value=os.environ.get(env,"")
+    value=rest.resolve_secret(env)
     prefixes=("xoxp-",) if mode=="enterprise_audit" else ("xoxb-","xoxp-")
     if not value.startswith(prefixes) or not 12<=len(value)<=4096 or any(ord(c)<33 or ord(c)>126 for c in value):
         raise rest.FeedError("slack_credential_unavailable")
