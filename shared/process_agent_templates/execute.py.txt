@@ -494,10 +494,12 @@ def ensure_current(intent, now=None, stop_marker=None):
 
 
 async def execute_approved(spec, plan_document, case, bindings, intent, *, journal_directory,
-                           client_factory=_tool_client, receipt_reader=_source_receipt, catalog_reader=_catalog_state, source_state_reader=_source_state_receipt, now=None):
+                           client_factory=_tool_client, receipt_reader=_source_receipt, catalog_reader=_catalog_state, source_state_reader=_source_state_receipt, now=None, tool_token_env='OWG_EXECUTION_MCP_TOKEN'):
     prepared = prepare(spec, plan_document, case, bindings)
     validate_intent(spec, prepared, case, bindings, intent, now=now)
-    tool_token = os.environ.get('OWG_EXECUTION_MCP_TOKEN', '')
+    if tool_token_env not in {'OWG_EXECUTION_MCP_TOKEN', 'OWG_EXECUTION_HTTP_TOKEN'}:
+        raise ImplementationError('Unsupported customer tool credential contract')
+    tool_token = os.environ.get(tool_token_env, '')
     source_token = os.environ.get('OWG_EXECUTION_SOURCE_READ_TOKEN', '')
     catalog_token = os.environ.get('OWG_EXECUTION_CATALOG_READ_TOKEN', '')
     if spec.get('organization_catalog_reference') and not catalog_token:
