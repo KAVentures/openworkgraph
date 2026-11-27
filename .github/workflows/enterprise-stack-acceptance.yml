@@ -94,7 +94,8 @@ jobs:
             tests/test_connector_crosswalks.py \
             tests/test_enterprise_connector_credentials.py \
             tests/test_enterprise_connector_deployment.py \
-            tests/test_enterprise_connector_integration.py
+            tests/test_enterprise_connector_integration.py \
+            tests/test_enterprise_connector_history.py
       - name: Install isolated Chromium runtime
         if: success() || failure()
         run: |
@@ -111,3 +112,35 @@ jobs:
         run: |
           test ! -e data/workflow_observer.db
           test ! -e data/gateway/openworkgraph_gateway.db
+
+  historical-reconciliation:
+    if: github.event_name == 'pull_request' && startsWith(github.head_ref, 'feat/enterprise-historical-reconciliation-')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install existing Gateway and test dependencies
+        run: python -m pip install -e ".[dev,gateway]"
+      - name: Compile history integration and dashboard
+        run: |
+          python -m py_compile server/enterprise_connector_history.py server/enterprise_rest_feed.py server/enterprise_connector_routes.py server/enterprise_connector_operations.py
+          node --check dashboard/enterprise_connectors.js
+          node --check tests/browser/enterprise_connectors.cjs
+      - name: Exercise historical recovery, existing retention and SQL source fixtures
+        run: python -m pytest -q --tb=short tests/test_enterprise_connector_history.py tests/test_enterprise_rest_feed.py tests/test_enterprise_sql_feed.py
+      - name: Install isolated Chromium runtime
+        if: success() || failure()
+        run: |
+          npm install --prefix "$RUNNER_TEMP/owg-browser" playwright@1.64.1 axe-core@4.10.3
+          node "$RUNNER_TEMP/owg-browser/node_modules/playwright/cli.js" install chromium
+      - name: Verify native SQL late-event reconciliation in the dashboard
+        if: success() || failure()
+        run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/enterprise_connectors.cjs
