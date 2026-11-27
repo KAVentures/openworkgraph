@@ -26,3 +26,21 @@ HTTPS is required except explicitly reviewed numeric loopback development endpoi
 ## Acceptance
 
 Generated tests include the actual canonical executor with synthetic HTTP transport, a real loopback HTTP server performing GET–conditional PATCH–GET, source-receipt checks, mismatched schemas/methods, unsafe path arguments, stale preconditions, ambiguous results, redirects, timeouts, response bounds and journal replay refusal. The portable manifest and required acceptance suites include the new target. These fixtures are synthetic, not a live customer deployment or independent provider certification. CI and provider-specific acceptance are required before production use.
+
+## Illustrative read operation (not an approved provider contract)
+
+```json
+{
+  "name": "read_case",
+  "method": "GET",
+  "path": "/api/cases/{case_id}",
+  "fields": {"case_id": "string"},
+  "query": {},
+  "body": {},
+  "expected_version_argument": null,
+  "idempotency_argument": null,
+  "reviewed_provider_contract": false
+}
+```
+
+A reviewed write can map its business fields into the JSON body while mapping the exact separately reviewed version and idempotency arguments into the two fixed headers. The runtime refuses unsupported or unmapped fields. Do not copy illustrative endpoint names into a live deployment without checking the actual provider contract.
