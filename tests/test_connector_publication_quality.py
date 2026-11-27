@@ -199,11 +199,53 @@ def test_quality_routes_require_owner(tmp_path,monkeypatch):
     with TestClient(app) as c:
         base="/v1/admin/connector-events/customer/"
         assert c.get("/admin/connector-publication-quality").status_code==200
-        for path in ("quality-review","quality-export","quality-export-csv"):
+        for path in ("quality-review","quality-export","quality-export-csv","case-quality-export"):
             assert c.post(base+path,json={}).status_code==401
             assert c.post(base+path,json={},headers={"Authorization":"Bearer test-admin"}).status_code==422
         ordinary=admin_accounts.AdminIdentity("admin-fixture","admin@example.test","Admin","admin","test")
         monkeypatch.setattr(admin_accounts,"validate_session",lambda db,token:ordinary)
         header={"Authorization":"Bearer "+admin_accounts.SESSION_PREFIX+"test"}
-        for path in ("quality-review","quality-export","quality-export-csv"):
+        for path in ("quality-review","quality-export","quality-export-csv","case-quality-export"):
             assert c.post(base+path,json={},headers=header).status_code==403
+
+
+def test_linked_quality_export_combines_exact_provenance(published):
+    from gateway.connector_case_review import ReviewedCases,Plan,linked_csv
+    from gateway.connector_publication_quality import LinkedExport,linked_export
+    store,spec,ga,gb,sa,sb=published
+    reviewed=ReviewedCases(store)
+    quality=review(store,"customer",Review.model_validate(spec),"owner")
+    plan={"snapshots":spec["snapshots"],"confirm_inspection":True,"groups":[
+        {"members":[{"job_id":ga["job_id"],"case_id":sa.events[0].case_id},
+                    {"job_id":gb["job_id"],"case_id":sb.events[0].case_id}],
+         "basis":"reviewed_business_record"}]}
+    linkage=reviewed.preview("customer",Plan.model_validate(plan),"owner")
+    request={**plan,"expected_review_sha256":linkage["review_sha256"],"confirm_link_assertions":True,
+             "confirm_export":True,"quality":spec,"expected_quality_sha256":quality["quality_sha256"],
+             "confirm_quality_gated_export":True}
+    result=linked_export(reviewed,"customer",LinkedExport.model_validate(request),"owner")
+    assert result["quality_review"]==quality and result["review_sha256"]==linkage["review_sha256"]
+    assert result["event_count"]==4 and len({x["case_id"] for x in result["events"]})==1
+    log=ws.import_log(BytesIO(linked_csv(result).encode()),name="Quality accepted linked cases",
+                      source_format="csv",mapping=result["mapping"])
+    assert log["events"]==4 and log["objects"]==1
+    with pytest.raises(ValidationError):
+        LinkedExport.model_validate({**request,"quality":{**spec,"snapshots":[pin(ga)]}})
+    with pytest.raises(JobError,match="quality_review_changed"):
+        linked_export(reviewed,"customer",LinkedExport.model_validate({**request,
+                      "expected_quality_sha256":"e"*64}),"owner")
+    failing={**spec,"policy":{"min_events":3}}
+    failed=review(store,"customer",Review.model_validate(failing),"owner")
+    with pytest.raises(JobError,match="publication_quality_gates_not_satisfied"):
+        linked_export(reviewed,"customer",LinkedExport.model_validate({**request,
+                      "quality":failing,"expected_quality_sha256":failed["quality_sha256"]}),"owner")
+    with pytest.raises(JobError,match="cross_source_review_changed"):
+        linked_export(reviewed,"customer",LinkedExport.model_validate({**request,
+                      "expected_review_sha256":"f"*64}),"owner")
+    with pytest.raises(JobError,match="explicit_quality_linkage_and_export"):
+        linked_export(reviewed,"customer",LinkedExport.model_validate({**request,
+                      "confirm_quality_gated_export":False}),"owner")
+    store.remove("customer",ga["job_id"],Remove(expected_publication_revision=ga["revision"],
+                 confirm_delete=True),"owner",ga["grant_id"])
+    with pytest.raises(JobError,match="snapshot_missing_or_changed"):
+        linked_export(reviewed,"customer",LinkedExport.model_validate(request),"owner")
