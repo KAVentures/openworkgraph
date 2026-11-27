@@ -138,6 +138,18 @@ def install(app,jobs,admin):
         principal=owner(authorization,True)
         return await reply(queues.change,organization_id,queue_id,await parse(request,QueueChange,maximum=32768),principal)
 
+    @router.post(base+"/{organization_id}/exception-queues/{queue_id}/export")
+    async def export_exception_queue(organization_id:str,queue_id:str,request:Request,authorization:str|None=Header(default=None)):
+        from .connector_exception_triage import Export,disposition_csv
+        import json
+        principal=owner(authorization,True)
+        result=await reply(queues.export,organization_id,queue_id,await parse(request,Export),principal)
+        data=json.loads(result.body)
+        return Response(disposition_csv(data),media_type="text/csv",headers={
+            "Cache-Control":"no-store","X-Content-Type-Options":"nosniff",
+            "X-OWG-Disposition-SHA256":data["export_sha256"],
+            "Content-Disposition":'attachment; filename="owg-evidence-dispositions.csv"'})
+
     @router.post(base+"/{organization_id}/exception-queues/{queue_id}/delete")
     async def delete_exception_queue(organization_id:str,queue_id:str,request:Request,authorization:str|None=Header(default=None)):
         principal=owner(authorization,True)
