@@ -4932,7 +4932,7 @@
     const flatOut=el('div');flatOut.id='owgEventLogFlatteningBox';
     const attrOut=el('div');attrOut.id='owgEventLogObjectAttributesBox';
     box.append(row,out,flatOut,attrOut,shared);
-    let graph=null,flat=null,attrs=null;
+    let graph=null,flat=null,attrs=null,mapTurn=0;
     const renderAttrs=()=>{
       const type=attrs&&(attrs.object_types||[]).find(t=>t.object_type===pick.value);
       if(!type){attrOut.replaceChildren();return;}
@@ -5005,7 +5005,24 @@
       if(links.length)parts.push(table(['Linked to','Share of observed '+type.object_type+' objects','Mean links per linked object','Most linked'],links.map(r=>[r.to_type,pct(r.share_of_from_objects),r.mean_linked_per_object,r.max_linked_per_object])));
       renderFlat();renderAttrs();parts.push(inspection.node);out.replaceChildren(...parts);
     };
-    showMap.onclick=render;pick.onchange=render;
+    const selectMap=async()=>{
+      const ticket=++mapTurn,selected=pick.value;
+      if(!graph||!current())return;
+      const type=(state.objectTypes||[]).find(t=>t.object_type===selected);
+      if(type&&Number(type.event_links)===0){
+        out.replaceChildren(el('p','This object type has no retained events, so there is no lifecycle map.','muted'));
+        renderFlat();renderAttrs();return;
+      }
+      if((graph.object_types||[]).some(t=>t.object_type===selected)){render();return;}
+      out.replaceChildren(el('p','Loading the selected object type map…','muted'));renderFlat();renderAttrs();
+      try{
+        const query=new URLSearchParams({object_type:selected});
+        const selectedGraph=await getJSON(logPath('object-map').replace(/\?.*$/,'')+'?'+query);
+        if(!current()||ticket!==mapTurn||pick.value!==selected)return;
+        graph=selectedGraph;render();
+      }catch(error){if(current()&&ticket===mapTurn&&pick.value===selected)out.replaceChildren(el('div',error.message,'muted'));}
+    };
+    showMap.onclick=selectMap;pick.onchange=selectMap;
     getJSON(logPath('object-map').replace(/\?.*$/,'')).then(async g=>{
       if(!current())return;
       if(!state.objectTypes.length){
@@ -5013,7 +5030,7 @@
         if(!current())return;
         state.objectTypes=types.object_types||[];
       }
-      graph=g;setOptions(pick,(g.object_types||[]).map(t=>[t.object_type,t.object_type+' ('+Number(t.objects).toLocaleString()+')']));
+      graph=g;setOptions(pick,(state.objectTypes||[]).map(t=>[t.object_type,(t.object_type.trim()===t.object_type?t.object_type:JSON.stringify(t.object_type))+' ('+Number(t.objects).toLocaleString()+')']));
       if(state.caseType)pick.value=state.caseType;
       const touching=g.activities_touching_several_types||[];
       const sharedRows=el('div');sharedRows.id='owgObjectMapSharedActivities';
@@ -5032,7 +5049,7 @@
       if(touching.length)renderShared();
       shared.replaceChildren(el('p','Showing '+g.object_types.length+' of '+g.object_type_count+' object types.','muted'),...(touching.length?[el('h4','Activities shared by several object types'),sharedStatus,sharedRows,sharedNav]:[]),
         ...((g.object_types||[]).length>1||state.objectTypes.length>1||g.log&&(g.log.object_relationships||['ocel','ocelxml'].includes(g.log.source_format))?[objectRuleSection(g),objectModelSection()]:[]));
-      render();
+      selectMap();
     }).catch(error=>{if(current())out.replaceChildren(el('div',error.message,'muted'));});
     getJSON(logPath('object-flattening').replace(/\?.*$/,'')).then(f=>{if(current()){flat=f;renderFlat();}}).catch(()=>{});
     getJSON(logPath('object-attributes').replace(/\?.*$/,'')).then(a=>{if(current()){attrs=a;renderAttrs();}}).catch(()=>{});

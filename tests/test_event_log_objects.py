@@ -90,6 +90,29 @@ def test_shared_activity_count_discloses_results_beyond_the_map_limit():
     assert graph["activities_touching_several_types"][0]["activity"] == "Activity 000"
 
 
+def test_selected_object_type_map_includes_a_type_outside_the_default_limit():
+    types = [f'type{n:02}' for n in range(22)]
+    types[-1] = 'zz & / 雪'
+    doc = {'objectTypes': [], 'eventTypes': [],
+           'objects': [{'id': f'o{n}', 'type': t} for n, t in enumerate(types)] + [{'id': 'empty', 'type': 'empty'}],
+           'events': [{'id': f'e{n}', 'type': 'A', 'time': '2024-01-01T00:00:00Z',
+                       'relationships': [{'objectId': f'o{n}', 'qualifier': ''}]}
+                      for n in range(len(types))]}
+    doc['events'][-1]['relationships'].append({'objectId': 'o0', 'qualifier': ''})
+    log = _ocel(doc)
+    original = objects.object_graph(log)
+    assert len(original['object_types']) == 20 and types[-1] not in {t['object_type'] for t in original['object_types']}
+    selected = objects.object_graph(log, types[-1])
+    assert len(selected['object_types']) == 20 and selected['object_type_count'] == 22
+    assert selected['object_types'][0]['object_type'] == types[-1]
+    assert selected['object_types'][0]['activities'][0]['activity'] == 'A'
+    assert any(r['from_type'] == types[-1] and r['to_type'] == 'type00' for r in selected['relations'])
+    with pytest.raises(workspace.EventLogWorkspaceError, match='no retained events'):
+        objects.object_graph(log, 'empty')
+    with pytest.raises(workspace.EventLogWorkspaceError, match='no retained events'):
+        objects.object_graph(log, 'missing')
+
+
 def test_flat_logs_have_one_type_and_no_relations():
     log_id = workspace.import_log(BytesIO(_claims_csv().encode()), name="c", source_format="csv", mapping={
         "case_column": "case", "activity_column": "activity", "timestamp_column": "time"})["log_id"]
