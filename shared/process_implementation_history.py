@@ -221,8 +221,13 @@ def build(records,root,access,request,current_source):
                 "headroom_not_established_if_unknown":values["forecast"]["unknown_phases"]>0,
                 "current_approved_assessment":current_source["current_approved_assessment"],
                 "source_blockers":current_source["blockers"]}
+    comparison=transition(before,after)
+    if len(currency_history)>1:
+        comparison["cost_bridge"]={"comparable":False,"reason":"ambiguous_report_currency_history"}
+        for phase in comparison["phases"]:
+            for field in phase["metrics"]["cost"].values():field["change"]=None
     return {"format":FORMAT,"root_workflow_id":root,"access_revision":access,"history_sha256":pin,
-            "latest_revision":records[-1]["revision"],"timeline":timeline,"comparison":transition(before,after),
+            "latest_revision":records[-1]["revision"],"timeline":timeline,"comparison":comparison,
             "calendar":calendar(after,request.as_of_date),"current_budget_review":budget,
             "multiple_currencies_in_history":len(currency_history)>1,
             "currency_warning":"Reported costs lack separate currency provenance; do not aggregate or compare monetary reports across currency changes." if len(currency_history)>1 else None,

@@ -69,3 +69,7 @@ review creates no new retained store, changes no plan, and grants no
 approval, execution, spending or benefit claims. Explicit JSON export is
 a point-in-time review artifact. Dirty same-page edits and known opportunity
 changes invalidate or disable review controls; reload after remote changes.
+
+## Verification
+
+New tests cover 200 randomized independent integer-cent scope bridges and partial forecast bounds, actual saved history, rebaseline review invalidation, stale pins, calendar date exclusions, corrupted history, strict inputs, authenticated HTTP and real browser review/download. Native CI remains required.
