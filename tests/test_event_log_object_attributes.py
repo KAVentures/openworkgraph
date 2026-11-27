@@ -137,6 +137,28 @@ def test_comparison_stops_at_its_work_budget(monkeypatch):
     assert "event_links" not in status and status["value_changes"] == 2  # change counts stay exact
 
 
+def test_object_history_pages_exact_values_and_refuses_a_changed_log():
+    doc = _orders()
+    doc['objects'][0]['attributes'] = [_value('status', (datetime(2024, 1, 1, tzinfo=timezone.utc) + timedelta(minutes=n)).isoformat(), f'v{n:03}') for n in range(215)]
+    log = _import(doc)['log_id']
+    first = attributes.object_history(log, 'order', 'o1', limit=100)
+    assert first['total_values'] == 215 and first['next_offset'] == 100
+    second = attributes.object_history(log, 'order', 'o1', offset=100, limit=100, revision=first['log_revision'])
+    third = attributes.object_history(log, 'order', 'o1', offset=200, limit=100, revision=first['log_revision'])
+    assert [v['value'] for v in first['values'] + second['values'] + third['values']] == [f'v{n:03}' for n in range(215)]
+    assert third['next_offset'] is None
+    with pytest.raises(workspace.EventLogWorkspaceError, match='selected type'):
+        attributes.object_history(log, 'item', 'o1')
+    with pytest.raises(workspace.EventLogWorkspaceError, match='first page'):
+        attributes.object_history(log, 'order', 'o1', offset=100)
+    newer = {'objectTypes': [], 'eventTypes': [], 'objects': [{'id': 'new', 'type': 'order'}],
+             'events': [{'id': 'new-event', 'type': 'New', 'time': '2024-02-01T00:00:00Z',
+                         'relationships': [{'objectId': 'new', 'qualifier': ''}]}]}
+    workspace.append_log(log, BytesIO(json.dumps(newer).encode()), source_format='ocel')
+    with pytest.raises(workspace.EventLogWorkspaceError, match='changed'):
+        attributes.object_history(log, 'order', 'o1', offset=100, revision=first['log_revision'])
+
+
 @pytest.mark.parametrize("fmt", ["ocel", "ocelxml"])
 def test_exports_round_trip_the_history_and_the_stored_value(fmt):
     log = _import(_orders())["log_id"]
@@ -213,6 +235,12 @@ with TestClient(app) as client:
     status = result.json()["object_types"][0]["attributes"][0]
     assert status["event_links"]["where_stored_value_differs_from_value_then"] == 1
     assert len(result.json()["object"]["values"]) == 2
+    history_path = "/v1/event-logs/" + made.json()["log_id"] + "/object-attribute-history"
+    assert client.get(history_path, params={"object_type": "order", "object_id": "o1"}, headers=bearer).status_code in (401, 403)
+    history = client.get(history_path, params={"object_type": "order", "object_id": "o1"}, headers=headers)
+    assert history.status_code == 200 and history.headers["cache-control"] == "no-store"
+    assert [v['value'] for v in history.json()['values']] == ['open', 'closed']
+    assert client.get(history_path, params={"object_type": "other", "object_id": "o1"}, headers=headers).status_code == 422
     assert client.get(path + "?object_id=nope", headers=headers).status_code == 422
     assert client.get("/v1/event-logs/log_0000000000000000/object-attributes", headers=headers).status_code in (404, 422)
 '''

@@ -4931,9 +4931,38 @@
     const shared=el('div');
     const flatOut=el('div');flatOut.id='owgEventLogFlatteningBox';
     const attrOut=el('div');attrOut.id='owgEventLogObjectAttributesBox';
-    box.append(row,out,flatOut,attrOut,shared);
+    const history=el('div');history.id='owgObjectAttributeHistory';
+    const historyId=input('owgObjectAttributeHistoryId','text','Exact object ID');historyId.maxLength=400;
+    const historyOpen=button('Review attribute history','secondary');
+    const historyStatus=el('div',null,'muted');historyStatus.setAttribute('role','status');
+    const historyRows=el('div'),historyPrevious=button('Previous attribute values','secondary'),historyNext=button('Next attribute values','secondary');
+    const historyControls=el('div',null,'row');historyControls.append(historyPrevious,historyNext);
+    history.append(el('h4','Object attribute history'),el('p','Enter an exact object ID from the selected type. Values are recorded observations; 1970-01-01 denotes an initial value without a known time.','muted'),field('Exact object ID',historyId),historyOpen,historyStatus,historyRows,historyControls);
+    box.append(row,out,flatOut,attrOut,history,shared);
     let graph=null,flat=null,attrs=null,mapTurn=0;
     const flatCache=new Map(),attrCache=new Map();
+    let historyTurn=0,historyRevision=null,historyOffset=0,historyFollowing=null;
+    const clearObjectHistory=()=>{++historyTurn;historyRevision=null;historyOffset=0;historyFollowing=null;historyStatus.textContent='';historyRows.replaceChildren();historyPrevious.disabled=historyNext.disabled=true;};
+    clearObjectHistory();historyId.oninput=clearObjectHistory;
+    async function loadObjectHistory(offset){
+      const ticket=++historyTurn,selected=pick.value,object=historyId.value;
+      const active=()=>current()&&ticket===historyTurn&&pick.value===selected&&historyId.value===object;
+      historyPrevious.disabled=historyNext.disabled=true;historyStatus.textContent='Loading attribute values…';historyRows.replaceChildren();
+      if(!object){historyStatus.textContent='Enter an exact object ID.';return;}
+      const query=new URLSearchParams({object_type:selected,object_id:object,offset:String(offset),limit:'50'});
+      if(historyRevision!==null)query.set('revision',String(historyRevision));
+      try{
+        const result=await getJSON(logPath('object-attribute-history').replace(/\?.*$/,'')+'?'+query);
+        if(!active())return;
+        historyRevision=result.log_revision;historyOffset=offset;historyFollowing=result.next_offset;
+        historyStatus.textContent=result.total_values?'Showing '+(offset+1).toLocaleString()+'–'+(offset+result.values.length).toLocaleString()+' of '+Number(result.total_values).toLocaleString()+' retained attribute values.':'No retained timed values for this object.';
+        if(result.values.length)historyRows.replaceChildren(table(['Attribute','Recorded from (UTC)','Value'],result.values.map(v=>[v.name,v.valid_from,v.value])));
+        historyPrevious.disabled=offset===0;historyNext.disabled=historyFollowing===null;
+      }catch(error){if(active()){historyRevision=null;historyStatus.textContent=error.message;}}
+    }
+    historyOpen.onclick=()=>{historyRevision=null;loadObjectHistory(0);};
+    historyPrevious.onclick=()=>loadObjectHistory(Math.max(0,historyOffset-50));
+    historyNext.onclick=()=>loadObjectHistory(historyFollowing);
     const renderAttrs=()=>{
       const type=attrs&&(attrs.object_types||[]).find(t=>t.object_type===pick.value);
       if(!type){attrOut.replaceChildren(...(attrs?[el('p','No timed object attributes are recorded for this type.','muted')]:[]));return;}
@@ -5044,7 +5073,7 @@
         graph=selectedGraph;render();
       }catch(error){if(current()&&ticket===mapTurn&&pick.value===selected)out.replaceChildren(el('div',error.message,'muted'));}
     };
-    showMap.onclick=selectMap;pick.onchange=selectMap;
+    showMap.onclick=selectMap;pick.onchange=()=>{clearObjectHistory();selectMap();};
     getJSON(logPath('object-map').replace(/\?.*$/,'')).then(async g=>{
       if(!current())return;
       if(!state.objectTypes.length){
