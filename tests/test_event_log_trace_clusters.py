@@ -195,6 +195,59 @@ def test_cluster_case_csv_respects_scope_limits_and_spreadsheet_safety(monkeypat
         trace_clusters.cluster_cases_csv(log, {**spec, "after": "normal"})
 
 
+def test_tag_cluster_without_a_variant_cohort_and_recheck_selection(monkeypatch):
+    log = _log()
+    monkeypatch.setattr(cohorts, "MAX_COHORT_VARIANTS", 1)
+    settings = {"max_variants": 2, "k": 2, "cohort": {"started_from": "2024-03-05T00:00:00Z"}}
+    result = trace_clusters.clusters(log, settings)
+    cluster = next(item for item in result["clusters"] if item["cohort"] is None)
+    spec = {**settings, "cluster_key": cluster["cluster_key"], "tag": "Cluster review", "note": "reviewed"}
+    reviewed = trace_clusters.cluster_tag_preview(log, spec)
+    expected = trace_clusters.cluster_cases(log, {**settings, "cluster_key": cluster["cluster_key"], "limit": 100})
+    assert reviewed["matched_cases"] == expected["total"] == cluster["cases"]
+    assert reviewed["already_tagged"] == 0
+    member_ids = [row["case_id"] for row in expected["cases"]]
+    assert all(int(case[1:]) >= 4 if case.startswith("o") else True for case in member_ids)
+    with pytest.raises(workspace.EventLogWorkspaceError, match="preview"):
+        trace_clusters.cluster_tag_apply(log, spec)
+    tags.add(log, {"tag": "Cluster review", "note": "concurrent", "case_ids": [member_ids[0]]})
+    with pytest.raises(workspace.EventLogWorkspaceError, match="changed; preview again"):
+        trace_clusters.cluster_tag_apply(log, {**spec, "expected_selection_sha256": reviewed["selection_sha256"]})
+    assert tags.listing(log, "Cluster review")["cases"][0]["note"] == "concurrent"
+    reviewed = trace_clusters.cluster_tag_preview(log, spec)
+    assert reviewed["already_tagged"] == 1
+    applied = trace_clusters.cluster_tag_apply(log, {**spec, "expected_selection_sha256": reviewed["selection_sha256"]})
+    assert applied["tagged"] == len(member_ids)
+    stored = tags.listing(log, "Cluster review")["cases"]
+    assert {row["case_id"] for row in stored} == set(member_ids)
+    assert all(row["note"] == "reviewed" for row in stored)
+    with pytest.raises(workspace.EventLogWorkspaceError, match="cluster has changed"):
+        trace_clusters.cluster_tag_preview(log, {**spec, "cluster_key": "0" * 64})
+    monkeypatch.setattr(tags, "MAX_CASES_BY_FILTER", 1)
+    with pytest.raises(workspace.EventLogWorkspaceError, match="more than 1"):
+        trace_clusters.cluster_tag_preview(log, spec)
+
+
+def test_cluster_tag_preview_rejects_membership_swap_with_same_variant_counts():
+    log = _log({"a": (["Open", "Close"], 1), "b": (["Open", "Close"], 1),
+                "c": (["Open", "Close"], 1)})
+    tags.add(log, {"tag": "scope", "case_ids": ["a", "b"]})
+    settings = {"cohort": {"tag": "scope"}}
+    cluster = trace_clusters.clusters(log, settings)["clusters"][0]
+    spec = {**settings, "cluster_key": cluster["cluster_key"], "tag": "review", "note": "keep"}
+    preview = trace_clusters.cluster_tag_preview(log, spec)
+    tags.remove(log, {"tag": "scope", "case_ids": ["b"]})
+    tags.add(log, {"tag": "scope", "case_ids": ["c"]})
+    assert trace_clusters.clusters(log, settings)["clusters"][0]["cluster_key"] == cluster["cluster_key"]
+    with pytest.raises(workspace.EventLogWorkspaceError, match="changed; preview again"):
+        trace_clusters.cluster_tag_apply(log, {**spec, "expected_selection_sha256": preview["selection_sha256"]})
+    assert tags.listing(log, "review")["cases"] == []
+    current = trace_clusters.cluster_tag_preview(log, spec)
+    result = trace_clusters.cluster_tag_apply(log, {**spec, "expected_selection_sha256": current["selection_sha256"]})
+    assert result["tagged"] == 2
+    assert {row["case_id"] for row in tags.listing(log, "review")["cases"]} == {"a", "c"}
+
+
 def test_export_cursor_detects_changed_membership_even_with_identical_variants(monkeypatch):
     log = _log({"a": (["Open", "Close"], 1), "b": (["Open", "Close"], 1),
                 "c": (["Open", "Close"], 1)})
@@ -254,6 +307,15 @@ with TestClient(app) as client:
     assert found.status_code == 200, found.text
     assert [c["cases"] for c in found.json()["clusters"]] == [6, 6]
     selected = {"cluster_key": found.json()["clusters"][0]["cluster_key"], "limit": 1}
+    tag_spec = {"cluster_key": selected["cluster_key"], "tag": "Review", "note": "checked"}
+    assert client.post(path+"/tag/preview", json=tag_spec, headers=bearer).status_code == 403
+    assert client.post(path+"/tag", json=tag_spec, headers=bearer).status_code == 403
+    assert client.post(path+"/tag", json=tag_spec, headers=owner).status_code == 422
+    tagged_preview = client.post(path+"/tag/preview", json=tag_spec, headers=owner)
+    assert tagged_preview.status_code == 200 and tagged_preview.json()["matched_cases"] == 6
+    assert tagged_preview.headers["cache-control"] == "no-store"
+    apply_tag = {**tag_spec, "expected_selection_sha256": tagged_preview.json()["selection_sha256"]}
+    assert client.post(path+"/tag", json=apply_tag, headers=owner).json()["tagged"] == 6
     assert client.post(path+"/cases", json=selected, headers=bearer).status_code == 403
     export = {"cluster_key": selected["cluster_key"]}
     assert client.post(path+"/cases.csv", json=export, headers=bearer).status_code == 403
