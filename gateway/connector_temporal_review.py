@@ -144,11 +144,6 @@ def temporal_review(reviewed,org,spec,principal):
         if set(spec.business_date_timezones)-date_jobs:
             raise JobError("timezone_requires_linked_business_date_source",422)
         zones=dict(sorted(spec.business_date_timezones.items()))
-        temporal_scope=digest({"format":FORMAT,"review_sha256":base["review_sha256"],
-                               "business_date_timezones":zones,
-                               "policy":"closed_intervals_reported_dates_not_occurrence"})
-        if spec.expected_temporal_scope_sha256 and spec.expected_temporal_scope_sha256!=temporal_scope:
-            raise JobError("temporal_scope_changed")
         totals=Counter({k:0 for k in METRICS})
         rows=[];all_groups=[];unknown=bounded=events=0
         groups=sorted(spec.groups,key=group_key)
@@ -164,6 +159,14 @@ def temporal_review(reviewed,org,spec,principal):
                 totals.update({k:pair[k] for k in METRICS})
             if spec.offset<=i<spec.offset+spec.limit:
                 rows.append(row)
+        rollup=summarize_source_pairs(all_groups,providers)
+        # Bind the actual derived result as well as the assumptions; a
+        # timezone database update cannot silently change subsequent pages.
+        temporal_scope=digest({"format":FORMAT,"review_sha256":base["review_sha256"],
+                               "business_date_timezones":zones,"groups":all_groups,"source_pair_rollup":rollup,
+                               "policy":"closed_intervals_reported_dates_not_occurrence"})
+        if spec.expected_temporal_scope_sha256 and spec.expected_temporal_scope_sha256!=temporal_scope:
+            raise JobError("temporal_scope_changed")
         reviewed._fresh(expires)
         reviewed._audit(c,org,spec,principal,"temporal_review",
                         {"review_sha256":base["review_sha256"],"temporal_scope_sha256":temporal_scope,
@@ -175,7 +178,7 @@ def temporal_review(reviewed,org,spec,principal):
                 "summary":{"linked_groups":len(groups),"linked_events":events,
                            "groups_with_reported_span_bounds":bounded,"unaligned_events":unknown,
                            **dict(totals)},
-                "source_pair_rollup":summarize_source_pairs(all_groups,providers),
+                "source_pair_rollup":rollup,
                 "gap_quantile_method":"nearest_rank_one_vote_per_wholly_separated_linked_group",
                 "groups":rows,"offset":spec.offset,
                 "next_offset":spec.offset+len(rows) if spec.offset+len(rows)<len(groups) else None,
