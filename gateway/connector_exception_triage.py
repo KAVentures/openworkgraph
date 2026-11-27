@@ -259,6 +259,9 @@ class Queues:
                     raise JobError("exception_disposition_unchanged",422)
                 previous={"state":item["state"],"disposition":item["disposition"],"revision":item["revision"]}
                 item.update(state=edit.state,disposition=edit.reason,revision=item["revision"]+1)
+                # Any changed disposition invalidates the plan permanently, even if later restored.
+                if item.get("followup"):
+                    item["followup"]["stale"]=True
                 item["history"]=[{"at":now,"previous":previous,"state":edit.state,
                                   "disposition":edit.reason,"revision":item["revision"]},*item["history"]][:MAX_HISTORY]
                 pending.append(item)
