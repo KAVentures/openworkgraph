@@ -57,6 +57,19 @@ p{overflow-wrap:anywhere;max-width:94ch}.profile{border:1px solid var(--border);
 <p><label><input id="googleDomain" type="checkbox"> I separately authorize domain-wide audit reads if scope is all.</label></p>
 <p><label><input id="googleParameters" type="checkbox"> For Drive document cases, I approve transient retrieval of ordinary string event parameters; only exact document IDs are used.</label></p>
 <button id="googleCreateButton" type="submit">Save Google audit profile</button></form></details>
+<details><summary>Create native SQL event feed</summary>
+<p>Choose a deployment-approved SQL source. Your administrator defines its exact relation and columns in the local source catalog. No arbitrary SQL, passwords, database paths or connection strings are entered here. PostgreSQL uses a verified TLS connection and read-only snapshot. SQLite reads a strict local table in read-only mode.</p>
+<form id="sqlCreate"><div class="grid">
+<label>Profile name<input id="sqlName" maxlength="100" required></label>
+<label>Approved SQL source<select id="sqlSource" required disabled></select></label>
+<label>First change-window start (ISO 8601 UTC)<input id="sqlSince" required placeholder="2026-11-01T00:00:00Z"></label>
+<label>Advancing window (hours)<input id="sqlWindow" type="number" min="1" max="168" value="24" required></label>
+<label>Late-change overlap (minutes)<input id="sqlOverlap" type="number" min="0" max="1440" value="60" required></label>
+<label>Records per batch<input id="sqlPage" type="number" min="1" max="500" value="500" required></label></div>
+<div id="sqlSourceReview" aria-live="polite"></div>
+<p><label><input id="sqlConfirm" type="checkbox" required> I reviewed the exact approved source, mapped columns and time-window settings.</label></p>
+<p><label><input id="sqlRetention" type="checkbox" required> I approve retention of the selected activity labels, pseudonymous identifiers and timestamps locally.</label></p>
+<button id="sqlCreateButton" type="submit" disabled>Save SQL feed configuration</button></form></details>
 <p id="restStatus" role="status"></p><div id="profiles"></div></section>
 <section><h2>Other configured adapters</h2><p>Use the main dashboard's Privacy → Business system sign-in and Evidence panels for the existing provider-specific consent and configuration workflows. CLI-only adapters remain outside this local inventory.</p><a href="/">Open the main dashboard</a></section>
 </main></body></html>

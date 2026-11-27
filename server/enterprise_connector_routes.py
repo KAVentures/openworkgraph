@@ -7,6 +7,7 @@ from starlette.concurrency import run_in_threadpool
 
 from . import enterprise_rest_feed as rest
 from . import google_workspace_audit as google
+from . import enterprise_sql_feed as sql
 from . import enterprise_connector_operations as operations
 from .event_log_routes import _json_body
 from .local_auth import dashboard_session_valid
@@ -58,6 +59,18 @@ async def rest_create(request:Request):
     require(request)
     body=await _json_body(request,"REST feed configuration",strict=True,limit=8192)
     return await call(request,rest.create,body)
+
+
+@router.get("/v1/enterprise-connectors/sql/catalog")
+async def sql_catalog(request:Request):
+    return await call(request,sql.catalog)
+
+
+@router.post("/v1/enterprise-connectors/sql")
+async def sql_create(request:Request):
+    require(request)
+    body=await _json_body(request,"SQL feed configuration",strict=True,limit=4096)
+    return await call(request,sql.create,body)
 
 
 @router.post("/v1/enterprise-connectors/google")
