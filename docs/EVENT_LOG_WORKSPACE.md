@@ -253,6 +253,21 @@ are offered, not views, virtual tables or SQLite's own tables, and each is read 
 most 256 MB. NULL becomes an empty cell and binary values are left empty and counted. SQLite stores
 no time zone, so the import asks which offset times without one use.
 
+### OCEL 2.0 SQLite databases
+
+A SQLite file that holds the OCEL 2.0 tables (`event`, `object`, `event_object`, `object_object`,
+`event_map_type`, `object_map_type`) is recognised when it is chosen and imported as an
+object-centric log, keeping its object types, qualified event-object links, object-to-object
+relationships and timed object attributes, instead of being read as one table.
+`POST /v1/event-logs/ocel-sqlite-to-json` turns it into an OCEL 2.0 JSON document that the ordinary
+OCEL import then reads; `sqlite-to-csv` reports `"ocel": true` for such files. Event times come from
+the `event_<Type>` tables and attributes from their other columns; an object's rows in
+`object_<Type>` give its attribute values at `ocel_time` (only the `ocel_changed_field` column for a
+change row). Times without an offset, as some tools write them, are read as UTC and counted
+(`times_without_offset_read_as_utc`); events without a time are left out and counted. The same
+read-only, untrusted-schema handling and limits as other SQLite files apply, plus at most 5,000,000
+rows in all. Nothing is stored.
+
 ### JSON Lines files
 
 A `.jsonl` or `.ndjson` file (one JSON object per line, as APIs and log shippers write) is converted
@@ -911,15 +926,19 @@ by literal case key, with an optional `limit` of 1–100 (default 50). Send the 
 `next_after` as `after` to continue. If the cluster changes, rerun the report to get
 its current key. This route requires a dashboard session.
 
-From **Inspect cases**, **Tag cases matching this cluster** can mark the cases
-whose current paths match that cluster, within the case scope used to build it.
-Preview the count and sample before applying; existing tag notes on matching
-cases will be replaced. The preview is checked again at save time, so changes to
-the matching cases or existing notes require another preview. The selected paths
-are re-evaluated on the current log, not a frozen report-time case list. When a
-cluster cannot fit the bounded variant filter, request size, or 100,000-case
-tagging limit, tagging is not available; inspect or download its case list instead. Tagging does not change
-stored events and the cluster report must be run again afterward.
+From **Inspect cases**, **Tag cases in this cluster** recomputes the cluster in
+the original case scope and can mark its current members, including clusters
+whose paths cannot fit a variant filter. Preview the count and sample before
+applying; existing tag notes on matching cases will be replaced. The preview is
+checked again at save time, so changes to membership or existing notes require
+another preview. The cluster is recomputed on the current log, not a frozen
+report-time case list. Tagging is limited to 100,000 cases; inspect or download
+larger case lists instead. Tagging does not change stored events and the cluster
+report must be run again afterward. `POST /v1/event-logs/{log_id}/trace-clusters/tag/preview`
+accepts the clustering settings, `cluster_key`, tag and note; apply with the
+same settings and `expected_selection_sha256` at `/trace-clusters/tag`. Both
+routes require a dashboard session. The server rechecks membership and existing
+notes under the workspace lock and applies the tag transactionally.
 
 **Download cluster report JSON** includes the original request, the complete
 returned cluster summary, settings and case notion. The CSV gives one row per
@@ -3684,6 +3703,116 @@ The owner-only endpoint is `POST /v1/event-logs/petri-policy-review`, with `Cont
 
 These are model-level untimed activity trace properties, not legal compliance, real-world case evidence, policy approval or a grant of agent execution authority. A completed-trace property does not by itself establish that all executions complete; use the separate soundness and termination checks.
 
+### Executable workflow acceptance scenarios
+
+Expand **Run workflow acceptance scenarios** in the model validation panel. Reuse the net just replayed as a baseline, author scenarios with the builder or edit the portable JSON suite, and optionally upload a candidate PNML revision. The suite is a declared acceptance test, not a policy inferred from observations. Example:
+
+```json
+{
+  "format": "openworkgraph.petri_acceptance_suite.v1",
+  "cases": [
+    {"id": "approved", "trace": ["Register", "Check", "Pay"], "expect": {"completed": true}},
+    {"id": "no-unapproved-payment", "trace": ["Register", "Pay"], "expect": {"completed": false}},
+    {"id": "after-register", "trace": ["Register"], "expect": {
+      "fireable": true, "finishable": true, "exact_next": ["Check"]
+    }}
+  ]
+}
+```
+
+The seven expectation keys are:
+
+- `completed`: the exact supplied visible trace can end at the declared final marking.
+- `fireable`: at least one reachable firing sequence matches the visible trace, regardless of whether completion is possible.
+- `finishable`: at least one matched marking can still reach the final marking.
+- `all_prefix_states_finishable`: at least one marking matches the prefix and every such marking has a path to final. False for an impossible prefix on a complete graph; inconclusive on an incomplete graph. This is not a guarantee that all future executions terminate.
+- `required_next`: every listed visible next activity can extend this prefix to a completed trace, possibly with different continuations.
+- `forbidden_next`: none of the listed visible activities can be the next step on a completion path.
+- `exact_next`: the complete set of viable next visible activities equals the listed set.
+
+Silent transitions are traversed without consuming a visible activity. Duplicate labels use nondeterministic marking subsets; a prefix can be fireable but not finishable. The report returns the longest observed matching prefix, counts of matching and known completable markings, exact noncompletable counts when the graph is complete, viable next activities, and a shortest observed completion suffix by visible length then transition firings. Only a completely explored marking graph certifies absence or shortest length. For a prefix that cannot execute, an empty exact-next set can pass; require fireability or finishability explicitly when needed. Multiple assertions in one case must all pass; failure and inconclusive states remain distinct. A candidate regression is a previously passing case that now fails; an unknown result does not count as a known regression or improvement.
+
+The owner-only, non-retained endpoint is `POST /v1/event-logs/petri-acceptance`, with `Content-Type: application/octet-stream`. The frame is a four-byte unsigned big-endian suite JSON byte count, those UTF-8 bytes, a four-byte unsigned big-endian baseline byte count, those PNML bytes, and optional candidate PNML bytes. Strict JSON rejects duplicate keys, nonfinite values and invalid suite fields. Each model is limited to 2 MiB; suite to 256 KiB, 40 cases, 100 visible activities per trace and 100 per next-step expectation. The graph uses the existing marking exploration limits. A shared 600,000-unit work budget per model can leave later scenarios inconclusive; no unexplored behavior is treated as absent.
+
+The same engine can run offline from the repository or installed Python environment, with its normal dependencies:
+
+```sh
+python -m server.event_log_petri_acceptance --baseline before.pnml --suite suite.json --candidate after.pnml > report.json
+```
+
+The CLI does not contact a service. Exit codes: 0 target suite passed, 1 at least one target case failed, 2 invalid input, 3 target suite inconclusive. The candidate is the target when supplied; baseline and change findings remain in the JSON report. SHA-256 identifies the exact submitted model bytes and the canonical normalized suite. The dashboard uses UTF-8 encoding of its current baseline replay text. Reports contain model labels and the declared suite, and should be shared only deliberately. Passing a finite acceptance suite does not establish full language equivalence, formal policy compliance, or real-world automation correctness.
+
+### Generate reference-model characterization scenarios
+
+Inside **Run workflow acceptance scenarios**, expand **Generate characterization scenarios from the baseline**. The generator requires a completely explored finite marking graph so negative assertions are established rather than guessed. It then explores reachable epsilon-closed marking subsets using breadth-first search, with one shortest representative prefix for each discovered subset. It derives exact completed/fireable/finishable and universal-prefix expectations, plus exact viable next sets when they fit the suite contract. Impossible next activities drawn from the reference alphabet provide negative examples.
+
+A bounded deterministic diversity selection prioritizes semantic categories, distinct markings, visible activities and viable next options. The report discloses candidate count, selected and omitted categories, graph and prefix exploration limits, selection and suite byte limits, exact model and suite digests. A finite selected suite is not exhaustive trace, transition or real-world execution coverage. The reference can itself be wrong or unsafe; generated expectations are characterization tests and require human review.
+
+The preview does not replace an existing editor suite automatically. Select **Replace editor with proposed suite** explicitly, edit as needed, and run the ordinary acceptance review against the baseline or candidate. Download generation evidence separately to retain provenance. A model with an incomplete marking graph does not generate a suite.
+
+The local owner-only endpoint is `POST /v1/event-logs/petri-test-generation?max_cases=20&max_depth=20` with raw PNML body (2 MiB maximum). The scenario limit is 1–40 and prefix depth 1–99. Prefix exploration is bounded to 2,000 subsets and 600,000 counted work units, and selection to 2,000,000 counted feature units. No model, suite or report is retained; the response uses `Cache-Control: no-store`. No agent execution or policy approval is authorized.
+
+### Challenge acceptance suites with synthetic workflow faults
+
+Within **Run workflow acceptance scenarios**, expand **Challenge acceptance suite with synthetic faults**. Review or edit the suite first. Mutation testing requires the exact baseline to pass that suite; a baseline failure or inconclusive result stops the review. Choose up to eight independent mutations across four operators:
+
+- Hide a visible activity (make the transition silent without changing firing conditions).
+- Rename a visible activity to a fresh synthetic label.
+- Remove one transition and its incident arcs (never remove the last transition).
+- Increase one input-arc weight by one, within the supported weight limit.
+
+Selection is deterministic: round-robin by enabled operator, then sorted target identifiers. Each mutation is applied to a fresh copy of the original submitted PNML; saved models are not edited. The report gives the available and selected mutation counts and each recipe, resulting model SHA-256, failed scenario IDs and unknown scenario IDs.
+
+A fault is **detected** if any acceptance case fails, **survived** if all cases pass, or **inconclusive** otherwise. The detection-fraction interval uses all selected mutations as the denominator: detected / selected to (detected + inconclusive) / selected. This is not corrected for semantically equivalent faults and is not an estimate of real-world failure probability. No denominator is invented when no applicable mutations exist.
+
+For surviving mutations, the completed-visible-language checker attempts an exact comparison with the original model. If it finds an added or removed trace, OWG proposes an additional exact completed-trace scenario with the reference model's expected result. Long truncated witnesses and unsupported labels are not used as executable scenarios. Review the proposal and explicitly add it to the suite editor; it is never applied automatically. A completed-language-equivalent mutation can still change prefix behavior, deadlock, timing or other properties. An inconclusive comparison is not an equivalence proof.
+
+The owner-only `POST /v1/event-logs/petri-mutation-review` endpoint accepts `application/octet-stream`: four unsigned big-endian bytes giving the UTF-8 JSON settings byte count, that many JSON bytes, then the reference PNML bytes. JSON is `{"suite": <acceptance suite>, "settings": {"max_mutants": 4, "operators": ["hide_activity", "rename_activity"]}}`; settings can omit either key to use its default. The JSON frame is limited to 256 KiB + 4 KiB and PNML to 2 MiB. Each of at most eight mutations uses existing bounded marking exploration, acceptance and completed-language comparison budgets. Results are non-retained and downloadable as digest-pinned JSON. Mutation testing makes no real business changes, executes no agents and does not certify independently authored business policy.
+
+### Review a model release against pinned criteria
+
+Open **Review a model release against pinned criteria** in the structural and behavioral validation panel. The model just replayed is the baseline. Upload a candidate and explicitly copy the current acceptance suite and policy rules, or edit the proposed specification. For example:
+
+```json
+{
+  "format": "openworkgraph.petri_release_spec.v1",
+  "suite": {
+    "format": "openworkgraph.petri_acceptance_suite.v1",
+    "cases": [
+      {"id": "approved", "trace": ["Register", "Check", "Pay"], "expect": {"completed": true}}
+    ]
+  },
+  "rules": [{"template": "precedence", "a": "Check", "b": "Pay"}],
+  "criteria": {
+    "language": "equivalent",
+    "require_baseline_acceptance": true,
+    "require_candidate_termination": false,
+    "require_candidate_one_safe": false,
+    "require_rule_activation": true,
+    "mutation": {"min_detected_basis_points": 7500, "min_mutants": 4,
+                 "settings": {"max_mutants": 4}}
+  }
+}
+```
+
+**Freeze model release specification** validates and normalizes the inputs and adds the exact baseline and candidate SHA-256 digests. Pinning does not run exploration or assert approval. Download the frozen specification to reproduce the review later. Editing the proposed specification, changing the candidate file, or replaying a different baseline invalidates the dashboard freeze. The copied suite and rules are independent of their source editors; copying them again is an explicit change.
+
+**Review frozen release** recomputes the checks from the submitted model bytes; it refuses either model if its digest does not match. Candidate soundness and the acceptance suite must pass. Baseline acceptance is required by default; set it to false when deliberately changing requirements (not compatible with a mutation adequacy gate). Language criteria can be `equivalent` (default), `preserve_baseline`, `no_new_traces` or `not_required`. Guaranteed termination and one-safeness are optional. Every supplied untimed policy rule and the joint suite must hold on completed candidate traces; by default each individual rule must also have an activated satisfying trace, not merely vacuous satisfaction. An empty policy array means no policy gate, not proven policy compliance.
+
+The optional mutation criterion uses the baseline acceptance suite, and a selected-mutant minimum of 1–8 and threshold of 0–10,000 basis points. It passes only when the minimum sample is met and the observed detection lower bound reaches the threshold; if the upper bound is below the threshold it fails, otherwise it is inconclusive. This is a synthetic test adequacy gate, not a statistical real-world risk estimate.
+
+The report is **blocked** when any required gate fails, **inconclusive** when no gate fails but at least one is unknown, and **model criteria met** only when every required gate passes. The report contains the normalized specification, gate results and independently recomputed component reports. SHA-256 binds the specification and report using compact sorted-key JSON with ASCII escapes (the report digest excludes its own digest field). It is not a signature, an external attestation or execution approval.
+
+Offline CLI with the normal repository dependencies:
+
+```sh
+python -m server.event_log_petri_release pin --baseline before.pnml --candidate after.pnml --spec proposal.json > pin.json
+# Extract the "spec" object from pin.json to frozen.json; preserve the original models.
+python -m server.event_log_petri_release review --baseline before.pnml --candidate after.pnml --spec frozen.json > review.json
+```
+
+Review exit codes: 0 criteria met, 1 blocked, 2 invalid input (including changed model hashes), 3 inconclusive. The owner-only, non-retained API is `POST /v1/event-logs/petri-release/pin` or `/review` with `application/octet-stream`: four unsigned big-endian bytes giving the UTF-8 JSON specification length, those bytes, four unsigned big-endian bytes giving the baseline PNML length, those PNML bytes, and the nonempty candidate PNML bytes. The specification is limited to 384 KiB; each model to 2 MiB. Existing component work limits and the optional eight-mutation maximum apply. Reports include model labels and declared criteria; share them deliberately. No real business work or agents are executed, and a model release report cannot authorize deployment or verify real-world outcomes.
+
 ### Process trees (PTML) from PM4Py and ProM
 
 The file picker also accepts a **process tree** in PTML, as `pm4py.write_ptml` and ProM's Inductive
@@ -3840,6 +3969,15 @@ events. The workspace's Parquet import reads the file back to the same events.
 
 The local rework report shows the total number of repeated activities and recorded loop patterns, with an adjustable display limit of 20, 50 or 100. JSON and CSV downloads contain the displayed results and the JSON includes the selected cohort and analysis settings. The report offers explicit case-evidence links for repeated activities and exact closed activity loops. Selectors respect the active case cohort and retain literal event order; timestamp ties do not establish business order.
 
+### Keeping hidden-activity selections intact
+
+The hide-activities picker includes all currently hidden labels, even when they
+fall outside the initial 2,000 frequent activities. Search original labels and
+page through matches to add other activities to the picker without changing
+the current selection. The dashboard checks that
+the saved hidden set has not changed since it loaded. If another view changed
+it, reload before saving; the stale selection is not applied.
+
 ### Reusing activity groupings across logs
 
 Under **Group activities**, download a saved mapping as JSON. In another log,
@@ -3853,3 +3991,11 @@ The dashboard-session endpoint `POST /v1/event-logs/{log_id}/activity-mappings/t
 accepts `{ "format": "openworkgraph.activity-mapping.v1", "mapping": { ... } }`.
 It validates and previews the definition against original event labels without
 changing the log or its saved mappings.
+
+### Exact activities in compliance rules
+
+Activity A and B accept an exact label in place of the suggested activity. Use
+**Find labels** to search the current case notion, then add and check the rule.
+The checked definition is also used for violation evidence and saved signals.
+Adding or removing a queued rule clears the previous check; run it again to
+review violations or save a signal.
