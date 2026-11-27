@@ -1,0 +1,63 @@
+name: gateway PostgreSQL backup rehearsal
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - "gateway/postgres_backup.py"
+      - "gateway/db.py"
+      - "tests/test_gateway_postgres_backup.py"
+      - ".github/workflows/gateway-postgres-backup.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  isolated-recovery:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      source:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: fixture
+          POSTGRES_PASSWORD: synthetic-source-password
+          POSTGRES_DB: owg_backup_fixture
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U fixture -d owg_backup_fixture"
+          --health-interval 5s --health-timeout 5s --health-retries 12
+      rehearsal:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: rehearsal
+          POSTGRES_PASSWORD: synthetic-rehearsal-password
+          POSTGRES_DB: postgres
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U rehearsal -d postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install Gateway and development dependencies
+        run: python -m pip install -e ".[dev,gateway]"
+      - name: Ensure compatible native PostgreSQL clients
+        run: |
+          if ! command -v pg_dump || ! command -v pg_restore; then
+            sudo apt-get update
+            sudo apt-get install -y postgresql-client
+          fi
+          pg_dump --version
+          pg_restore --version
+      - name: Test archive validation and real isolated recovery
+        env:
+          OWG_BACKUP_TEST_SOURCE_URL: postgresql://fixture:synthetic-source-password@127.0.0.1:5432/owg_backup_fixture?sslmode=disable
+          OWG_BACKUP_TEST_REHEARSAL_URL: postgresql://rehearsal:synthetic-rehearsal-password@127.0.0.1:5433/postgres?sslmode=disable
+        run: python -m pytest -q tests/test_gateway_postgres_backup.py
