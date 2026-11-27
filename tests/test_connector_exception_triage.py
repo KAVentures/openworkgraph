@@ -186,12 +186,35 @@ def test_http_owner_only(tmp_path,monkeypatch):
         assert c.get(base).status_code==401
         admin={"Authorization":"Bearer test-admin"}
         assert c.get(base,headers=admin).json()["queues"]==[]
-        for suffix in ("","/cet_fixture/page","/cet_fixture/change","/cet_fixture/delete"):
+        for suffix in ("","/cet_fixture/page","/cet_fixture/change","/cet_fixture/delete","/cet_fixture/export"):
             assert c.post(base+suffix,json={},headers=admin).status_code in (404,422)
             assert c.post(base+suffix,json={}).status_code==401
         ordinary=admin_accounts.AdminIdentity("admin-fixture","admin@example.test","Admin","admin","test")
         monkeypatch.setattr(admin_accounts,"validate_session",lambda db,token:ordinary)
         header={"Authorization":"Bearer "+admin_accounts.SESSION_PREFIX+"test"}
         assert c.get(base,headers=header).status_code==403
-        for suffix in ("","/cet_fixture/page","/cet_fixture/change","/cet_fixture/delete"):
+        for suffix in ("","/cet_fixture/page","/cet_fixture/change","/cet_fixture/delete","/cet_fixture/export"):
             assert c.post(base+suffix,json={},headers=header).status_code==403
+
+
+def test_full_disposition_export_is_exact_and_preserves_original_outcome(prepared):
+    from gateway.connector_exception_triage import Export,disposition_csv
+    from shared.connector_event_snapshot import digest
+    from io import StringIO
+    import csv
+    q,*_=prepared;d=create(prepared);item=items(q,d)[0]
+    updated=update(q,d,item,"reviewed","source_gap_suspected")
+    new=updated["queue"]
+    with pytest.raises(JobError,match="exception_queue_revision_changed"):
+        q.export("customer",d["queue_id"],Export(expected_revision=1,confirm_disposition_export=True),"owner")
+    with pytest.raises(JobError,match="explicit_disposition_export"):
+        q.export("customer",d["queue_id"],Export(expected_revision=2,confirm_disposition_export=False),"owner")
+    report=q.export("customer",d["queue_id"],Export(expected_revision=2,confirm_disposition_export=True),"owner")
+    assert report["queue"]==new
+    assert report["export_sha256"]==digest({k:v for k,v in report.items() if k!="export_sha256"})
+    rows=list(csv.DictReader(StringIO(disposition_csv(report))))
+    assert len(rows)==1 and rows[0]["state"]=="reviewed"
+    assert rows[0]["status"]==item["status"] and rows[0]["reason"]==item["reason"]
+    assert rows[0]["disposition"]=="source_gap_suspected" and rows[0]["queue_revision"]=="2"
+    assert rows[0]["export_sha256"]==report["export_sha256"]
+    assert "history" not in rows[0]
