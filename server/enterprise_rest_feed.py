@@ -152,6 +152,9 @@ def _key(p, domain, value):
 
 
 def _check_binding(p):
+    if p.get("provider") == "sql":
+        from . import enterprise_sql_feed as sql
+        return sql.check_binding(p)
     if p.get("provider") == "google":
         from . import google_workspace_audit as google
         return google.check_binding(p)
@@ -187,6 +190,8 @@ def _public(p,now):
                            "checkpoint","last_success_at","last_attempt_at","last_result","retry_not_before")}
     out["config"] = p["config"]
     out["provider"] = p.get("provider", "rest")
+    if p.get("provider")=="sql":
+        out["source_schema_sha256"]=p.get("source_schema_sha256")
     if p["status"]=="running" and p["lease_until"]<=now:
         out["status"]="interrupted"
     try:
@@ -291,7 +296,8 @@ def forget_dataset(conn,log_id):
         p=json.loads(definition)
         if p["log_id"]==log_id:
             p.update(enabled=False,status="dataset_deleted",revision=p["revision"]+1,run_id=None,lease_until=0,
-                     log_id=None,checkpoint=None,last_result=None,last_success_at=None)
+                     log_id=None,checkpoint=None,last_result=None,last_success_at=None,
+                     source_schema_sha256=None)
             _put(conn,p)
 
 
@@ -476,6 +482,8 @@ def _retain(p,rows,counts,until):
                      run_id=None,lease_until=0,retry_not_before=0,
                      last_result={**counts,"outcome":"succeeded","distinct_events_in_window":len(rows),
                                   "events_added":added,"duplicates_skipped":duplicates})
+        if p.get("provider")=="sql":
+            saved["source_schema_sha256"]=counts["source_schema_sha256"]
         _put(conn,saved)
     with workspace._LOCK:
         _check(p)
@@ -487,7 +495,7 @@ def _retain(p,rows,counts,until):
                 added=result["added_events"]
                 duplicates=result["duplicate_events_skipped"]
             else:
-                result=workspace.import_log(source,name=("Google Workspace audit " if p.get("provider")=="google" else "Enterprise REST ")+p["profile_id"],source_format="csv",
+                result=workspace.import_log(source,name={"google":"Google Workspace audit ","sql":"Enterprise SQL "}.get(p.get("provider"),"Enterprise REST ")+p["profile_id"],source_format="csv",
                                             mapping=mapping,_transaction_hook=checkpoint)
                 added=result["events"]
                 duplicates=0
@@ -535,7 +543,10 @@ def run(profile_id,revision,*,confirm_reads,confirm_retention,client_factory=htt
         raise FeedError("exact_revision_required",422)
     p,since,until=_begin(profile_id,revision,now or _now())
     try:
-        if p.get("provider")=="google":
+        if p.get("provider")=="sql":
+            from . import enterprise_sql_feed as sql
+            rows,counts=sql.extract(p,since,until)
+        elif p.get("provider")=="google":
             from . import google_workspace_audit as google
             rows,counts=google.extract(p,since,until,client_factory)
         else:
@@ -573,7 +584,9 @@ def run_scheduled(profile_id,revision):
     except FeedError as error:
         if error.code in {"unknown_rest_profile","rest_profile_disabled","profile_changed_or_disabled",
                            "credential_changed_reconfigure_required","rest_run_invalidated",
-                           "endpoint_not_deployment_allowlisted","google_grant_unavailable","google_grant_scope_mismatch","google_reconnect_required"}:
+                           "endpoint_not_deployment_allowlisted","google_grant_unavailable","google_grant_scope_mismatch","google_reconnect_required",
+                           "sql_source_not_deployment_allowlisted","sql_source_definition_changed",
+                           "sql_source_schema_changed_requires_new_profile","sql_mapped_column_missing_or_type_changed"}:
             return "paused:rest_profile_changed",0.0
         if error.code=="no_new_checkpoint_window":
             return "skipped_no_new_window",0.0
