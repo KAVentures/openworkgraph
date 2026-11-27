@@ -176,7 +176,7 @@ def inventory(conn) -> dict[str, Any]:
         JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
         WHERE c.relkind IN ('r','p')
           AND n.nspname NOT IN ('pg_catalog','information_schema')
-          AND n.nspname NOT LIKE 'pg_%'
+          AND left(n.nspname,3) <> 'pg_'
         ORDER BY n.nspname, c.relname
     """).fetchall()
     require(REQUIRED_TABLES <= {name for schema, name, _ in tables if schema == "public"},
@@ -198,7 +198,7 @@ def inventory(conn) -> dict[str, Any]:
         LEFT JOIN pg_catalog.pg_attrdef d ON d.adrelid=a.attrelid AND d.adnum=a.attnum
         WHERE c.relkind IN ('r','p') AND a.attnum>0 AND NOT a.attisdropped
           AND n.nspname NOT IN ('pg_catalog','information_schema')
-          AND n.nspname NOT LIKE 'pg_%'
+          AND left(n.nspname,3) <> 'pg_'
         ORDER BY n.nspname,c.relname,a.attnum
     """).fetchall()
     # Dropped columns are not dumped. Compare relative live column order rather
@@ -212,7 +212,7 @@ def inventory(conn) -> dict[str, Any]:
         JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
         WHERE c.relkind IN ('r','p')
           AND n.nspname NOT IN ('pg_catalog','information_schema')
-          AND n.nspname NOT LIKE 'pg_%'
+          AND left(n.nspname,3) <> 'pg_'
         ORDER BY n.nspname,c.relname,k.conname
     """).fetchall()
     # Separate schema/count digests make mismatches actionable without exposing
@@ -230,6 +230,7 @@ def snapshot(params: dict[str, str]):
         # No user schema shadows built-in functions; the inventory qualifies
         # table identifiers explicitly. Stable deparsing for logical restore.
         conn.execute("SET LOCAL search_path TO pg_catalog")
+        conn.execute("SET LOCAL row_security TO off")
         yield conn
 
 
@@ -267,6 +268,8 @@ def create_backup(destination: Path, url: str, *, confirm: str, timeout: int = 3
                                  "--no-acl", "--snapshot=" + snap,
                                  "--file=" + str(archive.resolve())], params, timeout)
         _private_file(archive)
+        with archive.open("rb") as durable:
+            os.fsync(durable.fileno())
         sha, size = digest_file(archive)
         require(size > 0, "empty_archive")
         manifest = {"format": FORMAT, "created_at": utcnow(),
@@ -353,7 +356,9 @@ def verify_backup(bundle: Path) -> dict:
 
 
 def _same_endpoint(a: dict, b: dict) -> bool:
-    return (a["host"].lower(), a["port"]) == (b["host"].lower(), b["port"])
+    return (a["port"] == b["port"] and
+            bool({a["host"].lower(), a.get("hostaddr", "").lower()} .intersection(
+                {b["host"].lower(), b.get("hostaddr", "").lower()}) - {""}))
 
 
 def rehearse_backup(bundle: Path, target_url: str, *, confirm: str,
