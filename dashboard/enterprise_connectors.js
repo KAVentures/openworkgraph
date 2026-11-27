@@ -695,6 +695,55 @@
     }catch(error){$('tuningStatus').textContent=error.message;}
     finally{tuningLock(false);}
   };
+  let historyGeneration=0,historyBusy=false;
+  const historyFields=['historyProfile','historyDays','historyState','historyLimit'];
+  function historyInvalidate(){
+    historyGeneration++;$('historyDownload').disabled=true;$('historyResults').replaceChildren();
+    $('historyStatus').textContent='Filters changed. Load local run history again.';
+  }
+  for(const id of historyFields)$(id).oninput=historyInvalidate;
+  function historyPath(){
+    const profile=$('historyProfile').value.trim(),days=Number($('historyDays').value),limit=Number($('historyLimit').value);
+    if((profile&&!/^rest_[a-f0-9]{24}$/.test(profile))||!Number.isInteger(days)||days<1||days>90||
+       !Number.isInteger(limit)||limit<1||limit>1000)throw Error('Choose a valid profile ID, lookback and row limit.');
+    const params=new URLSearchParams({days:String(days),limit:String(limit)});
+    if(profile)params.set('profile_id',profile);if($('historyState').value)params.set('state',$('historyState').value);
+    return base+'/run-history?'+params;
+  }
+  function historyRender(data){
+    const s=data.summary,fields=Object.keys(s.counts);
+    const root=$('historyResults');
+    root.replaceChildren(el('p',data.returned_runs+' of '+data.matching_retained_runs+' matching retained attempts returned. Summary uses returned rows only.'+
+      (data.truncated?' Increase the limit or narrow filters.':'')),
+      table(['Outcome','Returned attempts'],Object.entries(s.states)),
+      table(['Reported successful-run measure','Sum','Known runs','Unknown runs'],fields.map(k=>
+        [k.replaceAll('_',' '),s.counts[k].sum_of_reported,s.counts[k].reported_runs,s.counts[k].unknown_successful_runs])),
+      table(['Profile','Attempts','Succeeded','Failed','Interrupted','Invalidated','Mean successful seconds'],data.profiles.map(p=>
+        [p.profile_id,p.runs,p.successful_runs,p.states.failed,p.states.interrupted,p.states.invalidated,p.successful_elapsed_seconds_mean])),
+      el('h3','Failure and interruption codes'),
+      table(['Code','Attempts'],Object.entries(s.error_counts)),
+      el('h3','Exact admitted attempts'),
+      table(['Profile / provider','Revision','Admitted UTC','Change window','Outcome','Elapsed seconds','Checkpoint before','Checkpoint after','Added','Duplicates','Pages','Error / cooldown'],
+        data.runs.map(r=>[r.profile_id+' / '+r.provider,r.revision,r.admitted_at,r.since_at+' → '+r.until_at,
+          r.state+(r.local_intent_unreconciled?' (unreconciled)':''),r.elapsed_seconds,r.checkpoint_before,r.checkpoint_after,
+          r.events_added,r.duplicates_skipped,r.pages,[r.error_code,r.retry_not_before].filter(Boolean).join(' / ')])),
+      el('p','Counts describe locally committed evidence, not live provider health or complete source coverage. An expired or invalidated intent does not prove remote cancellation.'));
+  }
+  async function historyLoad(save=false){
+    if(historyBusy)return;historyBusy=true;const turn=++historyGeneration;
+    $('historyRefresh').disabled=true;$('historyDownload').disabled=true;
+    try{
+      const data=await api(historyPath());
+      if(turn!==historyGeneration)return;
+      historyRender(data);$('historyDownload').disabled=false;
+      $('historyStatus').textContent='Local journal refreshed. No provider reads or credential renewal.';
+      if(save){const url=URL.createObjectURL(new Blob([JSON.stringify(data,null,2)],{type:'application/json'}));
+        try{const a=el('a');a.href=url;a.download='owg-ingestion-run-history.json';a.click();}finally{URL.revokeObjectURL(url);}}
+    }catch(error){if(turn===historyGeneration){$('historyResults').replaceChildren();$('historyStatus').textContent=error.message;}}
+    finally{historyBusy=false;$('historyRefresh').disabled=false;}
+  }
+  $('historyRefresh').onclick=()=>historyLoad(false);
+  $('historyDownload').onclick=()=>historyLoad(true);
   $('refresh').onclick=load;
   $('freshness').oninput=()=>{generation++;latest=null;$('download').disabled=true;$('refresh').disabled=busy;$('inventory').replaceChildren();$('profiles').replaceChildren();$('status').textContent='Threshold changed. Refresh local inventory.';};
   $('download').onclick=async()=>{
