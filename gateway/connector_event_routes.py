@@ -69,6 +69,25 @@ def install(app,jobs,admin):
         await reply(store.preflight,token)
         return await reply(store.upload,token,await parse(request,Upload,maximum=MAX_BYTES+4096))
 
+    @router.post(base+"/{organization_id}/quality-review")
+    async def quality_review(organization_id:str,request:Request,authorization:str|None=Header(default=None)):
+        from .connector_publication_quality import Review,review
+        principal=owner(authorization,True)
+        return await reply(review,store,organization_id,await parse(request,Review,maximum=32768),principal)
+
+    @router.post(base+"/{organization_id}/quality-export")
+    async def quality_export(organization_id:str,request:Request,authorization:str|None=Header(default=None)):
+        from .connector_publication_quality import Export,export
+        principal=owner(authorization,True)
+        result=await reply(export,store,organization_id,await parse(request,Export,maximum=32768),principal)
+        result.headers["Content-Disposition"]='attachment; filename="owg-quality-reviewed-event-bundle.json"'
+        return result
+
+    @router.get("/admin/connector-publication-quality",include_in_schema=False)
+    def quality_page():
+        from .html_pages import render_page
+        return render_page("connector_publication_quality.html")
+
     @router.get("/admin/connector-events",include_in_schema=False)
     def page():
         from .html_pages import render_page
