@@ -157,11 +157,11 @@ def test_http_owner_only(tmp_path,monkeypatch):
         base="/v1/admin/connector-events/customer"
         admin={"Authorization":"Bearer test-admin"}
         assert c.get("/admin/connector-case-review").status_code==200
-        for suffix in ("case-catalog","case-review","case-export","case-export-csv","case-export-portable"):
+        for suffix in ("case-catalog","case-review","case-export","case-export-csv","case-export-portable","case-temporal-review","case-conformance-catalog","case-conformance-review","case-conformance-worklist","case-quality-export"):
             assert c.post(base+"/"+suffix,json={}).status_code==401
             assert c.post(base+"/"+suffix,json={},headers=admin).status_code==422
         ordinary=admin_accounts.AdminIdentity("admin-fixture","admin@example.test","Admin","admin","test")
         monkeypatch.setattr(admin_accounts,"validate_session",lambda db,token:ordinary)
         header={"Authorization":"Bearer "+admin_accounts.SESSION_PREFIX+"test"}
-        for suffix in ("case-catalog","case-review","case-export","case-export-csv","case-export-portable"):
+        for suffix in ("case-catalog","case-review","case-export","case-export-csv","case-export-portable","case-temporal-review","case-conformance-catalog","case-conformance-review","case-conformance-worklist","case-quality-export"):
             assert c.post(base+"/"+suffix,json={},headers=header).status_code==403
