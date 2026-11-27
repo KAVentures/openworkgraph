@@ -86,6 +86,17 @@
     const sample=input('owgCommsSample','checkbox');const sampleCount=input('owgCommsSampleCount','number');sampleCount.min='1';sampleCount.max='200';sampleCount.value='25';
     const sampleLabel=el('label');sampleLabel.style.cssText='display:flex;gap:6px;align-items:center';
     sampleLabel.append(sample,document.createTextNode(' Keep the least certain inbound messages, redacted, as review examples (needs review examples turned on below)'));
+    const episodeEnabled=input('owgCommsEpisodes','checkbox');
+    const episodeLabel=el('label');episodeLabel.style.cssText='display:flex;gap:6px;align-items:center';
+    episodeLabel.append(episodeEnabled,document.createTextNode(' Include response episodes and deadline review (optional)'));
+    const episodeCutoff=input('owgCommsEpisodeCutoff','text','2026-01-31T23:59:59Z');
+    episodeCutoff.maxLength=64;
+    const episodeDeadlines=input('owgCommsEpisodeDeadlines','text','60,240,1440');
+    episodeDeadlines.value='60,240,1440';episodeDeadlines.maxLength=100;
+    const episodeControls=el('div');episodeControls.id='owgCommsEpisodeControls';
+    episodeControls.append(el('p','Declare an export observation cutoff with timezone and one to eight elapsed-time deadlines. An observed outbound is not verified resolution. No extra storage is enabled.','muted'),
+      field('Response observation cutoff (ISO with timezone)',episodeCutoff),field('Response deadlines in whole minutes, comma-separated',episodeDeadlines));
+    episodeEnabled.onchange=()=>show(episodeControls,episodeEnabled.checked);show(episodeControls,false);
     const run=button('Analyse communications');run.id='owgCommsRun';run.disabled=true;
     const status=el('div',null,'muted');status.id='owgCommsStatus';status.setAttribute('role','status');status.setAttribute('aria-live','polite');
     const results=el('div');results.id='owgCommsResults';
@@ -97,7 +108,7 @@
     const taxRow=el('div',null,'row');taxRow.append(saveTaxonomy,resetTaxonomy);
     taxonomyBox.append(el('div','One intent per line: "Name: term, term". A message gets the intent whose terms match best; ties are shown as ambiguous.','muted'),field('Intents and terms',taxonomy),taxRow,taxStatus);
     const review=el('details');review.id='owgCommsReview';review.appendChild(el('summary','Review examples and learned model'));
-    card.append(row,mapping,field('Intents from',classifier),qualityControls,consentLabel,saveLabel,sampleLabel,field('How many review examples',sampleCount),run,status,results,review,taxonomyBox);
+    card.append(row,mapping,field('Intents from',classifier),qualityControls,episodeLabel,episodeControls,consentLabel,saveLabel,sampleLabel,field('How many review examples',sampleCount),run,status,results,review,taxonomyBox);
     const anchor=document.getElementById('owgEventLogCard')||document.getElementById('owgProcessCSV');
     if(anchor)anchor.insertAdjacentElement('afterend',card);else panel.appendChild(card);
 
@@ -132,6 +143,14 @@
           return;
         }
         q.set('quality_gate_language',code.toLowerCase());
+      }
+      if(episodeEnabled.checked){
+        const cutoff=episodeCutoff.value.trim(),parts=episodeDeadlines.value.split(',').map(x=>x.trim());
+        if(!/T.*(?:Z|[+-]\d{2}:\d{2})$/i.test(cutoff)||!Number.isFinite(Date.parse(cutoff))||parts.length<1||parts.length>8||
+          parts.some(x=>!/^\d{1,5}$/.test(x)||Number(x)<1||Number(x)>43200)||new Set(parts.map(Number)).size!==parts.length){
+          status.textContent='Declare an exact timezone-qualified cutoff and one to eight distinct whole-minute deadlines.';return;
+        }
+        q.set('response_cutoff',cutoff);q.set('response_deadlines',parts.map(Number).join(','));
       }
       if(sample.checked){q.set('review_sample',String(Math.max(1,Math.min(200,Number(sampleCount.value)||25))));headers['X-OWG-Review-Examples-Confirmed']='true';}
       if(save.checked){q.set('save_event_log','true');q.set('name',chosen.name.replace(/\.[^.]+$/,'').slice(0,100)+' intents');headers['X-OWG-Local-Storage-Confirmed']='true';}
@@ -384,6 +403,38 @@
         el('div','Only entity types are counted; values are never kept or shown.','muted'));
       const t=r.threads;
       parts.push(el('h3','Threads'),table(['Threads','Median messages','Threads with repeat contact','Median first response'],[[Number(t.threads).toLocaleString(),t.median_messages_per_thread===null?'—':t.median_messages_per_thread,Number(t.threads_with_repeat_inbound).toLocaleString(),t.first_response_seconds?duration(t.first_response_seconds.median)+' ('+t.first_response_seconds.count+' threads)':'—']]));
+      if(r.response_episodes){
+        const a=r.response_episodes,s=a.overall,c=a.coverage,box=el('div');box.id='owgCommsEpisodeResults';
+        const pct=v=>v===null?'—':(100*v).toFixed(1)+'%';
+        const targetRows=(label,group)=>group.deadlines.map(d=>[label,d.deadline_minutes,d.counts.observed_within_deadline,d.counts.observed_after_deadline,
+          d.counts.no_reply_deadline_elapsed,d.counts.no_reply_within_deadline,pct(d.observed_within_deadline_share),pct(d.upper_share_if_pending_reply_on_time)]);
+        const headers=['Group','Deadline (min)','Observed on time','Observed late','No reply, elapsed','No reply, pending','Observed lower share','Conditional upper share'];
+        box.append(el('h3','Response episode intelligence'),el('p',a.observation_cutoff+' cutoff · '+s.episodes+' eligible response episodes across '+c.eligible_threads+' threads.'),
+          table(['Measure','Count'],[['Threaded population',c.threaded_population],['Eligible threads',c.eligible_threads],['Excluded threads',c.excluded_threads],
+            ['Messages without thread',c.unthreaded_messages],['Dated messages after cutoff (fully dated threads)',c.dated_messages_after_cutoff_in_fully_dated_threads],
+            ['First observed episodes',s.first_observed_episodes],['Follow-up episodes',s.follow_up_episodes],
+            ['Episodes with repeat inbound',s.episodes_with_repeat_inbound],['Additional inbound messages',s.additional_inbound_before_observed_reply_or_cutoff],
+            ['Observed reply episodes',s.observed_reply_episodes],['No observed reply',s.without_observed_reply]]),
+          table(['Exclusive exclusion reason','Threads'],Object.entries(c.exclusive_exclusion_reasons)),
+          table(['Duration basis','Count','Median','P90'],[['Observed replies',s.observed_reply_seconds.count,s.observed_reply_seconds.median===null?'—':duration(s.observed_reply_seconds.median),
+            s.observed_reply_seconds.p90_nearest_rank===null?'—':duration(s.observed_reply_seconds.p90_nearest_rank)],
+            ['Open episode age',s.open_age_seconds.count,s.open_age_seconds.median===null?'—':duration(s.open_age_seconds.median),
+            s.open_age_seconds.p90_nearest_rank===null?'—':duration(s.open_age_seconds.p90_nearest_rank)]]),
+          el('h4','Response deadline sensitivity'),table(headers,targetRows('All eligible episodes',s)));
+        for(const [title,group] of [['First inbound intent',a.by_first_inbound_intent],['Episode start week (UTC)',a.by_episode_start_week],['First observed versus follow-up',a.by_episode_kind]]){
+          const details=el('details');details.append(el('summary',title),
+            el('p',group.suppressed_or_limited_groups+' groups withheld or limited; minimum '+group.minimum_distinct_threads+' distinct threads per displayed group.','muted'),
+            table(['Group','Distinct threads','Episodes','Repeat inbound episodes','Observed replies','Without observed reply'],
+              group.rows.map(x=>[x.label??'Mixed first timestamp',x.distinct_threads,x.episodes,x.episodes_with_repeat_inbound,x.observed_reply_episodes,x.without_observed_reply])),
+            table(headers,group.rows.flatMap(x=>targetRows(x.label??'Mixed first timestamp',x))));
+          box.append(details);
+        }
+        const exportButton=button('Download response episode aggregates','secondary');
+        exportButton.id='owgCommsEpisodeDownload';
+        exportButton.onclick=()=>{const url=URL.createObjectURL(new Blob([JSON.stringify(a,null,2)],{type:'application/json'})),link=el('a');
+          link.href=url;link.download='owg-response-episodes.json';link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);};
+        box.append(el('p',a.interpretation,'muted'),exportButton);parts.push(box);
+      }
       if(r.weekly_volume.length)parts.push(el('h3','Weekly volume'),table(['Week','Messages','Most common intent'],r.weekly_volume.slice(-26).map(w=>{const top=Object.entries(w.by_intent).filter(([k])=>k!=='outbound reply').sort((a,b)=>b[1]-a[1])[0];return [w.week,Number(w.messages).toLocaleString(),top?top[0]+' ('+top[1]+')':'—'];})));
       if(r.unclassified_themes.length)parts.push(el('h3','Frequent phrases in unclassified messages'),el('div','Phrases in at least 5 messages that matched no intent; consider adding them to the taxonomy.','muted'),
         table(['Phrase','Messages'],r.unclassified_themes.map(x=>[x.terms,x.messages])));
