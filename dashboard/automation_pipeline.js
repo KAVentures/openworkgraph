@@ -1800,6 +1800,23 @@
                   for(const row of rows){const tr=el('tr');row.forEach(x=>tr.append(el('td',x??'Not within horizon')));b.append(tr);}
                   t.append(h,b);wrap.append(t);return wrap;
                 }
+                function cashChart(d){
+                  const section=el('div');section.setAttribute('role','group');section.setAttribute('aria-label','Discounted cash balance by month for '+d.label);
+                  const values=d.months.map(m=>Number(m.cumulative_discounted_cash_flow));
+                  const scale=Math.max(1,...values.map(Math.abs));
+                  section.append(el('p','Discounted cumulative cash balance; zero is the center line. Exact values are in the monthly table.','muted'));
+                  for(const [i,v] of values.entries()){
+                    const row=el('div');row.style.cssText='display:grid;grid-template-columns:52px minmax(0,1fr);align-items:center;gap:8px;margin:3px 0';
+                    row.append(el('span','M'+i));
+                    const track=el('div');track.style.cssText='position:relative;height:12px;border:1px solid currentColor;border-radius:3px;opacity:.85';
+                    const zero=el('div');zero.style.cssText='position:absolute;left:50%;height:100%;border-left:1px solid currentColor';
+                    const bar=el('div');bar.style.cssText='position:absolute;height:100%;background:currentColor';
+                    const width=50*Math.abs(v)/scale;
+                    bar.style.left=(v<0?50-width:50)+'%';bar.style.width=width+'%';
+                    track.title=d.months[i].cumulative_discounted_cash_flow;track.setAttribute('aria-hidden','true');track.append(zero,bar);row.append(track);section.append(row);
+                  }
+                  return section;
+                }
                 function exportFile(value,type,name){
                   const url=URL.createObjectURL(new Blob([value],{type})),a=el('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
                 }
@@ -1840,7 +1857,7 @@
                         el('p','Unconverted released hours: '+d.unconverted_released_hours+'; additional hours: '+d.additional_hours+
                           '. Initial investment and additional phase costs are included.'),
                         table(['Cash conversion fraction','Cash NPV','Nonnegative'],s.sensitivity.map(x=>[x.cash_conversion_share,x.cash_npv,x.cash_npv_nonnegative?'Yes':'No'])),
-                        table(['Month','Cases','Released hours','Extra hours','Cash flow','Economic value','Cumulative cash','Discounted cumulative cash'],
+                        cashChart(d),table(['Month','Cases','Released hours','Extra hours','Cash flow','Economic value','Cumulative cash','Discounted cumulative cash'],
                           d.months.map(m=>[m.month,m.cases,m.released_hours,m.additional_hours,m.net_cash_flow,m.net_economic_value,
                             m.cumulative_cash_flow,m.cumulative_discounted_cash_flow])),
                         el('p','First discounted cash crossing: '+(d.discounted_cash_break_even.first_nonnegative_month??'none')+

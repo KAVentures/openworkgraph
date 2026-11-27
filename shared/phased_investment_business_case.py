@@ -122,7 +122,15 @@ def _sensitivity(base_npv, release_npv, shares):
     else:
         status="attainable_under_declared_assumptions"
         threshold=-base_npv/release_npv
-    return {"status":status,"minimum_cash_conversion_share_for_nonnegative_npv":display(threshold,10),
+    conservative=None
+    if threshold is not None:
+        with localcontext() as ctx:
+            ctx.prec=100
+            # Integer ceiling on the exact rational, not on a rounded quotient.
+            scaled=-((-threshold.numerator*10**10)//threshold.denominator)
+            conservative=format(Decimal(scaled)/Decimal(10**10),".10f")
+    return {"status":status,"minimum_cash_conversion_share_for_nonnegative_npv":conservative,
+            "minimum_share_display_rounded_up":True,
             "sensitivity":[{"cash_conversion_share":display(s,10),"cash_npv":display(base_npv+s*release_npv),
                             "cash_npv_nonnegative":base_npv+s*release_npv>=0} for s in sorted(shares)],
             "cash_npv_at_zero_conversion":display(base_npv),
