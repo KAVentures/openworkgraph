@@ -33,6 +33,16 @@ class NoteSpec(BaseModel):
     text: str = Field(min_length=1, max_length=2000)
 
 
+class NoteUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    expected_text: str = Field(min_length=1, max_length=2000)
+    text: str = Field(min_length=1, max_length=2000)
+
+
+class NoteConflict(EventLogWorkspaceError):
+    """The note was changed after it was loaded for editing."""
+
+
 class NoteQuery(BaseModel):
     model_config = ConfigDict(extra="forbid")
     case_id: str | None = Field(default=None, min_length=1, max_length=500)
@@ -112,6 +122,15 @@ def query(log_id: str, spec: Any) -> dict[str, Any]:
     return notes(log_id, **selection.model_dump())
 
 
+def _validated_text(value: str) -> str:
+    text = value.strip()
+    if not text:
+        raise EventLogWorkspaceError("write something in the note")
+    if any(ord(ch) < 32 and ch not in "\n\t" for ch in text):
+        raise EventLogWorkspaceError("the note must not contain control characters")
+    return text
+
+
 def add(log_id: str, spec: Any, *, compact: bool = False) -> dict[str, Any]:
     try:
         note = NoteSpec.model_validate(spec)
@@ -119,11 +138,7 @@ def add(log_id: str, spec: Any, *, compact: bool = False) -> dict[str, Any]:
         first = exc.errors()[0]
         where = ".".join(str(p) for p in first["loc"])
         raise EventLogWorkspaceError("case note is invalid: " + (where + " " if where else "") + first["msg"]) from None
-    text = note.text.strip()
-    if not text:
-        raise EventLogWorkspaceError("write something in the note")
-    if any(ord(ch) < 32 and ch not in "\n\t" for ch in text):
-        raise EventLogWorkspaceError("the note must not contain control characters")
+    text = _validated_text(note.text)
 
     def run(conn):
         if not conn.execute("SELECT 1 FROM objects WHERE log_id = ? AND object_id = ?", [log_id, note.case_id]).fetchone():
@@ -135,6 +150,25 @@ def add(log_id: str, spec: Any, *, compact: bool = False) -> dict[str, Any]:
                      [log_id, note_id, note.case_id, text, datetime.now(timezone.utc).replace(tzinfo=None)])
         result = {"added": note_id, "case_id": note.case_id}
         return result if compact else {**_listing(conn, log_id, note.case_id), **result}
+    return _with_conn(log_id, run)
+
+
+def update(log_id: str, note_id: str, spec: Any) -> dict[str, Any]:
+    try:
+        change = NoteUpdate.model_validate(spec)
+    except ValidationError as exc:
+        raise EventLogWorkspaceError("case note update is invalid: " + exc.errors()[0]["msg"]) from None
+    text = _validated_text(change.text)
+
+    def run(conn):
+        row = conn.execute("SELECT case_id, text FROM case_notes WHERE log_id = ? AND note_id = ?",
+                           [log_id, note_id]).fetchone()
+        if row is None:
+            raise EventLogWorkspaceError("no case note with this id in this log")
+        if row[1] != change.expected_text:
+            raise NoteConflict("This note changed since it was opened. Reload it before saving.")
+        conn.execute("UPDATE case_notes SET text = ? WHERE log_id = ? AND note_id = ?", [text, log_id, note_id])
+        return {"updated": note_id, "case_id": row[0]}
     return _with_conn(log_id, run)
 
 
@@ -155,4 +189,4 @@ def erase(conn, log_id: str) -> None:
     conn.execute("DELETE FROM case_notes WHERE log_id = ?", [log_id])
 
 
-__all__ = ["notes", "query", "add", "remove", "erase", "FORMAT"]
+__all__ = ["notes", "query", "add", "update", "remove", "erase", "FORMAT"]
