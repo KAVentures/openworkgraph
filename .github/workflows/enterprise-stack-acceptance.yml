@@ -113,12 +113,19 @@ jobs:
         run: |
           npm install --prefix "$RUNNER_TEMP/owg-browser" playwright@1.64.1 axe-core@4.10.3
           node "$RUNNER_TEMP/owg-browser/node_modules/playwright/cli.js" install chromium
-      - name: Enterprise connector configuration acceptance
-        if: success() || failure()
-        run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/enterprise_connectors.cjs
       - name: End-to-end evidence quality, linkage, conformance, triage and portable export acceptance
         if: success() || failure()
-        run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/connector_crosswalks.cjs
+        run: |
+          export OWG_BROWSER_EVIDENCE_FIXTURES="$RUNNER_TEMP/owg-synthetic-evidence"
+          NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/connector_crosswalks.cjs
+      - name: Local connector acceptance and actual Gateway download import
+        if: success() || failure()
+        run: |
+          export OWG_BROWSER_EVIDENCE_FIXTURES="$RUNNER_TEMP/owg-synthetic-evidence"
+          NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/enterprise_connectors.cjs
+      - name: Remove synthetic handoff files
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/owg-synthetic-evidence"
       - name: Verify repository database isolation
         if: success() || failure()
         run: |
