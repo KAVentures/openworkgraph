@@ -82,20 +82,23 @@ async function loadFollowups(){
       });
       const label=el('label','Reviewed comparison input (JSON)'),file=el('input');file.type='file';file.accept='.json,application/json';label.append(file);
       const consent=approval('I assert the exact mapped cases and activity selectors correspond; this is not independently verified.');
-      const report=el('div');let selectedInput=null,selectedReport=null;
+      const report=el('div');let selectedInput=null,selectedReport=null,comparisonGeneration=0;
       async function showComparison(value){
-        selectedReport=null;report.replaceChildren();
+        const turn=++comparisonGeneration;selectedReport=null;report.replaceChildren();
         selectedInput={...value,expected_queue_revision:active.revision,expected_packet_revision:p.revision,confirm_case_and_selector_correspondence:true};
-        selectedReport=await api(packetPath()+'/'+p.packet_id+'/reassessment-preview',selectedInput);
+        const exactInput=selectedInput;
+        const exactReport=await api(packetPath()+'/'+p.packet_id+'/reassessment-preview',exactInput);
+        if(turn!==comparisonGeneration||!valid())return;
+        selectedReport=exactReport;
         report.replaceChildren(el('h4','Later sample assessment'),el('p',selectedReport.interpretation),
           table(Object.entries(selectedReport.summary)),el('p','Review SHA-256: '+selectedReport.reassessment_sha256));
         for(const row of selectedReport.rows)report.append(table([['Rule',row.rule_id],['Baseline',row.baseline_status],['Later sample',row.subsequent_status],['Observed reason',row.subsequent_reason]]));
         const exact=approval('I approve recording this exact comparison digest and downloading the report.');
         const sample=approval('I understand this does not verify corrective action, case identity, causation or completeness.');
         const record=btn('Record reassessment and download report',async()=>{
-          if(!selectedReport||!exact.input.checked||!sample.input.checked)throw Error('Review the exact comparison first.');
-          const result=await api(packetPath()+'/'+p.packet_id+'/reassessment-record',{...selectedInput,
-            expected_reassessment_sha256:selectedReport.reassessment_sha256,confirm_record_reassessment:true,confirm_sample_only:true});
+          if(turn!==comparisonGeneration||selectedReport!==exactReport||!exact.input.checked||!sample.input.checked)throw Error('Review the exact comparison first.');
+          const result=await api(packetPath()+'/'+p.packet_id+'/reassessment-record',{...exactInput,
+            expected_reassessment_sha256:exactReport.reassessment_sha256,confirm_record_reassessment:true,confirm_sample_only:true});
           const url=URL.createObjectURL(new Blob([JSON.stringify(result.report,null,2)],{type:'application/json'}));
           try{const l=el('a');l.href=url;l.download='owg-followup-reassessment-report.json';l.click();}finally{URL.revokeObjectURL(url);}
           active=result.queue;await loadPage(0,true);$('status').textContent='Exact reassessment receipt recorded. Remediation remains unverified.';
@@ -108,7 +111,7 @@ async function loadFollowups(){
         await showComparison(JSON.parse(await file.files[0].text()));
       });
       preview.disabled=true;
-      file.onchange=consent.input.onchange=()=>{selectedReport=selectedInput=null;report.replaceChildren();preview.disabled=busy||!file.files[0]||!consent.input.checked;};
+      file.onchange=consent.input.onchange=()=>{comparisonGeneration++;selectedReport=selectedInput=null;report.replaceChildren();preview.disabled=busy||!file.files[0]||!consent.input.checked;};
       const guided=el('fieldset');guided.append(el('legend','Guided mapping — no JSON editing'),
         el('p','Choose the baseline conformance request and later linkage request exported from the case review console. The server checks both live sets of grants before showing candidates. No match is automatically selected.'));
       function requestFile(title){
@@ -117,8 +120,8 @@ async function loadFollowups(){
       const baselineFile=requestFile('Baseline conformance request (JSON)'),laterFile=requestFile('Later linked-case request (JSON)');
       const inspect=approval('I approve inspecting the exact selected later and baseline publications and their activity catalogs.');
       const mappingRoot=el('div');let guidance=null;
-      function clearMapping(){guidance=null;mappingRoot.replaceChildren();selectedInput=selectedReport=null;report.replaceChildren();}
-      function invalidateComparison(){selectedInput=selectedReport=null;report.replaceChildren();}
+      function clearMapping(){guidance=null;mappingRoot.replaceChildren();invalidateComparison();}
+      function invalidateComparison(){comparisonGeneration++;selectedInput=selectedReport=null;report.replaceChildren();}
       async function readRequest(input){
         if(!input.files[0]||input.files[0].size>1024*1024)throw Error('Choose a reviewed request file (at most 1 MiB).');
         const doc=JSON.parse(await input.files[0].text());
@@ -137,7 +140,7 @@ async function loadFollowups(){
         const g=await api(packetPath()+'/'+p.packet_id+'/mapping-guidance',{expected_queue_revision:active.revision,
           expected_packet_revision:p.revision,baseline,subsequent,confirm_mapping_inspection:true});
         guidance=g;const choices=new Map(),caseChoices=new Map(),selectorChoices=new Map(),dependent=el('div'),feasibilityReport=el('div');
-        let checked=null;
+        let checked=null,mappingGeneration=0;
         function summarizeFeasibility(title,result){
           const section=el('section');section.append(el('h5',title),
             el('p',(result.feasible?'Feasible: ':'Blocked: ')+result.matched_count+' / '+result.required_count+' can be assigned distinct candidates.'));
@@ -147,7 +150,7 @@ async function loadFollowups(){
               el('p','Original IDs: '+w.left.join(', ')),el('p','Remaining candidate IDs: '+(w.neighbors.join(', ')||'none')));
           }else{
             for(const [id,options] of Object.entries(result.allowed)){
-              section.append(el('p',id+' — '+options.length+' feasible remaining option(s): '+options.join(', ')));
+              section.append(el('p',id+' — '+options.length+' feasible remaining option(s): '+options.slice(0,10).join(', ')+(options.length>10?' …':'')));
             }
           }
           return section;
@@ -156,12 +159,12 @@ async function loadFollowups(){
           if(guidance!==g||!inspect.input.checked)throw Error('Refresh the reviewed guidance first.');
           const fixed_sources=[...choices].filter(([,s])=>s.value).map(([before,s])=>({before,after:s.value}));
           const fixed_cases=[...caseChoices].filter(([,s])=>s.value).map(([before,s])=>({before,after:s.value}));
-          checked=null;submitConsent.input.checked=false;submit.disabled=true;
+          const turn=++mappingGeneration;invalidateComparison();checked=null;submitConsent.input.checked=false;submit.disabled=true;
           feasibilityReport.replaceChildren();
           const result=await api(packetPath()+'/'+p.packet_id+'/mapping-feasibility',{
             expected_queue_revision:active.revision,expected_packet_revision:p.revision,baseline,subsequent,
             confirm_mapping_inspection:true,expected_guidance_sha256:g.guidance_sha256,fixed_sources,fixed_cases});
-          if(guidance!==g)return;
+          if(guidance!==g||turn!==mappingGeneration||!valid())return;
           checked=result;
           feasibilityReport.append(summarizeFeasibility('Remaining source choices',result.source_feasibility));
           if(result.case_feasibility)feasibilityReport.append(summarizeFeasibility('Remaining linked-case choices',result.case_feasibility));
@@ -188,7 +191,7 @@ async function loadFollowups(){
             jobs,cases});
         });
         submit.disabled=true;
-        function changed(){invalidateComparison();checked=null;feasibilityReport.replaceChildren();submitConsent.input.checked=false;submit.disabled=true;}
+        function changed(){mappingGeneration++;invalidateComparison();checked=null;feasibilityReport.replaceChildren();submitConsent.input.checked=false;submit.disabled=true;}
         function renderDependents(){
           changed();dependent.replaceChildren();caseChoices.clear();selectorChoices.clear();
           const map=new Map([...choices].map(([k,s])=>[k,s.value]));
