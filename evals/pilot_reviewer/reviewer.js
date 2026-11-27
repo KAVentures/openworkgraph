@@ -11,7 +11,7 @@
   const byteSize = value => new TextEncoder().encode(value).length;
   const MAX = 32 * 1024 * 1024, PAGE = 25;
   let packet = null, entries = new Map(), saved = new Map(), current = null, page = 0;
-  let dual = false, dirty = false, loadVersion = 0;
+  let dual = false, dirty = false, loadVersion = 0, sheetVersion = 0;
 
   function exact(value, keys) {
     if (!value || Array.isArray(value) || typeof value !== "object" ||
@@ -139,7 +139,7 @@
     current = id; renderEntry(true); renderList();
   }
   $("packet-file").addEventListener("change", async () => {
-    const version = ++loadVersion;
+    const version = ++loadVersion; sheetVersion++;
     if ((saved.size || dirty) && !window.confirm("Replace the current packet and discard its in-memory judgments?")) {
       $("packet-file").value = ""; return;
     }
@@ -158,11 +158,11 @@
     }
   });
   $("sheet-file").addEventListener("change", async () => {
-    const version = loadVersion;
+    const version = loadVersion, sheetAttempt = ++sheetVersion;
     try {
       if (!packet || ((saved.size || dirty) && !window.confirm("Replace all current judgments with the selected sheet?"))) return;
       const rows = await read($("sheet-file").files[0]);
-      if (version !== loadVersion) return;
+      if (version !== loadVersion || sheetAttempt !== sheetVersion) return;
       if (!Array.isArray(rows) || rows.length > entries.size) throw new Error("Invalid review sheet size.");
       const next = new Map(); let reviewer = null;
       for (const row of rows) {
@@ -178,15 +178,17 @@
       saved = next;
       if (reviewer !== null) $("reviewer").value = reviewer;
       renderEntry(); renderList(); msg("notice", "Saved sheet restored in memory.");
-    } catch (error) { msg("notice", "Sheet refused: " + error.message); }
-    finally { $("sheet-file").value = ""; }
+    } catch (error) {
+      if (version === loadVersion && sheetAttempt === sheetVersion) msg("notice", "Sheet refused: " + error.message);
+    } finally { if (sheetAttempt === sheetVersion) $("sheet-file").value = ""; }
   });
-  $("review-form").addEventListener("input", () => { dirty = true; });
+  $("review-form").addEventListener("input", () => { dirty = true; sheetVersion++; });
+  $("reviewer").addEventListener("input", () => { sheetVersion++; });
   $("review-form").addEventListener("submit", event => {
     event.preventDefault();
     try {
       if (!current) throw new Error("Select an entry.");
-      const reviewer = text($("reviewer").value.trim(), 512);
+      const reviewer = text($("reviewer").value, 512);
       if ([...saved.values()].some(row => row.reviewer_id !== reviewer)) {
         throw new Error("Keep the same reviewer ID throughout a sheet; clear the workspace to start another.");
       }
@@ -202,13 +204,13 @@
       }
       if (dual) row.resolution_reason = text($("resolution_reason").value);
       judgment(row, ["review_id", "reviewer_id", ...(dual ? ["resolution_reason"] : [])]);
-      saved.set(current, row); dirty = false; $("clear").disabled = false;
+      saved.set(current, row); sheetVersion++; dirty = false; $("clear").disabled = false;
       msg("entry-message", "Judgment saved in memory. Export to retain it."); renderList();
     } catch (error) { msg("entry-message", "Judgment not saved: " + error.message); }
   });
   $("clear").addEventListener("click", () => {
     if (!saved.has(current) || !window.confirm("Remove this saved judgment? It will be missing from the exported sheet.")) return;
-    saved.delete(current); renderEntry(); renderList();
+    saved.delete(current); sheetVersion++; renderEntry(); renderList();
   });
   $("next-entry").addEventListener("click", () => {
     const ids = [...entries.keys()], offset = ids.indexOf(current);
@@ -234,7 +236,7 @@
   });
   $("reset").addEventListener("click", () => {
     if (!window.confirm("Clear all approved material and saved judgments from this page? Exported files are not deleted.")) return;
-    loadVersion++; packet = null; entries.clear(); saved.clear(); current = null; dirty = false;
+    loadVersion++; sheetVersion++; packet = null; entries.clear(); saved.clear(); current = null; dirty = false;
     $("workspace").hidden = true; $("export-section").hidden = true;
     $("packet-file").value = ""; $("sheet-file").value = ""; $("reviewer").value = "";
     $("entry-list").replaceChildren(); clearFields();
