@@ -103,15 +103,18 @@ class Create(rest.Strict):
 
 def _catalog():
     raw=os.environ.get("OWG_SQL_SOURCE_CATALOG","{}")
-    if len(raw.encode("utf-8"))>MAX_CATALOG_BYTES:
-        raise rest.FeedError("sql_catalog_too_large")
     try:
-        value=rest._strict_json(raw.encode())
+        encoded=raw.encode("utf-8")
+        if len(encoded)>MAX_CATALOG_BYTES:
+            raise rest.FeedError("sql_catalog_too_large")
+        value=rest._strict_json(encoded)
         if not isinstance(value,dict) or len(value)>MAX_CATALOG:
             raise ValueError()
         if any(not ALIAS.fullmatch(k) for k in value):
             raise ValueError()
         return {k:Source.model_validate(v) for k,v in value.items()}
+    except rest.FeedError:
+        raise
     except (ValidationError,ValueError,TypeError,UnicodeError):
         raise rest.FeedError("invalid_sql_deployment_catalog") from None
 
@@ -252,7 +255,19 @@ def _relation(source):
 def _query(source):
     placeholder="%s" if source.engine=="postgresql" else "?"
     m=source.mapping
-    cols=", ".join(_quote(c) for c in _columns(source))
+    # Limit transferred text at the server. An overlength value becomes
+    # max+1 characters and is rejected, never silently truncated.
+    limits={m.event_id:200,m.case_id:200,m.activity:160}
+    if m.resource:
+        limits[m.resource]=200
+    def select(column):
+        q=_quote(column)
+        if column not in limits:
+            return q
+        n=limits[column]+1
+        return ("pg_catalog.left("+q+"::text, "+str(n)+")" if source.engine=="postgresql"
+                else "substr("+q+", 1, "+str(n)+")")
+    cols=", ".join(select(c) for c in _columns(source))
     changed=_quote(m.change_time)
     # A single snapshot cursor, no offset or keyset skipping of tied times.
     return ("SELECT "+cols+" FROM "+_relation(source)+" WHERE "+changed+" >= "+placeholder+
@@ -362,7 +377,7 @@ def _sqlite_read(p,source,path,since,until,deadline):
 
 def _open_postgres(params):
     import psycopg
-    return psycopg.connect(**params,connect_timeout=5,application_name="OpenWorkGraph audit feed",
+    return psycopg.connect(**params,connect_timeout=5,gssencmode="disable",application_name="OpenWorkGraph audit feed",
                            options="-c default_transaction_read_only=on -c statement_timeout=10000 -c lock_timeout=5000")
 
 
@@ -390,7 +405,15 @@ def _postgres_read(p,source,params,since,until,deadline):
                 AND a.attnum>0 AND NOT a.attisdropped AND tn.nspname='pg_catalog'""",
                 (source.schema_name,source.relation))
             meta={r[0]:(r[1],bool(r[2]),r[3]) for r in cur.fetchall()}
-            fingerprint=_validate_types(source,meta)
+            columns_pin=_validate_types(source,meta)
+            cur.execute("""SELECT c.oid,c.relkind,CASE WHEN c.relkind IN ('v','m')
+                THEN pg_catalog.pg_get_viewdef(c.oid,true) ELSE NULL END
+                FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
+                WHERE n.nspname=%s AND c.relname=%s""",(source.schema_name,source.relation))
+            identity=cur.fetchone()
+            if identity is None:
+                raise rest.FeedError("sql_source_relation_missing")
+            fingerprint=rest._digest([columns_pin,list(identity)])
             _schema_guard(p,fingerprint)
             _budget(deadline)
             # Nullable view columns are allowed, but refuse a source that
