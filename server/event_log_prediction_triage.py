@@ -46,10 +46,12 @@ def _frozen(log_id,snapshot_id):
         settings = predictions.parse(json.loads(settings_text))
         summary, cases = json.loads(summary_text), json.loads(cases_text)
         if (not isinstance(summary,dict) or not isinstance(cases,list) or
-                summary.get("predicted_cases") != len(cases) or
+                type(summary.get("predicted_cases")) is not int or summary["predicted_cases"] != len(cases) or
                 type(summary.get("open_cases")) is not int or summary["open_cases"] < len(cases)):
             raise ValueError
         pin = core.digest([FORMAT,log_id,*row])
+        if not isinstance(as_of,str) or not as_of.endswith("Z"):
+            raise ValueError
         at = datetime.fromisoformat(as_of.removesuffix("Z"))
         if at.tzinfo is not None:
             raise ValueError

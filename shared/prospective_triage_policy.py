@@ -56,8 +56,8 @@ def parse(value):
 
 
 def _number(value, probability=False):
-    return (type(value) in (int, float) and math.isfinite(value) and value >= 0
-            and (value <= 1 if probability else value <= 10**12))
+    return (type(value) in (int, float) and 0 <= value <= (1 if probability else 10**12)
+            and math.isfinite(value))
 
 
 def plan(cases, spec, *, frozen_outcome_available):
@@ -154,6 +154,13 @@ def _arm(rows, field, spec):
     # Undefined denominators remain null, not zero or perfect performance.
     recall_lower = _ratio(tp, tp+fn+un)
     recall_upper = _ratio(tp+us, tp+us+fn)
+    # If only unknown selected cases could be positive, every defined
+    # recall is one. If only unknown unselected cases could be positive,
+    # every defined recall is zero. No possible positives => undefined.
+    if recall_lower is None and us:
+        recall_lower = 1.0
+    if recall_upper is None and un:
+        recall_upper = 0.0
     cost_known = fp*spec.false_positive_cost + fn*spec.false_negative_cost
     return {"selected": selected, "not_selected": len(rows)-selected,
             "known_confusion": {"tp": tp, "fp": fp, "fn": fn, "tn": tn},

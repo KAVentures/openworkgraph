@@ -96,3 +96,14 @@ For frozen_outcome, remaining_seconds must be null. The exact model is the
 existing frozen snapshot model, not a newly trained model. Max 5,000 frozen
 predictions. No new collection, source permissions, execution authorization,
 provider read, scheduled job, or model call is introduced.
+
+## Acceptance coverage
+
+The new Python suite independently enumerates every possible binary label
+assignment for 120 randomized bounded populations and checks exact marginal
+and paired bounds. Additional integration tests use actual retained CSV logs,
+append future events, reject post-observation freezes and stale evidence,
+exercise source erasure and policy integrity, and check dashboard-only HTTP.
+The existing prediction-snapshot Chromium journey now includes preview,
+input invalidation, freeze, before/after scoring, aggregate download, exact
+case drill-down and policy erasure. Native CI remains a release gate.
