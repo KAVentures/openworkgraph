@@ -218,3 +218,30 @@ def test_full_disposition_export_is_exact_and_preserves_original_outcome(prepare
     assert rows[0]["disposition"]=="source_gap_suspected" and rows[0]["queue_revision"]=="2"
     assert rows[0]["export_sha256"]==report["export_sha256"]
     assert "history" not in rows[0]
+
+
+def test_triage_disposition_does_not_change_conformance_temporal_or_quality_evidence(prepared):
+    from gateway.connector_temporal_review import Alignment,temporal_review
+    from gateway.connector_publication_quality import Review as QualityReview,review as quality_review
+    q,spec,*_=prepared
+    reviewed=q.reviewed
+    rule_spec=Review.model_validate({k:v for k,v in spec.items() if k!="confirm_exception_retention"})
+    plan={k:spec[k] for k in ("snapshots","groups","confirm_inspection","expected_review_sha256")}
+    alignment=Alignment.model_validate({**plan,"confirm_temporal_assumptions":True})
+    quality=QualityReview.model_validate({"snapshots":spec["snapshots"],
+                    "policy":{"min_events":1,"min_cases":1},"confirm_inspection":True})
+    before_rules=review(reviewed,"customer",rule_spec,"owner")
+    before_time=temporal_review(reviewed,"customer",alignment,"owner")
+    before_quality=quality_review(reviewed.publications,"customer",quality,"owner")
+    d=create(prepared)
+    item=items(q,d)[0]
+    investigating=update(q,d,item,"investigating")
+    closed=update(q,investigating["queue"],investigating["items"][0],
+                  "reviewed","source_gap_suspected")
+    assert closed["items"][0]["status"]==item["status"]=="not_satisfied"
+    assert closed["queue"]["states"]["reviewed"]==1
+    assert review(reviewed,"customer",rule_spec,"owner")["conformance_sha256"]==before_rules["conformance_sha256"]
+    assert temporal_review(reviewed,"customer",alignment,"owner")["temporal_scope_sha256"]==before_time["temporal_scope_sha256"]
+    assert quality_review(reviewed.publications,"customer",quality,"owner")["quality_sha256"]==before_quality["quality_sha256"]
+    replay=q.save("customer",Save.model_validate(spec),"owner")
+    assert replay["already_exists"] and replay["queue"]["states"]["reviewed"]==1
