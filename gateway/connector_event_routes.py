@@ -135,6 +135,14 @@ def install(app,jobs,admin):
                         headers={"Cache-Control":"no-store","Content-Disposition":'attachment; filename="owg-reviewed-cross-source-machine-import.csv"',
                                  "X-Content-Type-Options":"nosniff"})
 
+    @router.post(base+"/{organization_id}/case-quality-export")
+    async def case_quality_export(organization_id:str,request:Request,authorization:str|None=Header(default=None)):
+        from .connector_publication_quality import LinkedExport,linked_export
+        principal=owner(authorization,True)
+        result=await reply(linked_export,reviewed,organization_id,await parse(request,LinkedExport,maximum=MAX_REQUEST+32768),principal)
+        result.headers["Content-Disposition"]='attachment; filename="owg-quality-reviewed-linked-cases.json"'
+        return result
+
     @router.get("/admin/connector-case-review",include_in_schema=False)
     def case_page():
         from .html_pages import render_page
