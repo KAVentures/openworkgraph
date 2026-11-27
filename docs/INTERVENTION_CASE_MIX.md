@@ -89,3 +89,7 @@ can distort interpretation. Choose the dimension deliberately.
 ## Verification
 
 The new regressions cover 160 independent randomized rational decomposition and standardization oracles, composition-only changes, unsupported and ambiguous strata, retained case membership, stale evidence, original-period accounting, bounded scans, authenticated API and Chromium source-review/export workflows. Full native CI remains required.
+
+## Reference and support sensitivity
+
+The primary threshold and up to seven additional explicit thresholds are evaluated over the same accumulated case counts and rational metric sums, with no second source scan. For each threshold, recompute common support and five reference populations: equal cohort/period cells, equal baseline cells, equal follow-up cells, pooled common-support case volume, and equal common strata. Report all standardized cell means and changes, control-adjusted differences where applicable, per-cell coverage and the min/max change envelope across reference choices. A strict direction agreement indicator requires every available comparison to be strictly positive or every one strictly negative; all-zero is separate. Empty support yields no estimate. These are assumption sensitivity envelopes, not statistical confidence intervals. Changing support thresholds changes the population; thresholds are not chosen by the observed outcome.

@@ -180,3 +180,32 @@ def test_projected_case_bound_refuses_instead_of_sampling(monkeypatch):
     log=_log(480,lambda i,t,team:48)
     monkeypatch.setattr(m,"MAX_CASES",10)
     with pytest.raises(workspace.EventLogWorkspaceError,match="bounded projected"):review.review(log,body())
+
+
+def test_reference_and_threshold_sensitivity_is_exact_and_no_imputation():
+    r=synthetic({("all","baseline","A"):[10]*5,("all","baseline","B"):[30]*15,
+                 ("all","follow_up","A"):[20]*15,("all","follow_up","B"):[30]*5})
+    primary=r["sensitivity"]["thresholds"][0]
+    by_basis={x["reference_basis"]:x["groups"]["all"]["standardized_change"] for x in primary["reference_comparisons"]}
+    assert by_basis=={"equal_cell":5,"baseline_cell":2.5,"follow_up_cell":7.5,"pooled_case":5,"equal_stratum":5}
+    assert primary["group_change_envelopes"]["all"]=={"minimum_change":2.5,"maximum_change":7.5,"strict_direction_agrees":True,"all_zero":False}
+    assert r["sensitivity"]["additional_case_scans"]==0
+
+
+def test_real_sensitivity_thresholds_can_remove_all_support():
+    log=_log(480,lambda i,t,team:48)
+    spec=body(sensitivity_thresholds=[5,120,121])
+    r=review.review(log,spec)
+    levels=r["sensitivity"]["thresholds"]
+    assert [x["minimum_cases"] for x in levels]==[5,10,120,121]
+    assert [x["common_support_strata"] for x in levels]==[2,2,2,0]
+    assert levels[1]["primary_threshold"]
+    assert levels[0]["group_change_envelopes"]["all"]["all_zero"]
+    assert all(x["groups"]["all"]["standardized_change"] is None for x in levels[-1]["reference_comparisons"])
+
+
+@pytest.mark.parametrize("thresholds",[[True],[4],[10001],[10,10],list(range(5,13))])
+def test_bad_sensitivity_thresholds(thresholds):
+    from pydantic import ValidationError
+    with pytest.raises(ValidationError):
+        m.Settings(dimension="first_activity",sensitivity_thresholds=thresholds)

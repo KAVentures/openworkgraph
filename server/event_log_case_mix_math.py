@@ -6,7 +6,8 @@ import json
 from threading import BoundedSemaphore
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+from typing import Annotated
 
 FORMAT="openworkgraph.intervention-case-mix.v1"
 MAX_CASES=200000
@@ -19,6 +20,13 @@ class Settings(BaseModel):
     model_config=ConfigDict(extra="forbid",strict=True)
     dimension: Literal["first_activity","first_resource","utc_start_weekday"]
     minimum_cases: int=Field(default=10,ge=5,le=10000)
+    sensitivity_thresholds: list[Annotated[int,Field(ge=5,le=10000)]]=Field(default_factory=list,max_length=7)
+
+    @field_validator('sensitivity_thresholds')
+    @classmethod
+    def unique_thresholds(cls,values):
+        if len(set(values))!=len(values):raise ValueError('sensitivity thresholds must be distinct')
+        return sorted(values)
 
 
 def digest(value):
@@ -162,4 +170,6 @@ def calculate(groups,labels,settings,at,start,end,recent,exclude_spanning,period
                 "The difference between full and common-support changes is separately reported, not attributed to either component. "
                 "No missing groups are imputed. Start labels are recorded observations, not verified pre-treatment covariates. "
                 "No causal effect, confidence interval, staffing change or verified savings is established."}
+    from . import event_log_case_mix_sensitivity as sensitivity
+    report['sensitivity']=sensitivity.run(stats,cells,totals,settings.sensitivity_thresholds,settings.minimum_cases)
     return report,inventory

@@ -36,6 +36,7 @@
     const spanning=input('owgMixSpanning','checkbox');
     const dimension=select('owgMixDimension',[['first_activity','First recorded activity'],['first_resource','First recorded resource'],['utc_start_weekday','UTC start weekday']]);
     const minimum=input('owgMixMinimum','number','10');minimum.min='5';minimum.max='10000';minimum.step='1';
+    const thresholds=input('owgMixThresholds','text','');thresholds.placeholder='Optional: 5,20,50';thresholds.maxLength=50;
     const treated=el('textarea');treated.id='owgMixTreated';treated.rows=3;treated.style.width='100%';treated.maxLength=8192;
     const control=el('textarea');control.id='owgMixControl';control.rows=3;control.style.width='100%';control.maxLength=8192;
     const filters=el('details');filters.append(el('summary','Optional treated and control cohort filters'),
@@ -51,7 +52,7 @@
       run.disabled=download.disabled=true;status.textContent=message;
     }
     function syncMetric(){slaField.hidden=metric.value!=='sla_breach';activityField.hidden=metric.value!=='activity_count';}
-    for(const n of [date,metric,sla,activity,windowDays,recent,spanning,dimension,minimum,treated,control])n.addEventListener('input',()=>{syncMetric();invalidate();});
+    for(const n of [date,metric,sla,activity,windowDays,recent,spanning,dimension,minimum,thresholds,treated,control])n.addEventListener('input',()=>{syncMetric();invalidate();});
     function integer(n){if(n.value===''||!n.checkValidity()||!Number.isSafeInteger(Number(n.value)))throw Error('Enter all required whole-number settings.');return Number(n.value);}
     function cohort(n){if(!n.value.trim())return null;const v=JSON.parse(n.value);if(!v||typeof v!=='object'||Array.isArray(v))throw Error('A cohort must be a JSON object.');return v;}
     function active(n,key){return panel.isConnected&&n===generation&&key===scopeKey();}
@@ -64,7 +65,10 @@
         if(metric.value==='sla_breach')analysis.sla_seconds=integer(sla);
         if(metric.value==='activity_count'){if(!activity.value.trim())throw Error('Enter the exact activity label.');analysis.activity=activity.value;}
         const a=cohort(treated),b=cohort(control);if(b&&!a)throw Error('A control cohort requires a treated cohort.');if(a)analysis.treated=a;if(b)analysis.control=b;
-        const body={analysis,case_mix:{dimension:dimension.value,minimum_cases:integer(minimum)}};
+        const extra=thresholds.value.trim()?thresholds.value.split(',').map(x=>x.trim()):[];
+        if(extra.length>7||extra.some(x=>!/^\d{1,5}$/.test(x)||Number(x)<5||Number(x)>10000)||new Set(extra.map(Number)).size!==extra.length)
+          throw Error('Use up to seven distinct support thresholds from 5 to 10000.');
+        const body={analysis,case_mix:{dimension:dimension.value,minimum_cases:integer(minimum),sensitivity_thresholds:extra.map(Number)}};
         request={log:s.log,body};prepared.value=JSON.stringify(request,null,2);run.disabled=false;
         status.textContent='Review the exact source, metric, exclusions and support threshold before running.';
       }catch(error){status.textContent=error instanceof SyntaxError?'Invalid cohort JSON.':error.message;}
@@ -102,6 +106,18 @@
           Object.entries(data.groups).map(([g,r])=>[g,...['raw_change','common_support_change','symmetric_within_stratum_component','symmetric_composition_component','raw_minus_common_support_residual','standardized_change'].map(k=>fmt(r[k]))])));
       if(data.control_adjusted)out.append(el('h4','Control-adjusted descriptive differences'),
         grid(['Measure','Value'],Object.entries(data.control_adjusted).map(([k,v])=>[k.replaceAll('_',' '),fmt(v)])));
+      const sensitivity=el('details');sensitivity.id='owgMixSensitivity';
+      sensitivity.append(el('summary','Reference population and support-threshold sensitivity'),el('p',data.sensitivity.interpretation));
+      for(const row of data.sensitivity.thresholds){
+        sensitivity.append(el('h5','Minimum '+row.minimum_cases+' cases per cell'+(row.primary_threshold?' (primary)':'')),
+          el('p',row.common_support_strata+' common-support strata.'),
+          grid(['Group','Period','Supported cases','Included cases','Coverage'],row.coverage.map(c=>[c.group,c.period,c.common_support_cases,c.included_cases,pct(c.share)])),
+          grid(['Reference weights','Group','Baseline mean','Follow-up mean','Standardized change','Control-adjusted change'],
+            row.reference_comparisons.flatMap(x=>Object.entries(x.groups).map(([g,c])=>[x.reference_basis,g,fmt(c.baseline_mean),fmt(c.follow_up_mean),fmt(c.standardized_change),fmt(x.standardized_difference_in_differences)]))),
+          grid(['Group','Smallest change','Largest change','Strict direction agrees','All zero'],
+            Object.entries(row.group_change_envelopes).map(([g,c])=>[g,fmt(c.minimum_change),fmt(c.maximum_change),c.strict_direction_agrees?'Yes':'No',c.all_zero?'Yes':'No'])));
+      }
+      out.append(sensitivity);
       const filter=select('owgMixStrataFilter',[['all','All strata'],['supported','Common support'],['excluded','Outside support']]);
       const search=input('owgMixStrataSearch','search');search.placeholder='Exact label search';const list=el('div');
       function draw(){
@@ -139,7 +155,7 @@
     panel.append(el('p','Compare the same recorded case-start population across periods. Review support, composition and within-group changes without imputing missing groups.'),
       field('UTC intervention date',date),field('Metric',metric),slaField,activityField,field('Optional equal window days',windowDays),
       field('Exclude recent days',recent),field('Exclude spanning baseline cases',spanning),field('Start stratum',dimension),
-      field('Minimum cases per cohort and period',minimum),filters,prepare,field('Exact reviewed input',prepared),run,download,status,out,evidence);
+      field('Minimum cases per cohort and period',minimum),field('Additional support thresholds, comma separated',thresholds),filters,prepare,field('Exact reviewed input',prepared),run,download,status,out,evidence);
     anchor.append(panel);syncMetric();invalidate('Select the source and review explicit settings.');
   }
   function start(){new MutationObserver(mount).observe(document.body,{childList:true,subtree:true});mount();}
