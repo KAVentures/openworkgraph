@@ -128,6 +128,35 @@ class HeldoutAcceptance(unittest.TestCase):
         self.assertEqual(r["regression_gate"]["regressions"],1)
         self.assertFalse(r["categories"]["missing_facts"]["pass"])
 
+    def test_invalid_proposal_on_missing_facts_still_counts_as_critical(self):
+        bad=deepcopy(self.good)
+        aliases={v:k for k,v in self.freeze["aliases"].items()}
+        row=next(r for r in bad["results"] if r["challenge_case_id"]==aliases["case_2"])
+        row["plan"]={"status":"proposal"}
+        r=self.score(bad)
+        self.assertEqual(r["critical_gate"]["failures"],1)
+        self.assertTrue(next(x for x in r["cases"] if x["challenge_case_id"]==aliases["case_2"])["critical_failure"])
+
+    def test_optional_baseline_is_explicitly_absent_not_zero_regressions(self):
+        p={**self.policy,"require_baseline":False}
+        f,c=freeze_suite(self.spec,self.dev,self.test,p)
+        good=capture(f,self.results)
+        r=evaluate_frozen(self.spec,self.dev,self.test,f,c,good,
+                         freeze_sha256=digest(f),candidate_sha256=digest(good))
+        self.assertTrue(r["selected_acceptance_gates_pass"])
+        self.assertIsNone(r["regression_gate"]["pass"])
+        self.assertIsNone(r["regression_gate"]["regressions"])
+        self.assertIsNone(r["paired_transitions"])
+
+    def test_planner_error_is_sanitized_and_does_not_produce_partial_capture(self):
+        async def fake(case,*,model,spec):
+            raise RuntimeError("PRIVATE_PROVIDER_FAILURE")
+        with patch.dict(sys.modules,{"agent":SimpleNamespace(propose=fake)}):
+            with self.assertRaises(ImplementationError) as ctx:
+                asyncio.run(capture_planner(self.spec,self.challenge,
+                      challenge_sha256=digest(self.challenge),model="fixture-model"))
+        self.assertNotIn("PRIVATE_PROVIDER_FAILURE",str(ctx.exception))
+
     def test_malformed_plan_is_failed_case_not_dropped(self):
         bad=deepcopy(self.good);bad["results"][0]["plan"]={"nonsense":"PRIVATE_BAD_PLAN"}
         r=self.score(bad)
