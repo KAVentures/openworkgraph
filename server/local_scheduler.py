@@ -643,6 +643,12 @@ def _loop() -> None:
             run_due()
         except Exception:
             pass
+        # Independently opted-in passive ingestion monitoring; no source access.
+        try:
+            from .enterprise_ingestion_service_levels import evaluate_due
+            evaluate_due()
+        except Exception:
+            pass
         # Notification delivery has a distinct opt-in, never holds the
         # event-log workspace lock during an outbound network request.
         try:
