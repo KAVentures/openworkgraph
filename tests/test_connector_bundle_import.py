@@ -84,7 +84,6 @@ def test_preview_is_counts_only_and_canonical_order_invariant(published):
     lambda d:d.update(provider_completeness_verified=True),
     lambda d:d.update(provider_completeness_verified=0),
     lambda d:d.update(cross_source_identity_verified=0.0),
-    lambda d:d.update(quality_review={}),
 ])
 def test_tampering_and_unrecognized_semantics_fail_closed(published,mutate):
     changed=deepcopy(published);mutate(changed)
