@@ -74,6 +74,19 @@ def native_case(p,row):
             raise ValueError("native_type is not used for REST or SQL")
         value=rest._text(value,200)
         return rest._key(p,"case",value)
+    if provider in ("databricks","snowflake","netsuite","workday"):
+        # These adapters retain the exact approved view/report case string.
+        # No numeric coercion, trimming, case folding or type inference.
+        if kind is not None:
+            raise ValueError("native_type is not used for curated event sources")
+        return rest._key(p,provider+"_case",value)
+    if provider=="oracle_fusion":
+        # The selected business unit is part of the adapter case identity.
+        # Never treat a requisition and purchase order as the same case.
+        selection=next((x for x in p["config"]["selections"] if x["object_type"]==kind),None)
+        if not selection or kind not in ("requisition","purchase_order") or value not in selection["header_ids"]:
+            raise ValueError("native case is outside reviewed source scope")
+        return rest._key(p,"oracle_fusion_case",kind+":"+str(selection["business_unit_id"])+":"+value)
     if provider=="salesforce":
         from server import salesforce_history_feed as sf
         selection=next((x for x in p["config"]["selections"] if x["object"]==kind),None)
