@@ -229,6 +229,19 @@ async def agent_simulate(request: Request, log_id: str):
     return await _answer(sharing.simulate, log_id, spec["scenario"], case_type)
 
 
+@router.post("/v1/process-intelligence/{log_id}/compare-scenarios")
+async def agent_compare_scenarios(request: Request, log_id: str):
+    """Body: {"alternatives": [2-4 named scenarios], "baseline"?: shared settings, "case_type"?: text}."""
+    _require_agent_access(request)
+    spec = await _json_body(request, "scenario comparison", strict=True, limit=65536)
+    if not isinstance(spec, dict) or "alternatives" not in spec or set(spec) - {"alternatives", "baseline", "case_type"}:
+        raise HTTPException(422, 'send {"alternatives": [...]} with optional baseline and case_type')
+    case_type = spec.get("case_type")
+    if case_type is not None and (not isinstance(case_type, str) or not 0 < len(case_type) <= 200):
+        raise HTTPException(422, "case_type must be a short text")
+    return await _answer(sharing.compare_scenarios, log_id, spec.get("baseline"), spec["alternatives"], case_type)
+
+
 @router.get("/v1/process-intelligence/{log_id}/automation-candidates")
 async def agent_automation_candidates(request: Request, log_id: str, limit: int = Query(default=10, ge=1, le=50),
                                       case_type: str | None = Query(default=None, max_length=200)):
