@@ -102,8 +102,91 @@ def template(packet):
     return blinded.review_template(packet)
 
 
+ADJUDICATION="owg.pilot-blinded-adjudication.v1"
+
+
+def prepare_adjudication(packet, first_review, second_review, *, forbidden=()):
+    """Two complete independent sheets; disclose disagreements, not condition."""
+    template(packet)
+    entries={r["review_id"]:r for r in packet["entries"]}
+    first,first_ids=multi._sheet(first_review,entries,set(forbidden))
+    second,_=multi._sheet(second_review,entries,set(forbidden)|first_ids)
+    disagreements=[]
+    for rid,entry in entries.items():
+        fields=[f for f in product_value.REVIEW_FIELDS if first[rid][f]!=second[rid][f]]
+        if fields:
+            disagreements.append({**entry,"differing_fields":fields,
+                "first_review":{f:first[rid][f] for f in product_value.REVIEW_FIELDS},
+                "second_review":{f:second[rid][f] for f in product_value.REVIEW_FIELDS}})
+    public={"format":ADJUDICATION,"entries":disagreements,
+            "limitations":"Operator-reviewed material; independence and blinding are not verified."}
+    body={"format":ADJUDICATION,"packet_sha256":cohort.digest(packet),
+          "first_review_sha256":cohort.digest(first_review),"second_review_sha256":cohort.digest(second_review),
+          "adjudication_packet_sha256":cohort.digest(public)}
+    basis={**body,"adjudication_sha256":cohort.digest(body)}
+    agreement={"reviewed_entries":len(entries),"agreement_entries":len(entries)-len(disagreements),
+               "disagreement_entries":len(disagreements),"fields":multi._agreement(first,second),
+               "reviewer_independence_verified":False}
+    return public,basis,agreement
+
+
+def resolve_adjudication(packet, document, *, forbidden):
+    cohort.exact(document,("first_review","second_review","packet","basis",
+                           "expected_adjudication_sha256","resolutions"))
+    first_rows,second_rows=document["first_review"],document["second_review"]
+    public,basis,agreement=prepare_adjudication(packet,first_rows,second_rows,forbidden=forbidden)
+    if (public!=document["packet"] or basis!=document["basis"] or
+            basis["adjudication_sha256"]!=cohort.pin(document["expected_adjudication_sha256"])):
+        raise ValueError("adjudication differs from frozen independent pin")
+    entries={r["review_id"]:r for r in packet["entries"]}
+    first,first_ids=multi._sheet(first_rows,entries,set(forbidden))
+    _,second_ids=multi._sheet(second_rows,entries,set(forbidden)|first_ids)
+    disputed={r["review_id"] for r in public["entries"]}
+    resolutions=document["resolutions"]
+    if not isinstance(resolutions,list) or len(resolutions)>len(disputed):
+        raise ValueError("invalid resolution sheet")
+    selected=set()
+    for row in resolutions:
+        if not isinstance(row,dict):
+            raise ValueError("resolution row object required")
+        rid=cohort.token(row.get("review_id"))
+        if rid not in disputed or rid in selected:
+            raise ValueError("unknown or duplicate dispute resolution")
+        selected.add(rid)
+    final,_=multi._sheet(resolutions,selected,set(forbidden)|first_ids|second_ids,adjudication=True)
+    # Agreement is usable; unresolved disagreements remain unknown.
+    resolved={}
+    for rid in entries:
+        item=final.get(rid) if rid in disputed else first[rid]
+        if item is not None:
+            resolved[rid]={k:item[k] for k in ("review_id","reviewer_id",*product_value.REVIEW_FIELDS)}
+    return resolved,{"adjudication_sha256":basis["adjudication_sha256"],
+                     "resolution_sha256":cohort.digest(resolutions),
+                     "agreement":agreement,"resolved_disagreements":len(final),
+                     "unresolved_disagreements":len(disputed)-len(final)}
+
+
+def resolution_template(packet):
+    cohort.exact(packet,("format","entries","limitations"))
+    if packet["format"]!=ADJUDICATION or packet["limitations"]!="Operator-reviewed material; independence and blinding are not verified.":
+        raise ValueError("unsupported disagreement packet")
+    if not isinstance(packet["entries"],list) or len(packet["entries"])>cohort.MAX_EPISODES*len(cohort.ARMS):
+        raise ValueError("invalid disagreement packet size")
+    seen=set()
+    for entry in packet["entries"]:
+        cohort.exact(entry,("review_id","prompt","review_text","differing_fields","first_review","second_review"))
+        rid=cohort.token(entry["review_id"])
+        if rid in seen:
+            raise ValueError("duplicate dispute")
+        seen.add(rid);_text(entry["prompt"]);_text(entry["review_text"])
+    return multi.adjudication_template(packet)
+
+
 def _batch(plan,schedule,ledger,states,enrolled,truth,batch,completion_revisions):
-    cohort.exact(batch,("packet","key","expected_batch_sha256","reviews"))
+    if not isinstance(batch,dict):
+        raise ValueError("batch object required")
+    adjudicated="adjudication" in batch
+    cohort.exact(batch,("packet","key","expected_batch_sha256","adjudication" if adjudicated else "reviews"))
     packet,key=batch["packet"],batch["key"]
     cohort.exact(key,("format","plan_sha256","schedule_sha256","ledger_sha256",
                       "ledger_revision","packet_sha256","mapping","batch_sha256"))
@@ -145,20 +228,24 @@ def _batch(plan,schedule,ledger,states,enrolled,truth,batch,completion_revisions
         cells.add((eid,arm));found[rid]=meta
     if set(found)!=set(mapping):
         raise ValueError("private mapping coverage mismatch")
-    reviews=batch["reviews"]
-    if not isinstance(reviews,list) or len(reviews)>len(found):
-        raise ValueError("invalid review sheet")
-    submitted=set()
-    for row in reviews:
-        if not isinstance(row,dict):
-            raise ValueError("review row object required")
-        rid=cohort.token(row.get("review_id"))
-        if rid not in found or rid in submitted:
-            raise ValueError("unknown or duplicate submitted review")
-        submitted.add(rid)
     forbidden={multi._identity(t["ground_truth_verified_by"])
                for t in truth.values() if t.get("ground_truth_verified_by")}
-    indexed,_=multi._sheet(reviews,submitted,forbidden)
+    summary=None
+    if adjudicated:
+        indexed,summary=resolve_adjudication(packet,batch["adjudication"],forbidden=forbidden)
+    else:
+        reviews=batch["reviews"]
+        if not isinstance(reviews,list) or len(reviews)>len(found):
+            raise ValueError("invalid review sheet")
+        submitted=set()
+        for row in reviews:
+            if not isinstance(row,dict):
+                raise ValueError("review row object required")
+            rid=cohort.token(row.get("review_id"))
+            if rid not in found or rid in submitted:
+                raise ValueError("unknown or duplicate submitted review")
+            submitted.add(rid)
+        indexed,_=multi._sheet(reviews,submitted,forbidden)
     out={}
     for rid,row in indexed.items():
         meta=found[rid];eid,arm=meta["episode_id"],meta["arm"]
@@ -168,7 +255,7 @@ def _batch(plan,schedule,ledger,states,enrolled,truth,batch,completion_revisions
                       "session_id":state["session_id"],"transport_sha256":state["transport_sha256"],
                       "material_sha256":state["material_sha256"],"batch_sha256":key["batch_sha256"],
                       "independent_review":{k:row[k] for k in ("reviewer_id",*product_value.REVIEW_FIELDS)}}
-    return cells,set(found),out
+    return cells,set(found),out,summary
 
 
 def reconcile(plan,schedule,ledger,truth,batches,*,expected_plan_sha256,
@@ -182,9 +269,11 @@ def reconcile(plan,schedule,ledger,truth,batches,*,expected_plan_sha256,
         raise ValueError("bounded batch collection required")
     completion_revisions={(e["action"]["episode_id"],e["action"]["arm"]):e["revision"]
                           for e in ledger["events"] if e["action"]["action"]=="completed"}
-    seen=set();review_ids=set();reviewed={};pins=[]
+    seen=set();review_ids=set();reviewed={};pins=[];adjudications=[]
     for batch in batches:
-        cells,ids,rows=_batch(plan,schedule,ledger,states,enrolled,indexed,batch,completion_revisions)
+        cells,ids,rows,summary=_batch(plan,schedule,ledger,states,enrolled,indexed,batch,completion_revisions)
+        if summary is not None:
+            adjudications.append({"batch_sha256":batch["expected_batch_sha256"],**summary})
         if seen&cells or review_ids&ids:
             raise ValueError("attempt or review ID assigned to multiple batches")
         seen.update(cells);review_ids.update(ids);reviewed.update(rows)
@@ -222,6 +311,7 @@ def reconcile(plan,schedule,ledger,truth,batches,*,expected_plan_sha256,
           "ledger_sha256":expected_ledger_sha256,"schedule_sha256":expected_schedule_sha256,
           "batch_sha256s":sorted(pins),"completed_attempts":len(completion_revisions),
           "assigned_for_review":len(seen),"reviewed_attempts":len(reviewed),
+          "adjudications":sorted(adjudications,key=lambda a:a["batch_sha256"]),
           "score":result,"blinding_verified":False,"reviewer_identity_verified":False,
           "independent_transport_verified":False,"product_effectiveness_verified":False}
     return {**body,"reconciliation_sha256":cohort.digest(body)}
@@ -232,6 +322,14 @@ def main(argv=None):
     sub=parser.add_subparsers(dest="command",required=True)
     prep=sub.add_parser("prepare")
     rec=sub.add_parser("reconcile")
+    adjudicate=sub.add_parser("prepare-adjudication")
+    for name in ("packet","first-review","second-review","out","private-basis"):
+        adjudicate.add_argument("--"+name,type=Path,required=True)
+    adjudicate.add_argument("--confirm",action="store_true",required=True)
+    resolution=sub.add_parser("resolution-template")
+    resolution.add_argument("--packet",type=Path,required=True)
+    resolution.add_argument("--out",type=Path,required=True)
+    resolution.add_argument("--confirm",action="store_true",required=True)
     reviewer=sub.add_parser("template")
     reviewer.add_argument("--packet",type=Path,required=True)
     reviewer.add_argument("--out",type=Path,required=True)
@@ -245,6 +343,17 @@ def main(argv=None):
     rec.add_argument("--review-dispositions",type=Path)
     args=parser.parse_args(argv)
     try:
+        if args.command=="prepare-adjudication":
+            if args.out.resolve()==args.private_basis.resolve() or args.out.exists() or args.private_basis.exists():
+                raise ValueError("use distinct new review and private basis paths")
+            packet,basis,agreement=prepare_adjudication(cohort._load(args.packet),
+                            cohort._load(args.first_review),cohort._load(args.second_review))
+            cohort._write(args.private_basis,{"basis":basis,"agreement":agreement})
+            cohort._write(args.out,packet)
+            return 0
+        if args.command=="resolution-template":
+            cohort._write(args.out,resolution_template(cohort._load(args.packet)))
+            return 0
         if args.command=="template":
             cohort._write(args.out,template(cohort._load(args.packet)))
             return 0
