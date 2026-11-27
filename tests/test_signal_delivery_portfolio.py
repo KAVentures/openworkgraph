@@ -237,3 +237,28 @@ def test_authenticated_routes_no_store_and_confirmation(monkeypatch):
         assert response.status_code == 200, response.text
         assert response.json()["dismissed_groups"] == 2
         assert response.headers["cache-control"] == "no-store"
+
+
+def test_invalid_nested_rule_state_does_not_disclose_or_mutate():
+    seed()
+    data = notices._read()
+    data["channels"][A]["pending"][0]["states"][0]["rule_id"] = "PRIVATE_INVALID"
+    notices._save(data)
+    before = notices._path().read_bytes()
+    with pytest.raises(notices.DeliveryError):
+        portfolio.overview()
+    with pytest.raises(notices.DeliveryError):
+        portfolio.pause_all(expected_enabled_channels_sha256="0"*64, confirm_pause=True)
+    assert notices._path().read_bytes() == before
+
+
+def test_audit_unknown_fields_cannot_be_reflected():
+    configure(A)
+    data = notices._read()
+    data["channels"][A]["paused_reason"] = ["PRIVATE_CORRUPT"]
+    data["channels"][A]["audit"] = [{"outcome": ["PRIVATE_CORRUPT"], "at": "PRIVATE_CORRUPT"}]
+    notices._save(data)
+    report = portfolio.overview()
+    assert report["channels"][0]["paused_reason"] is None
+    assert report["channels"][0]["last_retained_audit_outcome"] is None
+    assert "PRIVATE_CORRUPT" not in json.dumps(report)

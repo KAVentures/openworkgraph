@@ -23,7 +23,8 @@ MAX_SCHEDULE_BYTES = 2 * 1024 * 1024
 HEX = re.compile(r"[a-f0-9]{64}\Z")
 CHANNEL = re.compile(r"ndl_[a-f0-9]{16}\Z")
 LOG = re.compile(r"log_[a-f0-9]{16}\Z")
-NOTIFICATION = re.compile(r"ntf_[a-f0-9]{16,64}\Z")
+NOTIFICATION = re.compile(r"ntf_[a-f0-9]{24}\Z")
+RULE = re.compile(r"sig_[a-f0-9]{16}\Z")
 PAUSE_REASONS = {"owner_paused_delivery", "delivery_paused_after_five_failures",
                  "owner_paused_delivery_portfolio"}
 STATUS_ORDER = ("delivery_paused", "schedule_unknown", "schedule_missing",
@@ -98,7 +99,10 @@ def _validated_channels(data):
                 raise _error()
             keys = set()
             for state in states:
-                if not isinstance(state, dict) or not _match(state.get("key"), HEX) or state["key"] in keys:
+                if (not isinstance(state, dict) or not _match(state.get("key"), HEX)
+                        or not _match(state.get("rule_id"), RULE)
+                        or not _match(state.get("state_fingerprint"), HEX)
+                        or state["key"] in keys):
                     raise _error()
                 keys.add(state["key"])
     return channels
@@ -197,10 +201,10 @@ def overview(*, now=None):
                        "attempts": entry["attempts"], "queued_state_count": len(entry["states"]),
                        "previous_delivery_may_have_arrived": bool(entry["attempts"])}
                       for entry in item["pending"]]
-            audit = [a for a in item.get("audit", []) if a.get("outcome") in AUDIT]
+            audit = [a for a in item.get("audit", []) if isinstance(a.get("outcome"), str) and a["outcome"] in AUDIT]
             reason = item.get("paused_reason")
             rows.append({"log_id": log_id, "channel_id": item["channel_id"], "enabled": item["enabled"],
-                         "status": state, "paused_reason": reason if reason in PAUSE_REASONS else None,
+                         "status": state, "paused_reason": reason if isinstance(reason, str) and reason in PAUSE_REASONS else None,
                          "pending_groups": groups, "pending_group_count": len(groups),
                          "pending_state_occurrences": sum(g["queued_state_count"] for g in groups),
                          "previously_attempted_groups": sum(g["previous_delivery_may_have_arrived"] for g in groups),
@@ -226,7 +230,8 @@ def overview(*, now=None):
             "channels": rows, "source_data_read": False, "notifications_sent": False,
             "actions_authorized": False,
             "interpretation": "Local queue and schedule snapshots are separate. A due head is not a promise of delivery; "
-                              "the sender must independently check fresh state, rule approval and quiet hours. "
+                               "the sender independently checks current evaluated state, enabled schedule and quiet hours; "
+                              "the portfolio does not verify the current rule-definition digest. "
                               "Queued counts may include stale or repeated states. A receiver acknowledgement is not human review."}
 
 

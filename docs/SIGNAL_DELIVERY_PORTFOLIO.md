@@ -14,7 +14,9 @@ also reads existing signal schedule metadata, including quiet hours, missing
 or paused schedules and missing approval pins. Unknown/corrupt schedule
 metadata is distinct from an absent job. The schedule and delivery snapshots
 are separate, not a transactional observation across both stores. A due
-queue head still needs the sender's current rule/state/quiet-hour preflight.
+queue head still needs the sender's current evaluated-state, enabled-schedule
+and quiet-hour preflight. The displayed approval pin is only a presence check,
+not verification of the latest saved definitions.
 Counts describe queued state occurrences, not distinct current alerts or
 verified business incidents. No case IDs, rule IDs, raw state fingerprints,
 receiver hosts/URLs, secrets, source text or metric values are returned.
