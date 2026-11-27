@@ -59,8 +59,10 @@ def _state_cells(state):
 
 
 def _validate(state):
-    cohort.exact(state,("format","revision","previous_head_sha256","plan","schedule",
-                       "ledger","history_sha256","batches","withdrawn_episode_ids","head_sha256"))
+    fields=("format","revision","previous_head_sha256","plan","schedule",
+            "ledger","history_sha256","batches","withdrawn_episode_ids","head_sha256")
+    registered="decision_protocol" in state
+    cohort.exact(state,(*fields,"decision_protocol","decision_reviews") if registered else fields)
     if (state["format"]!=FORMAT or type(state["revision"]) is not int or
             not 0<=state["revision"]<=MAX_REVISIONS or
             cohort.pin(state["head_sha256"])!=cohort.digest(_body(state))):
@@ -124,6 +126,9 @@ def _validate(state):
                 active_cells.add(cell)
     if active>blinded.MAX_BATCHES:
         raise ValueError("active batch limit exceeded")
+    if registered:
+        from .pilot_registered_review import validate_state
+        validate_state(state)
     return cells
 
 
@@ -169,7 +174,7 @@ def _load(conn):
     prior=None;chain=None
     for i,(revision,prev,head,operation) in enumerate(history):
         if revision!=i or prev!=prior or operation not in (
-                "initialize","append","prepare_batch","retire_batch","withdraw_episode"):
+                "initialize","append","prepare_batch","retire_batch","withdraw_episode","register_decision_protocol","record_decision_review"):
             raise ValueError("invalid workspace history chain")
         if (i==0)!=(operation=="initialize"):
             raise ValueError("invalid initialization record")
@@ -178,6 +183,9 @@ def _load(conn):
     if (prior!=state["head_sha256"] or history[-1][1]!=state["previous_head_sha256"] or
             chain!=state["history_sha256"]):
         raise ValueError("workspace history head mismatch")
+    if "decision_protocol" in state or any(r[3] in ("register_decision_protocol","record_decision_review") for r in history):
+        from .pilot_registered_review import validate_history
+        validate_history(state,history)
     return state
 
 

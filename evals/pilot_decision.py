@@ -45,6 +45,8 @@ def report(path,protocol,truth,batches,*,expected_protocol_sha256,expected_head_
     initial=history["history"][0]["head_sha256"]
     p=verify_protocol(protocol,expected_protocol_sha256,initial,state["plan"]["plan_sha256"],
                       state["schedule"]["schedule_sha256"])
+    if "decision_protocol" in state and state["decision_protocol"]!=protocol:
+        raise ValueError("report protocol differs from durable registration")
     enrolled=cohort._verify(state["plan"],state["plan"]["plan_sha256"])
     generated=[]
     def observe(observations,coverage):
@@ -99,6 +101,9 @@ def report(path,protocol,truth,batches,*,expected_protocol_sha256,expected_head_
                          "Externally retained pins are essential; the protocol does not authenticate when a file was created.",
                          "Thresholds are separate from the canonical scorer and do not authorize deployment.",
                          "The head was checked before returning, not locked against future changes."]}
+    if "decision_protocol" in state:
+        body["protocol_registered_in_workspace"]=True
+        body["registered_head_sha256"]=history["history"][1]["head_sha256"]
     return {**body,"decision_sha256":cohort.digest(body)}
 
 
