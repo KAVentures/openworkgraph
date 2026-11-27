@@ -140,9 +140,11 @@ def _endpoint(value):
     return value
 
 
-def _endpoint_credential(endpoint,reference):
+def _endpoint_credential(endpoint,reference,*,required=False):
     """Optional exact deployment association; never silently fall back."""
     raw=os.environ.get("OWG_REST_ENDPOINT_CREDENTIALS")
+    if required and raw is None:
+        raise FeedError("rest_endpoint_credential_catalog_required",403)
     if raw is not None:
         try:
             if len(raw)>65536:
@@ -185,7 +187,7 @@ def _key(p, domain, value):
 def _adapter(provider):
     if provider=="rest":
         return None
-    module=NATIVE_ADAPTERS.get(provider)
+    module=NATIVE_ADAPTERS.get(provider) if isinstance(provider,str) else None
     if module is None:
         raise FeedError("unknown_enterprise_connector_provider",422)
     return import_module("."+module,__package__)
@@ -196,7 +198,7 @@ def _check_binding(p):
     if adapter is not None:
         return adapter.check_binding(p)
     endpoint=_endpoint(p["config"]["endpoint"])
-    token = _endpoint_credential(endpoint,p["config"]["credential_env"])
+    token = _endpoint_credential(endpoint,p["config"]["credential_env"],required=p["config"].get("credential_pair_policy") is True)
     if not hmac.compare_digest(_key(p,"credential",token),p["credential_binding"]):
         raise FeedError("credential_changed_reconfigure_required")
     return token
@@ -272,6 +274,8 @@ def create(value):
         raise FeedError("invalid_profile_name",422)
     config=spec.model_dump(exclude={"confirm_configuration","confirm_activity_labels"})
     config.update(name=spec.name.strip(),endpoint=endpoint,initial_since=_iso(since))
+    if "OWG_REST_ENDPOINT_CREDENTIALS" in os.environ:
+        config["credential_pair_policy"]=True
     return create_profile(config,token,now)
 
 
@@ -635,7 +639,7 @@ def run_scheduled(profile_id,revision):
     except FeedError as error:
         if error.code in {"unknown_rest_profile","rest_profile_disabled","profile_changed_or_disabled",
                            "credential_changed_reconfigure_required","rest_run_invalidated",
-                           "endpoint_not_deployment_allowlisted","invalid_rest_endpoint_credential_catalog","rest_endpoint_credential_pair_not_approved",
+                           "endpoint_not_deployment_allowlisted","invalid_rest_endpoint_credential_catalog","rest_endpoint_credential_pair_not_approved","rest_endpoint_credential_catalog_required",
                            "unknown_enterprise_connector_provider","invalid_connector_secret_catalog","invalid_connector_secret_root",
                            "unsafe_connector_secret_ancestor","connector_secret_root_must_be_owner_only","unsafe_connector_secret_file",
                            "connector_secret_file_unavailable","connector_secret_changed_during_read","invalid_connector_secret_file_content",
