@@ -70,6 +70,66 @@ def _group_result(group,cases,providers,scope,zones):
             "physical_occurrence_times_verified":False}
 
 
+def nearest_rank(values,percent):
+    """Case-weighted empirical quantile, never pair-weighted."""
+    ordered=sorted(values)
+    return ordered[max(0,(len(ordered)*percent+99)//100-1)]
+
+
+def gap_distribution(gaps):
+    if not gaps:
+        return None
+    lo=[g["minimum_seconds"] for g in gaps]
+    hi=[g["maximum_seconds"] for g in gaps]
+    return {"groups":len(gaps),"minimum_lower_bound_seconds":min(lo),
+            "maximum_upper_bound_seconds":max(hi),
+            "p50_bounds":{"minimum_seconds":nearest_rank(lo,50),"maximum_seconds":nearest_rank(hi,50)},
+            "p90_bounds":{"minimum_seconds":nearest_rank(lo,90),"maximum_seconds":nearest_rank(hi,90)}}
+
+
+def summarize_source_pairs(group_rows,providers):
+    """One case-group vote per source pair; directional gap distributions
+    include only wholly separated groups in the corresponding direction.
+    The inputs are already bounded by the exact publication budget.
+    """
+    totals={}
+    for row in group_rows:
+        for pair in row["source_pairs"]:
+            a,b=pair["left_job_id"],pair["right_job_id"]
+            k=(a,b)
+            if k not in totals:
+                totals[k]={"metrics":Counter({m:0 for m in METRICS}),"groups":0,
+                    "left_gaps":[],"right_gaps":[],"unaligned_groups":0,"overlap_groups":0,
+                    "tie_groups":0,"mixed_direction_groups":0}
+            t=totals[k]
+            t["groups"]+=1
+            t["metrics"].update({m:pair[m] for m in METRICS})
+            t["unaligned_groups"]+=bool(pair["unaligned_date_pairs"])
+            t["overlap_groups"]+=bool(pair["overlapping_intervals"])
+            t["tie_groups"]+=bool(pair["equal_reported_points"])
+            t["mixed_direction_groups"]+=bool(pair["left_strictly_before_right"] and pair["right_strictly_before_left"])
+            if pair["separation"]=="left_before_right":
+                t["left_gaps"].append(pair["reported_boundary_gap_bounds"])
+            elif pair["separation"]=="right_before_left":
+                t["right_gaps"].append(pair["reported_boundary_gap_bounds"])
+    results=[]
+    for (a,b),t in sorted(totals.items()):
+        left,right=len(t["left_gaps"]),len(t["right_gaps"])
+        results.append({"left_job_id":a,"left_provider":providers[a],
+            "right_job_id":b,"right_provider":providers[b],"linked_groups":t["groups"],
+            "wholly_left_before_right_groups":left,"wholly_right_before_left_groups":right,
+            "not_wholly_separated_groups":t["groups"]-left-right,
+            # These diagnostic flags may overlap within a group.
+            "groups_with_unaligned_dates":t["unaligned_groups"],
+            "groups_with_overlaps":t["overlap_groups"],
+            "groups_with_equal_reported_points":t["tie_groups"],
+            "groups_with_pairs_in_both_directions":t["mixed_direction_groups"],
+            "left_before_right_gap_distribution":gap_distribution(t["left_gaps"]),
+            "right_before_left_gap_distribution":gap_distribution(t["right_gaps"]),
+            "pair_counts":dict(t["metrics"])})
+    return results
+
+
 def temporal_review(reviewed,org,spec,principal):
     if not spec.confirm_temporal_assumptions:
         raise JobError("explicit_temporal_assumption_review_required",403)
@@ -90,12 +150,13 @@ def temporal_review(reviewed,org,spec,principal):
         if spec.expected_temporal_scope_sha256 and spec.expected_temporal_scope_sha256!=temporal_scope:
             raise JobError("temporal_scope_changed")
         totals=Counter({k:0 for k in METRICS})
-        rows=[];unknown=bounded=events=0
+        rows=[];all_groups=[];unknown=bounded=events=0
         groups=sorted(spec.groups,key=group_key)
         if spec.offset>=len(groups) and spec.offset!=0:
             raise JobError("temporal_page_outside_scope",422)
         for i,group in enumerate(groups):
             row=_group_result(group,cases,providers,scope,zones)
+            all_groups.append(row)
             events+=row["event_count"]
             unknown+=row["unaligned_events"]
             bounded+=row["reported_span_bounds"] is not None
@@ -114,6 +175,8 @@ def temporal_review(reviewed,org,spec,principal):
                 "summary":{"linked_groups":len(groups),"linked_events":events,
                            "groups_with_reported_span_bounds":bounded,"unaligned_events":unknown,
                            **dict(totals)},
+                "source_pair_rollup":summarize_source_pairs(all_groups,providers),
+                "gap_quantile_method":"nearest_rank_one_vote_per_wholly_separated_linked_group",
                 "groups":rows,"offset":spec.offset,
                 "next_offset":spec.offset+len(rows) if spec.offset+len(rows)<len(groups) else None,
                 "independently_verified_handoffs":False,"physical_occurrence_times_verified":False,
