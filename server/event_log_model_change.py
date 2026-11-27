@@ -55,10 +55,11 @@ def _relations(tree: dict[str, Any], alphabet: list[str]) -> dict[tuple[str, str
 
 
 def _compare(log_id: str, case_type: str | None, groups: dict[str, dict[str, Any]], noise: float,
-             include_case_evidence: bool):
+             include_case_evidence: bool, activities: float = 1.0):
     """Discover a model per group (two groups, in order) and compare orderings, activities and cross-fit."""
     (first, c1), (second, c2) = groups.items()
-    models = {name: discovery.discover(log_id, case_type, noise=noise, cohort=c) for name, c in groups.items()}
+    models = {name: discovery.discover(log_id, case_type, noise=noise, activities=activities, cohort=c)
+              for name, c in groups.items()}
     nets = {name: pnml.to_pnml(pnml.tree_to_net(m["tree"]), f"{name} model").encode() for name, m in models.items()}
     acts = {name: footprints._tree_fp(m["tree"]).acts for name, m in models.items()}
     alphabet = sorted(acts[first] | acts[second])
@@ -100,7 +101,8 @@ def _compare(log_id: str, case_type: str | None, groups: dict[str, dict[str, Any
 
 
 def model_change(log_id: str, case_type: str | None = None, *, split: Any = None, noise: float = 0.2,
-                 cohort: dict[str, Any] | None = None, include_case_evidence: bool = False) -> dict[str, Any]:
+                 cohort: dict[str, Any] | None = None, include_case_evidence: bool = False,
+                 activities: float = 1.0) -> dict[str, Any]:
     if isinstance(noise, bool) or not isinstance(noise, (int, float)) or not 0 <= noise < 1:
         raise EventLogWorkspaceError("noise must be a share from 0 up to (not including) 1")
     base = {k: v for k, v in dict(cohort or {}).items() if v not in (None, "", [], {})}
@@ -124,7 +126,8 @@ def model_change(log_id: str, case_type: str | None = None, *, split: Any = None
         raise EventLogWorkspaceError(f"each period needs at least {MIN_CASES_PER_PERIOD} cases; "
                                      f"this split gives {before_n} before and {after_n} after")
     periods = {"before": {**base, "started_before": _iso(at)}, "after": {**base, "started_from": _iso(at)}}
-    models, acts, changes, pairs, cross = _compare(log_id, case_type, periods, noise, include_case_evidence)
+    models, acts, changes, pairs, cross = _compare(log_id, case_type, periods, noise, include_case_evidence,
+                                                   activities)
     own, moved = cross["before_cases_on_before_model"]["fitness"], cross["after_cases_on_before_model"]["fitness"]
     return {
         "format": FORMAT, "log_id": log_id, "case_notion": models["before"].get("case_notion"),
@@ -158,7 +161,8 @@ def _group(raw: Any, what: str) -> dict[str, str]:
 
 
 def model_comparison(log_id: str, group_a: Any, group_b: Any, case_type: str | None = None, *,
-                     noise: float = 0.2, cohort: dict[str, Any] | None = None, include_case_evidence: bool = False) -> dict[str, Any]:
+                     noise: float = 0.2, cohort: dict[str, Any] | None = None, include_case_evidence: bool = False,
+                     activities: float = 1.0) -> dict[str, Any]:
     """The same comparison between two groups of cases, each selected by a case attribute value
     (for example ``region=EU`` and ``region=US``), as Celonis compares org units."""
     if isinstance(noise, bool) or not isinstance(noise, (int, float)) or not 0 <= noise < 1:
@@ -189,7 +193,8 @@ def model_comparison(log_id: str, group_a: Any, group_b: Any, case_type: str | N
     if min(counts.values()) < MIN_CASES_PER_PERIOD:
         raise EventLogWorkspaceError(f"each group needs at least {MIN_CASES_PER_PERIOD} cases; "
                                      f"these give {counts['a']} and {counts['b']}")
-    models, acts, changes, pairs, cross = _compare(log_id, case_type, groups, noise, include_case_evidence)
+    models, acts, changes, pairs, cross = _compare(log_id, case_type, groups, noise, include_case_evidence,
+                                                   activities)
     own, other = cross["a_cases_on_a_model"]["fitness"], cross["b_cases_on_a_model"]["fitness"]
     return {
         "format": FORMAT.replace("model_change", "model_comparison"), "log_id": log_id,

@@ -26,6 +26,7 @@ from pydantic import BaseModel, ConfigDict, Field, StrictInt, ValidationError, m
 from . import event_log_cohorts as cohorts
 from . import event_log_expressions as expressions
 from . import event_log_workspace as workspace
+from .event_log_json_path import attribute_pointer
 
 MAX_ROWS = 500
 MAX_SAVED = 50
@@ -95,7 +96,7 @@ class _Strict(BaseModel):
 
 
 MetricName = Annotated[str, Field(pattern=r"^[a-z][a-z0-9_]{0,39}$")]
-AttributeName = Annotated[str, Field(pattern=r'^[^"\\\x00-\x1f]{1,120}$')]
+AttributeName = Annotated[str, Field(pattern=r'^[^\x00-\x1f]{1,120}$')]
 Unit = Annotated[str, Field(pattern=r"^[A-Za-z%$€£¥/._ -]{1,20}$")]
 
 
@@ -344,7 +345,7 @@ def _column(measure: Measure, metric_columns: dict[str, str] | None = None) -> t
 
 
 def _path(attribute: str) -> str:
-    return '$."' + attribute + '"'
+    return attribute_pointer(attribute)
 
 
 def _metrics(conn, metrics: list[Any]) -> tuple[dict[str, str], list[dict[str, Any]]]:
