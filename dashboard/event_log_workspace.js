@@ -3797,7 +3797,7 @@
     f.required.append(field('Exact activity B',exactRequired));
     f.via.append(field('Exact linking activity',exactVia));
     box.appendChild(el('div','Object type choices include all retained types, including types with no events. Activity suggestions are limited to the displayed object graph. Exact entries override them and use stored event labels, before any activity mapping or hidden-activity filter.','muted'));
-    if(types.length<2&&graph.log&&(graph.log.object_relationships||['ocel','ocelxml'].includes(graph.log.source_format)))template.value='supplied_object_cardinality';
+    if((graph.object_types||[]).length<2&&(allTypes.length>1||graph.log&&(graph.log.object_relationships||['ocel','ocelxml'].includes(graph.log.source_format))))template.value='supplied_object_cardinality';
     const sync=()=>{
       const t=template.value,supplied=t==='supplied_object_cardinality';
       show(f.activity,!['object_cardinality','supplied_object_cardinality'].includes(t));show(f.related,t!=='event_cardinality');show(f.required,t==='synchronization');show(f.via,t==='object_cardinality');
@@ -4951,19 +4951,24 @@
     const eventStatus=el('div',null,'muted');eventStatus.setAttribute('role','status');
     const eventRows=el('div'),eventPrevious=button('Previous recorded events','secondary'),eventNext=button('Next recorded events','secondary');
     const eventNav=el('div',null,'row');eventNav.append(eventPrevious,eventNext);
+    const eventDetail=el('div');eventDetail.id='owgObjectEventDetail';
+    const eventDetailTitle=el('h4'),eventDetailStatus=el('div',null,'muted'),eventDetailRows=el('div');eventDetailStatus.setAttribute('role','status');
+    eventDetail.append(eventDetailTitle,el('p','Object values use the latest retained timestamp at or before the event. Equal-time conflicting values are ambiguous; 1970-01-01 denotes an initial value without a known time. These observations do not verify business state.','muted'),eventDetailStatus,eventDetailRows);
     const participants=el('div');participants.id='owgObjectEventParticipants';
     const participantTitle=el('h4'),participantStatus=el('div',null,'muted'),participantRows=el('div');participantStatus.setAttribute('role','status');
     const participantPrevious=button('Previous linked objects','secondary'),participantNext=button('Next linked objects','secondary'),participantNav=el('div',null,'row');participantNav.append(participantPrevious,participantNext);
     participants.append(participantTitle,el('p','These objects share this recorded event; this does not establish a verified business relationship.','muted'),participantStatus,participantRows,participantNav);
-    eventPanel.append(el('h4','Recorded events for this object'),el('p','These are stored event labels before activity mappings or hidden-activity filters. Equal timestamps do not establish business order; the event ID breaks ties. Qualifiers are supplied link labels.','muted'),eventStatus,eventRows,eventNav,participants);
+    eventPanel.append(el('h4','Recorded events for this object'),el('p','These are stored event labels before activity mappings or hidden-activity filters. Equal timestamps do not establish business order; the event ID breaks ties. Qualifiers are supplied link labels.','muted'),eventStatus,eventRows,eventNav,eventDetail,participants);
     box.append(row,out,flatOut,attrOut,history,eventPanel,shared);
     let graph=null,flat=null,attrs=null,mapTurn=0;
     const flatCache=new Map(),attrCache=new Map();
     let historyTurn=0,historyRevision=null,historyOffset=0,historyFollowing=null;
     let eventTurn=0,eventRevision=null,eventOffset=0,eventFollowing=null;
+    let eventDetailTurn=0;
+    const clearEventDetail=()=>{++eventDetailTurn;eventDetailStatus.textContent='';eventDetailRows.replaceChildren();show(eventDetail,false);};
     let participantTurn=0,participantEvent='',participantRevision=null,participantIndex=0,participantFollowing=null,participantCursors=[null];
     const clearParticipants=()=>{++participantTurn;participantEvent='';participantRevision=null;participantIndex=0;participantFollowing=null;participantCursors=[null];participantRows.replaceChildren();participantStatus.textContent='';participantPrevious.disabled=participantNext.disabled=true;show(participants,false);};
-    const clearObjectEvents=()=>{++eventTurn;eventRevision=null;eventOffset=0;eventFollowing=null;eventStatus.textContent='';eventRows.replaceChildren();eventPrevious.disabled=eventNext.disabled=true;clearParticipants();show(eventPanel,false);};
+    const clearObjectEvents=()=>{++eventTurn;eventRevision=null;eventOffset=0;eventFollowing=null;eventStatus.textContent='';eventRows.replaceChildren();eventPrevious.disabled=eventNext.disabled=true;clearParticipants();clearEventDetail();show(eventPanel,false);};
     const clearObjectHistory=()=>{++historyTurn;historyRevision=null;historyOffset=0;historyFollowing=null;historyStatus.textContent='';historyRows.replaceChildren();historyPrevious.disabled=historyNext.disabled=true;clearObjectEvents();};
     clearObjectHistory();historyId.oninput=clearObjectHistory;
     async function loadObjectHistory(offset){
@@ -4988,7 +4993,7 @@
     async function loadObjectEvents(offset){
       const ticket=++eventTurn,selected=pick.value,object=historyId.value;
       const active=()=>current()&&ticket===eventTurn&&pick.value===selected&&historyId.value===object;
-      clearParticipants();
+      clearParticipants();clearEventDetail();
       show(eventPanel,true);
       eventPrevious.disabled=eventNext.disabled=true;eventStatus.textContent='Loading recorded events…';eventRows.replaceChildren();
       if(!object){eventStatus.textContent='Enter an exact object ID.';return;}
@@ -4999,10 +5004,13 @@
         if(!active())return;
         eventRevision=result.log_revision;eventOffset=offset;eventFollowing=result.next_offset;
         eventStatus.textContent=result.total_events?'Showing '+(offset+1).toLocaleString()+'–'+(offset+result.events.length).toLocaleString()+' of '+Number(result.total_events).toLocaleString()+' recorded events.':'No retained events are linked to this object.';
-        if(result.events.length)eventRows.replaceChildren(table(['Event ID','Activity','Timestamp (UTC)','Link qualifiers','Linked objects'],result.events.map(e=>{
+        if(result.events.length)eventRows.replaceChildren(table(['Event ID','Activity','Timestamp (UTC)','Link qualifiers','Review'],result.events.map(e=>{
           const inspect=button('Inspect linked objects','secondary');inspect.setAttribute('aria-label','Inspect objects linked to event '+JSON.stringify(e.event_id));
-          inspect.onclick=()=>{clearParticipants();participantEvent=e.event_id;participantRevision=result.log_revision;participantTitle.textContent='Objects linked to event '+e.event_id;show(participants,true);loadParticipants(0);};
-          return [e.event_id,e.activity,e.timestamp,JSON.stringify(e.qualifiers),inspect];
+          inspect.onclick=()=>{clearEventDetail();clearParticipants();participantEvent=e.event_id;participantRevision=result.log_revision;participantTitle.textContent='Objects linked to event '+e.event_id;show(participants,true);loadParticipants(0);};
+          const detail=button('Review event details','secondary');detail.setAttribute('aria-label','Review details for event '+JSON.stringify(e.event_id));
+          detail.onclick=()=>{clearParticipants();loadEventDetail(e.event_id,result.log_revision);};
+          const actions=el('div',null,'row');actions.append(detail,inspect);
+          return [e.event_id,e.activity,e.timestamp,JSON.stringify(e.qualifiers),actions];
         })));
         eventPrevious.disabled=offset===0;eventNext.disabled=eventFollowing===null;
       }catch(error){if(active()){eventRevision=null;eventStatus.textContent=error.message;}}
@@ -5010,6 +5018,22 @@
     eventOpen.onclick=()=>{eventRevision=null;loadObjectEvents(0);};
     eventPrevious.onclick=()=>loadObjectEvents(Math.max(0,eventOffset-50));
     eventNext.onclick=()=>loadObjectEvents(eventFollowing);
+    async function loadEventDetail(event,basis){
+      const ticket=++eventDetailTurn,selected=pick.value,object=historyId.value;
+      const active=()=>current()&&ticket===eventDetailTurn&&pick.value===selected&&historyId.value===object;
+      eventDetailTitle.textContent='Event details · '+event;eventDetailRows.replaceChildren();eventDetailStatus.textContent='Loading event details…';show(eventDetail,true);
+      const query=new URLSearchParams({object_type:selected,object_id:object,event_id:event,revision:String(basis)});
+      try{
+        const result=await getJSON(logPath('object-event-detail').replace(/\?.*$/,'')+'?'+query);
+        if(!active())return;
+        eventDetailStatus.textContent='Recorded event details for '+object+'.';
+        const labels={known:'Recorded',ambiguous:'Conflicting values',before_first_value:'Before first recorded value',missing_history:'No timed history'};
+        eventDetailRows.replaceChildren(el('p','Resource: '+(result.resource||'Not recorded'),'muted'),el('h4','Event attributes'),
+          result.event_attributes.length?table(['Attribute','Value'],result.event_attributes.map(a=>[a.name,a.value])):el('p','No retained event attributes.','muted'),
+          el('h4','Object attribute values at this event'),
+          result.object_attribute_states.length?table(['Attribute','Status','Recorded from (UTC)','Value'],result.object_attribute_states.map(a=>[a.name,labels[a.status]||a.status,a.valid_from||'—',a.value===null?'—':a.value])):el('p','No retained object attributes.','muted'));
+      }catch(error){if(active())eventDetailStatus.textContent=error.message;}
+    }
     async function loadParticipants(index){
       const ticket=++participantTurn,selected=pick.value,object=historyId.value,event=participantEvent,basis=participantRevision;
       const active=()=>current()&&ticket===participantTurn&&pick.value===selected&&historyId.value===object&&participantEvent===event;

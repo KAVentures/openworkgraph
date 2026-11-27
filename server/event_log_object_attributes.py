@@ -12,6 +12,7 @@ Counts describe the recorded values; they do not verify when the business change
 """
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from . import event_log_workspace as workspace
@@ -181,6 +182,53 @@ def event_objects(log_id: str, object_type: str, object_id: str, event_id: str, 
             conn.close()
 
 
+def event_detail(log_id: str, object_type: str, object_id: str, event_id: str, revision: int) -> dict[str, Any]:
+    """Read a retained event and the selected object's recorded values at its time."""
+    if (not all(isinstance(s, str) and 1 <= len(s) <= 200 for s in (object_type, object_id, event_id)) or
+            type(revision) is not int or revision < 0):
+        raise workspace.EventLogWorkspaceError('invalid object event detail request')
+    with workspace._LOCK:
+        conn = workspace._connect()
+        try:
+            workspace._check_log(conn, log_id)
+            current = _revision(conn, log_id)
+            if revision != current:
+                raise workspace.EventLogWorkspaceError('the retained log has changed; restart the object event history')
+            row = conn.execute('''SELECT e.activity, e.ts, e.resource, e.attributes, o.attributes
+                FROM events e JOIN event_objects eo ON eo.log_id=e.log_id AND eo.event_id=e.event_id
+                JOIN objects o ON o.log_id=eo.log_id AND o.object_id=eo.object_id
+                WHERE e.log_id=? AND e.event_id=? AND o.object_id=? AND o.object_type=? LIMIT 1''',
+                               [log_id, event_id, object_id, object_type]).fetchone()
+            if not row:
+                raise workspace.EventLogWorkspaceError('the event is not linked to the selected object and type')
+            activity, timestamp, resource, event_json, object_json = row
+            event_attributes = json.loads(event_json or '{}')
+            stored_attributes = json.loads(object_json or '{}')
+            history_names = {r[0] for r in conn.execute('''SELECT DISTINCT name FROM object_attribute_values
+                WHERE log_id=? AND object_id=?''', [log_id, object_id]).fetchall()}
+            names = set(stored_attributes) | history_names
+            rows = conn.execute('''SELECT name, valid_from, count(DISTINCT value) AS distinct_values, min(value) AS value
+                FROM object_attribute_values WHERE log_id=? AND object_id=? AND valid_from <= ?
+                GROUP BY name, valid_from QUALIFY row_number() OVER (PARTITION BY name ORDER BY valid_from DESC)=1''',
+                                [log_id, object_id, timestamp]).fetchall()
+            at_time = {name: (at, count, value) for name, at, count, value in rows}
+            states = []
+            for name in sorted(names):
+                if name not in at_time:
+                    states.append({'name': name, 'status': 'before_first_value' if name in history_names else 'missing_history',
+                                   'valid_from': None, 'value': None})
+                else:
+                    at, count, value = at_time[name]
+                    states.append({'name': name, 'status': 'known' if count == 1 else 'ambiguous',
+                                   'valid_from': _iso(at), 'value': value if count == 1 else None})
+            return {'object_type': object_type, 'object_id': object_id, 'event_id': event_id,
+                    'log_revision': current, 'activity': activity, 'timestamp': _iso(timestamp), 'resource': resource,
+                    'event_attributes': [{'name': name, 'value': value} for name, value in sorted(event_attributes.items())],
+                    'object_attribute_states': states}
+        finally:
+            conn.close()
+
+
 def attribute_changes(log_id: str, object_type: str | None = None, object_id: str | None = None) -> dict[str, Any]:
     with workspace._LOCK:
         conn = workspace._connect()
@@ -303,4 +351,4 @@ def _iso(stamp) -> str | None:
     return None if stamp is None else stamp.isoformat() + "Z"
 
 
-__all__ = ["attribute_changes", "object_history", "browse_objects", "object_events", "event_objects"]
+__all__ = ["attribute_changes", "object_history", "browse_objects", "object_events", "event_objects", "event_detail"]

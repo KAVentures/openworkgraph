@@ -239,6 +239,42 @@ def test_event_participants_page_distinct_objects_and_validate_evidence():
         attributes.event_objects(log, 'order', 'o1', 'e1', revision, after=first['next_after'])
 
 
+def test_event_detail_reports_recorded_values_at_event_time_without_inventing_state():
+    doc = _orders()
+    doc['objects'][0]['attributes'].append(_value('untimed', 'not a time', 'stored'))
+    doc['events'][1]['attributes'] = [{'name': 'priority', 'value': '<urgent>'}]
+    log = _import(doc)['log_id']
+    revision = attributes.object_events(log, 'order', 'o1')['log_revision']
+    detail = attributes.event_detail(log, 'order', 'o1', 'e2', revision)
+    assert detail['event_attributes'] == [{'name': 'priority', 'value': '<urgent>'}]
+    states = {s['name']: s for s in detail['object_attribute_states']}
+    assert states['status'] == {'name': 'status', 'status': 'known', 'valid_from': '2024-01-01T03:00:00Z', 'value': 'approved'}
+    assert states['region']['value'] == 'EU' and states['region']['valid_from'] == T0
+    assert states['untimed']['status'] == 'missing_history' and states['untimed']['value'] is None
+    earlier = attributes.event_detail(log, 'order', 'o2', 'e4', revision)['object_attribute_states']
+    assert earlier[0]['status'] == 'before_first_value' and earlier[0]['value'] is None
+    ambiguous = attributes.event_detail(log, 'order', 'o3', 'e4', revision)['object_attribute_states']
+    assert ambiguous[0]['status'] == 'ambiguous' and ambiguous[0]['value'] is None
+    with pytest.raises(workspace.EventLogWorkspaceError, match='not linked'):
+        attributes.event_detail(log, 'order', 'o1', 'e4', revision)
+    newer = {'objectTypes': [], 'eventTypes': [], 'objects': [{'id': 'new', 'type': 'order'}],
+             'events': [{'id': 'new-event', 'type': 'New', 'time': '2024-02-01T00:00:00Z',
+                         'relationships': [{'objectId': 'new', 'qualifier': ''}]}]}
+    workspace.append_log(log, BytesIO(json.dumps(newer).encode()), source_format='ocel')
+    with pytest.raises(workspace.EventLogWorkspaceError, match='changed'):
+        attributes.event_detail(log, 'order', 'o1', 'e2', revision)
+
+
+def test_event_detail_retains_csv_resource_and_selected_event_attributes():
+    source = BytesIO(b'case,activity,time,who,priority\nc,A,2024-01-01T00:00:00Z,operator,high\n')
+    info = workspace.import_log(source, name='c', source_format='csv', mapping={
+        'case_column': 'case', 'activity_column': 'activity', 'timestamp_column': 'time',
+        'resource_column': 'who', 'attribute_columns': ['priority']})
+    history = attributes.object_events(info['log_id'], 'case', 'c')
+    detail = attributes.event_detail(info['log_id'], 'case', 'c', history['events'][0]['event_id'], history['log_revision'])
+    assert detail['resource'] == 'operator' and detail['event_attributes'] == [{'name': 'priority', 'value': 'high'}]
+
+
 @pytest.mark.parametrize("fmt", ["ocel", "ocelxml"])
 def test_exports_round_trip_the_history_and_the_stored_value(fmt):
     log = _import(_orders())["log_id"]
@@ -339,6 +375,12 @@ with TestClient(app) as client:
     assert participants.status_code == 200 and participants.headers['cache-control'] == 'no-store'
     assert participants.json()['objects'] == [{'object_id': 'o1', 'object_type': 'order', 'qualifiers': ['']}]
     assert client.get(participant_path, params={**params, 'event_id': 'missing'}, headers=headers).status_code == 422
+    detail_path = "/v1/event-logs/" + made.json()["log_id"] + "/object-event-detail"
+    assert client.get(detail_path, params=params, headers=bearer).status_code in (401, 403)
+    detail = client.get(detail_path, params=params, headers=headers)
+    assert detail.status_code == 200 and detail.headers['cache-control'] == 'no-store'
+    assert detail.json()['object_attribute_states'][0]['value'] == 'closed'
+    assert client.get(detail_path, params={**params, 'event_id': 'missing'}, headers=headers).status_code == 422
     assert client.get(path + "?object_id=nope", headers=headers).status_code == 422
     assert client.get("/v1/event-logs/log_0000000000000000/object-attributes", headers=headers).status_code in (404, 422)
 '''

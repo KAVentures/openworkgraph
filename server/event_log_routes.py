@@ -1280,6 +1280,16 @@ def event_log_object_event_participants(request: Request, log_id: str,
     return _respond(object_attributes.event_objects, log_id, object_type, object_id, event_id, revision, after, limit)
 
 
+@router.get("/v1/event-logs/{log_id}/object-event-detail")
+def event_log_object_event_detail(request: Request, log_id: str,
+        object_type: str = Query(min_length=1, max_length=200),
+        object_id: str = Query(min_length=1, max_length=200),
+        event_id: str = Query(min_length=1, max_length=200),
+        revision: int = Query(ge=0, le=2_147_483_647)):
+    _require_dashboard(request)
+    return _respond(object_attributes.event_detail, log_id, object_type, object_id, event_id, revision)
+
+
 @router.post("/v1/event-logs/{log_id}/stuck-cases")
 async def event_log_stuck_cases(request: Request, log_id: str):
     """Open cases idle much longer than usual after their latest activity."""
