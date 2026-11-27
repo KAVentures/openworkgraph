@@ -57,6 +57,7 @@ class Member(Strict):
 class Group(Strict):
     members:list[Member]=Field(min_length=2,max_length=20)
     basis:Literal["reviewed_native_reference","reviewed_business_record","operator_assertion"]
+    evidence_sha256:str|None=Field(default=None,pattern=DIGEST)
 
     @model_validator(mode="after")
     def distinct(self):
@@ -213,7 +214,8 @@ class ReviewedCases:
                            "cross_source_timestamp_ties":tied_cross_source,
                            "strict_adjacent_source_switches":None if day_precision else ordered_switches,
                            "day_precision_present":day_precision,"same_source_many_to_one":len(members)>len(by_source),
-                           "business_identity_independently_verified":False})
+                           "business_identity_independently_verified":False,
+                           **({"evidence_sha256":group.evidence_sha256} if group.evidence_sha256 else {})})
         unlinked_cases=len(cases)-len(assigned)
         unlinked_events=count-linked_events
         plan={"format":FORMAT,"scope_sha256":scope,"groups":groups,"include_unlinked":spec.include_unlinked,
