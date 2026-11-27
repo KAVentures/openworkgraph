@@ -88,6 +88,14 @@ def install(app,jobs,admin):
         principal=owner(authorization,True)
         return await reply(reviewed.preview,organization_id,await parse(request,Plan,maximum=MAX_REQUEST),principal)
 
+    @router.post(base+"/{organization_id}/case-export-portable")
+    async def case_export_portable(organization_id:str,request:Request,authorization:str|None=Header(default=None)):
+        from .connector_portable_linkage import PortableExport,export_portable
+        principal=owner(authorization,True)
+        result=await reply(export_portable,reviewed,organization_id,await parse(request,PortableExport,maximum=MAX_REQUEST+4096),principal)
+        result.headers["Content-Disposition"]='attachment; filename="owg-portable-reviewed-linked-evidence.json"'
+        return result
+
     @router.post(base+"/{organization_id}/case-export")
     async def case_export(organization_id:str,request:Request,authorization:str|None=Header(default=None)):
         principal=owner(authorization,True)
