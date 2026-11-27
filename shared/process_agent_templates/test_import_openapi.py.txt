@@ -180,6 +180,36 @@ class OpenAPIProposalTests(unittest.TestCase):
         self.assertFalse(result["all_previous_operations_representable"])
         with self.assertRaises(ImplementationError):compare(SPEC,old,"f"*64,doc)
 
+    @unittest.skipUnless(importlib.util.find_spec("httpx"),"httpx required for actual runtime parity")
+    def test_generated_scalar_mapping_and_unsupported_constraint_oracle(self):
+        from random import Random
+        from execute_http import Operations
+        rng=Random(1701)
+        kinds={"string":"sample","integer":17,"number":2.5,"boolean":True}
+        for iteration in range(250):
+            doc=fixture()
+            query={f"q_{i}":rng.choice(tuple(kinds)) for i in range(rng.randrange(8))}
+            body={f"b_{i}":rng.choice(tuple(kinds)) for i in range(rng.randrange(1,9))}
+            item=doc["paths"][PATH]
+            item["get"]["parameters"]=[param(k,"query",v) for k,v in query.items()]
+            schema=doc["components"]["schemas"]["Update"]
+            schema["properties"]={k:{"type":v} for k,v in body.items()}
+            schema["required"]=list(body)
+            p=propose(SPEC,doc,ORIGIN,selection("patch","get"))
+            approved=approve(SPEC,doc,p,p["proposal_sha256"],["read_case","update_case"],
+                             confirm_contracts=True,confirm_writes=True)
+            ops=Operations(SPEC,approved,digest(approved))
+            read_args={"case_id":"abc",**{"query_"+k:kinds[v] for k,v in query.items()}}
+            write_args={"case_id":"abc","owg_expected_version":'"17"',"owg_idempotency_key":"synthetic",
+                        **{"body_"+k:kinds[v] for k,v in body.items()}}
+            self.assertEqual(ops.request("read_case",read_args)[2],{k:kinds[v] for k,v in query.items()})
+            self.assertEqual(ops.request("update_case",write_args)[3],{k:kinds[v] for k,v in body.items()})
+            self.assertEqual(p,propose(SPEC,doc,ORIGIN,selection("get","patch")))
+            field=rng.choice(list(body))
+            schema["properties"][field]["const"]=kinds[body[field]]
+            with self.assertRaises(ImplementationError):
+                propose(SPEC,doc,ORIGIN,selection("patch"))
+
     def test_cli_inspect_propose_exclusive_output(self):
         with tempfile.TemporaryDirectory() as root:
             d=Path(root);source=d/"api.json";source.write_text(json.dumps(fixture()))
