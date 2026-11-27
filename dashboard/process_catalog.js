@@ -454,11 +454,17 @@
         if(!reuse){
           const ds=dates.value.split(',').map(d=>d.trim());
           if(ds.some(d=>!d)||!limit.checkValidity()||limit.value==='')throw Error('Choose explicit test dates and witness budget.');
-          basis={dates:ds,dimensions:JSON.parse(input.value),witness_limit:Number(limit.value)};
+          JSON.parse(input.value);basis={dates:ds,dimensionsText:input.value.trim(),witness_limit:Number(limit.value)};
         }
         if(!basis)throw Error('Prepare the domain first.');
-        const value=await request('/v1/process-catalog/decision-domain/compare?'+params,{...basis,filter:filter.value,table_id:focus.value||null,offset,limit:25,
-          ...(prior?{expected_review_sha256:prior.review_sha256}:{})});
+        const meta={dates:basis.dates,witness_limit:basis.witness_limit,filter:filter.value,table_id:focus.value||null,offset,limit:25,
+          ...(prior?{expected_review_sha256:prior.review_sha256}:{})};
+        const body=JSON.stringify(meta).slice(0,-1)+',"dimensions":'+basis.dimensionsText+'}';
+        await window.__owgAuthReady;if(!active()||n!==serial)return;
+        const response=await fetch('/v1/process-catalog/decision-domain/compare?'+params,{method:'POST',cache:'no-store',
+          headers:{'Content-Type':'application/json'},body});
+        if(!response.ok){const error=await response.json().catch(()=>({}));throw Error(error.detail||'Differential review refused.');}
+        const value=await response.json();
         if(!active()||n!==serial)return;
         if(value.before.content_sha256!==previous.content_sha256||value.after.content_sha256!==selected.content_sha256)throw Error('Unexpected exact revision references.');
         report=value;const oldFocus=focus.value;

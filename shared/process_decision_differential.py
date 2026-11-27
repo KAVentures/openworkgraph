@@ -6,10 +6,9 @@ choice indices, not supplied values. No source or execution is contacted.
 """
 from __future__ import annotations
 
-from collections import Counter, defaultdict
+from collections import Counter
 from itertools import product
 from threading import BoundedSemaphore
-from typing import Any
 
 from . import process_decision_domain as domain
 from .process_decision_tables import evaluate_decisions, validate_date
@@ -123,7 +122,8 @@ def _obligations(row,date):
 
 def compact_witnesses(points,limit):
     """Deterministic greedy set cover; no claim of cardinality optimality."""
-    universe=set().union(*(p["obligations"] for p in points)) if points else set()
+    universe=set()
+    for p in points:universe.update(p["obligations"])
     if len(universe)>MAX_OBLIGATIONS:
         raise ValueError("changed witness obligation budget exceeded; narrow the domain")
     uncovered=set(universe)
@@ -167,6 +167,7 @@ def compare(before,after,payload):
         date_stats={d:Counter() for d in dates}
         primary=Counter();flag_counts=Counter()
         points=[];page=[];matching=0;changed_points=0;point_index=0
+        obligation_ids={}
         for date in dates:
             for indices in product(*(range(len(d["choices"])) for d in dimensions)):
                 facts=domain._facts(dimensions,paths,indices)
@@ -188,8 +189,17 @@ def compare(before,after,payload):
                 changes=[r["table_id"] for r in rows if r["flags"]]
                 if changes:
                     changed_points+=1
+                    # Intern repeated signatures to keep bounded point storage
+                    # proportional to memberships, not repeated long strings.
+                    interned=set()
+                    for obligation in obligations:
+                        if obligation not in obligation_ids:
+                            if len(obligation_ids)>=MAX_OBLIGATIONS:
+                                raise ValueError("changed witness obligation budget exceeded; narrow the domain")
+                            obligation_ids[obligation]=len(obligation_ids)
+                        interned.add(obligation_ids[obligation])
                     points.append({"point_index":point_index,"as_of_date":date,"choice_indices":list(indices),
-                                   "changed_table_ids":changes,"obligations":obligations})
+                                   "changed_table_ids":changes,"obligations":interned})
                 date_stats[date]["points"]+=1
                 date_stats[date]["changed_points"]+=bool(changes)
                 date_stats[date]["changed_table_points"]+=len(changes)
