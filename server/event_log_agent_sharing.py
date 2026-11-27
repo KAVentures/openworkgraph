@@ -1396,19 +1396,25 @@ def signal_scorecard(log_id: str, months: int = 6) -> dict[str, Any]:
             "interpretation": result["interpretation"]}
 
 
-def variants(log_id: str, case_type: str | None = None, limit: int = 20) -> dict[str, Any]:
+def variants(log_id: str, case_type: str | None = None, limit: int = 20,
+             case_filter: dict[str, Any] | None = None) -> dict[str, Any]:
     """The most common paths with their cases, share and median duration (aggregates level). Variants followed
     by fewer than AGENT_MIN_CELL_CASES cases are withheld and only counted, so a unique path cannot single out
     a case."""
     require(log_id, "aggregates")
     if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 100:
         raise EventLogWorkspaceError("limit must be a whole number from 1 to 100")
-    result = workspace.variants(log_id, case_type, 200)
+    if case_filter is not None:
+        if not isinstance(case_filter, dict) or not case_filter:
+            raise EventLogWorkspaceError("case_filter must be a non-empty object of case-filter keys")
+        if workspace.summary(log_id, case_type, case_filter)["cases"] < AGENT_MIN_FILTERED_CASES:
+            raise EventLogWorkspaceError(f"fewer than {AGENT_MIN_FILTERED_CASES} cases match this filter; widen it")
+    result = workspace.variants(log_id, case_type, 200, cohort=case_filter)
     listed = result["variants"]
     shown = [v for v in listed if v["cases"] >= AGENT_MIN_CELL_CASES]
     rare = result["distinct_variants"] - len(shown)
     from . import event_log_variant_coverage as coverage
-    targets = coverage.coverage(log_id, case_type, 1)["coverage_targets"]
+    targets = coverage.coverage(log_id, case_type, 1, cohort=case_filter)["coverage_targets"]
     return {"format": FORMAT, "log_id": log_id, "case_notion": result.get("case_notion"), "cases": result["cases"],
             "distinct_variants": result["distinct_variants"], "coverage_targets": targets,
             "variants": [{"rank": i + 1, "path": v["path"], "cases": v["cases"], "share": v["share"],
@@ -1420,12 +1426,19 @@ def variants(log_id: str, case_type: str | None = None, limit: int = 20) -> dict
                        "withheld. A variant is the recorded order of activities, not a verified procedure.")}
 
 
-def process_map(log_id: str, case_type: str | None = None, activities: float = 1.0, paths: float = 1.0) -> dict[str, Any]:
+def process_map(log_id: str, case_type: str | None = None, activities: float = 1.0, paths: float = 1.0,
+                case_filter: dict[str, Any] | None = None) -> dict[str, Any]:
     """The directly-follows process map: activities and transitions with counts and gaps (aggregates level).
-    Activities and transitions seen in fewer than AGENT_MIN_CELL_CASES cases are withheld."""
+    Activities and transitions seen in fewer than AGENT_MIN_CELL_CASES cases are withheld. An optional case
+    filter (at least AGENT_MIN_FILTERED_CASES cases) draws the map of one group of cases."""
     require(log_id, "aggregates")
     from . import event_log_process_map as pm
-    result = pm.process_map(log_id, case_type, activities=activities, paths=paths)
+    if case_filter is not None:
+        if not isinstance(case_filter, dict) or not case_filter:
+            raise EventLogWorkspaceError("case_filter must be a non-empty object of case-filter keys")
+        if workspace.summary(log_id, case_type, case_filter)["cases"] < AGENT_MIN_FILTERED_CASES:
+            raise EventLogWorkspaceError(f"fewer than {AGENT_MIN_FILTERED_CASES} cases match this filter; widen it")
+    result = pm.process_map(log_id, case_type, activities=activities, paths=paths, cohort=case_filter)
     nodes = [a for a in result["activities"] if a["case_count"] >= AGENT_MIN_CELL_CASES]
     names = {a["activity"] for a in nodes}
     edges = [t for t in result["transitions"]
