@@ -18,7 +18,7 @@ from .local_source_credentials import stripe_source_status
 
 FORMAT = "openworkgraph.enterprise-connector-operations.v1"
 PROVIDERS = (
-    ("salesforce","Salesforce","selected_case_history"),
+    ("salesforce","Salesforce","native_multi_object_field_history_and_selected_case_history"),
     ("servicenow","ServiceNow","selected_incident_journal"),
     ("microsoft","Microsoft 365","reviewed_outlook_delta"),
     ("atlassian","Jira","retained_selected_issue_profiles"),

@@ -294,6 +294,7 @@
           <input type="password" id="pvOAuthSecret" placeholder="Client secret (only if required)" aria-label="Client secret (optional)" autocomplete="off">
           <button type="button" class="secondary" id="pvOAuthConnect">Connect</button>
         </div>
+        <label><input type="checkbox" id="pvOAuthSfIdentity"> For Salesforce history, additionally request identity scope (transient organization and integration-user verification).</label>
         <div class="muted" id="pvOAuthStatus" role="status" aria-live="polite"></div>
         <div id="pvOAuthList" aria-label="Connected business systems"></div>
       </div>
@@ -1374,7 +1375,8 @@
       const value = id => panel.querySelector(id).value.trim();
       try {
         const result = await api('/v1/connector-oauth/begin', send('POST', {provider: value('#pvOAuthProvider'),
-          host: value('#pvOAuthHost') || null, client_id: value('#pvOAuthClient'), client_secret: value('#pvOAuthSecret') || null}));
+          host: value('#pvOAuthHost') || null, client_id: value('#pvOAuthClient'), client_secret: value('#pvOAuthSecret') || null,
+          ...(value('#pvOAuthProvider')==='salesforce'&&panel.querySelector('#pvOAuthSfIdentity').checked?{scopes:['api','refresh_token','id']}: {})}));
         panel.querySelector('#pvOAuthSecret').value = '';
         window.open(result.authorization_url, '_blank', 'noopener');
         if (oauthStatus) oauthStatus.textContent = 'Approve access in the new tab, then return here. Register ' + result.redirect_uri + ' as the redirect URI of your app.';

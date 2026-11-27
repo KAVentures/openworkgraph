@@ -15,7 +15,7 @@ const path=require('node:path');
   assert.equal(sqlSeed.status,0,sqlSeed.stderr);
   env.OWG_SQL_SOURCE_CATALOG=JSON.stringify({browser_sql:{engine:'sqlite',path:sourcePath,relation:'events',mapping:{event_id:'eid',case_id:'cid',activity:'label',event_time:'happened',change_time:'changed'}}});
   const seeded=spawnSync(process.env.OWG_BROWSER_PYTHON||'python',['-c',
-    'from server import connector_oauth as o; o._save({"version":1,"connections":{"conn_aaaaaaaaaaaaaaaa":{"provider":"google","host":"","scopes":[o.GOOGLE_AUDIT_SCOPE],"client_id":"test-client","refresh_token":"synthetic-browser-only","connected_at":"2026-01-01T00:00:00Z"}}})'],
+    'from server import connector_oauth as o; o._save({"version":1,"connections":{"conn_aaaaaaaaaaaaaaaa":{"provider":"google","host":"","scopes":[o.GOOGLE_AUDIT_SCOPE],"client_id":"test-client","refresh_token":"synthetic-browser-only","connected_at":"2026-01-01T00:00:00Z"},"conn_bbbbbbbbbbbbbbbb":{"provider":"salesforce","host":"customer.my.salesforce.com","api_host":"customer.my.salesforce.com","scopes":["api","refresh_token","id"],"client_id":"test-client","refresh_token":"synthetic-salesforce-only","connected_at":"2026-01-01T00:00:00Z"}}})'],
     {env:{...env,WORKFLOW_OBSERVER_DATA:path.join(scratch,'data'),WORKFLOW_OBSERVER_AUTH_DIR:path.join(scratch,'auth'),WORKFLOW_OBSERVER_CONFIG:path.join(scratch,'config.json')},encoding:'utf8'});
   assert.equal(seeded.status,0,seeded.stderr);
   const server=spawn(process.env.OWG_BROWSER_PYTHON||'python',['-m','uvicorn','process_logs_app:app','--app-dir','tests/browser','--host','127.0.0.1','--port','8787'],{env,stdio:['ignore','pipe','pipe']});
@@ -135,6 +135,27 @@ const path=require('node:path');
     assert.ok(await page.locator('#slackChannel').isEnabled());
     assert.ok(await page.locator('#slackOrg').isDisabled());
     assert.equal(await page.locator('#slackCase').inputValue(),'channel');
+    await page.locator('summary').filter({hasText:'Create native Salesforce CRM history feed'}).click();
+    await page.locator('#sfName').fill('Salesforce browser fixture');
+    await page.locator('#sfConnection').selectOption('conn_bbbbbbbbbbbbbbbb');
+    await page.locator('#sfHost').fill('customer.my.salesforce.com');
+    await page.locator('#sfOrg').fill('00D000000000001');
+    await page.locator('#sfUser').fill('005000000000001');
+    await page.locator('#sfSince').fill(new Date(Math.floor((Date.now()-86400000)/1000)*1000).toISOString());
+    await page.locator('#sfSelectAccountHistory').check();
+    await page.locator('#sfFieldsAccountHistory').fill('Name,Owner');
+    await page.locator('#sfIdsAccountHistory').fill('001000000000001');
+    await page.locator('#sfConfirm').check();await page.locator('#sfLabels').check();await page.locator('#sfIdentity').check();
+    await page.locator('#sfCreateButton').click();
+    await page.locator('#restStatus').filter({hasText:'Salesforce profile saved. No source was read.'}).waitFor();
+    await page.getByRole('heading',{name:'Salesforce browser fixture'}).waitFor();
+    assert.ok(await page.getByRole('button',{name:'Run next window'}).isDisabled());
+    const [sfDownload]=await Promise.all([page.waitForEvent('download'),page.locator('#download').click()]);
+    const sfReport=JSON.parse(await fs.readFile(await sfDownload.path(),'utf8'));
+    assert.equal(sfReport.profiles.find(p=>p.provider==='salesforce').provider_live_health,'unknown');
+    assert.ok(!JSON.stringify(sfReport).includes('00D000000000001'));
+    await page.getByRole('button',{name:'Remove configuration'}).click();
+    await page.locator('#profiles').getByText('No configured REST feeds.').waitFor();
     await page.addScriptTag({content:await fs.readFile(require.resolve('axe-core/axe.min.js'),'utf8')});
     const axe=await page.evaluate(()=>window.axe.run(document.querySelector('main'),{runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21a','wcag21aa']}}));
     assert.deepEqual(axe.violations.map(v=>v.id),[]);

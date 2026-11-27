@@ -8,6 +8,7 @@ from starlette.concurrency import run_in_threadpool
 from . import enterprise_rest_feed as rest
 from . import google_workspace_audit as google
 from . import slack_native_feed as slack
+from . import salesforce_history_feed as sf
 from . import enterprise_sql_feed as sql
 from . import enterprise_connector_operations as operations
 from .event_log_routes import _json_body
@@ -72,6 +73,13 @@ async def sql_create(request:Request):
     require(request)
     body=await _json_body(request,"SQL feed configuration",strict=True,limit=4096)
     return await call(request,sql.create,body)
+
+
+@router.post("/v1/enterprise-connectors/salesforce")
+async def salesforce_create(request:Request):
+    require(request)
+    body=await _json_body(request,"Salesforce history profile",strict=True,limit=32768)
+    return await call(request,sf.create,body)
 
 
 @router.post("/v1/enterprise-connectors/slack")
