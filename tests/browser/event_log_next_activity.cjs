@@ -53,8 +53,18 @@ const path=require('node:path');
    assert.match(text,/c041\tCheck\tReject 100\.0%\t"Import" → "Check"\t20/);
    assert.match(text,/c040\tCheck\tApprove 100\.0%\t"Receive" → "Check"\t20/);
    assert.match(text,/not instructions/);
+   // Historical validation must use the same literal completion labels, not split commas.
+   const landmarks=page.locator('#owgNextLandmarks');
+   await landmarks.locator('summary').click();
+   await page.locator('#owgNextLandmarkDates').fill('2024-01-21T09:30:00Z');
+   const [landmarkResponse]=await Promise.all([page.waitForResponse(r=>r.url().endsWith('/next-activity/landmarks')&&r.request().method()==='POST'),page.locator('#owgNextLandmarkRun').click()]);
+   assert.deepEqual(landmarkResponse.request().postDataJSON().end_activities,['Pay','Close, archived']);
+   assert.equal(landmarkResponse.status(),200,await landmarkResponse.text());
+   await landmarks.getByText('Historical evaluation complete. This is not prospective validation.',{exact:true}).waitFor();
    await section.getByRole('button',{name:'Remove end activity Close, archived'}).click();
    assert.equal(await out.textContent(),'');
+   assert.equal(await page.locator('#owgNextLandmarkPicker').count(),0);
+   await landmarks.locator('summary').click();
    await page.locator('#owgNextEnds').fill('Close, archived');
    await page.locator('#owgNextAddEnd').click();
    await page.locator('#owgNextRun').click();
