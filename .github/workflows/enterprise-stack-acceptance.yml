@@ -30,7 +30,7 @@ jobs:
   integrated-contract:
     # Validate the consolidated candidate even while it remains a draft.
     # Ordinary feature drafts continue to use the existing cheap smoke path.
-    if: github.event_name == 'workflow_dispatch' || startsWith(github.head_ref, 'integration/enterprise-connectors-') || github.head_ref == 'feat/enterprise-databricks-approved-views' || github.head_ref == 'feat/enterprise-snowflake-approved-views' || github.head_ref == 'feat/enterprise-netsuite-suiteql-events' || github.head_ref == 'feat/enterprise-workday-raas-events' || github.head_ref == 'feat/enterprise-oracle-fusion-procurement'
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.head_ref, 'integration/enterprise-connectors-') || github.head_ref == 'feat/enterprise-databricks-approved-views' || github.head_ref == 'feat/enterprise-snowflake-approved-views' || github.head_ref == 'feat/enterprise-netsuite-suiteql-events' || github.head_ref == 'feat/enterprise-workday-raas-events' || github.head_ref == 'feat/enterprise-oracle-fusion-procurement' || github.head_ref == 'feat/enterprise-new-provider-crosswalk-batch'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     services:
@@ -97,6 +97,7 @@ jobs:
             tests/test_connector_event_publications.py \
             tests/test_connector_case_review.py \
             tests/test_connector_crosswalks.py \
+            tests/test_enterprise_crosswalk_batch.py \
             tests/test_enterprise_connector_credentials.py \
             tests/test_enterprise_connector_deployment.py \
             tests/test_enterprise_connector_integration.py

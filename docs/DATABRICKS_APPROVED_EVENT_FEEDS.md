@@ -12,7 +12,7 @@ Configure OWG_DATABRICKS_CATALOG as a deployment-owned JSON mapping, e.g.:
 
 Set the referenced bearer credential via the existing environment or private-file delivery. Use the organization's approved Databricks service identity; a token change requires explicit reconfiguration (in-place rotation is not claimed). The adapter checks current_user() against the configured principal before and after the read. The workspace hostname and catalog hash are pinned. The check is not independent proof of all grants or the view's business correctness.
 
-Open the local Enterprise connectors page, choose the approved Databricks view, inspect its exact revision and retained labels, choose first timestamp, window, overlap and reporting lag, and explicitly approve configuration, source reads and retention. Saving performs no network request. Run once or schedule via the existing retained feed controls. Central Gateway job scheduling and governed snapshot publication use the shared provider contract; private native crosswalk and reviewed rotation remain unsupported.
+Open the local Enterprise connectors page, choose the approved Databricks view, inspect its exact revision and retained labels, choose first timestamp, window, overlap and reporting lag, and explicitly approve configuration, source reads and retention. Saving performs no network request. Run once or schedule via the existing retained feed controls. Central Gateway job scheduling and governed snapshot publication use the shared provider contract; [Private native crosswalk](GATEWAY_PRIVATE_CROSSWALKS.md) accepts exact approved-view case strings; reviewed rotation remains unsupported.
 
 ## Data path
 

@@ -17,6 +17,11 @@ Supported case resolvers:
 | Salesforce | parent CRM record ID | selected history object, e.g. CaseHistory |
 | ServiceNow | exact sys_id | selected table, e.g. incident |
 | SAP procurement | purchase order number | purchase_order or omit |
+| Dynamics 365 / Dataverse | exact native GUID | selected table |
+| HubSpot | exact CRM record ID | selected object type |
+| Databricks, Snowflake | exact approved view case string | omit |
+| NetSuite, Workday | exact curated record/report case string | omit |
+| Oracle Fusion | exact decimal selected header ID | requisition or purchase_order |
 
 Google Workspace and Slack actor/thread/channel cases do not currently
 have a general business-record crosswalk resolver; use explicit review
@@ -77,6 +82,64 @@ HMAC match tags. It includes no native case ID, business key or secret.
 Do not upload the input or snapshot file in place of the crosswalk artifact.
 Match tags and case pseudonyms are still sensitive correlation data.
 
+## Batch preparation on a source host
+
+For two to ten profiles on one local workspace, the batch command replaces
+repeated manual preparation. Each input must be an owner-only private regular
+JSON file. First publish the exact snapshots and obtain their job, grant and
+revision pins. Prepare a private batch input containing:
+
+    {
+      "batch_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "domain": "purchase_order",
+      "require_all_snapshot_cases_mapped": true,
+      "confirm_batch_review": true,
+      "confirm_match_tag_disclosure": true,
+      "sources": [
+        {
+          "snapshot_file": "/private/source-a-snapshot.json",
+          "mapping_file": "/private/source-a-mapping.json",
+          "job_id": "cj_11111111111111111111111111111111",
+          "grant_id": "cep_22222222222222222222222222222222",
+          "publication_revision": 1
+        },
+        {
+          "snapshot_file": "/private/source-b-snapshot.json",
+          "mapping_file": "/private/source-b-mapping.json",
+          "job_id": "cj_33333333333333333333333333333333",
+          "grant_id": "cep_44444444444444444444444444444444",
+          "publication_revision": 1
+        }
+      ]
+    }
+
+These are fictional pins. Supply the same dedicated random batch secret as in
+the single-source workflow. Run:
+
+    python -m server.enterprise_crosswalk_batch preview --input /private/batch.json
+
+Review the source-by-source exact mapped/unmapped populations, provider,
+snapshot and artifact digests and combined request size. The counts-only
+preview does not reveal native IDs, business keys or match tags. Complete
+mapping is optional but must be an explicit decision; a listed native ID
+missing from its exact snapshot is always refused. Preview validates local
+snapshots, not the live Gateway grant state.
+
+Then separately export with the reviewed digest:
+
+    python -m server.enterprise_crosswalk_batch export --input /private/batch.json --out /private/crosswalks.zip --expected-sha256 <reviewed-digest> --confirm-export
+
+All artifacts are recomputed under one local workspace lock; a changed
+snapshot, mapping, key or pin invalidates the digest. The output is exclusively
+created with mode 0600 and contains numbered minimized crosswalk JSON files
+and a counts-only review manifest. Ordinary write exceptions remove the
+incomplete output; a process crash can leave an invalid archive which must
+not be used. Extract only into a restricted private directory and select the
+crosswalk JSON files, not the review manifest, in the Gateway UI. The archive
+contains sensitive match tags, not raw mapping files or the shared key.
+Multi-host batches still use separate local preparations with a common key
+and domain; this feature never mounts another host or sends requests.
+
 ## Gateway proposal review
 
 Open Gateway administration → Connector event integration → Private
@@ -96,6 +159,8 @@ artifact digests. These are provenance fingerprints, not digital signatures
 or proof that the submitted native mapping is true. A malicious authorized
 owner or source host could submit incorrect assertions. The Gateway does
 not independently authenticate which host produced the file.
+
+The proposal includes exact source-level mapped, unmapped, single-source, ambiguous and candidate case counts, plus candidate group and member coverage for every source pair, including pairs with zero coverage. Ambiguous case counts overlap candidate counts when ambiguous candidates are included. These are counts of source cases, not event counts, independently verified identity accuracy or proof of historical coverage.
 
 Every group is unchecked by default. Review original authorized business
 evidence and choose groups individually or explicitly select all displayed

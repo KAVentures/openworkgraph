@@ -14,7 +14,7 @@ Configure the deployment-owned OWG_SNOWFLAKE_CATALOG JSON mapping, e.g.:
 
 Names are exact, case-sensitive simple SQL identifiers. Only the organization-account public hostname form is supported in this slice. Set the referenced token in the existing environment or approved private-file secret mechanism. Never paste the PAT into the dashboard. The source definition and credential are pinned; changing either requires reviewed reconfiguration.
 
-Open Enterprise connectors, select the approved Snowflake view, review its digest, role and labels, choose first timestamp, window, overlap and reporting lag, and approve reads and metadata retention. Saving or refreshing inventory makes no provider request. Run once or schedule via the existing retained-feed controls. Gateway jobs and governed snapshot publication use the common wire contract; private native crosswalk and reviewed in-place rotation are not claimed.
+Open Enterprise connectors, select the approved Snowflake view, review its digest, role and labels, choose first timestamp, window, overlap and reporting lag, and approve reads and metadata retention. Saving or refreshing inventory makes no provider request. Run once or schedule via the existing retained-feed controls. Gateway jobs and governed snapshot publication use the common wire contract; [Private native crosswalk](GATEWAY_PRIVATE_CROSSWALKS.md) accepts exact approved-view case strings; reviewed in-place rotation is not claimed.
 
 ## Read and retention contract
 
