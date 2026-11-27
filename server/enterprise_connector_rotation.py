@@ -142,6 +142,9 @@ def metadata(p):
         elif provider=="hubspot":
             from . import hubspot_history_feed as hs
             ref=hs.source(cfg)["credential_env"]
+        elif provider=="snowflake":
+            from . import snowflake_event_feed as snow
+            ref=snow.source(cfg)["credential_env"]
         elif provider=="databricks":
             from . import databricks_event_feed as dbx
             ref=dbx.source(cfg)["credential_env"]
