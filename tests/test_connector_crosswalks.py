@@ -240,3 +240,45 @@ def test_http_owner_only(tmp_path,monkeypatch):
         header={"Authorization":"Bearer "+admin_accounts.SESSION_PREFIX+"test"}
         assert c.get(base+"/saved-reviews",headers=header).status_code==403
         assert c.post(base+"/crosswalk-proposals",json={},headers=header).status_code==403
+
+
+def test_ambiguous_source_matches_withheld_until_separately_selected(prepared,deployed):
+    from datetime import timedelta
+    from gateway.connector_jobs import Create,profile_digest
+    from server import enterprise_connector_snapshot as snapshots
+    from test_enterprise_rest_feed import config,event,page,run
+    reviewed,saved,items,spec=prepared
+    jobs,pubs=deployed
+    p=rest.create(config())
+    start=rest._stamp(p["config"]["initial_since"])
+    run(p,lambda _:page([event(p),{**event(p,"event-second"),"case":"second-native-case"}]))
+    snap=snapshots.prepare(p["profile_id"],rest._iso(start),rest._iso(start+timedelta(days=1)))
+    made=jobs.create(Create(organization_id="customer",name="Ambiguous fixture",provider="rest",
+       profile_id=p["profile_id"],profile_revision=p["revision"],profile_sha256=profile_digest(p),
+       interval_minutes=15,confirm_dispatch=True,confirm_counts_only_receipts=True),"owner")
+    j=made["job"];g=grant(pubs,j,snap);upload(pubs,made["worker_token"],g,snap)
+    a=artifact(j,g,snap,inputs=mapping(rows=[
+       {"native_case_id":"raw-case-1","business_key":BUSINESS},
+       {"native_case_id":"second-native-case","business_key":BUSINESS}]))
+    spec={**spec,"snapshots":[*spec["snapshots"],pin(g)],"crosswalks":[*spec["crosswalks"],a.model_dump()]}
+    withheld=propose(reviewed,"customer",Propose.model_validate(spec),"owner")
+    assert withheld["summary"]["ambiguous_groups"]==1 and withheld["plan"] is None
+    included=propose(reviewed,"customer",Propose.model_validate({**spec,"include_ambiguous":True}),"owner")
+    assert included["summary"]["candidate_groups"]==1
+    assert included["plan"]["confirm_many_to_one"] is True
+    assert included["review"]["summary"]["many_to_one_groups"]==1
+    assert len(included["plan"]["groups"][0]["members"])==4
+    with pytest.raises(ValidationError):
+        Plan.model_validate({**included["plan"],"confirm_many_to_one":False})
+
+
+def test_reapproved_identical_snapshot_does_not_restore_saved_plan(prepared):
+    reviewed,saved,items,_=prepared;r,p=make_review(prepared)
+    first=saved.save("customer",save_spec(r,p),"owner")
+    j,g,s,a=items[0]
+    reviewed.publications.remove("customer",j["job_id"],Remove(expected_publication_revision=g["revision"],confirm_delete=True),"owner",g["grant_id"])
+    replacement=grant(reviewed.publications,j,s)
+    assert replacement["grant_id"]!=g["grant_id"]
+    assert saved.inventory("customer")["plans"]==[]
+    with pytest.raises(JobError,match="saved_review_missing"):
+        saved.read("customer",first["plan_id"],1,"owner")
