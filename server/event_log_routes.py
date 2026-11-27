@@ -273,6 +273,11 @@ async def compare_event_logs(request: Request):
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
+@router.get("/prediction-triage-policy.js")
+def prediction_triage_policy_script() -> FileResponse:
+    return FileResponse(_SCRIPT.parent / "prediction_triage_policy.js", media_type="application/javascript")
+
+
 @router.get("/event-log-workspace.js")
 def event_log_workspace_script() -> FileResponse:
     """Static dashboard client; it only calls the authenticated routes below."""
@@ -3109,6 +3114,64 @@ async def event_log_evaluate_prediction_snapshot(request: Request, log_id: str, 
     except workspace.EventLogWorkspaceError as exc:
         raise HTTPException(404 if "unknown" in str(exc) else 422, str(exc)) from None
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+@router.get("/v1/event-logs/{log_id}/prediction-snapshots/{snapshot_id}/triage-policies")
+async def prediction_triage_policies(request: Request, log_id: str, snapshot_id: str):
+    from . import event_log_prediction_triage as triage
+    _require_dashboard(request)
+    response = await run_in_threadpool(_respond, triage.listing, log_id, snapshot_id)
+    _require_dashboard(request)
+    return response
+
+
+@router.post("/v1/event-logs/{log_id}/prediction-snapshots/{snapshot_id}/triage-policies/preview")
+async def prediction_triage_preview(request: Request, log_id: str, snapshot_id: str):
+    from . import event_log_prediction_triage as triage
+    _require_dashboard(request)
+    spec = await _json_body(request, "triage policy settings", strict=True, limit=8192)
+    _require_dashboard(request)
+    response = await run_in_threadpool(_respond, triage.preview, log_id, snapshot_id, spec)
+    _require_dashboard(request)
+    return response
+
+
+@router.post("/v1/event-logs/{log_id}/prediction-snapshots/{snapshot_id}/triage-policies")
+async def prediction_triage_freeze(request: Request, log_id: str, snapshot_id: str):
+    from . import event_log_prediction_triage as triage
+    _require_dashboard(request)
+    spec = await _json_body(request, "triage policy freeze", strict=True, limit=8192)
+    _require_dashboard(request)
+    return await run_in_threadpool(_respond, triage.freeze, log_id, snapshot_id, spec)
+
+
+@router.get("/v1/event-logs/{log_id}/prediction-snapshots/{snapshot_id}/triage-policies/{policy_id}/evaluation")
+async def prediction_triage_evaluate(request: Request, log_id: str, snapshot_id: str, policy_id: str):
+    from . import event_log_prediction_triage as triage
+    _require_dashboard(request)
+    response = await run_in_threadpool(_respond, triage.evaluate, log_id, snapshot_id, policy_id)
+    _require_dashboard(request)
+    return response
+
+
+@router.post("/v1/event-logs/{log_id}/prediction-snapshots/{snapshot_id}/triage-policies/{policy_id}/evidence")
+async def prediction_triage_evidence(request: Request, log_id: str, snapshot_id: str, policy_id: str):
+    from . import event_log_prediction_triage as triage
+    _require_dashboard(request)
+    spec = await _json_body(request, "triage policy evidence", strict=True, limit=8192)
+    _require_dashboard(request)
+    response = await run_in_threadpool(_respond, triage.evidence, log_id, snapshot_id, policy_id, spec)
+    _require_dashboard(request)
+    return response
+
+
+@router.post("/v1/event-logs/{log_id}/prediction-snapshots/{snapshot_id}/triage-policies/{policy_id}/delete")
+async def prediction_triage_delete(request: Request, log_id: str, snapshot_id: str, policy_id: str):
+    from . import event_log_prediction_triage as triage
+    _require_dashboard(request)
+    spec = await _json_body(request, "triage policy deletion", strict=True, limit=8192)
+    _require_dashboard(request)
+    return await run_in_threadpool(_respond, triage.delete, log_id, snapshot_id, policy_id, spec)
 
 
 @router.post("/v1/event-logs/{log_id}/prediction-snapshots/{snapshot_id}/delete")

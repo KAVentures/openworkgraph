@@ -115,3 +115,9 @@ possible score (zero pinball or interval width), not an imputed completion.
 Upper bounds remain unknown until all eligible cases are observed. Invalid
 estimates and absent pairs are disclosed. No new stored data, threshold
 selection, execution authorization, or statistical confidence claim is added.
+
+
+## Prospective capacity-matched triage policy review
+
+Freeze and later score a capacity-limited ranking against a same-capacity naive
+baseline. See [prospective triage policies](PROSPECTIVE_TRIAGE_POLICIES.md).
