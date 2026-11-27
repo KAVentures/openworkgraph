@@ -4951,13 +4951,19 @@
     const eventStatus=el('div',null,'muted');eventStatus.setAttribute('role','status');
     const eventRows=el('div'),eventPrevious=button('Previous recorded events','secondary'),eventNext=button('Next recorded events','secondary');
     const eventNav=el('div',null,'row');eventNav.append(eventPrevious,eventNext);
-    eventPanel.append(el('h4','Recorded events for this object'),el('p','These are stored event labels before activity mappings or hidden-activity filters. Equal timestamps do not establish business order; the event ID breaks ties. Qualifiers are supplied link labels.','muted'),eventStatus,eventRows,eventNav);
+    const participants=el('div');participants.id='owgObjectEventParticipants';
+    const participantTitle=el('h4'),participantStatus=el('div',null,'muted'),participantRows=el('div');participantStatus.setAttribute('role','status');
+    const participantPrevious=button('Previous linked objects','secondary'),participantNext=button('Next linked objects','secondary'),participantNav=el('div',null,'row');participantNav.append(participantPrevious,participantNext);
+    participants.append(participantTitle,el('p','These objects share this recorded event; this does not establish a verified business relationship.','muted'),participantStatus,participantRows,participantNav);
+    eventPanel.append(el('h4','Recorded events for this object'),el('p','These are stored event labels before activity mappings or hidden-activity filters. Equal timestamps do not establish business order; the event ID breaks ties. Qualifiers are supplied link labels.','muted'),eventStatus,eventRows,eventNav,participants);
     box.append(row,out,flatOut,attrOut,history,eventPanel,shared);
     let graph=null,flat=null,attrs=null,mapTurn=0;
     const flatCache=new Map(),attrCache=new Map();
     let historyTurn=0,historyRevision=null,historyOffset=0,historyFollowing=null;
     let eventTurn=0,eventRevision=null,eventOffset=0,eventFollowing=null;
-    const clearObjectEvents=()=>{++eventTurn;eventRevision=null;eventOffset=0;eventFollowing=null;eventStatus.textContent='';eventRows.replaceChildren();eventPrevious.disabled=eventNext.disabled=true;show(eventPanel,false);};
+    let participantTurn=0,participantEvent='',participantRevision=null,participantIndex=0,participantFollowing=null,participantCursors=[null];
+    const clearParticipants=()=>{++participantTurn;participantEvent='';participantRevision=null;participantIndex=0;participantFollowing=null;participantCursors=[null];participantRows.replaceChildren();participantStatus.textContent='';participantPrevious.disabled=participantNext.disabled=true;show(participants,false);};
+    const clearObjectEvents=()=>{++eventTurn;eventRevision=null;eventOffset=0;eventFollowing=null;eventStatus.textContent='';eventRows.replaceChildren();eventPrevious.disabled=eventNext.disabled=true;clearParticipants();show(eventPanel,false);};
     const clearObjectHistory=()=>{++historyTurn;historyRevision=null;historyOffset=0;historyFollowing=null;historyStatus.textContent='';historyRows.replaceChildren();historyPrevious.disabled=historyNext.disabled=true;clearObjectEvents();};
     clearObjectHistory();historyId.oninput=clearObjectHistory;
     async function loadObjectHistory(offset){
@@ -4982,6 +4988,7 @@
     async function loadObjectEvents(offset){
       const ticket=++eventTurn,selected=pick.value,object=historyId.value;
       const active=()=>current()&&ticket===eventTurn&&pick.value===selected&&historyId.value===object;
+      clearParticipants();
       show(eventPanel,true);
       eventPrevious.disabled=eventNext.disabled=true;eventStatus.textContent='Loading recorded events…';eventRows.replaceChildren();
       if(!object){eventStatus.textContent='Enter an exact object ID.';return;}
@@ -4992,13 +4999,42 @@
         if(!active())return;
         eventRevision=result.log_revision;eventOffset=offset;eventFollowing=result.next_offset;
         eventStatus.textContent=result.total_events?'Showing '+(offset+1).toLocaleString()+'–'+(offset+result.events.length).toLocaleString()+' of '+Number(result.total_events).toLocaleString()+' recorded events.':'No retained events are linked to this object.';
-        if(result.events.length)eventRows.replaceChildren(table(['Event ID','Activity','Timestamp (UTC)','Link qualifiers'],result.events.map(e=>[e.event_id,e.activity,e.timestamp,JSON.stringify(e.qualifiers)])));
+        if(result.events.length)eventRows.replaceChildren(table(['Event ID','Activity','Timestamp (UTC)','Link qualifiers','Linked objects'],result.events.map(e=>{
+          const inspect=button('Inspect linked objects','secondary');inspect.setAttribute('aria-label','Inspect objects linked to event '+JSON.stringify(e.event_id));
+          inspect.onclick=()=>{clearParticipants();participantEvent=e.event_id;participantRevision=result.log_revision;participantTitle.textContent='Objects linked to event '+e.event_id;show(participants,true);loadParticipants(0);};
+          return [e.event_id,e.activity,e.timestamp,JSON.stringify(e.qualifiers),inspect];
+        })));
         eventPrevious.disabled=offset===0;eventNext.disabled=eventFollowing===null;
       }catch(error){if(active()){eventRevision=null;eventStatus.textContent=error.message;}}
     }
     eventOpen.onclick=()=>{eventRevision=null;loadObjectEvents(0);};
     eventPrevious.onclick=()=>loadObjectEvents(Math.max(0,eventOffset-50));
     eventNext.onclick=()=>loadObjectEvents(eventFollowing);
+    async function loadParticipants(index){
+      const ticket=++participantTurn,selected=pick.value,object=historyId.value,event=participantEvent,basis=participantRevision;
+      const active=()=>current()&&ticket===participantTurn&&pick.value===selected&&historyId.value===object&&participantEvent===event;
+      participantPrevious.disabled=participantNext.disabled=true;participantRows.replaceChildren();participantStatus.textContent='Loading linked objects…';
+      const query=new URLSearchParams({object_type:selected,object_id:object,event_id:event,revision:String(basis),limit:'50'});
+      if(participantCursors[index]!==null)query.set('after',participantCursors[index]);
+      try{
+        const result=await getJSON(logPath('object-event-participants').replace(/\?.*$/,'')+'?'+query);
+        if(!active())return;
+        participantIndex=index;participantFollowing=result.next_after;
+        const start=index*50;participantStatus.textContent='Showing '+(start+1).toLocaleString()+'–'+(start+result.objects.length).toLocaleString()+' of '+Number(result.total_objects).toLocaleString()+' linked objects.';
+        participantRows.replaceChildren(table(['Object ID','Object type','Link qualifiers','History'],result.objects.map(item=>{
+          const open=button('Review object events','secondary');open.setAttribute('aria-label','Review recorded events for '+JSON.stringify(item.object_id));
+          open.onclick=()=>{
+            if(![...pick.options].some(option=>option.value===item.object_type)){participantStatus.textContent='The linked object type is no longer available; reload the log.';return;}
+            if(pick.value!==item.object_type){pick.value=item.object_type;pick.dispatchEvent(new Event('change'));}else clearObjectHistory();
+            historyId.value=item.object_id;eventRevision=basis;loadObjectEvents(0);
+          };
+          return [item.object_id,item.object_type,JSON.stringify(item.qualifiers),open];
+        })));
+        participantPrevious.disabled=index===0;participantNext.disabled=participantFollowing===null;
+      }catch(error){if(active())participantStatus.textContent=error.message;}
+    }
+    participantPrevious.onclick=()=>loadParticipants(participantIndex-1);
+    participantNext.onclick=()=>{participantCursors[participantIndex+1]=participantFollowing;loadParticipants(participantIndex+1);};
     let browserTurn=0,browserRevision=null,browserIndex=0,browserFollowing=null,browserCursors=[null];
     const clearObjectBrowser=()=>{++browserTurn;browserRevision=null;browserIndex=0;browserFollowing=null;browserCursors=[null];browserStatus.textContent='';browserRows.replaceChildren();browserPrevious.disabled=browserNext.disabled=true;};
     clearObjectBrowser();browserSearch.oninput=clearObjectBrowser;
