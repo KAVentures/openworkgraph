@@ -53,6 +53,9 @@ def read_document(raw):
     paths=object_value(doc.get("paths"))
     require(1<=len(paths)<=MAX_PATHS,"openapi_path_budget")
     # Ignore top-level documentation but never follow references or URLs.
+    try:digest(doc)
+    except (ValueError,TypeError,OverflowError,RecursionError):
+        raise ImplementationError("invalid_openapi_json") from None
     return doc
 
 
@@ -179,7 +182,7 @@ def success_response(doc,op):
 
 
 def body_fields(doc,op):
-    if "requestBody" not in op:return {}
+    require("requestBody" in op,"explicit_json_write_body_required")
     raw=resolve(doc,op["requestBody"],"requestBodies")
     allowed(raw,{"content","required","description"},"request_body_semantics_unsupported")
     require(raw.get("required") is True,"optional_body_unsupported")
@@ -203,7 +206,7 @@ def compile_operation(doc,chosen,path,method):
     names=path_names(path)
     require(method in METHODS,"unsupported_http_method")
     item=object_value(doc["paths"].get(path))
-    require("$ref" not in item,"path_item_reference_unsupported")
+    allowed(item,{"summary","description","servers","parameters",*HTTP_METHODS},"path_item_semantics_unsupported")
     op=object_value(item.get(method))
     allowed(op,{"tags","summary","description","externalDocs","operationId","parameters","requestBody",
                 "responses","deprecated","security","servers"},"operation_semantics_unsupported")
@@ -247,7 +250,10 @@ def compile_operation(doc,chosen,path,method):
 def inventory(doc,chosen):
     fixed_origin(chosen)
     rows=[]
-    ids={}
+    ids={};shapes={};omitted=0
+    for path in doc["paths"]:
+        shape=re.sub(r"\{[^{}]+\}","{}",path)
+        shapes[shape]=shapes.get(shape,0)+1
     for path,item in sorted(doc["paths"].items()):
         if not isinstance(item,dict):continue
         for method in HTTP_METHODS:
@@ -256,7 +262,8 @@ def inventory(doc,chosen):
             if isinstance(name,str) and NAME.fullmatch(name):ids[name]=ids.get(name,0)+1
             # Unsafe identifiers are not copied into a diagnostic export.
             try:path_names(path)
-            except ImplementationError:continue
+            except ImplementationError:
+                omitted+=1;continue
             row={"path":path,"method":method,"operation_id":name if isinstance(name,str) and NAME.fullmatch(name) else None}
             try:
                 operation=compile_operation(doc,chosen,path,method)
@@ -266,10 +273,12 @@ def inventory(doc,chosen):
             rows.append(row)
     require(len(rows)<=MAX_PATHS*len(HTTP_METHODS),"operation_inventory_budget")
     for row in rows:
+        if shapes[re.sub(r"\{[^{}]+\}","{}",row["path"])]>1:
+            row.update(status="unsupported",reason="ambiguous_template_path",operation=None)
         if row["operation_id"] is not None and ids[row["operation_id"]]>1:
             row.update(status="unsupported",reason="duplicate_operation_id",operation=None)
     return {"format":"openworkgraph.openapi-inventory.v1","openapi_sha256":digest(doc),
-            "origin":chosen,"operations":rows,"candidate_count":sum(r["status"]=="candidate" for r in rows),
+            "origin":chosen,"operations":rows,"omitted_unsafe_path_operations":omitted,"candidate_count":sum(r["status"]=="candidate" for r in rows),
             "business_tool_calls":False,"provider_contract_verified":False,"execution_authorized":False}
 
 
