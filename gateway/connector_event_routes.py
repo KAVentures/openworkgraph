@@ -35,10 +35,6 @@ def install(app,jobs,admin):
         principal=owner(authorization,True)
         return await reply(store.approve,organization_id,job_id,await parse(request,Approve),principal)
 
-    @router.post(base+"/{organization_id}/{job_id}/{grant_id}/delete")
-    async def delete(organization_id:str,job_id:str,grant_id:str,request:Request,authorization:str|None=Header(default=None)):
-        principal=owner(authorization,True)
-        return await reply(store.remove,organization_id,job_id,await parse(request,Remove),principal,grant_id)
 
     @router.post(base+"/{organization_id}/export")
     async def export(organization_id:str,request:Request,authorization:str|None=Header(default=None)):
@@ -270,5 +266,43 @@ def install(app,jobs,admin):
         from .connector_temporal_review import Alignment,temporal_review
         principal=owner(authorization,True)
         return await reply(temporal_review,reviewed,organization_id,await parse(request,Alignment,maximum=MAX_REQUEST),principal)
+
+
+    from .connector_exception_followups import Followups, Preview as FollowupPreview, Create as FollowupCreate, Change as FollowupChange, Export as FollowupExport
+    followups=Followups(queues)
+
+    @router.get(base+"/{organization_id}/exception-queues/{queue_id}/followups")
+    async def followup_inventory(organization_id:str,queue_id:str,authorization:str|None=Header(default=None)):
+        owner(authorization)
+        return await reply(followups.inventory,organization_id,queue_id)
+
+    @router.post(base+"/{organization_id}/exception-queues/{queue_id}/followups/preview")
+    async def followup_preview(organization_id:str,queue_id:str,request:Request,authorization:str|None=Header(default=None)):
+        owner(authorization)
+        return await reply(followups.preview,organization_id,queue_id,await parse(request,FollowupPreview,maximum=16384))
+
+    @router.post(base+"/{organization_id}/exception-queues/{queue_id}/followups")
+    async def followup_create(organization_id:str,queue_id:str,request:Request,authorization:str|None=Header(default=None)):
+        principal=owner(authorization,True)
+        return await reply(followups.create,organization_id,queue_id,await parse(request,FollowupCreate,maximum=16384),principal)
+
+    @router.post(base+"/{organization_id}/exception-queues/{queue_id}/followups/{packet_id}/change")
+    async def followup_change(organization_id:str,queue_id:str,packet_id:str,request:Request,authorization:str|None=Header(default=None)):
+        principal=owner(authorization,True)
+        return await reply(followups.change,organization_id,queue_id,packet_id,await parse(request,FollowupChange),principal)
+
+    @router.post(base+"/{organization_id}/exception-queues/{queue_id}/followups/{packet_id}/export")
+    async def followup_export(organization_id:str,queue_id:str,packet_id:str,request:Request,authorization:str|None=Header(default=None)):
+        principal=owner(authorization,True)
+        result=await reply(followups.export,organization_id,queue_id,packet_id,await parse(request,FollowupExport),principal)
+        result.headers["Content-Disposition"]='attachment; filename="owg-reviewed-exception-followup.json"'
+        return result
+
+    # Register the generic publication delete after specific queue/plan routes.
+    @router.post(base+"/{organization_id}/{job_id}/{grant_id}/delete")
+    async def delete(organization_id:str,job_id:str,grant_id:str,request:Request,authorization:str|None=Header(default=None)):
+        principal=owner(authorization,True)
+        return await reply(store.remove,organization_id,job_id,await parse(request,Remove),principal,grant_id)
+
 
     app.include_router(router)
