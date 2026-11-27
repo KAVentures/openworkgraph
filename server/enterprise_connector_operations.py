@@ -27,6 +27,7 @@ PROVIDERS = (
     ("stripe","Stripe","selected_record_evidence"),
     ("rest","Customer REST","retained_event_feed"),
     ("google","Google Workspace","native_admin_reports_audit"),
+    ("slack","Slack","native_enterprise_audit_and_selected_channel_activity"),
     ("sql","SQL databases","native_postgresql_sqlite_event_feeds"),
     ("folder","Folder exports","retained_csv_feed"),
     ("agent_runs","Agent runs","local_agent_run_log"),

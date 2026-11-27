@@ -8,7 +8,7 @@ const path=require('node:path');
 (async()=>{
   const scratch=await fs.mkdtemp(path.join(tmpdir(),'owg-enterprise-connectors-'));
   const base='http://127.0.0.1:8787',endpoint='https://customer.example.com/events';
-  const env={...process.env,OWG_BROWSER_TEST_DIR:scratch,OWG_REST_ALLOWED_ENDPOINTS:JSON.stringify([endpoint]),OWG_REST_TOKEN_BROWSER:'browser-fixture-only'};
+  const env={...process.env,OWG_BROWSER_TEST_DIR:scratch,OWG_REST_ALLOWED_ENDPOINTS:JSON.stringify([endpoint]),OWG_REST_TOKEN_BROWSER:'browser-fixture-only',OWG_SLACK_TOKEN_BROWSER:'xoxp-synthetic-browser-only'};
   const sourcePath=path.join(await fs.realpath(scratch),'source.sqlite');
   const sqlSeed=spawnSync(process.env.OWG_BROWSER_PYTHON||'python',['-c',
     'import sqlite3,sys,time; c=sqlite3.connect(sys.argv[1]); c.execute("CREATE TABLE events (eid TEXT NOT NULL,cid TEXT NOT NULL,label TEXT NOT NULL,happened INTEGER NOT NULL,changed INTEGER NOT NULL) STRICT"); t=int(time.time()*1000000)-12*3600*1000000; c.execute("INSERT INTO events VALUES (?,?,?,?,?)",("private-event","private-case","Approve",t,t)); c.commit(); c.close()',sourcePath],{encoding:'utf8'});
@@ -111,6 +111,30 @@ const path=require('node:path');
     assert.ok(!JSON.stringify(sqlReport).includes(sourcePath));
     await page.getByRole('button',{name:'Remove configuration'}).click();
     await page.locator('#profiles').getByText('No configured REST feeds.').waitFor();
+    // Slack profile configuration is passive; scoped source reads require
+    // separate approval. No real Slack token or network request is used.
+    await page.locator('summary').filter({hasText:'Create native Slack feed'}).click();
+    await page.locator('#slackName').fill('Slack browser fixture');
+    await page.locator('#slackEnv').fill('OWG_SLACK_TOKEN_BROWSER');
+    await page.locator('#slackEnterprise').fill('E123ABC');
+    await page.locator('#slackSince').fill(new Date(Math.floor((Date.now()-86400000)/1000)*1000).toISOString());
+    await page.locator('#slackConfirm').check();await page.locator('#slackRetention').check();
+    await page.locator('#slackOrg').check();
+    await page.locator('#slackCreateButton').click();
+    await page.locator('#restStatus').filter({hasText:'Slack profile saved. No source was read.'}).waitFor();
+    await page.getByRole('heading',{name:'Slack browser fixture'}).waitFor();
+    assert.ok(await page.getByRole('button',{name:'Run next window'}).isDisabled());
+    assert.match(await page.locator('#profiles').textContent(),/Slack native/);
+    const [slackDownload]=await Promise.all([page.waitForEvent('download'),page.locator('#download').click()]);
+    const slackReport=JSON.parse(await fs.readFile(await slackDownload.path(),'utf8'));
+    assert.equal(slackReport.profiles.find(p=>p.provider==='slack').provider_live_health,'unknown');
+    assert.ok(!JSON.stringify(slackReport).includes('E123ABC'));
+    await page.getByRole('button',{name:'Remove configuration'}).click();
+    await page.locator('#profiles').getByText('No configured REST feeds.').waitFor();
+    await page.locator('#slackMode').selectOption('channel_activity');
+    assert.ok(await page.locator('#slackChannel').isEnabled());
+    assert.ok(await page.locator('#slackOrg').isDisabled());
+    assert.equal(await page.locator('#slackCase').inputValue(),'channel');
     await page.addScriptTag({content:await fs.readFile(require.resolve('axe-core/axe.min.js'),'utf8')});
     const axe=await page.evaluate(()=>window.axe.run(document.querySelector('main'),{runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21a','wcag21aa']}}));
     assert.deepEqual(axe.violations.map(v=>v.id),[]);

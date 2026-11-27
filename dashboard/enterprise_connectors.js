@@ -101,8 +101,8 @@
     for(const p of feeds.profiles){
       const card=el('article');card.className='profile';card.append(el('h3',p.config.name),
         el('p',p.profile_id+' · revision '+p.revision+' · '+p.status),
-        table(['Configuration','Value'],[...(p.provider==='google'?[['Provider','Google Workspace audit'],['Application',p.config.application],['Customer',p.config.customer_id],['User scope',p.config.user_key],['Case notion',p.config.case_basis],['Reporting lag (minutes)',p.config.ingestion_lag_minutes]]:p.provider==='sql'?[['Provider','Native SQL'],['Source alias',p.config.source_alias],['Engine',p.config.engine],['Reviewed source definition',p.config.source_sha256],['Retained schema pin',p.source_schema_sha256||'No successful snapshot yet']]:[['Fixed endpoint',p.config.endpoint]]),['Credential binding available',p.credential_binding_available],['Change window (hours)',p.config.window_hours],['Overlap (minutes)',p.config.overlap_minutes],['Last attempt',p.last_attempt_at],['Last successful retention',p.last_success_at],['Checkpoint',p.checkpoint],['Retained log',p.log_id],['Last result',p.last_result?JSON.stringify(p.last_result):null]]));
-      const read=check(p.provider==='google'?'Authorize one bounded Google audit read for the exact customer, application and user scope.':p.provider==='sql'?'Authorize one bounded read-only SQL snapshot from the exact approved source.':'Authorize one bounded read from the exact configured endpoint.');
+        table(['Configuration','Value'],[...(p.provider==='google'?[['Provider','Google Workspace audit'],['Application',p.config.application],['Customer',p.config.customer_id],['User scope',p.config.user_key],['Case notion',p.config.case_basis],['Reporting lag (minutes)',p.config.ingestion_lag_minutes]]:p.provider==='slack'?[['Provider','Slack native'],['Mode',p.config.mode],['Enterprise',p.config.enterprise_id],['Workspace',p.config.team_id],['Channel',p.config.channel_id],['Case notion',p.config.case_basis],['Audit action filters',p.config.actions.join(', ')||'All'],['Audit actor filter',p.config.actor_id],['Reporting lag (minutes)',p.config.ingestion_lag_minutes]]:p.provider==='sql'?[['Provider','Native SQL'],['Source alias',p.config.source_alias],['Engine',p.config.engine],['Reviewed source definition',p.config.source_sha256],['Retained schema pin',p.source_schema_sha256||'No successful snapshot yet']]:[['Fixed endpoint',p.config.endpoint]]),['Credential binding available',p.credential_binding_available],['Change window (hours)',p.config.window_hours],['Overlap (minutes)',p.config.overlap_minutes],['Last attempt',p.last_attempt_at],['Last successful retention',p.last_success_at],['Checkpoint',p.checkpoint],['Retained log',p.log_id],['Last result',p.last_result?JSON.stringify(p.last_result):null]]));
+      const read=check(p.provider==='google'?'Authorize one bounded Google audit read for the exact customer, application and user scope.':p.provider==='slack'?'Authorize one bounded read from the exact selected Slack scope.':p.provider==='sql'?'Authorize one bounded read-only SQL snapshot from the exact approved source.':'Authorize one bounded read from the exact configured endpoint.');
       const retain=check('Authorize retention of the selected mapped events locally.');
       const run=button('Run next window',()=>action(async()=>{
         if(!read.box.checked||!retain.box.checked)throw Error('Confirm both read and retention.');
@@ -173,6 +173,34 @@
         confirm_activity_labels:$('sqlRetention').checked});
       $('sqlConfirm').checked=$('sqlRetention').checked=false;
       return 'SQL profile saved. No source was read.';
+    });
+  };
+  function slackMode(){
+    const audit=$('slackMode').value==='enterprise_audit';
+    const choices=audit?[['actor','Audit actor'],['entity','Audit entity'],['location','Audit location']]:[['channel','Channel'],['thread','Reported thread']];
+    $('slackCase').replaceChildren(...choices.map(([value,label])=>{const o=el('option',label);o.value=value;return o;}));
+    for(const id of ['slackTeam','slackChannel','slackTransient'])$(id).disabled=audit;
+    for(const id of ['slackActions','slackActor','slackOrg'])$(id).disabled=!audit;
+    $('slackEnterprise').required=audit;
+    $('slackTeam').required=$('slackChannel').required=!audit;
+  }
+  $('slackMode').onchange=slackMode;
+  slackMode();
+  $('slackCreate').onsubmit=event=>{
+    event.preventDefault();
+    action(async()=>{
+      const audit=$('slackMode').value==='enterprise_audit';
+      await api(base+'/slack',{name:$('slackName').value,mode:$('slackMode').value,
+        credential_env:$('slackEnv').value,enterprise_id:$('slackEnterprise').value.trim()||null,
+        team_id:audit?null:$('slackTeam').value.trim(),channel_id:audit?null:$('slackChannel').value.trim(),
+        case_basis:$('slackCase').value,actions:audit?$('slackActions').value.split(',').map(s=>s.trim()).filter(Boolean):[],
+        actor_id:audit?$('slackActor').value.trim()||null:null,initial_since:$('slackSince').value,
+        window_hours:Number($('slackWindow').value),overlap_minutes:Number($('slackOverlap').value),
+        ingestion_lag_minutes:Number($('slackLag').value),page_size:Number($('slackPage').value),
+        confirm_configuration:$('slackConfirm').checked,confirm_retention:$('slackRetention').checked,
+        confirm_org_audit:audit&&$('slackOrg').checked,confirm_transient_message_content:!audit&&$('slackTransient').checked});
+      for(const id of ['slackConfirm','slackRetention','slackOrg','slackTransient'])$(id).checked=false;
+      return 'Slack profile saved. No source was read.';
     });
   };
   $('refresh').onclick=load;
