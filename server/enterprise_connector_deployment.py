@@ -9,9 +9,7 @@ from pathlib import Path
 import stat
 import time
 
-from pydantic import ValidationError
-
-from gateway.connector_jobs import Receipt, Claim
+from gateway.connector_jobs import Receipt
 
 MAX_OUTBOX=8192
 
@@ -117,7 +115,7 @@ def explicit_recording():
         if len(raw)>1024*1024:
             return False
         state=json.loads(raw,object_pairs_hook=_pairs)
-        return isinstance(state,dict) and state.get("version")==1 and state.get("state")=="recording"
+        return isinstance(state,dict) and type(state.get("version")) is int and state.get("version")==1 and state.get("state")=="recording"
     except (ValueError,TypeError,OSError,AttributeError,RecursionError):
         return False
 
