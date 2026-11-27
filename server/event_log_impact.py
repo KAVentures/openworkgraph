@@ -230,8 +230,10 @@ def _split(rows, at: datetime, start: datetime | None, end: datetime | None, rec
     return before, after, left
 
 
-def _population(conn, log_id, parsed, at, window):
+def _population(conn, log_id, parsed, at, window, *, max_cases=None):
     _case_values(conn, parsed)
+    if max_cases is not None and conn.execute("SELECT count(*) FROM impact_cases").fetchone()[0]>max_cases:
+        raise workspace.EventLogWorkspaceError("case mix review exceeds the bounded projected case population")
     rows = conn.execute("SELECT case_id, started, ended, value FROM impact_cases ORDER BY case_id").fetchall()
     if not rows:
         raise workspace.EventLogWorkspaceError("the log has no cases to compare")

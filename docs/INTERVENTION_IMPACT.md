@@ -146,3 +146,6 @@ to selected groups, cases outside both explicitly chosen groups, and
 included/excluded selected-group cases. The total projected count is
 bound to the evidence pin. This makes cohort exclusions visible without
 including outside-cohort case identifiers in the reviewed inventory.
+
+
+For common-support standardization, composition decomposition and exact stratum evidence, see [Intervention case mix](INTERVENTION_CASE_MIX.md).
