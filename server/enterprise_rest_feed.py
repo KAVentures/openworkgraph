@@ -228,6 +228,8 @@ def _public(p,now):
         out["credential_binding_available"]=True
     except FeedError:
         out["credential_binding_available"]=False
+    from .enterprise_connector_rotation import metadata
+    out["credential_management"]=metadata(p)
     out.update(provider_live_health="unknown", source_completeness_verified=False,
                credentials_exposed=False, execution_authorized=False)
     return out
