@@ -41,7 +41,7 @@ from .db import DATA_DIR
 
 FORMAT = "openworkgraph.local-schedules.v1"
 KINDS = ("retained_jira_profile", "event_log_signals", "event_log_report", "local_backup", "event_log_folder_feed",
-         "event_log_agent_runs")
+         "event_log_agent_runs", "enterprise_rest_feed")
 MIN_BACKUP_INTERVAL_MINUTES = 24 * 60
 MIN_INTERVAL_MINUTES = 15
 MAX_INTERVAL_MINUTES = 7 * 24 * 60
@@ -252,7 +252,8 @@ def _report_scope(log_id: str, scope: Any) -> dict[str, Any]:
 def create(kind: str, target_id: str, *, interval_minutes: int, confirm_scheduled_runs: bool,
            confirm_unencrypted_local_backup: bool = False,
            quiet_hours: dict[str, str] | None = None,
-           report_scope: dict[str, Any] | None = None) -> dict[str, Any]:
+           report_scope: dict[str, Any] | None = None,
+           confirm_rest_read_retention: bool = False) -> dict[str, Any]:
     if confirm_scheduled_runs is not True:
         raise ScheduleError("explicit confirmation required to run this job on a schedule")
     if kind not in KINDS:
@@ -271,6 +272,15 @@ def create(kind: str, target_id: str, *, interval_minutes: int, confirm_schedule
         if kind != "event_log_report":
             raise ScheduleError("report scope applies only to event log report jobs")
         report_scope = _report_scope(target_id, report_scope)
+    rest_pin = None
+    if kind == "enterprise_rest_feed":
+        if confirm_rest_read_retention is not True:
+            raise ScheduleError("explicit recurring REST source read and local retention confirmation required")
+        from . import enterprise_rest_feed as rest
+        try:
+            rest_pin = rest.schedule_pin(target_id)
+        except rest.FeedError as exc:
+            raise ScheduleError(exc.code) from None
     _check_target(kind, target_id)
     if kind == "local_backup":
         _check_backup_location()
@@ -294,6 +304,7 @@ def create(kind: str, target_id: str, *, interval_minutes: int, confirm_schedule
                 **({"quiet_hours": quiet} if quiet is not None else {}),
                 **({"report_scope": report_scope} if report_scope is not None else {}),
                 "last_result": None, "consecutive_failures": 0, "paused_reason": None, "history": [],
+                **({"rest_profile_revision": rest_pin, "rest_read_retention_confirmed": True} if rest_pin is not None else {}),
                 **({"unencrypted_local_backup_acknowledged": True} if kind == "local_backup" else {}),
                 **({"signal_rules_fingerprint": signal_pin["fingerprint"],
                     "signal_rules_count": signal_pin["count"]} if signal_pin is not None else {})}
@@ -334,6 +345,8 @@ def update(schedule_id: str, *, enabled: bool | None = None, interval_minutes: i
             item["signal_rules_count"] = reapproved_pin["count"]
             if item.get("paused_reason") == "signal_rules_changed_requires_reapproval":
                 item["paused_reason"] = None
+        elif item.get("paused_reason") == "rest_profile_changed_requires_reapproval" and enabled is True:
+            raise ScheduleError("remove the old schedule and explicitly approve the current REST profile")
         elif item.get("paused_reason") == "signal_rules_changed_requires_reapproval" and enabled is True:
             raise ScheduleError("review and explicitly reapprove current signal rules first")
         if interval_minutes is not None:
@@ -388,6 +401,10 @@ def _check_backup_location() -> None:
 
 
 def _check_target(kind: str, target_id: str) -> None:
+    if kind == "enterprise_rest_feed":
+        # The pinned execution path handles disabled/deleted profiles and
+        # revoked credentials without deleting an operator audit history.
+        return
     if kind == "local_backup":
         if target_id != "local":
             raise ScheduleError("local backup target must be local")
@@ -454,6 +471,8 @@ def _run_scoped_report(item: dict[str, Any]) -> tuple[str, float]:
 
 def _run_job(kind: str, target_id: str) -> tuple[str, float]:
     """Run one job; returns (outcome code, provider retry-after seconds)."""
+    if kind == "enterprise_rest_feed":
+        return "failed:rest_schedule_pin_required", 0.0
     if kind == "local_backup":
         if target_id != "local":
             return "failed:invalid_local_backup_target", 0.0
@@ -549,6 +568,14 @@ def run_due(now: float | None = None, runner: Runner | None = None) -> list[dict
                 try:
                     if runner is _run_job and item["kind"] == "event_log_signals":
                         outcome, retry_after = _run_pinned_signal_job(item)
+                    elif runner is _run_job and item["kind"] == "enterprise_rest_feed":
+                        from . import enterprise_rest_feed as rest
+                        if item.get("rest_read_retention_confirmed") is not True:
+                            outcome, retry_after = "paused:rest_profile_changed", 0.0
+                        elif not _recording():
+                            outcome, retry_after = "skipped_recording_paused", 0.0
+                        else:
+                            outcome, retry_after = rest.run_scheduled(item["target_id"], item.get("rest_profile_revision"))
                     elif runner is _run_job and item["kind"] == "event_log_report" and "report_scope" in item:
                         outcome, retry_after = _run_scoped_report(item)
                     else:
@@ -573,6 +600,11 @@ def run_due(now: float | None = None, runner: Runner | None = None) -> list[dict
                     if outcome.startswith("failed") and retry_after > 0:
                         live["next_run_epoch"] = max(
                             live.get("next_run_epoch") or 0, finished + retry_after)
+                    _write(data)
+                    ran.append({"schedule_id": live["schedule_id"], "outcome": outcome})
+                    continue
+                if outcome == "paused:rest_profile_changed":
+                    live.update(enabled=False, paused_reason="rest_profile_changed_requires_reapproval", next_run_epoch=None)
                     _write(data)
                     ran.append({"schedule_id": live["schedule_id"], "outcome": outcome})
                     continue
