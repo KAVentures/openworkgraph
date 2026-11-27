@@ -136,10 +136,41 @@ async function loadFollowups(){
         const baseline=await readRequest(baselineFile),subsequent=await readRequest(laterFile);
         const g=await api(packetPath()+'/'+p.packet_id+'/mapping-guidance',{expected_queue_revision:active.revision,
           expected_packet_revision:p.revision,baseline,subsequent,confirm_mapping_inspection:true});
-        guidance=g;const choices=new Map(),caseChoices=new Map(),selectorChoices=new Map(),dependent=el('div');
+        guidance=g;const choices=new Map(),caseChoices=new Map(),selectorChoices=new Map(),dependent=el('div'),feasibilityReport=el('div');
+        let checked=null;
+        function summarizeFeasibility(title,result){
+          const section=el('section');section.append(el('h5',title),
+            el('p',(result.feasible?'Feasible: ':'Blocked: ')+result.matched_count+' / '+result.required_count+' can be assigned distinct candidates.'));
+          if(result.hall_witness){
+            const w=result.hall_witness;
+            section.append(el('p','Conflict: '+w.left.length+' original records have only '+w.neighbors.length+' distinct remaining candidates. Shortfall '+w.deficit+'.'),
+              el('p','Original IDs: '+w.left.join(', ')),el('p','Remaining candidate IDs: '+(w.neighbors.join(', ')||'none')));
+          }else{
+            for(const [id,options] of Object.entries(result.allowed)){
+              section.append(el('p',id+' — '+options.length+' feasible remaining option(s): '+options.join(', ')));
+            }
+          }
+          return section;
+        }
+        const checkFeasibility=btn('Check remaining mapping feasibility',async()=>{
+          if(guidance!==g||!inspect.input.checked)throw Error('Refresh the reviewed guidance first.');
+          const fixed_sources=[...choices].filter(([,s])=>s.value).map(([before,s])=>({before,after:s.value}));
+          const fixed_cases=[...caseChoices].filter(([,s])=>s.value).map(([before,s])=>({before,after:s.value}));
+          checked=null;submitConsent.input.checked=false;submit.disabled=true;
+          feasibilityReport.replaceChildren();
+          const result=await api(packetPath()+'/'+p.packet_id+'/mapping-feasibility',{
+            expected_queue_revision:active.revision,expected_packet_revision:p.revision,baseline,subsequent,
+            confirm_mapping_inspection:true,expected_guidance_sha256:g.guidance_sha256,fixed_sources,fixed_cases});
+          if(guidance!==g)return;
+          checked=result;
+          feasibilityReport.append(summarizeFeasibility('Remaining source choices',result.source_feasibility));
+          if(result.case_feasibility)feasibilityReport.append(summarizeFeasibility('Remaining linked-case choices',result.case_feasibility));
+          else feasibilityReport.append(el('p','Complete a feasible source mapping to assess linked-case choices.'));
+          feasibilityReport.append(el('p','Feasibility digest: '+result.feasibility_sha256+' · not identity verification.'));
+        });
         const submitConsent=approval('I reviewed the explicit source, case and activity mappings; correspondence is my assertion, not independent verification.');
         const submit=btn('Preview guided reassessment',async()=>{
-          if(guidance!==g||!submitConsent.input.checked)throw Error('Review and approve the mappings first.');
+          if(guidance!==g||!submitConsent.input.checked||!checked?.source_feasibility.feasible||!checked?.case_feasibility?.feasible)throw Error('Check mapping feasibility and approve the mappings first.');
           const jobs=g.baseline_sources.map(a=>({before:a.job_id,after:choices.get(a.job_id).value}));
           const cases=g.baseline_cases.map(a=>({before:a.linked_case_id,after:caseChoices.get(a.linked_case_id).value}));
           if(jobs.some(x=>!x.after)||new Set(jobs.map(x=>x.after)).size!==jobs.length||
@@ -157,7 +188,7 @@ async function loadFollowups(){
             jobs,cases});
         });
         submit.disabled=true;
-        function changed(){invalidateComparison();submitConsent.input.checked=false;submit.disabled=true;}
+        function changed(){invalidateComparison();checked=null;feasibilityReport.replaceChildren();submitConsent.input.checked=false;submit.disabled=true;}
         function renderDependents(){
           changed();dependent.replaceChildren();caseChoices.clear();selectorChoices.clear();
           const map=new Map([...choices].map(([k,s])=>[k,s.value]));
@@ -189,15 +220,15 @@ async function loadFollowups(){
         }
         mappingRoot.append(el('h4','Source correspondence'),el('p','Guidance digest: '+g.guidance_sha256));
         for(const old of g.baseline_sources){
-          const allowed=g.source_candidates.find(x=>x.before===old.job_id)?.candidates||[];
+          const allowed=g.source_feasibility.feasible?(g.source_feasibility.allowed[old.job_id]||[]):(g.source_candidates.find(x=>x.before===old.job_id)?.candidates||[]);
           const options=g.subsequent_sources.filter(x=>allowed.includes(x.job_id)).map(x=>[x.job_id,
             x.job_id+' · '+x.provider+' · '+x.since+' – '+x.until+' · '+x.event_count+' events']);
           const input=choose(old.job_id+' · '+old.provider,options);choices.set(old.job_id,input.s);
           input.s.onchange=renderDependents;mappingRoot.append(input.l);
           if(!options.length)mappingRoot.append(el('p','No eligible later source for this publication.'));
         }
-        submitConsent.input.onchange=()=>{invalidateComparison();submit.disabled=busy||!submitConsent.input.checked;};
-        mappingRoot.append(dependent);renderDependents();
+        submitConsent.input.onchange=()=>{invalidateComparison();submit.disabled=busy||!submitConsent.input.checked||!checked?.source_feasibility.feasible||!checked?.case_feasibility?.feasible;};
+        mappingRoot.append(summarizeFeasibility('Initial source feasibility',g.source_feasibility),dependent,checkFeasibility,feasibilityReport);renderDependents();
       });
       prepare.disabled=true;
       baselineFile.onchange=laterFile.onchange=inspect.input.onchange=()=>{
