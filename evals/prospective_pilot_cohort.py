@@ -173,7 +173,62 @@ def inspect(plan, observations, *, expected_plan_sha256, confirmed):
     return {**body,"coverage_sha256":digest(body)}
 
 
-def _load(path):
+def score(plan, truth, runs, dispositions, *, expected_plan_sha256, confirmed):
+    """Bind actual submitted truth and reviewed runs to the frozen denominator.
+
+    The canonical existing product-value scorer is invoked only on complete
+    paired coverage. No new product gate is introduced here.
+    """
+    from . import product_value
+
+    if confirmed is not True:
+        raise ValueError("explicit private scoring confirmation required")
+    enrolled = _verify(plan, expected_plan_sha256)
+    indexed_truth = _index(truth)
+    if set(indexed_truth) != set(enrolled):
+        raise ValueError("truth must cover the exact frozen cohort")
+    for eid,row in indexed_truth.items():
+        if digest(row) != enrolled[eid]["truth_sha256"]:
+            raise ValueError("ground truth differs from frozen declaration")
+    exact(runs, ARMS)
+    if not isinstance(dispositions,list) or any(
+            not isinstance(r,dict) or r.get("status") not in MISSING for r in dispositions):
+        raise ValueError("only missing dispositions may be supplied separately")
+    observations = list(dispositions)
+    for arm in ARMS:
+        for eid,run in _index(runs[arm]).items():
+            if eid not in enrolled:
+                raise ValueError("unplanned completed episode")
+            if any(run.get(k)!=enrolled[eid][k] for k in ("model_id","source_state_id")):
+                raise ValueError("run model or source differs from frozen declaration")
+            reviewed = product_value._validated_review(run,episode_id=eid,arm=arm)
+            observations.append({"episode_id":eid,"arm":arm,"status":"reviewed",
+                                 "model_id":run["model_id"],"source_state_id":run["source_state_id"],
+                                 "truth_sha256":enrolled[eid]["truth_sha256"],
+                                 "review_sha256":digest(run),
+                                 **{k:reviewed[k] for k in OUTCOMES}})
+    coverage = inspect(plan, observations,expected_plan_sha256=expected_plan_sha256,confirmed=True)
+    full = coverage["complete_coverage"]
+    report = product_value.report(truth, *(runs[a] for a in ARMS)) if full else None
+    body = {"format":"owg.prospective-pilot-score.v1","coverage":coverage,
+            "truth_sha256":digest(truth),"run_sha256":{a:digest(runs[a]) for a in ARMS},
+            "canonical_report":report,"canonical_scorer_invoked":full,
+            "decision_withheld_for_incomplete_coverage":not full,
+            "provenance_verified":False,"product_effectiveness_verified":False}
+    return {**body,"score_sha256":digest(body)}
+
+
+def _load_jsonl(path):
+    with path.open("rb") as f:
+        data=f.read(MAX_BYTES+1)
+    if len(data)>MAX_BYTES:
+        raise ValueError("input too large")
+    rows=[_parse(line) for line in data.splitlines() if line.strip()]
+    _index(rows)
+    return rows
+
+
+def _parse(data):
     def unique(pairs):
         out = {}
         for k,v in pairs:
@@ -183,12 +238,15 @@ def _load(path):
         return out
     def invalid(_):
         raise ValueError("nonfinite JSON value")
+    return json.loads(data,object_pairs_hook=unique,parse_constant=invalid)
+
+
+def _load(path):
     with path.open("rb") as f:
         data = f.read(MAX_BYTES+1)
     if len(data)>MAX_BYTES:
         raise ValueError("input too large")
-    return json.loads(data, object_pairs_hook=unique, parse_constant=invalid)
-
+    return _parse(data)
 
 def _write(path,value):
     data = canonical(value)+b"\n"
@@ -207,14 +265,28 @@ def main(argv=None):
     b.add_argument("--plan",type=Path,required=True)
     b.add_argument("--plan-sha256",required=True)
     b.add_argument("--observations",type=Path,required=True)
-    for cmd in (a,b):
+    s=sub.add_parser("score")
+    s.add_argument("--plan",type=Path,required=True)
+    s.add_argument("--plan-sha256",required=True)
+    s.add_argument("--episodes",type=Path,required=True)
+    s.add_argument("--dispositions",type=Path,required=True)
+    for arm in ARMS:
+        s.add_argument("--"+arm,type=Path,required=True)
+    for cmd in (a,b,s):
         cmd.add_argument("--out",type=Path,required=True)
         cmd.add_argument("--confirm",action="store_true",required=True)
     args=parser.parse_args(argv)
     try:
-        result=(freeze(_load(args.roster),confirmed=args.confirm) if args.command=="freeze"
-                else inspect(_load(args.plan),_load(args.observations),
-                             expected_plan_sha256=args.plan_sha256,confirmed=args.confirm))
+        if args.command=="freeze":
+            result=freeze(_load(args.roster),confirmed=args.confirm)
+        elif args.command=="inspect":
+            result=inspect(_load(args.plan),_load(args.observations),
+                           expected_plan_sha256=args.plan_sha256,confirmed=args.confirm)
+        else:
+            result=score(_load(args.plan),_load_jsonl(args.episodes),
+                         {a:_load_jsonl(getattr(args,a)) for a in ARMS},
+                         _load(args.dispositions),expected_plan_sha256=args.plan_sha256,
+                         confirmed=args.confirm)
         _write(args.out,result)
     except (ValueError,TypeError,OSError,RecursionError,OverflowError):
         parser.exit(2,"Pilot cohort operation refused: invalid evidence, pin, or file access.\n")
