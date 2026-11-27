@@ -12543,7 +12543,7 @@
     if(minimum>1)when.minimum_cases=minimum;
     if(['duration_over','open_longer_than'].includes(values.condition)){if(!(hours>0))throw new Error('Enter the number of hours.');when.seconds=Math.round(hours*3600);}
     if(['contains_activity','lacks_activity'].includes(values.condition))when.activity=values.activity;
-    if(values.condition==='open_longer_than'){when.end_activities=String(values.ends||'').split(',').map(x=>x.trim()).filter(Boolean);if(!when.end_activities.length)throw new Error('List the activities that end a case.');}
+    if(values.condition==='open_longer_than'){if(values.pendingEnd)throw new Error('Add the entered end activity before continuing.');when.end_activities=values.ends;if(!when.end_activities.length)throw new Error('Add the activities that end a case.');}
     return {name,when};
   }
 
@@ -12624,7 +12624,13 @@
     const threshold=input('owgSignalThreshold','number');threshold.min='0';threshold.step='any';
     const hours=input('owgSignalHours','number');hours.min='0';hours.step='any';
     const activity=select('owgSignalActivity',activityNames.slice(0,500).map(a=>[a,a]));
-    const ends=input('owgSignalEnds','text','Close, Cancel');
+    const ends=input('owgSignalEnds','text','Choose or enter one exact activity');ends.maxLength=200;
+    const endLabels=[],endList=el('ul');endList.id='owgSignalEndLabels';
+    const addEnd=button('Add end activity','secondary');addEnd.id='owgSignalAddEnd';
+    const endStatus=el('div',null,'muted');endStatus.setAttribute('role','status');
+    const endOptions=document.createElement('datalist');endOptions.id='owgSignalEndsList';
+    activityNames.slice(0,500).forEach(a=>{const option=document.createElement('option');option.value=a;endOptions.appendChild(option);});
+    ends.setAttribute('list',endOptions.id);
     const minimum=input('owgSignalMinimumCases','number');minimum.min='1';minimum.max='1000000000';minimum.step='1';minimum.value='1';
     const activeSignalCohort=filterOn()?globalCohort():null;
     const signalScope=select('owgSignalScope',[['all','All cases'],['active','Current case filter']]);
@@ -12634,7 +12640,8 @@
     const previewStatus=el('div',null,'muted');previewStatus.id='owgSignalPreviewStatus';previewStatus.setAttribute('role','status');
     const previewEvidence=el('div');previewEvidence.id='owgSignalPreviewEvidence';
     const evaluate=button('Check signals');evaluate.id='owgSignalEvaluate';
-    const fields={condition:field('Condition',condition),metric:field('KPI',metric),operator:field('Comparison',operator),threshold:field('Threshold',threshold),hours:field('Hours',hours),activity:field('Activity',activity),ends:field('Activities that end a case',ends),minimum:field('Minimum matching cases',minimum)};
+    const fields={condition:field('Condition',condition),metric:field('KPI',metric),operator:field('Comparison',operator),threshold:field('Threshold',threshold),hours:field('Hours',hours),activity:field('Activity',activity),ends:field('Activity that ends a case',ends),minimum:field('Minimum matching cases',minimum)};
+    fields.ends.append(addEnd,endOptions,endList,endStatus);
     const sync=()=>{const k=kind.value==='kpi';show(fields.minimum,!k);show(fields.condition,!k);show(fields.metric,k);show(fields.operator,k);show(fields.threshold,k);
       show(fields.hours,k?metric.value==='sla_breach_rate':['duration_over','open_longer_than'].includes(condition.value));
       show(fields.activity,!k&&['contains_activity','lacks_activity'].includes(condition.value));show(fields.ends,!k&&condition.value==='open_longer_than');};
@@ -13151,7 +13158,7 @@
           :w.kind==='conformance'?w.metric.replace(/_/g,' ')+' on '+w.net_name+' '+w.operator+' '+w.threshold+(w.recent_days?' (cases started in the last '+w.recent_days+' days)':'')
           :w.kind==='due_date'?(w.metric==='open_overdue_cases'?'open cases overdue for '+w.activity:'late share of '+w.activity)+' '+w.operator+' '+w.threshold+(w.due_attribute?' (due: '+w.due_attribute+')':' (due '+w.due_days+' days after start)')
           :w.kind==='compliance'?'compliance rule'+(w.rule&&w.rule.kind?': '+String(w.rule.kind).replace(/_/g,' '):'')
-          :w.condition.replace(/_/g,' ')+(w.activity?' '+w.activity:'')+(w.seconds?' '+duration(w.seconds):'');
+          :w.condition.replace(/_/g,' ')+(w.activity?' '+w.activity:'')+(w.seconds?' '+duration(w.seconds):'')+(w.end_activities?.length?' · ends: '+w.end_activities.map(value=>JSON.stringify(value)).join(', '):'');
         const scoped=Object.keys(rule.cohort||{}).some(key=>key!=='label');
         const scope=(scoped?'Saved case filter':'All cases')+(rule.case_type?' · '+rule.case_type:'');
         const minimumText=w.minimum_cases>1?' · minimum '+Number(w.minimum_cases).toLocaleString()+' cases':'';
@@ -13164,13 +13171,25 @@
       await refreshDelivery().catch(error=>{deliveryStatus.textContent=error.message;});
     }
     const draftRule=()=>{
-      const values={name:name.value,kind:kind.value,condition:condition.value,metric:metric.value,operator:operator.value,threshold:threshold.value,hours:hours.value,activity:activity.value,ends:ends.value,minimumCases:minimum.value};
+      const values={name:name.value,kind:kind.value,condition:condition.value,metric:metric.value,operator:operator.value,threshold:threshold.value,hours:hours.value,activity:activity.value,ends:[...endLabels],pendingEnd:ends.value.length>0,minimumCases:minimum.value};
       const body=signalRule(values);if(state.caseType)body.case_type=state.caseType;
       if(activeSignalCohort&&signalScope.value==='active')body.cohort=activeSignalCohort;
       return body;
     };
     let previewTurn=0;
     const clearPreview=()=>{++previewTurn;previewStatus.textContent='';previewEvidence.replaceChildren();preview.disabled=false;};
+    const drawEnds=()=>endList.replaceChildren(...endLabels.map((label,index)=>{
+      const item=el('li',JSON.stringify(label)+' '),remove=button('Remove','secondary');
+      remove.setAttribute('aria-label','Remove signal end activity '+label);
+      remove.onclick=()=>{endLabels.splice(index,1);drawEnds();clearPreview();};item.appendChild(remove);return item;
+    }));
+    addEnd.onclick=()=>{
+      const value=ends.value;
+      if(!value.length){endStatus.textContent='Enter an activity label.';return;}
+      if(endLabels.includes(value)){endStatus.textContent='This activity is already selected.';return;}
+      if(endLabels.length>=20){endStatus.textContent='Select at most 20 end activities.';return;}
+      endLabels.push(value);ends.value='';endStatus.textContent='';drawEnds();clearPreview();
+    };
     row.addEventListener('input',clearPreview);row.addEventListener('change',clearPreview);
     preview.onclick=async()=>{
       const ticket=++previewTurn;
