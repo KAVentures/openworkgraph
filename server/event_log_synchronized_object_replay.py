@@ -348,6 +348,7 @@ def review(log_id, value):
             conn.close()
     model_sha = _digest(req.model.model_dump(mode="json"))
     pin = _digest({"format":FORMAT,"log_id":log_id,"model_sha256":model_sha,
+                   "retained_totals":[log["events"],log["objects"]],
                    "objects":list(objects.items()),
                    "events":[[e.id,e.activity,_stamp(e.timestamp),e.objects] for e in events],
                    "limits":[MAX_EVENTS,MAX_OBJECTS,MAX_LINKS,MAX_MARKINGS,MAX_WORK,MAX_COMPONENT_WORK]})
