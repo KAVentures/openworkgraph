@@ -16,10 +16,10 @@ def plan(n=3,groups=1):
                           for i in range(n)],confirmed=True)
 
 
-def setup(p=None):
+def setup(p=None,review_protocol="single"):
     p=p or plan()
     kw={"expected_plan_sha256":p["plan_sha256"],"confirmed":True}
-    s=execution.schedule(p,seed="a"*64,**kw)
+    s=execution.schedule(p,seed="a"*64,review_protocol=review_protocol,**kw)
     kw["expected_schedule_sha256"]=s["schedule_sha256"]
     ledger=execution.initialize(p,s,**kw)
     return p,s,ledger
@@ -147,7 +147,7 @@ def test_cli_exclusive_snapshots(tmp_path):
     plan_path=tmp_path/"plan.json";cohort._write(plan_path,p)
     schedule_path=tmp_path/"schedule.json";ledger_path=tmp_path/"ledger.json"
     common=["--plan",str(plan_path),"--plan-sha256",p["plan_sha256"],"--confirm"]
-    assert execution.main(["schedule",*common,"--seed","a"*64,"--out",str(schedule_path)])==0
+    assert execution.main(["schedule",*common,"--seed","a"*64,"--review-protocol","single","--out",str(schedule_path)])==0
     assert cohort._load(schedule_path)==s
     common+=["--schedule",str(schedule_path),"--schedule-sha256",s["schedule_sha256"]]
     assert execution.main(["initialize",*common,"--out",str(ledger_path)])==0
@@ -181,3 +181,21 @@ def test_withdraw_remaining_keeps_completed_history_and_no_material_coverage():
     assert all(coverage["coverage"]["bounds"][arm]["continuation_success"]["unknown"]==1 for arm in cohort.ARMS)
     with pytest.raises(ValueError):execution.withdraw_remaining(p,s,next,episode_id=eid,declared_at_ms=5,**kwargs(p,s,next))
     with pytest.raises(ValueError):append(p,s,next,[start(p,eid,b,5)])
+
+
+def test_preregistered_protocol_and_canonical_numeric_metadata():
+    p,s,l=setup(review_protocol="dual_adjudication")
+    assert s["review_protocol"]=="dual_adjudication"
+    with pytest.raises(ValueError):
+        execution.schedule(p,expected_plan_sha256=p["plan_sha256"],seed="a"*64,
+                           confirmed=True,review_protocol="choose_after_review")
+    changed=deepcopy(s)
+    changed["episodes"][0]["block"]=True
+    assert changed==s  # Python equality is weaker than canonical JSON equality.
+    with pytest.raises(ValueError):
+        execution.initialize(p,changed,expected_plan_sha256=p["plan_sha256"],
+                             expected_schedule_sha256=s["schedule_sha256"],confirmed=True)
+    changed=deepcopy(s);changed["review_protocol"]="single"
+    with pytest.raises(ValueError):
+        execution.initialize(p,changed,expected_plan_sha256=p["plan_sha256"],
+                             expected_schedule_sha256=s["schedule_sha256"],confirmed=True)
