@@ -32,7 +32,9 @@ _LINKS = """CREATE OR REPLACE TEMP TABLE dl AS
   WHERE eo.log_id = ?"""
 
 
-def flattening(log_id: str) -> dict[str, Any]:
+def flattening(log_id: str, object_type: str | None = None) -> dict[str, Any]:
+    if object_type is not None and (not isinstance(object_type, str) or not 1 <= len(object_type) <= 200):
+        raise workspace.EventLogWorkspaceError('choose a retained object type')
     with workspace._LOCK:
         conn = workspace._connect()
         try:
@@ -40,18 +42,26 @@ def flattening(log_id: str) -> dict[str, Any]:
             conn.execute(_LINKS, [log_id])
             total_events = conn.execute("SELECT count(*) FROM events WHERE log_id = ?", [log_id]).fetchone()[0]
             type_total = conn.execute("SELECT count(DISTINCT object_type) FROM dl").fetchone()[0]
-            types = [r[0] for r in conn.execute(f"""SELECT object_type FROM dl GROUP BY 1
-                ORDER BY count(DISTINCT object_id) DESC, 1 LIMIT {MAX_TYPES}""").fetchall()]
+            if object_type is None:
+                types = [r[0] for r in conn.execute(f"""SELECT object_type FROM dl GROUP BY 1
+                    ORDER BY count(DISTINCT object_id) DESC, 1 LIMIT {MAX_TYPES}""").fetchall()]
+            else:
+                if not conn.execute('SELECT 1 FROM dl WHERE object_type = ? LIMIT 1', [object_type]).fetchone():
+                    raise workspace.EventLogWorkspaceError('the selected object type has no retained events')
+                types = [object_type]
             # Per event and type: how many objects of the type it is linked to.
             conn.execute("""CREATE OR REPLACE TEMP TABLE de AS SELECT object_type, event_id, activity,
                   count(*) AS objects FROM dl GROUP BY 1, 2, 3""")
             conn.execute("""CREATE OR REPLACE TEMP TABLE dr AS SELECT object_type, object_id, activity,
                   count(*) AS repetitions FROM dl GROUP BY 1, 2, 3 HAVING count(*) > 1""")
+            if object_type is not None:
+                conn.execute('DELETE FROM dr WHERE object_type <> ?', [object_type])
             explained, divergence_status = _divergence(conn)
             result = [_one_type(conn, log_id, t, total_events, explained.get(t, {})) for t in types]
             return {
                 "log": info, "events": total_events, "object_types": result,
-                "object_type_count": type_total, "object_types_truncated": type_total > len(types),
+                "object_type_count": type_total, "object_types_truncated": object_type is None and type_total > len(types),
+                **({'selected_object_type': object_type} if object_type is not None else {}),
                 **divergence_status,
                 "interpretation": (
                     "Case analyses flatten the log onto the chosen object type. Events linked to none of its objects "
