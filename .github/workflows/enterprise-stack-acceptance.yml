@@ -126,6 +126,7 @@ jobs:
             tests/test_connector_linked_conformance.py \
             tests/test_connector_exception_triage.py \
             tests/test_connector_exception_followups.py \
+            tests/test_enterprise_evidence_journey.py \
             tests/test_connector_temporal_review.py \
             tests/test_enterprise_connector_integration.py
       - name: Install isolated Chromium runtime
