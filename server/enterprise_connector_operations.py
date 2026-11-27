@@ -25,6 +25,7 @@ PROVIDERS = (
     ("zendesk","Zendesk","selected_ticket_audit"),
     ("sap","SAP S/4HANA","order_to_cash_and_purchase_order_procurement_day_evidence"),
     ("stripe","Stripe","selected_record_evidence"),
+    ("hubspot","HubSpot","native_selected_record_property_history"),
     ("dataverse","Microsoft Dynamics 365 / Dataverse","native_selected_table_audit"),
     ("rest","Customer REST","retained_event_feed"),
     ("google","Google Workspace","native_admin_reports_audit"),

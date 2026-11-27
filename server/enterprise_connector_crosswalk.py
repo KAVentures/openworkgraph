@@ -22,7 +22,7 @@ from server import enterprise_rest_feed as rest
 from server import enterprise_connector_snapshot as snapshots
 from server import event_log_workspace as ws
 
-SUPPORTED={"rest","sql","salesforce","servicenow","sap","dataverse"}
+SUPPORTED={"rest","sql","salesforce","servicenow","sap","dataverse","hubspot"}
 MAX_INPUT=2*1024*1024
 
 
@@ -89,6 +89,13 @@ def native_case(p,row):
         if not selection or not sn.ID.fullmatch(value) or selection["record_ids"] and value not in selection["record_ids"]:
             raise ValueError("native case is outside reviewed source scope")
         return rest._key(p,"servicenow_case",kind+":"+value)
+    if provider=="hubspot":
+        from server import hubspot_history_feed as hs
+        selection=next((x for x in p["config"]["selections"] if x["object_type"]==kind),None)
+        value=hs.record_id(value)
+        if not selection or value not in selection["record_ids"]:
+            raise ValueError("native case is outside reviewed source scope")
+        return rest._key(p,"hubspot_case",kind+":"+value)
     if provider=="dataverse":
         from server import dataverse_audit_feed as dv
         selection=next((x for x in p["config"]["selections"] if x["table"]==kind),None)

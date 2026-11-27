@@ -45,9 +45,9 @@
     $('inventory').replaceChildren();$('profiles').replaceChildren();$('status').textContent='Reading local operational evidence…';
     try{
       const h=threshold();
-      const [r,feeds,grants,sql,sap,dv]=await Promise.all([api(base+'?freshness_hours='+h),api(base+'/rest'),api('/v1/connector-oauth').catch(()=>({connections:[]})),api(base+'/sql/catalog').catch(()=>({sources:[],unavailable:true})),api(base+'/sap/catalog').catch(()=>({sources:[],unavailable:true})),api(base+'/dataverse/catalog').catch(()=>({sources:[],unavailable:true}))]);
+      const [r,feeds,grants,sql,sap,dv,hs]=await Promise.all([api(base+'?freshness_hours='+h),api(base+'/rest'),api('/v1/connector-oauth').catch(()=>({connections:[]})),api(base+'/sql/catalog').catch(()=>({sources:[],unavailable:true})),api(base+'/sap/catalog').catch(()=>({sources:[],unavailable:true})),api(base+'/dataverse/catalog').catch(()=>({sources:[],unavailable:true})),api(base+'/hubspot/catalog').catch(()=>({sources:[],unavailable:true}))]);
       if(turn!==generation)return;
-      latest=r;render(r);renderProfiles(feeds,r);renderGoogleGrants(grants);renderSfGrants(grants);renderSnGrants(grants);renderSqlCatalog(sql);renderSapCatalog(sap);renderDvCatalog(dv);$('download').disabled=false;
+      latest=r;render(r);renderProfiles(feeds,r);renderGoogleGrants(grants);renderSfGrants(grants);renderSnGrants(grants);renderSqlCatalog(sql);renderSapCatalog(sap);renderDvCatalog(dv);renderHsCatalog(hs);$('download').disabled=false;
       $('status').textContent='Local inventory refreshed. No provider reads performed.';
     }catch(error){if(turn===generation)$('status').textContent=error.message;}
     finally{if(turn===generation)$('refresh').disabled=busy;}
@@ -134,6 +134,33 @@
     $('dvReview').append(table(['Reviewed source','Value'],[['Environment',src.origin],['Tenant',src.tenant_id],['Application client',src.client_id],['Organization',src.organization_id],['Application user',src.application_user_id],['Definition SHA-256',src.source_sha256]]));
   }
   $('dvSource').onchange=()=>renderDvReview();
+  const hsObjects=['contacts','companies','deals','tickets'];
+  let hsSources=[];
+  for(const name of hsObjects){
+    const fieldset=el('fieldset');fieldset.append(el('legend',name));
+    const selected=check('Include '+name);selected.box.id='hsSelect'+name;
+    const ids=el('input');ids.id='hsIds'+name;ids.placeholder='Exact comma-separated record IDs';ids.maxLength=2200;ids.disabled=true;
+    const props=el('input');props.id='hsProps'+name;props.placeholder='Selected internal property names';props.maxLength=1700;props.disabled=true;
+    const il=el('label','Record IDs');il.append(ids);const pl=el('label','Property names');pl.append(props);
+    selected.box.onchange=()=>{ids.disabled=props.disabled=!selected.box.checked;ids.required=props.required=selected.box.checked;};
+    fieldset.append(selected.node,il,pl);$('hsObjects').append(fieldset);
+  }
+  function renderHsCatalog(catalog){
+    hsSources=catalog.sources||[];const select=$('hsSource'),previous=select.value;
+    select.replaceChildren();
+    for(const src of hsSources){const o=el('option',src.source_alias);o.value=src.source_alias;o.disabled=!src.credential_available;select.append(o);}
+    const available=hsSources.filter(s=>s.credential_available);
+    if(available.some(s=>s.source_alias===previous))select.value=previous;
+    else if(available.length)select.value=available[0].source_alias;
+    select.disabled=busy||!available.length;renderHsReview(catalog.unavailable);
+  }
+  function renderHsReview(unavailable=false){
+    const src=hsSources.find(s=>s.source_alias===$('hsSource').value&&s.credential_available);
+    $('hsReview').replaceChildren();$('hsConfirm').checked=false;$('hsTicket').checked=false;$('hsCreateButton').disabled=busy||!src;
+    if(!src){$('hsReview').append(el('p',unavailable?'HubSpot catalog unavailable.':'No configured HubSpot source with available credential.'));return;}
+    $('hsReview').append(table(['Reviewed source','Value'],[['Account ID',src.hub_id],['Application ID',src.app_id],['Reviewed scopes',src.scopes.join(', ')],['Definition SHA-256',src.source_sha256]]));
+  }
+  $('hsSource').onchange=()=>renderHsReview();
   let sapSources=[];
   const sapStreams=[['sapPO','purchase_orders'],['sapMovement','material_movements'],['sapInvoice','supplier_invoices']];
   function renderSapCatalog(catalog){
@@ -189,7 +216,7 @@
   }
   $('sqlSource').onchange=()=>{$('sqlConfirm').checked=false;renderSqlReview();};
   async function action(fn){
-    if(busy)return;busy=true;$('createButton').disabled=true;$('googleCreateButton').disabled=true;$('sqlCreateButton').disabled=true;$('sfCreateButton').disabled=true;$('snCreateButton').disabled=true;$('sapCreateButton').disabled=true;$('dvCreateButton').disabled=true;$('refresh').disabled=true;
+    if(busy)return;busy=true;$('createButton').disabled=true;$('googleCreateButton').disabled=true;$('sqlCreateButton').disabled=true;$('sfCreateButton').disabled=true;$('snCreateButton').disabled=true;$('sapCreateButton').disabled=true;$('dvCreateButton').disabled=true;$('hsCreateButton').disabled=true;$('refresh').disabled=true;
     const root=$('profiles');root.querySelectorAll('button').forEach(b=>b.disabled=true);
     try{const r=await fn();$('restStatus').textContent=r;}
     catch(error){$('restStatus').textContent=error.message;}
@@ -200,8 +227,8 @@
     for(const p of feeds.profiles){
       const card=el('article');card.className='profile';card.append(el('h3',p.config.name),
         el('p',p.profile_id+' · revision '+p.revision+' · '+p.status),
-        table(['Configuration','Value'],[...(p.provider==='google'?[['Provider','Google Workspace audit'],['Application',p.config.application],['Customer',p.config.customer_id],['User scope',p.config.user_key],['Case notion',p.config.case_basis],['Reporting lag (minutes)',p.config.ingestion_lag_minutes]]:p.provider==='dataverse'?[['Provider','Dynamics 365 / Dataverse audit'],['Approved source',p.config.source_alias],['Definition SHA-256',p.config.source_sha256],['Selected table and record scope',JSON.stringify(p.config.selections)],['Operation codes',p.config.operations.join(', ')],['Reporting lag (minutes)',p.config.ingestion_lag_minutes]]:p.provider==='sap'?[['Provider','SAP procurement day evidence'],['Approved source',p.config.source_alias],['Definition SHA-256',p.config.source_sha256],['Selected purchase orders',p.config.purchase_orders.join(', ')],['Streams',p.config.streams.join(', ')],['Completed-day lag',p.config.lag_days],['Time precision','Day only; midnight is a storage convention']]:p.provider==='servicenow'?[['Provider','ServiceNow operations'],['Instance',p.config.instance_host],['Reviewed table/field/record scope',JSON.stringify(p.config.selections)],['Require repeat read',p.config.verify_repeat],['Reporting lag (minutes)',p.config.ingestion_lag_minutes]]:p.provider==='salesforce'?[['Provider','Salesforce field history'],['Instance',p.config.instance_host],['Organization',p.config.organization_id],['User',p.config.user_id],['Reviewed object/field/record scope',JSON.stringify(p.config.selections)],['Reporting lag (minutes)',p.config.ingestion_lag_minutes]]:p.provider==='slack'?[['Provider','Slack native'],['Mode',p.config.mode],['Enterprise',p.config.enterprise_id],['Workspace',p.config.team_id],['Channel',p.config.channel_id],['Case notion',p.config.case_basis],['Audit action filters',p.config.actions.join(', ')||'All'],['Audit actor filter',p.config.actor_id],['Reporting lag (minutes)',p.config.ingestion_lag_minutes]]:p.provider==='sql'?[['Provider','Native SQL'],['Source alias',p.config.source_alias],['Engine',p.config.engine],['Reviewed source definition',p.config.source_sha256],['Retained schema pin',p.source_schema_sha256||'No successful snapshot yet']]:[['Fixed endpoint',p.config.endpoint]]),['Credential binding available',p.credential_binding_available],['Change window (hours)',p.config.window_hours],['Overlap (minutes)',p.config.overlap_minutes],['Last attempt',p.last_attempt_at],['Last successful retention',p.last_success_at],['Checkpoint',p.checkpoint],['Retained log',p.log_id],['Last result',p.last_result?JSON.stringify(p.last_result):null]]));
-      const read=check(p.provider==='google'?'Authorize one bounded Google audit read for the exact customer, application and user scope.':p.provider==='dataverse'?'Authorize one bounded read of the approved Dataverse audit scope.':p.provider==='sap'?'Authorize one bounded SAP business-date read for the approved source and selected purchase orders.':p.provider==='servicenow'?'Authorize one bounded read of the exact approved ServiceNow scope.':p.provider==='salesforce'?'Authorize one bounded read of the exact approved Salesforce history scope.':p.provider==='slack'?'Authorize one bounded read from the exact selected Slack scope.':p.provider==='sql'?'Authorize one bounded read-only SQL snapshot from the exact approved source.':'Authorize one bounded read from the exact configured endpoint.');
+        table(['Configuration','Value'],[...(p.provider==='google'?[['Provider','Google Workspace audit'],['Application',p.config.application],['Customer',p.config.customer_id],['User scope',p.config.user_key],['Case notion',p.config.case_basis],['Reporting lag (minutes)',p.config.ingestion_lag_minutes]]:p.provider==='hubspot'?[['Provider','HubSpot property history'],['Approved source',p.config.source_alias],['Definition SHA-256',p.config.source_sha256],['Selected record and property scope',JSON.stringify(p.config.selections)],['Creation evidence',p.config.include_created],['Reporting lag (minutes)',p.config.ingestion_lag_minutes]]:p.provider==='dataverse'?[['Provider','Dynamics 365 / Dataverse audit'],['Approved source',p.config.source_alias],['Definition SHA-256',p.config.source_sha256],['Selected table and record scope',JSON.stringify(p.config.selections)],['Operation codes',p.config.operations.join(', ')],['Reporting lag (minutes)',p.config.ingestion_lag_minutes]]:p.provider==='sap'?[['Provider','SAP procurement day evidence'],['Approved source',p.config.source_alias],['Definition SHA-256',p.config.source_sha256],['Selected purchase orders',p.config.purchase_orders.join(', ')],['Streams',p.config.streams.join(', ')],['Completed-day lag',p.config.lag_days],['Time precision','Day only; midnight is a storage convention']]:p.provider==='servicenow'?[['Provider','ServiceNow operations'],['Instance',p.config.instance_host],['Reviewed table/field/record scope',JSON.stringify(p.config.selections)],['Require repeat read',p.config.verify_repeat],['Reporting lag (minutes)',p.config.ingestion_lag_minutes]]:p.provider==='salesforce'?[['Provider','Salesforce field history'],['Instance',p.config.instance_host],['Organization',p.config.organization_id],['User',p.config.user_id],['Reviewed object/field/record scope',JSON.stringify(p.config.selections)],['Reporting lag (minutes)',p.config.ingestion_lag_minutes]]:p.provider==='slack'?[['Provider','Slack native'],['Mode',p.config.mode],['Enterprise',p.config.enterprise_id],['Workspace',p.config.team_id],['Channel',p.config.channel_id],['Case notion',p.config.case_basis],['Audit action filters',p.config.actions.join(', ')||'All'],['Audit actor filter',p.config.actor_id],['Reporting lag (minutes)',p.config.ingestion_lag_minutes]]:p.provider==='sql'?[['Provider','Native SQL'],['Source alias',p.config.source_alias],['Engine',p.config.engine],['Reviewed source definition',p.config.source_sha256],['Retained schema pin',p.source_schema_sha256||'No successful snapshot yet']]:[['Fixed endpoint',p.config.endpoint]]),['Credential binding available',p.credential_binding_available],['Change window (hours)',p.config.window_hours],['Overlap (minutes)',p.config.overlap_minutes],['Last attempt',p.last_attempt_at],['Last successful retention',p.last_success_at],['Checkpoint',p.checkpoint],['Retained log',p.log_id],['Last result',p.last_result?JSON.stringify(p.last_result):null]]));
+      const read=check(p.provider==='google'?'Authorize one bounded Google audit read for the exact customer, application and user scope.':p.provider==='hubspot'?'Authorize receipt of selected HubSpot property histories, including transient values outside the window.':p.provider==='dataverse'?'Authorize one bounded read of the approved Dataverse audit scope.':p.provider==='sap'?'Authorize one bounded SAP business-date read for the approved source and selected purchase orders.':p.provider==='servicenow'?'Authorize one bounded read of the exact approved ServiceNow scope.':p.provider==='salesforce'?'Authorize one bounded read of the exact approved Salesforce history scope.':p.provider==='slack'?'Authorize one bounded read from the exact selected Slack scope.':p.provider==='sql'?'Authorize one bounded read-only SQL snapshot from the exact approved source.':'Authorize one bounded read from the exact configured endpoint.');
       const retain=check('Authorize retention of the selected mapped events locally.');
       const run=button('Run next window',()=>action(async()=>{
         if(!read.box.checked||!retain.box.checked)throw Error('Confirm both read and retention.');
@@ -356,6 +383,21 @@
         confirm_configuration:$('dvConfirm').checked,confirm_application_identity:$('dvIdentity').checked,confirm_audit_retention:$('dvRetention').checked,confirm_unrestricted_records:$('dvAll').checked});
       for(const id of ['dvConfirm','dvIdentity','dvRetention','dvAll'])$(id).checked=false;
       return 'Dataverse profile saved. No source was read.';
+    });
+  };
+  $('hsCreate').onsubmit=event=>{
+    event.preventDefault();
+    action(async()=>{
+      const src=hsSources.find(s=>s.source_alias===$('hsSource').value&&s.credential_available);
+      if(!src)throw Error('Choose an approved HubSpot source.');
+      const values=id=>$(id).value.split(',').map(x=>x.trim()).filter(Boolean);
+      const selections=hsObjects.filter(n=>$('hsSelect'+n).checked).map(n=>({object_type:n,record_ids:values('hsIds'+n),properties:values('hsProps'+n)}));
+      if(!selections.length||selections.some(x=>!x.record_ids.length||!x.properties.length))throw Error('Choose exact records and properties for every selected object.');
+      await api(base+'/hubspot',{name:$('hsName').value,source_alias:src.source_alias,source_sha256:src.source_sha256,selections,
+        initial_since:$('hsSince').value,window_hours:Number($('hsWindow').value),overlap_minutes:Number($('hsOverlap').value),ingestion_lag_minutes:Number($('hsLag').value),batch_size:Number($('hsBatch').value),include_created:$('hsCreated').checked,
+        confirm_configuration:$('hsConfirm').checked,confirm_transient_history_values:$('hsTransient').checked,confirm_metadata_retention:$('hsRetention').checked,confirm_ticket_scope:$('hsTicket').checked});
+      for(const id of ['hsConfirm','hsTransient','hsRetention','hsTicket'])$(id).checked=false;
+      return 'HubSpot profile saved. No source was read.';
     });
   };
   $('refresh').onclick=load;

@@ -12,6 +12,7 @@ from . import salesforce_history_feed as sf
 from . import servicenow_operations_feed as sn
 from . import sap_procurement_feed as sap
 from . import dataverse_audit_feed as dv
+from . import hubspot_history_feed as hs
 from . import enterprise_sql_feed as sql
 from . import enterprise_connector_operations as operations
 from .event_log_routes import _json_body
@@ -76,6 +77,18 @@ async def sql_create(request:Request):
     require(request)
     body=await _json_body(request,"SQL feed configuration",strict=True,limit=4096)
     return await call(request,sql.create,body)
+
+
+@router.get("/v1/enterprise-connectors/hubspot/catalog")
+async def hubspot_catalog(request:Request):
+    return await call(request,hs.catalog_public)
+
+
+@router.post("/v1/enterprise-connectors/hubspot")
+async def hubspot_create(request:Request):
+    require(request)
+    body=await _json_body(request,"HubSpot history profile",strict=True,limit=32768)
+    return await call(request,hs.create,body)
 
 
 @router.get("/v1/enterprise-connectors/dataverse/catalog")

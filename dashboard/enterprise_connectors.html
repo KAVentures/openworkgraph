@@ -168,6 +168,23 @@ p{overflow-wrap:anywhere;max-width:94ch}.profile{border:1px solid var(--border);
 <p><label><input id="dvRetention" type="checkbox" required> I approve retention of audit operation/action codes, timestamps and pseudonymous record and actor identities.</label></p>
 <p><label><input id="dvAll" type="checkbox"> I separately authorize reads of all visible audited records for selected tables with no exact record restriction.</label></p>
 <button id="dvCreateButton" type="submit" disabled>Save Dataverse profile</button></form></details>
+<details><summary>Create native HubSpot CRM history feed</summary>
+<p>Choose a deployment-approved private application, exact CRM record IDs and property names. HubSpot returns property values transiently; only property-change timestamps, activity labels and pseudonymous case identities are retained. The API's returned history is not a complete audit journal.</p>
+<form id="hsCreate"><div class="grid">
+<label>Profile name<input id="hsName" required maxlength="100"></label>
+<label>Approved HubSpot source<select id="hsSource" required></select></label>
+<label>First history timestamp (ISO UTC)<input id="hsSince" required placeholder="2026-11-01T00:00:00Z"></label>
+<label>Window (hours)<input id="hsWindow" type="number" min="1" max="168" value="24" required></label>
+<label>Overlap (minutes)<input id="hsOverlap" type="number" min="0" max="1440" value="60" required></label>
+<label>Reporting lag (minutes)<input id="hsLag" type="number" min="0" max="1440" value="15" required></label>
+<label>Batch size (records)<input id="hsBatch" type="number" min="1" max="100" value="50" required></label></div>
+<div id="hsReview"></div><div id="hsObjects"></div>
+<p><label><input id="hsCreated" type="checkbox" checked> Include record creation timestamps within the selected window.</label></p>
+<p><label><input id="hsConfirm" type="checkbox" required> I reviewed this exact account, application, scopes, object types, record IDs and properties.</label></p>
+<p><label><input id="hsTransient" type="checkbox" required> I approve transient receipt of property histories including values and change-source metadata, including versions outside the selected time window.</label></p>
+<p><label><input id="hsRetention" type="checkbox" required> I approve retention of selected property-change labels, timestamps and pseudonymous case identities.</label></p>
+<p><label><input id="hsTicket" type="checkbox"> I separately acknowledge the legacy tickets permission may allow writes, although this adapter only makes fixed read requests.</label></p>
+<button id="hsCreateButton" type="submit" disabled>Save HubSpot profile</button></form></details>
 <p id="restStatus" role="status"></p><div id="profiles"></div></section>
 <section><h2>Other configured adapters</h2><p>Use the main dashboard's Privacy → Business system sign-in and Evidence panels for the existing provider-specific consent and configuration workflows. CLI-only adapters remain outside this local inventory.</p><a href="/">Open the main dashboard</a></section>
 </main></body></html>
