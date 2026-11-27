@@ -190,3 +190,70 @@ def test_worker_response_is_bounded_and_strict():
         with httpx.Client(transport=httpx.MockTransport(lambda _:httpx.Response(200,content=payload))) as c:
             with pytest.raises(WorkerError,match=code):
                 worker._api(c,"inspect",worker.pin())
+
+
+def test_publication_review_at_maximum_combined_event_budget(deployed):
+    """Four full publication windows, then reject a fifth rather than truncate."""
+    from hashlib import sha256
+    from shared.connector_event_snapshot import Snapshot,Event,digest,utc,MAX_EVENTS
+    from gateway.connector_event_publications import Bundle,MAX_EXPORT_EVENTS
+    jobs,pubs=deployed
+    reviewed=ReviewedCases(pubs)
+    now=rest._now()
+    since=utc(rest._iso(now-timedelta(days=2)))
+    until=utc(rest._iso(now-timedelta(days=1)))
+    observed=utc(rest._iso(now-timedelta(days=1,hours=1)))
+
+    def h(value):
+        return sha256(value.encode()).hexdigest()
+
+    def make_source(i):
+        p={"provider":"rest","profile_id":"rest_"+f"{i:024x}","revision":1,"config":{"fixture":i}}
+        job=jobs.create(Create(organization_id="customer",name="Scale fixture",
+            provider=p["provider"],profile_id=p["profile_id"],profile_revision=1,
+            profile_sha256=profile_digest(p),interval_minutes=60,confirm_dispatch=True,
+            confirm_counts_only_receipts=True),"owner")
+        events=[Event(event_id=h(f"event:{i}:{j}"),case_id=h(f"case:{i}:{j%50}"),
+                      activity="A_"+h(f"activity:{j%5}"),observed_at=observed).model_dump()
+                for j in range(MAX_EVENTS)]
+        events.sort(key=lambda e:(e["observed_at"],e["event_id"]))
+        m=Manifest(profile_id=p["profile_id"],profile_revision=1,profile_sha256=profile_digest(p),
+                   provider=p["provider"],since=since,until=until,checkpoint=until,
+                   event_count=len(events),case_count=50,activity_mode="coded",rows_sha256=digest(events))
+        snap=Snapshot(manifest=m,events=events)
+        g=grant(pubs,job["job"],snap)
+        upload(pubs,job["worker_token"],g,snap)
+        return job["job"],g
+
+    sources=[make_source(i) for i in range(1,5)]
+    pins=[pin(g) for _,g in sources]
+    groups=[{"members":[{"job_id":j["job_id"],"case_id":h(f"case:{i}:{k}")}
+                        for i,(j,_) in enumerate(sources,1)],"basis":"operator_assertion"}
+            for k in range(50)]
+    plan=Plan.model_validate({"snapshots":pins,"groups":groups,"confirm_inspection":True})
+    preview=reviewed.preview("customer",plan,"owner")
+    assert preview["summary"]["input_events"]==MAX_EXPORT_EVENTS==4*MAX_EVENTS
+    assert preview["summary"]["export_cases"]==50 and preview["summary"]["linked_input_cases"]==200
+    export=reviewed.export("customer",Export.model_validate({**plan.model_dump(),
+         "expected_review_sha256":preview["review_sha256"],"confirm_link_assertions":True,"confirm_export":True}),"owner")
+    assert export["event_count"]==MAX_EXPORT_EVENTS and len({x["case_id"] for x in export["events"]})==50
+    assert len({(x["source_namespace"],x["event_id"]) for x in export["events"]})==MAX_EXPORT_EVENTS
+    _,extra=make_source(5)
+    too_many=[*pins,pin(extra)]
+    with pytest.raises(JobError,match="combined_snapshot_event_budget_exceeded"):
+        pubs.export("customer",Bundle(snapshots=too_many,confirm_export=True),"owner")
+    with pytest.raises(JobError,match="combined_snapshot_event_budget_exceeded"):
+        reviewed.preview("customer",Plan.model_validate({**plan.model_dump(),"snapshots":too_many}),"owner")
+
+
+def test_endpoint_credential_catalog_change_during_read_prevents_commit(local,monkeypatch):
+    from test_enterprise_rest_feed import event,page,run
+    monkeypatch.setenv("OWG_REST_ENDPOINT_CREDENTIALS",json.dumps({URL:ENV}))
+    p=rest.create(config())
+    def change(_):
+        monkeypatch.setenv("OWG_REST_ENDPOINT_CREDENTIALS",json.dumps({URL:"OWG_REST_TOKEN_SECOND"}))
+        return page([event(p)])
+    with pytest.raises(rest.FeedError):
+        run(p,change)
+    assert rest.inventory()["profiles"][0]["checkpoint"] is None
+    assert ws.list_logs()["logs"]==[]
