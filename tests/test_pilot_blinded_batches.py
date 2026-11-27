@@ -11,13 +11,13 @@ from evals import pilot_blinded_batches as batches
 from test_pilot_execution import setup,kwargs,append,start,finish,disposition
 
 
-def study(n=2):
+def study(n=2,review_protocol="single"):
     truth=[{"episode_id":f"e{i}","prompt":f"Approved neutral prompt {i}",
             "correct_resources":["resource"],"correct_agent_runs":[],
             "ground_truth_verified_by":"truth-author","real_observed_work":False} for i in range(n)]
     p=cohort.prepare(truth,[{"episode_id":r["episode_id"],"team_id":"team",
         "model_id":"model","source_state_id":f"s{i}"} for i,r in enumerate(truth)],confirmed=True)
-    p,s,l=setup(p)
+    p,s,l=setup(p,review_protocol=review_protocol)
     return p,s,l,truth
 
 
@@ -160,7 +160,7 @@ def adjudication_bundle(packet,key):
 
 
 def test_two_reviewers_and_partial_adjudication():
-    p,s,l,truth=study(1);row=s["episodes"][0];materials=[]
+    p,s,l,truth=study(1,"dual_adjudication");row=s["episodes"][0];materials=[]
     for arm in row["arm_order"]:
         l,m=complete(p,s,l,row["episode_id"],arm,l["revision"]+1);materials.append(m)
     packet,key=prepare(p,s,l,truth,materials)
@@ -182,7 +182,7 @@ def test_two_reviewers_and_partial_adjudication():
 @pytest.mark.parametrize("kind",["same_reviewer","truth_author","changed_basis","changed_disagreement",
                                  "wrong_resolution","same_adjudicator"])
 def test_adjudication_integrity(kind):
-    p,s,l,truth=study(1);row=s["episodes"][0]
+    p,s,l,truth=study(1,"dual_adjudication");row=s["episodes"][0]
     l,m=complete(p,s,l,row["episode_id"],row["arm_order"][0],1)
     packet,key=prepare(p,s,l,truth,[m]);item,_=adjudication_bundle(packet,key);a=item["adjudication"]
     if kind=="same_reviewer":a["second_review"][0]["reviewer_id"]=" reviewer-a "
@@ -206,3 +206,15 @@ def test_reviewer_template_cli_requires_no_private_data(tmp_path):
     template=cohort._load(o)
     assert template[0]["reviewer_id"] is None and template[0]["continuation_success"] is None
     with pytest.raises(SystemExit):batches.main(["template","--packet",str(f),"--out",str(o),"--confirm"])
+
+
+@pytest.mark.parametrize("protocol",["single","dual_adjudication"])
+def test_cannot_switch_review_protocol_after_observing_results(protocol):
+    p,s,l,truth=study(1,protocol);row=s["episodes"][0]
+    l,m=complete(p,s,l,row["episode_id"],row["arm_order"][0],1)
+    packet,key=prepare(p,s,l,truth,[m])
+    if protocol=="single":
+        item,_=adjudication_bundle(packet,key)
+    else:
+        item=bundle(packet,key,sheet(packet))
+    with pytest.raises(ValueError):reconcile(p,s,l,truth,[item])
