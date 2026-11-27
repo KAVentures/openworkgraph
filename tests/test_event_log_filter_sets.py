@@ -58,6 +58,20 @@ def test_save_list_apply_and_delete_a_filter_set():
         filter_sets.delete(log, saved["set_id"])
 
 
+def test_update_saved_filter_preserves_identity_and_rejects_stale_edits():
+    log = _log()
+    saved = filter_sets.save(log, {"name": "Rework", "cohort": FIX})
+    current = filter_sets.list_sets(log)["filter_sets"][0]
+    spec = {"name": "Updated", "cohort": {"activity": "Receive"}, "case_type": "case",
+            "expected_definition_sha256": current["definition_sha256"]}
+    updated = filter_sets.update(log, saved["set_id"], spec)
+    assert updated["set_id"] == saved["set_id"] and updated["name"] == "Updated"
+    assert workspace.summary(log, "case", updated["cohort"])["cases"] == 9
+    with pytest.raises(workspace.EventLogWorkspaceError, match="changed"):
+        filter_sets.update(log, saved["set_id"], spec)
+    assert len(filter_sets.list_sets(log)["filter_sets"]) == 1
+
+
 def test_saved_case_notion_is_validated_and_legacy_filter_stays_portable():
     log = _log()
     legacy = filter_sets.save(log, {"name": "Legacy", "cohort": FIX})
