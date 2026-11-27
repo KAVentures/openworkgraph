@@ -25,6 +25,7 @@ MAX_SCOPE_DEPTH = 12
 MAX_PROCESSES = 40
 MAX_EXPANDED_NODES = 500
 MAX_EXPANDED_FLOWS = 1200
+MAX_MULTI_INSTANCE = 16
 NS = "http://www.omg.org/spec/BPMN/20100524/MODEL"
 DI = "http://www.omg.org/spec/BPMN/20100524/DI"
 TASKS = {"task", "userTask", "manualTask", "serviceTask", "scriptTask", "businessRuleTask"}
@@ -198,7 +199,8 @@ def to_pnml(data: bytes, process_id: str | None = None):
     evidence = {"node_transition_ids": {}, "flow_place_ids": {}, "parallel_pairs": {},
                 "scope_by_node": {}, "scope_by_flow": {}, "subprocess_boundaries": {},
                 "call_boundaries": {}, "node_instances": [], "flow_instances": [],
-                "parallel_pair_instances": [], "subprocess_boundary_instances": []}
+                "parallel_pair_instances": [], "subprocess_boundary_instances": [],
+                "multi_instance_activities": []}
     _emit_scope(net, scope, source, sink, evidence, scopes, ())
     result_net = {"places": net.places, "transitions": net.transitions, "arcs": net.arcs,
                   "source": source, "sink": sink}
@@ -213,6 +215,7 @@ def to_pnml(data: bytes, process_id: str | None = None):
             "places": len(net.places), "transitions": len(net.transitions), **evidence,
             "caveat": "Only unconditional visible activity and routing token semantics are represented. "
                       "Plain embedded subprocess and local call wrappers are silent; their internal tasks remain visible. "
+                      "Fixed multi-instance tasks emit one visible activity per instance and wait for every instance. "
                       "No task code, data conditions, timing, resources, collaboration or execution authority is imported."}
 
 
@@ -225,6 +228,7 @@ def _read_scope(process, context, depth):
     flows = {}
     children = {}
     calls = {}
+    multi = {}
     for element in process:
         kind = _kind(element)
         if kind == "documentation" or (_kind(process) == "subProcess" and kind in {"incoming", "outgoing"}):
@@ -265,7 +269,11 @@ def _read_scope(process, context, depth):
                     _fail("event subprocesses are unsupported")
             else:
                 for c in element:
-                    if c.tag not in {_tag("incoming"), _tag("outgoing"), _tag("documentation")}:
+                    if c.tag == _tag("multiInstanceLoopCharacteristics") and kind in TASKS:
+                        if ident in multi:
+                            _fail("duplicate multi-instance declaration: " + ident)
+                        multi[ident] = _read_multi(c)
+                    elif c.tag not in {_tag("incoming"), _tag("outgoing"), _tag("documentation")}:
                         _fail("unsupported task, gateway or event semantics: " + c.tag.rsplit("}", 1)[-1])
             if kind == "callActivity":
                 ref = element.get("calledElement")
@@ -329,13 +337,35 @@ def _read_scope(process, context, depth):
         _fail("every BPMN node must lie on a start-to-end graph path")
     pairs = _parallel_pairs(nodes, successors, predecessors, end)
     return {"id": _id(process), "nodes": nodes, "labels": labels, "flows": flows,
-            "incoming": incoming, "outgoing": outgoing, "pairs": pairs, "children": children, "calls": calls}
+            "incoming": incoming, "outgoing": outgoing, "pairs": pairs, "children": children, "calls": calls, "multi": multi}
+
+
+def _read_multi(element):
+    # Only a fixed positive integer cardinality with ordinary completion is
+    # represented. No loop-data collections, behavior expressions, input/output
+    # mappings or early completion conditions may be silently dropped.
+    _attrs(element, {"id", "isSequential"})
+    sequential = element.get("isSequential", "false")
+    if sequential not in {"true", "false", "1", "0"}:
+        _fail("multi-instance isSequential must be boolean")
+    cardinalities = [c for c in element if c.tag == _tag("loopCardinality")]
+    if len(cardinalities) != 1 or any(c.tag not in {_tag("loopCardinality"), _tag("documentation")} for c in element):
+        _fail("multi-instance tasks require exactly one literal cardinality and no other execution semantics")
+    card = cardinalities[0]
+    _attrs(card, {"id"})
+    raw = (card.text or "").strip()
+    if len(card) or not re.fullmatch(r"[1-9][0-9]?", raw):
+        _fail("multi-instance cardinality must be a positive literal integer")
+    count = int(raw)
+    if count > MAX_MULTI_INSTANCE:
+        _fail("multi-instance cardinality exceeds 16")
+    return {"count": count, "sequential": sequential in {"true", "1"}}
 
 
 def _expanded_size(scope, scopes, ancestors, depth, totals):
     if depth > MAX_SCOPE_DEPTH:
         _fail("expanded BPMN subprocess/call nesting exceeds 12 levels")
-    totals[0] += len(scope["nodes"])
+    totals[0] += len(scope["nodes"]) + sum(m["count"] - 1 for m in scope["multi"].values())
     totals[1] += len(scope["flows"])
     if totals[0] > MAX_EXPANDED_NODES or totals[1] > MAX_EXPANDED_FLOWS:
         _fail("expanded BPMN call graph exceeds node or flow budget")
@@ -376,7 +406,13 @@ def _emit_scope(net, scope, source, sink, evidence, scopes, path):
         elif kind == "endEvent":
             tids = [net.transition(None, inputs[0], sink)]
         elif kind in TASKS:
-            tids = [net.transition(labels[ident], inputs[0], outputs[0])]
+            if ident in scope["multi"]:
+                tids, visible, routing = _emit_multi(net, labels[ident], inputs[0], outputs[0], scope["multi"][ident])
+                evidence["multi_instance_activities"].append({"source_id": ident, "scope_id": scope["id"],
+                    "call_path": list(path), **scope["multi"][ident], "visible_transition_ids": visible,
+                    "routing_transition_ids": routing})
+            else:
+                tids = [net.transition(labels[ident], inputs[0], outputs[0])]
         elif kind == "subProcess":
             entry, exit = net.place(), net.place()
             enter = net.transition(None, inputs[0], entry)
@@ -407,3 +443,21 @@ def _emit_scope(net, scope, source, sink, evidence, scopes, path):
         evidence["scope_by_node"][ident] = scope["id"]
         evidence["node_instances"].append({"source_id": ident, "scope_id": scope["id"],
                                            "call_path": list(path), "transition_ids": tids})
+
+
+def _emit_multi(net, label, source, sink, spec):
+    count = spec["count"]
+    if spec["sequential"] or count == 1:
+        visible = []
+        here = source
+        for i in range(count):
+            nxt = sink if i == count - 1 else net.place()
+            visible.append(net.transition(label, here, nxt))
+            here = nxt
+        return visible, visible, []
+    starts = [net.place() for _ in range(count)]
+    ends = [net.place() for _ in range(count)]
+    split = net.silent_between([source], starts)
+    visible = [net.transition(label, a, b) for a, b in zip(starts, ends)]
+    join = net.silent_between(ends, [sink])
+    return [split, *visible, join], visible, [split, join]

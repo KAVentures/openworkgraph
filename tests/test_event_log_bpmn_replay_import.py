@@ -334,3 +334,73 @@ def test_expansion_budget_counts_reused_definitions(monkeypatch):
 def test_nested_call_instance_keys_do_not_alias():
     assert importer._instance_key((), '["a","b"]') != importer._instance_key(("a",), "b")
     assert importer._instance_key(("a:b",), "c") != importer._instance_key(("a",), "b:c")
+
+
+def with_multi(data=SEQ, *, count="3", sequential="false", extra="", attrs=""):
+    body = (f'<task id="a" name="A"><multiInstanceLoopCharacteristics isSequential="{sequential}"{attrs}>'
+            f'<loopCardinality>{count}</loopCardinality>{extra}</multiInstanceLoopCharacteristics></task>')
+    return data.replace(b'<task id="a" name="A"/>', body.encode())
+
+
+@pytest.mark.parametrize("sequential", ["true", "false", "1", "0"])
+def test_fixed_multi_instance_requires_every_activity_before_continuation(sequential):
+    data = with_multi(sequential=sequential)
+    assert traces(data) == {("A", "A", "A", "B")}
+    report = importer.to_pnml(data)
+    evidence = report["multi_instance_activities"][0]
+    assert evidence["count"] == 3
+    assert evidence["sequential"] is (sequential in {"true", "1"})
+    assert evidence["source_id"] == "a"
+    assert evidence["call_path"] == []
+    net = replay.parse_pnml(report["pnml"].encode())
+    assert len(set(evidence["visible_transition_ids"])) == 3
+    assert all(net["transitions"][t] == "A" for t in evidence["visible_transition_ids"])
+    assert len(evidence["routing_transition_ids"]) == (0 if evidence["sequential"] else 2)
+    assert all(net["transitions"][t] is None for t in evidence["routing_transition_ids"])
+
+
+def test_sequential_and_parallel_have_distinct_enabled_instance_sets():
+    for sequential in ("true", "false"):
+        report = importer.to_pnml(with_multi(sequential=sequential))
+        row = report["multi_instance_activities"][0]
+        net = replay.parse_pnml(report["pnml"].encode())
+        visible = row["visible_transition_ids"]
+        # The start event first moves the initial token onto the task input.
+        marking = net["initial"].copy()
+        start = report["node_transition_ids"]["s"][0]
+        marking.subtract(net["pre"][start])
+        marking.update(net["post"][start])
+        if sequential == "false":
+            split = row["routing_transition_ids"][0]
+            marking.subtract(net["pre"][split])
+            marking.update(net["post"][split])
+        enabled = [t for t in visible if all(marking[p] >= n for p,n in net["pre"][t].items())]
+        assert len(enabled) == (1 if sequential == "true" else 3)
+        next_step = report["node_transition_ids"]["b"][0]
+        assert not all(marking[p] >= n for p,n in net["pre"][next_step].items())
+
+
+def test_multi_instance_in_parallel_region_preserves_all_interleavings():
+    data = bpmn([START, SPLIT, A, B, JOIN, END],
+                [("s", "x"), ("x", "a"), ("x", "b"), ("a", "j"), ("b", "j"), ("j", "e")])
+    assert traces(with_multi(data, count="2")) == {("A", "A", "B"), ("A", "B", "A"), ("B", "A", "A")}
+
+
+def test_single_instance_and_expanded_limits(monkeypatch):
+    assert traces(with_multi(count="1")) == {("A", "B")}
+    monkeypatch.setattr(importer, "MAX_EXPANDED_NODES", 5)
+    with pytest.raises(EventLogWorkspaceError, match="expanded"):
+        importer.to_pnml(with_multi())
+
+
+@pytest.mark.parametrize("kwargs", [
+    {"count": "0"}, {"count": "-1"}, {"count": "17"}, {"count": "1.5"},
+    {"count": "items.size()"}, {"count": "02"}, {"sequential": "maybe"},
+    {"extra": "<completionCondition>true</completionCondition>"},
+    {"extra": "<loopDataInputRef>items</loopDataInputRef>"},
+    {"extra": "<loopCardinality>2</loopCardinality>"},
+    {"attrs": ' behavior="One"'},
+])
+def test_unsupported_multi_instance_semantics_refused(kwargs):
+    with pytest.raises(EventLogWorkspaceError):
+        importer.to_pnml(with_multi(**kwargs))

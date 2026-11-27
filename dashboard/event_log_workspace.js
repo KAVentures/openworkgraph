@@ -9871,7 +9871,7 @@
           const label=chosen.name+' (BPMN control flow)';
           await replay(converted.pnml,label);
           if(conversionEpoch!==epoch+1||sectionGeneration!==state.generation||lastNet?.body!==converted.pnml||lastNet?.label!==label)return;
-          bpmnConversion.append(el('h4','BPMN conversion evidence'),el('div',converted.nodes+' BPMN nodes · '+converted.sequence_flows+' sequence flows · '+Object.keys(converted.parallel_pairs).length+' paired parallel regions · '+(converted.subprocess_boundary_instances||[]).length+' embedded subprocesses · '+Object.keys(converted.call_boundaries||{}).length+' expanded calls. '+converted.caveat,'muted'));
+          bpmnConversion.append(el('h4','BPMN conversion evidence'),el('div',converted.nodes+' BPMN nodes · '+converted.sequence_flows+' sequence flows · '+Object.keys(converted.parallel_pairs).length+' paired parallel regions · '+(converted.subprocess_boundary_instances||[]).length+' embedded subprocesses · '+Object.keys(converted.call_boundaries||{}).length+' expanded calls · '+(converted.multi_instance_activities||[]).length+' multi-instance activities. '+converted.caveat,'muted'));
           const download=(name,data,mime)=>{
             const url=URL.createObjectURL(new Blob([data],{type:mime}));
             const link=document.createElement('a');link.href=url;link.download=name;document.body.appendChild(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
