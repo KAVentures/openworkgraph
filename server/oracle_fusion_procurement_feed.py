@@ -144,7 +144,7 @@ def source(cfg):
     require(value is not None and rest._digest(value)==cfg["source_sha256"],
             "oracle_fusion_source_definition_changed",409)
     for s in cfg["selections"]:
-        require(s["business_unit_id"] in value[s["object_type"]+"_business_units"],
+        require(int(s["business_unit_id"]) in value[s["object_type"]+"_business_units"],
                 "oracle_fusion_business_unit_not_approved",403)
     return value
 
@@ -188,6 +188,8 @@ def create(value):
                                   "confirm_snapshot_semantics","confirm_metadata_retention"})
     cfg.update(name=spec.name.strip(),initial_since=rest._iso(since),
                selections=sorted(cfg["selections"],key=lambda x:x["object_type"]))
+    for s in cfg["selections"]:
+        s["business_unit_id"]=str(s["business_unit_id"])
     return rest.create_profile(cfg,password(source(cfg)),now,provider="oracle_fusion")
 
 
@@ -221,7 +223,7 @@ def project(p,selection,header_id,item,since,until):
     require(isinstance(item,dict) and set(item)==set(fields(selection)),
             "oracle_fusion_header_schema_mismatch")
     require(type(item[identity]) is int and item[identity]==int(header_id)
-            and type(item[bu]) is int and item[bu]==selection["business_unit_id"],
+            and type(item[bu]) is int and item[bu]==int(selection["business_unit_id"]),
             "oracle_fusion_header_or_business_unit_mismatch")
     created=stamp(item["CreationDate"])
     dates=[]
