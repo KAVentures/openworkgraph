@@ -1716,7 +1716,12 @@
         el('p','Never active: '+(data.versions_never_active_in_window.join(', ')||'none')+
           ' · Never selected in a complete bundle: '+(data.versions_never_selected_in_complete_bundle.join(', ')||'none'),'muted'),
         el('p','Timeline digest '+data.timeline_sha256,'muted'),
-        button('Download timeline manifest (without source text)',()=>{if(timelineReport===data&&stillCurrent(basis))exportReport(data,'owg-effective-policy-timeline.json');}));
+        button('Download timeline manifest (without source text)',()=>{if(timelineReport===data&&stillCurrent(basis))exportReport(data,'owg-effective-policy-timeline.json');}),
+        button('Download reusable timeline input (includes full source text)',()=>{
+          if(timelineReport!==data||!basis||!stillCurrent(basis))return;
+          if(confirm('Download a local copy containing all exact policy source texts? Review and protect this file before sharing.'))
+            exportReport(basis.payload,'owg-effective-policy-input.json');
+        }));
     }));
     async function runDate(offset=0,pin=null){
       const selected=basis,prepared=timelineReport;

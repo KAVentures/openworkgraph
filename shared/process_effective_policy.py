@@ -6,7 +6,7 @@ authority, approval, signatures, retention, or execution are inferred.
 from __future__ import annotations
 
 from collections import Counter
-from datetime import date, timedelta
+from datetime import date
 from hashlib import sha256
 import json
 from typing import Annotated, Literal
@@ -188,6 +188,7 @@ def timeline(record,spec):
         if b is not None and start<b<end:points.add(b)
     points=sorted(points)
     segments=[]
+    bundle_pins={}
     family_days={k:Counter() for k in families}
     aggregate=Counter()
     for a,b in zip(points,points[1:]):
@@ -198,7 +199,12 @@ def timeline(record,spec):
         for row in rows:
             family_days[row["family_id"]][row["status"]]+=days
         selected=_selection(rows)
-        bundle_pin=clarification.documents_sha256(_documents(spec,selected)) if status=="resolved_under_declared_assumptions" else None
+        bundle_pin=None
+        if status=="resolved_under_declared_assumptions":
+            key=tuple(selected)
+            if key not in bundle_pins:
+                bundle_pins[key]=clarification.documents_sha256(_documents(spec,selected))
+            bundle_pin=bundle_pins[key]
         # Coalesce only equal complete diagnostics, not just equal winners:
         # otherwise an overlap beginning in the middle would disappear.
         if segments and segments[-1]["families"]==rows:
