@@ -80,6 +80,9 @@ def load(c, profile_id):
     for key in ("recorded_commits","discarded_disjoint_intervals"):
         if type(value[key]) is not int or value[key] < 0:
             raise ValueError("invalid coverage counter")
+    historical=value.get("historical_commits",0)
+    if type(historical) is not int or not 0<=historical<=value["recorded_commits"]:
+        raise ValueError("invalid historical coverage counter")
     return value
 
 
@@ -103,6 +106,21 @@ def commit(c, p, until):
     anchor = rest._stamp(p["checkpoint"] or p["config"]["initial_since"])
     if not start<=anchor<until:
         raise rest.FeedError("coverage_admitted_window_invalid")
+    _record(c,p,start,until)
+
+
+def commit_historical(c,p,until):
+    """Record the exact admitted historical request without advancing the cursor."""
+    active=p.get("historical_active")
+    if not active or active["profile_revision"]!=p["revision"] or active["checkpoint_before"]!=p["checkpoint"]:
+        raise rest.FeedError("coverage_historical_intent_mismatch")
+    start=rest._stamp(active["since"])
+    if rest._stamp(active["until"])!=until or not rest._stamp(p["config"]["initial_since"])<=start<until<=rest._stamp(p["checkpoint"]):
+        raise rest.FeedError("coverage_historical_window_invalid")
+    _record(c,p,start,until,historical=True)
+
+
+def _record(c,p,start,until,*,historical=False):
     value = load(c,p["profile_id"])
     intervals = union([*decode(value["intervals"]),(start,until)])
     dropped = max(0,len(intervals)-MAX_INTERVALS)
@@ -112,6 +130,8 @@ def commit(c, p, until):
     value.update(intervals=encode(intervals),recorded_commits=value["recorded_commits"]+1,
                  discarded_disjoint_intervals=value["discarded_disjoint_intervals"]+dropped,
                  first_recorded_at=value["first_recorded_at"] or at,last_recorded_at=at)
+    if historical:
+        value["historical_commits"]=value.get("historical_commits",0)+1
     c.execute("INSERT OR REPLACE INTO enterprise_ingestion_coverage VALUES (?,?)",
               [p["profile_id"],json.dumps(value,separators=(",",":"))])
 
@@ -214,6 +234,7 @@ def inspect_profile(c,p,start,end,now):
             "integrity_hold":bool(p.get("integrity_hold")),
             "coverage_index_consistent":consistent,
             "recorded_commits":value["recorded_commits"],
+            "historical_commits":value.get("historical_commits",0),
             "discarded_disjoint_intervals":value["discarded_disjoint_intervals"],
             "first_recorded_at":value["first_recorded_at"],"last_recorded_at":value["last_recorded_at"],
             "retained_interval_count":len(intervals),"segments":segments,"microseconds_by_kind":totals,
