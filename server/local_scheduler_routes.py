@@ -52,7 +52,8 @@ async def create_schedule(request: Request):
                       confirm_unencrypted_local_backup=data.get("confirm_unencrypted_local_backup"),
                       quiet_hours=data.get("quiet_hours"),
                       report_scope=data.get("report_scope"),
-                      confirm_rest_read_retention=data.get("confirm_rest_read_retention", False))
+                      confirm_rest_read_retention=data.get("confirm_rest_read_retention", False),
+                      expected_rest_profile_revision=data.get("expected_rest_profile_revision"))
 
 
 @router.post("/v1/schedules/update")
