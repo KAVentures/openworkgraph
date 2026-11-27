@@ -252,8 +252,11 @@ def evaluate_due(*, now=None, force=False):
     if not force and not ws.database_path().exists():
         return {"evaluated":[],"errors":[]}
     with ws._LOCK:
-        c=rest._connect()
+        c=rest._connect() if force else ws._connect()
         try:
+            if not exists(c):
+                return {"evaluated":[],"errors":[],"provider_reads_performed":False,
+                        "credential_refresh_performed":False,"provider_live_health_verified":False}
             rules=[json.loads(r[0]) for r in c.execute(
                 "SELECT definition FROM enterprise_ingestion_sla_rules ORDER BY profile_id").fetchall()]
             results,errors=[],[]
