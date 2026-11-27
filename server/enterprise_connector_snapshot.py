@@ -43,6 +43,25 @@ def prepare(profile_id,since,until,*,activity_mode="coded",confirm_labels=False)
                 WHERE log_id=? AND ts>=? AND ts<?""",[log,start,end]).fetchone()[0]
             if not 1<=total<=MAX_EVENTS:
                 raise ValueError("select a nonempty window of at most 5000 events")
+            # Count equality alone is insufficient: one missing source key
+            # and one multiply linked event can cancel out in the join.
+            # Verify per-event cardinalities before selecting the projection.
+            violations=c.execute("""WITH selected AS (
+                SELECT event_id FROM events WHERE log_id=? AND ts>=? AND ts<?
+            ), key_counts AS (
+                SELECT k.event_id,count(*) AS n FROM event_source_keys k
+                JOIN selected s ON s.event_id=k.event_id WHERE k.log_id=? GROUP BY k.event_id
+            ), link_counts AS (
+                SELECT l.event_id,count(*) AS n FROM event_objects l
+                JOIN selected s ON s.event_id=l.event_id WHERE l.log_id=? GROUP BY l.event_id
+            )
+            SELECT count(*) FROM selected s
+            LEFT JOIN key_counts k ON k.event_id=s.event_id
+            LEFT JOIN link_counts l ON l.event_id=s.event_id
+            WHERE coalesce(k.n,0)<>1 OR coalesce(l.n,0)<>1""",
+                [log,start,end,log,log]).fetchone()[0]
+            if violations:
+                raise ValueError("retained source key or case link cardinality changed")
             records=c.execute("""SELECT k.source_event_id,k.source_namespace,e.activity,e.ts,
                 o.object_id,o.object_type
                 FROM events e JOIN event_source_keys k ON k.log_id=e.log_id AND k.event_id=e.event_id
