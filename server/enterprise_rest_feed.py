@@ -319,9 +319,9 @@ def change(profile_id,revision,enabled):
             p=_get(c,profile_id)
             if revision!=p["revision"]:
                 raise FeedError("profile_changed")
+            if p.get("run_id") and not p.get("historical_active") and p["lease_until"]<=time.time():
+                raise FeedError("expired_routine_intent_requires_reconciliation")
             if enabled:
-                if p.get("run_id") and not p.get("historical_active") and p["lease_until"]<=time.time():
-                    raise FeedError("expired_routine_intent_requires_reconciliation")
                 if p.get("integrity_hold"):
                     raise FeedError("retained_integrity_hold_requires_reviewed_release")
                 if p["status"]=="dataset_deleted":
