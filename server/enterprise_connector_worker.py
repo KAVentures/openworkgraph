@@ -83,7 +83,7 @@ def worker_lock(directory):
 
 
 class Worker:
-    def __init__(self,*,gateway,token,organization,job,profile_id,revision,digest,outbox,client_factory=httpx.Client,report_readiness=False):
+    def __init__(self,*,gateway,token,organization,job,profile_id,revision,digest,outbox,client_factory=httpx.Client,report_readiness=False,require_explicit_recording=False):
         self.gateway=base_url(gateway)
         if not token.startswith("owg_connector_worker_"):
             raise WorkerError("worker_credential_required")
@@ -92,12 +92,18 @@ class Worker:
         self.directory=Path(outbox)
         self.client_factory=client_factory
         self.report_readiness=report_readiness is True
+        self.require_explicit_recording=require_explicit_recording is True
         try:
             Claim(profile_id=profile_id,profile_revision=revision,profile_sha256=digest)
             if not self.directory.is_absolute():
                 raise ValueError()
         except ValueError:
             raise WorkerError("invalid_worker_deployment_pin_or_outbox") from None
+
+    def recording(self):
+        if self.require_explicit_recording:
+            return deployment.explicit_recording()
+        return scheduler._recording()
 
     def pin(self):
         return {"profile_id":self.profile_id,"profile_revision":self.revision,"profile_sha256":self.digest}
@@ -184,7 +190,7 @@ class Worker:
                 self._heartbeat(client,error)
                 return {"outcome":"blocked","code":error}
             if self.report_readiness:
-                if not scheduler._recording():
+                if not self.recording():
                     self._heartbeat(client,"local_recording_paused")
                     return {"outcome":"blocked","code":"local_recording_paused"}
                 if p["retry_not_before"]>time.time():
@@ -212,7 +218,7 @@ class Worker:
                 p,error=self._local()
                 if error:
                     receipt={**base,"outcome":"blocked","code":error}
-                elif not scheduler._recording():
+                elif not self.recording():
                     receipt={**base,"outcome":"skipped","code":"local_recording_paused"}
                 else:
                     before=p["checkpoint"]
@@ -261,10 +267,11 @@ def main():
     if not args.preflight and os.environ.get("OWG_CONNECTOR_WORKER_APPROVED")!="true":
         raise SystemExit("explicit local deployment approval required")
     try:
-        worker=Worker(gateway=os.environ["OWG_CONNECTOR_GATEWAY_URL"],token=os.environ["OWG_CONNECTOR_WORKER_TOKEN"],
+        worker=Worker(gateway=os.environ["OWG_CONNECTOR_GATEWAY_URL"],token=rest.resolve_secret("OWG_CONNECTOR_WORKER_TOKEN"),
             organization=os.environ["OWG_CONNECTOR_ORGANIZATION"],job=os.environ["OWG_CONNECTOR_JOB_ID"],
             profile_id=os.environ["OWG_CONNECTOR_PROFILE_ID"],revision=int(os.environ["OWG_CONNECTOR_PROFILE_REVISION"]),
-            digest=os.environ["OWG_CONNECTOR_PROFILE_SHA256"],outbox=os.environ["OWG_CONNECTOR_OUTBOX"],report_readiness=os.environ.get("OWG_CONNECTOR_REPORT_READINESS")=="true")
+            digest=os.environ["OWG_CONNECTOR_PROFILE_SHA256"],outbox=os.environ["OWG_CONNECTOR_OUTBOX"],report_readiness=os.environ.get("OWG_CONNECTOR_REPORT_READINESS")=="true",
+            require_explicit_recording=os.environ.get("OWG_CONNECTOR_REQUIRE_EXPLICIT_RECORDING")=="true")
     except (KeyError,ValueError,WorkerError):
         raise SystemExit("invalid or missing connector deployment configuration") from None
     if args.preflight:
