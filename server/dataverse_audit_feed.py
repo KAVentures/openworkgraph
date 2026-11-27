@@ -107,7 +107,7 @@ def catalog():
 
 
 def secret(src):
-    value=os.environ.get(src["credential_env"],"")
+    value=rest.resolve_secret(src["credential_env"])
     if not 8<=len(value)<=4096 or any(ord(c)<33 or ord(c)>126 for c in value):
         raise rest.FeedError("dataverse_secret_unavailable")
     return value
