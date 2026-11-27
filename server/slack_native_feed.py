@@ -7,7 +7,6 @@ Message text, files, attachments, names, email, IP and audit details are never
 retained. Channel history is not a complete conversation/thread archive.
 """
 from datetime import datetime, timedelta, timezone
-from decimal import Decimal
 import hmac
 import os
 import re
@@ -29,7 +28,7 @@ ENTERPRISE=re.compile(r"E[A-Z0-9]{2,63}\Z")
 TEAM=re.compile(r"T[A-Z0-9]{2,63}\Z")
 CHANNEL=re.compile(r"[CG][A-Z0-9]{2,63}\Z")
 USER=re.compile(r"[UW][A-Z0-9]{2,63}\Z")
-ACT=re.compile(r"[a-z][a-z0-9_]{0,95}\Z")
+ACT=re.compile(r"[a-z][a-z0-9_.-]{0,95}\Z")
 TYP=re.compile(r"[a-z][a-z0-9_]{0,63}\Z")
 ID=re.compile(r"[A-Za-z0-9_.:-]{1,200}\Z")
 TS=re.compile(r"[0-9]{1,12}\.[0-9]{6}\Z")
@@ -380,11 +379,15 @@ def extract(p,since,until,client_factory=httpx.Client):
     with client_factory(timeout=10,follow_redirects=False,trust_env=False) as client:
         reader=Reader(p,client)
         before=reader.scope()
+        principal_pin=rest._key(p,"slack_principal",before)
+        if p.get("slack_principal_pin") not in (None,principal_pin):
+            raise rest.FeedError("slack_principal_changed_during_read",502)
         rows,counts=reader.pages(since,until)
         after=reader.scope()
         if before!=after:
             raise rest.FeedError("slack_principal_changed_during_read",502)
         counts.update(requests=reader.requests,scope_readback_verified=True,
+                      _slack_principal_pin=principal_pin,
                       provider_completeness_verified=False,
                       thread_replies_separately_traversed=False,message_content_retained=False)
         return rows,counts
