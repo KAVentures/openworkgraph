@@ -170,6 +170,17 @@ const path=require('node:path');
   assert.equal(gated.quality_review.quality_sha256,quality.quality_sha256);
   assert.equal(gated.review_sha256,portable.review_sha256);
   assert.equal(gated.quality_review.all_selected_sources_pass,true);
+  // Only these deliberately synthetic fixture downloads cross to the
+  // separate local-browser test process; preserve exact server bytes.
+  const handoff=process.env.OWG_BROWSER_EVIDENCE_FIXTURES;
+  if(handoff){
+    await fs.mkdir(handoff,{recursive:true,mode:0o700});
+    for(const [download,name] of [[qualityDownload,'ordinary-quality.json'],[portableDownload,'portable.json'],[gatedDownload,'portable-quality.json']]){
+      const target=path.join(handoff,name);
+      await fs.copyFile(await download.path(),target);
+      await fs.chmod(target,0o600);
+    }
+  }
   await page.locator('#unlinked').uncheck();
   assert.ok(await page.locator('#exportPanel').isHidden());
   assert.ok(await page.locator('#temporalPanel').isHidden());
