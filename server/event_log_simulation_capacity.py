@@ -15,6 +15,7 @@ from threading import BoundedSemaphore
 from typing import Any
 
 from . import event_log_simulation as sim
+from . import event_log_capacity_decision as decision
 from .event_log_workspace import EventLogWorkspaceError
 
 FORMAT = "openworkgraph.simulation-capacity-grid.v1"
@@ -81,7 +82,7 @@ def _activities(value: Any) -> dict:
 
 
 def normalize(spec: Any) -> dict:
-    if not isinstance(spec, dict) or set(spec) != TOP_FIELDS or spec["format"] != FORMAT:
+    if not isinstance(spec, dict) or not TOP_FIELDS <= set(spec) or set(spec)-TOP_FIELDS-{"decision_review"} or spec["format"] != FORMAT:
         raise EventLogWorkspaceError("Provide a capacity grid format, baseline, designs, demand rates, replications and target")
     baseline = spec["baseline"]
     if not isinstance(baseline, dict) or set(baseline) - BASE_FIELDS:
@@ -121,10 +122,13 @@ def normalize(spec: Any) -> dict:
     target = spec["target"]
     if not isinstance(target, dict) or set(target) != {"cycle_time_minutes", "minimum_completion_share"}:
         raise EventLogWorkspaceError("Provide an elapsed cycle-time target and minimum completion share")
-    return {"format": FORMAT, "baseline": baseline, "designs": deepcopy(designs),
+    normalized = {"format": FORMAT, "baseline": baseline, "designs": deepcopy(designs),
             "arrival_rates_per_hour": rates, "replications": reps,
             "target": {"cycle_time_minutes": _number(target["cycle_time_minutes"], .001, 525600, "target minutes"),
                        "minimum_completion_share": _number(target["minimum_completion_share"], .01, 1, "target completion share")}}
+    if "decision_review" in spec:
+        normalized["decision_review"] = decision.normalize(spec["decision_review"],rates,normalized["target"]["minimum_completion_share"])
+    return normalized
 
 
 def _model_inputs(baseline: dict, design: dict, rate: float) -> dict:
@@ -299,6 +303,7 @@ def run_grid(log_id: str, spec: Any, case_type: str | None = None) -> dict:
         # One calibration object, even if the log is appended while we simulate.
         base = sim.calibrate(log_id, case_type)
         planned = _prepare(packet, base)
+        costs = decision.preflight(planned, packet["decision_review"]) if "decision_review" in packet else None
         seeds = list(range(packet["baseline"]["seed"],
                            packet["baseline"]["seed"] + packet["replications"]))
         target = packet["target"]
@@ -315,11 +320,7 @@ def run_grid(log_id: str, spec: Any, case_type: str | None = None) -> dict:
                     raise EventLogWorkspaceError("A grid run exceeds the supported simulation time range") from None
                 runs.append(summarize_run(result, samples, target["cycle_time_minutes"] * 60, seed))
             cell=summarize_cell(label, rate, runs, target["minimum_completion_share"])
-            pool_of={a:name for name,pool in model["pools"].items() for a in pool["activities"]}
-            cell["effective_resource_basis"]={
-                "dedicated_activities":{a:cfg["resources"] for a,cfg in sorted(model["activities"].items()) if a not in pool_of},
-                "shared_pools":{name:{"resources":p["resources"],"activities":sorted(p["activities"])}
-                                for name,p in sorted(model["pools"].items())}}
+            cell["effective_resource_basis"]=decision.effective_basis(model)
             cells.append(cell)
         calibration = {k: base[k] for k in ("arrivals_per_hour", "paths", "paths_cover_cases_share",
                        "activities", "observed_cases", "calibrated_cases", "excluded_case_reasons",
@@ -328,7 +329,7 @@ def run_grid(log_id: str, spec: Any, case_type: str | None = None) -> dict:
                     "calibration": calibration, "inputs": packet}
         digest = sha256(json.dumps(identity, sort_keys=True, separators=(",", ":"),
                                   allow_nan=False, ensure_ascii=False).encode()).hexdigest()
-        return {"format": REPORT_FORMAT, **identity, "calibration_and_inputs_sha256": digest,
+        report = {"format": REPORT_FORMAT, **identity, "calibration_and_inputs_sha256": digest,
                 "seeds": seeds, "cells": cells, "tested_envelope": _envelope(cells),
                 "paired_comparisons": paired_comparisons(cells),
                 "simulated_cases": len(cells) * len(seeds) * packet["baseline"]["cases"],
@@ -336,5 +337,8 @@ def run_grid(log_id: str, spec: Any, case_type: str | None = None) -> dict:
                 "simulated_not_observed": True, "production_capacity_certified": False,
                 "execution_authorized": False, "auto_selected_design": False,
                 "assumptions": ASSUMPTIONS}
+        if costs is not None:
+            report["decision_review"] = decision.review(cells,costs,packet["decision_review"],target["minimum_completion_share"])
+        return report
     finally:
         _GUARD.release()

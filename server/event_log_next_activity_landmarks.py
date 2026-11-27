@@ -15,6 +15,7 @@ from threading import BoundedSemaphore
 from typing import Any
 
 from . import event_log_next_activity as nxt
+from . import event_log_next_activity_distribution as distribution
 from . import event_log_workspace as workspace
 
 FORMAT = "openworkgraph.next-activity-landmarks.v1"
@@ -238,6 +239,7 @@ def evaluate_landmark(histories, cutoff, end, packet):
         else:
             candidates.append((key,path,index))
     rows=[]
+    scoring=distribution.Review()
     enough=training>=packet["minimum_training_cases"]
     overall=model.counts[0].get((),Counter())
     for key,path,index in candidates:
@@ -248,6 +250,7 @@ def evaluate_landmark(histories, cutoff, end, packet):
              "prefix_events":index,"actual_next_activity":actual,"outcome_reason":reason,
              "model":[],"overall_baseline":[],"last_activity_baseline":[],
              "history_used":None,"support":0,"abstention_reason":None}
+        counters={}
         if _ambiguous(prefix):
             out["abstention_reason"]="ambiguous_prefix_timestamp"
         elif not enough:
@@ -257,14 +260,18 @@ def evaluate_landmark(histories, cutoff, end, packet):
             support=sum(counter.values())
             if support>=packet["min_support"]:
                 out["model"]=_probabilities(counter,3)
+                counters["model"]=counter
                 out["history_used"]=level;out["support"]=support
             else:
                 out["abstention_reason"]="insufficient_step_support"
             if sum(overall.values())>=packet["min_support"]:
                 out["overall_baseline"]=_probabilities(overall,1)
+                counters["overall_baseline"]=overall
             last=model.counts[1].get((labels[-1],),Counter())
             if sum(last.values())>=packet["min_support"]:
                 out["last_activity_baseline"]=_probabilities(last,1)
+                counters["last_activity_baseline"]=last
+        out["distribution_scores"]=scoring.add(counters,actual,reason is not None)
         rows.append(out)
     result={"cutoff":_stamp(cutoff),"observed_until":_stamp(end),
             "completed_before_cutoff":completed_before,"training_cases":training,
@@ -280,7 +287,8 @@ def evaluate_landmark(histories, cutoff, end, packet):
             "last_activity_baseline":_score(rows,"last_activity_baseline",1),
             "paired_vs_overall":_paired(rows,"overall_baseline"),
             "paired_vs_last_activity":_paired(rows,"last_activity_baseline"),
-            "calibration":_calibration(rows)}
+            "calibration":_calibration(rows),
+            "distribution_validation":scoring.report(len(rows))}
     # Uncertain members receive no prediction. These bounds disclose the
     # sensitivity of whole-open-population hit share to including them.
     for key in ("top1","top3","overall_baseline","last_activity_baseline"):

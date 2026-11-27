@@ -39,7 +39,7 @@
       if(!result.artifact&&result.integrity_ok)names.set(key(ref(selected.process)),selected.process.title);render();
       message(!result.integrity_ok?'Map integrity failed. An owner can erase its history; no content is displayed.':result.artifact?'Opened map revision '+result.artifact.revision+'. '+(result.all_references_current?'All pinned references are current.':'Some references have changed, are archived or are unavailable.'): 'No map saved yet. Build and explicitly share this grouping.');
     }
-    function changed(){dirty=true;if(confirm)confirm.checked=false;update();}
+    function changed(){dirty=true;if(confirm)confirm.checked=false;form?.querySelector('#hierarchyCompareRun')?.parentElement?.remove();update();}
     function writable(){return view?.can_write&&selected.permissions.edit&&(!view.artifact||view.artifact.revision===view.latest_revision);}
     function update(){if(save)save.disabled=!writable()||!confirm.checked;if(download)download.disabled=dirty||!view?.artifact||!view.integrity_ok;}
     function valid(nodes){
@@ -95,6 +95,50 @@
       form.append(label('I reviewed this grouping and confirm sharing its title, category, capability and exact process references with organization process readers',confirm),save,download);
       history=el('select');history.id='hierarchyRevision';options(history,Array.from({length:view.latest_revision},(_,i)=>[String(i+1),'Map revision '+(i+1)]));if(view.artifact)history.value=String(view.artifact.revision);
       form.append(label('Saved map history',history),button('Open map revision',()=>work(ok=>load(ok,Number(history.value))),'hierarchyHistory'));
+      if(view.integrity_ok&&view.artifact&&view.latest_revision>1){
+        const comparison=el('div'),baseline=el('select'),out=el('div');
+        baseline.id='hierarchyCompareBaseline';out.setAttribute('role','status');
+        options(baseline,Array.from({length:view.latest_revision},(_,i)=>i+1)
+          .filter(i=>i!==view.artifact.revision).map(i=>[String(i),'Map revision '+i]));
+        let reviewed=null,serial=0;
+        const reset=()=>{serial++;reviewed=null;out.replaceChildren();};
+        baseline.onchange=reset;
+        const run=button('Compare exact map revisions',()=>work(async ok=>{
+          if(dirty)throw Error('Open a saved map without unsaved edits first.');
+          const token=++serial,root=selected.process.workflow_id,currentArtifact=view.artifact;
+          const path='/v1/human/processes/'+encodeURIComponent(root)+'/hierarchy';
+          out.replaceChildren(el('p','Checking retained map revisions…'));reviewed=null;
+          const prior=await call(path+'?revision='+baseline.value);
+          if(!ok()||token!==serial||!out.isConnected||dirty)return;
+          if(!prior.integrity_ok||!prior.artifact)throw Error('Baseline map failed integrity review.');
+          const body={baseline:{revision:prior.artifact.revision,expected_content_sha256:prior.artifact.content_sha256},
+            candidate:{revision:currentArtifact.revision,expected_content_sha256:currentArtifact.content_sha256}};
+          const result=await call(path+'/compare',body);
+          if(!ok()||token!==serial||!out.isConnected||dirty)return;
+          reviewed=body;
+          const table=(headers,rows)=>{const t=el('table'),head=el('thead'),hr=el('tr'),tb=el('tbody');
+            headers.forEach(h=>{const c=el('th',h);c.scope='col';hr.append(c);});head.append(hr);
+            rows.forEach(row=>{const tr=el('tr');row.forEach(x=>tr.append(el('td',x)));tb.append(tr);});t.append(head,tb);return t;};
+          const pathLabel=p=>p.join(' / ');
+          const downloadComparison=button('Recheck and download comparison JSON',()=>work(async live=>{
+            if(dirty||reviewed!==body)return;
+            const fresh=await call(path+'/compare',body);if(!live()||token!==serial||!out.isConnected||dirty)return;
+            const url=URL.createObjectURL(new Blob([JSON.stringify(fresh,null,2)],{type:'application/json'}));
+            const a=el('a');a.href=url;a.download='owg-map-comparison.json';a.click();URL.revokeObjectURL(url);
+          }));
+          out.replaceChildren(el('p','Baseline revision '+result.baseline.revision+' → candidate '+result.candidate.revision),
+            table(['Measure','Count'],Object.entries(result.counts).map(([k,v])=>[k.replaceAll('_',' '),v])),
+            table(['Metadata','Baseline','Candidate'],result.metadata_changes.map(x=>[x.field,x.baseline,x.candidate])),
+            table(['Change','Workflow ancestry path','Revision'],[
+              ...result.removed_paths.map(x=>['Removed',pathLabel(x.workflow_path),x.process.revision]),
+              ...result.added_paths.map(x=>['Added',pathLabel(x.workflow_path),x.process.revision]),
+              ...result.matched_paths.filter(x=>x.reference_changed).map(x=>['Changed pin',pathLabel(x.workflow_path),x.baseline.process.revision+' → '+x.candidate.process.revision])]),
+            table(['Possible relocation (not verified)','Removed paths','Added paths'],result.possible_relocation_groups.map(x=>[x.workflow_id,x.removed_paths.map(pathLabel).join('; '),x.added_paths.map(pathLabel).join('; ')])),
+            ...result.interpretation.map(x=>el('p',x)),downloadComparison);
+        }),'hierarchyCompareRun');
+        comparison.append(el('h4','Compare saved map revisions'),label('Baseline revision',baseline),run,out);
+        form.append(comparison);
+      }
       remove=button('Erase all map history',()=>work(async ok=>{if(!window.confirm('Erase every repository map revision for this root? Process designs will remain.'))return;
         await call('/v1/human/processes/'+encodeURIComponent(selected.process.workflow_id)+'/hierarchy/delete',{expected_revision:view.latest_revision,expected_access_revision:view.access_revision,user_confirmed:true});if(ok()){await load(ok);if(ok())message('Map history erased. Process designs remain.');}}),'hierarchyDelete');remove.disabled=!view.can_delete||!view.latest_revision;form.append(remove);
       host.append(form);draw();if(busy)form.disabled=true;
