@@ -3703,6 +3703,45 @@ The owner-only endpoint is `POST /v1/event-logs/petri-policy-review`, with `Cont
 
 These are model-level untimed activity trace properties, not legal compliance, real-world case evidence, policy approval or a grant of agent execution authority. A completed-trace property does not by itself establish that all executions complete; use the separate soundness and termination checks.
 
+### Executable workflow acceptance scenarios
+
+Expand **Run workflow acceptance scenarios** in the model validation panel. Reuse the net just replayed as a baseline, author scenarios with the builder or edit the portable JSON suite, and optionally upload a candidate PNML revision. The suite is a declared acceptance test, not a policy inferred from observations. Example:
+
+```json
+{
+  "format": "openworkgraph.petri_acceptance_suite.v1",
+  "cases": [
+    {"id": "approved", "trace": ["Register", "Check", "Pay"], "expect": {"completed": true}},
+    {"id": "no-unapproved-payment", "trace": ["Register", "Pay"], "expect": {"completed": false}},
+    {"id": "after-register", "trace": ["Register"], "expect": {
+      "fireable": true, "finishable": true, "exact_next": ["Check"]
+    }}
+  ]
+}
+```
+
+The seven expectation keys are:
+
+- `completed`: the exact supplied visible trace can end at the declared final marking.
+- `fireable`: at least one reachable firing sequence matches the visible trace, regardless of whether completion is possible.
+- `finishable`: at least one matched marking can still reach the final marking.
+- `all_prefix_states_finishable`: at least one marking matches the prefix and every such marking has a path to final. False for an impossible prefix on a complete graph; inconclusive on an incomplete graph. This is not a guarantee that all future executions terminate.
+- `required_next`: every listed visible next activity can extend this prefix to a completed trace, possibly with different continuations.
+- `forbidden_next`: none of the listed visible activities can be the next step on a completion path.
+- `exact_next`: the complete set of viable next visible activities equals the listed set.
+
+Silent transitions are traversed without consuming a visible activity. Duplicate labels use nondeterministic marking subsets; a prefix can be fireable but not finishable. The report returns the longest observed matching prefix, counts of matching and known completable markings, exact noncompletable counts when the graph is complete, viable next activities, and a shortest observed completion suffix by visible length then transition firings. Only a completely explored marking graph certifies absence or shortest length. For a prefix that cannot execute, an empty exact-next set can pass; require fireability or finishability explicitly when needed. Multiple assertions in one case must all pass; failure and inconclusive states remain distinct. A candidate regression is a previously passing case that now fails; an unknown result does not count as a known regression or improvement.
+
+The owner-only, non-retained endpoint is `POST /v1/event-logs/petri-acceptance`, with `Content-Type: application/octet-stream`. The frame is a four-byte unsigned big-endian suite JSON byte count, those UTF-8 bytes, a four-byte unsigned big-endian baseline byte count, those PNML bytes, and optional candidate PNML bytes. Strict JSON rejects duplicate keys, nonfinite values and invalid suite fields. Each model is limited to 2 MiB; suite to 256 KiB, 40 cases, 100 visible activities per trace and 100 per next-step expectation. The graph uses the existing marking exploration limits. A shared 600,000-unit work budget per model can leave later scenarios inconclusive; no unexplored behavior is treated as absent.
+
+The same engine can run offline from the repository or installed Python environment, with its normal dependencies:
+
+```sh
+python -m server.event_log_petri_acceptance --baseline before.pnml --suite suite.json --candidate after.pnml > report.json
+```
+
+The CLI does not contact a service. Exit codes: 0 target suite passed, 1 at least one target case failed, 2 invalid input, 3 target suite inconclusive. The candidate is the target when supplied; baseline and change findings remain in the JSON report. SHA-256 identifies the exact submitted model bytes and the canonical normalized suite. The dashboard uses UTF-8 encoding of its current baseline replay text. Reports contain model labels and the declared suite, and should be shared only deliberately. Passing a finite acceptance suite does not establish full language equivalence, formal policy compliance, or real-world automation correctness.
+
 ### Process trees (PTML) from PM4Py and ProM
 
 The file picker also accepts a **process tree** in PTML, as `pm4py.write_ptml` and ProM's Inductive
