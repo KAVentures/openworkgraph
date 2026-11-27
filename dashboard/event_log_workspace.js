@@ -4934,7 +4934,8 @@
     const history=el('div');history.id='owgObjectAttributeHistory';
     const historyId=input('owgObjectAttributeHistoryId','text','Exact object ID');historyId.maxLength=400;
     const historyOpen=button('Review attribute history','secondary');
-    historyOpen.disabled=true;
+    const eventOpen=button('Review recorded events','secondary');
+    historyOpen.disabled=eventOpen.disabled=true;
     const historyStatus=el('div',null,'muted');historyStatus.setAttribute('role','status');
     const historyRows=el('div'),historyPrevious=button('Previous attribute values','secondary'),historyNext=button('Next attribute values','secondary');
     const historyControls=el('div',null,'row');historyControls.append(historyPrevious,historyNext);
@@ -4945,12 +4946,19 @@
     const browserStatus=el('div',null,'muted');browserStatus.setAttribute('role','status');
     const browserRows=el('div'),browserNav=el('div',null,'row');browserNav.append(browserPrevious,browserNext);
     browser.append(el('summary','Find an object'),el('p','Search literal object IDs in the selected type. Matching is case-sensitive; leave the search empty to browse all objects, including those with no events.','muted'),field('Object ID contains',browserSearch),browserRun,browserStatus,browserRows,browserNav);
-    history.append(el('h4','Object attribute history'),el('p','Enter an exact object ID from the selected type. Values are recorded observations; 1970-01-01 denotes an initial value without a known time.','muted'),browser,field('Exact object ID',historyId),historyOpen,historyStatus,historyRows,historyControls);
-    box.append(row,out,flatOut,attrOut,history,shared);
+    history.append(el('h4','Object history'),el('p','Enter an exact object ID from the selected type. Values are recorded observations; 1970-01-01 denotes an initial value without a known time.','muted'),browser,field('Exact object ID',historyId),historyOpen,eventOpen,historyStatus,historyRows,historyControls);
+    const eventPanel=el('div');eventPanel.id='owgObjectEventHistory';
+    const eventStatus=el('div',null,'muted');eventStatus.setAttribute('role','status');
+    const eventRows=el('div'),eventPrevious=button('Previous recorded events','secondary'),eventNext=button('Next recorded events','secondary');
+    const eventNav=el('div',null,'row');eventNav.append(eventPrevious,eventNext);
+    eventPanel.append(el('h4','Recorded events for this object'),el('p','These are stored event labels before activity mappings or hidden-activity filters. Equal timestamps do not establish business order; the event ID breaks ties. Qualifiers are supplied link labels.','muted'),eventStatus,eventRows,eventNav);
+    box.append(row,out,flatOut,attrOut,history,eventPanel,shared);
     let graph=null,flat=null,attrs=null,mapTurn=0;
     const flatCache=new Map(),attrCache=new Map();
     let historyTurn=0,historyRevision=null,historyOffset=0,historyFollowing=null;
-    const clearObjectHistory=()=>{++historyTurn;historyRevision=null;historyOffset=0;historyFollowing=null;historyStatus.textContent='';historyRows.replaceChildren();historyPrevious.disabled=historyNext.disabled=true;};
+    let eventTurn=0,eventRevision=null,eventOffset=0,eventFollowing=null;
+    const clearObjectEvents=()=>{++eventTurn;eventRevision=null;eventOffset=0;eventFollowing=null;eventStatus.textContent='';eventRows.replaceChildren();eventPrevious.disabled=eventNext.disabled=true;show(eventPanel,false);};
+    const clearObjectHistory=()=>{++historyTurn;historyRevision=null;historyOffset=0;historyFollowing=null;historyStatus.textContent='';historyRows.replaceChildren();historyPrevious.disabled=historyNext.disabled=true;clearObjectEvents();};
     clearObjectHistory();historyId.oninput=clearObjectHistory;
     async function loadObjectHistory(offset){
       const ticket=++historyTurn,selected=pick.value,object=historyId.value;
@@ -4971,6 +4979,26 @@
     historyOpen.onclick=()=>{historyRevision=null;loadObjectHistory(0);};
     historyPrevious.onclick=()=>loadObjectHistory(Math.max(0,historyOffset-50));
     historyNext.onclick=()=>loadObjectHistory(historyFollowing);
+    async function loadObjectEvents(offset){
+      const ticket=++eventTurn,selected=pick.value,object=historyId.value;
+      const active=()=>current()&&ticket===eventTurn&&pick.value===selected&&historyId.value===object;
+      show(eventPanel,true);
+      eventPrevious.disabled=eventNext.disabled=true;eventStatus.textContent='Loading recorded events…';eventRows.replaceChildren();
+      if(!object){eventStatus.textContent='Enter an exact object ID.';return;}
+      const query=new URLSearchParams({object_type:selected,object_id:object,offset:String(offset),limit:'50'});
+      if(eventRevision!==null)query.set('revision',String(eventRevision));
+      try{
+        const result=await getJSON(logPath('object-event-history').replace(/\?.*$/,'')+'?'+query);
+        if(!active())return;
+        eventRevision=result.log_revision;eventOffset=offset;eventFollowing=result.next_offset;
+        eventStatus.textContent=result.total_events?'Showing '+(offset+1).toLocaleString()+'–'+(offset+result.events.length).toLocaleString()+' of '+Number(result.total_events).toLocaleString()+' recorded events.':'No retained events are linked to this object.';
+        if(result.events.length)eventRows.replaceChildren(table(['Event ID','Activity','Timestamp (UTC)','Link qualifiers'],result.events.map(e=>[e.event_id,e.activity,e.timestamp,JSON.stringify(e.qualifiers)])));
+        eventPrevious.disabled=offset===0;eventNext.disabled=eventFollowing===null;
+      }catch(error){if(active()){eventRevision=null;eventStatus.textContent=error.message;}}
+    }
+    eventOpen.onclick=()=>{eventRevision=null;loadObjectEvents(0);};
+    eventPrevious.onclick=()=>loadObjectEvents(Math.max(0,eventOffset-50));
+    eventNext.onclick=()=>loadObjectEvents(eventFollowing);
     let browserTurn=0,browserRevision=null,browserIndex=0,browserFollowing=null,browserCursors=[null];
     const clearObjectBrowser=()=>{++browserTurn;browserRevision=null;browserIndex=0;browserFollowing=null;browserCursors=[null];browserStatus.textContent='';browserRows.replaceChildren();browserPrevious.disabled=browserNext.disabled=true;};
     clearObjectBrowser();browserSearch.oninput=clearObjectBrowser;
@@ -4991,7 +5019,10 @@
         if(result.objects.length)browserRows.replaceChildren(table(['Object ID','Linked events','Timed values','History'],result.objects.map(item=>{
           const open=button('Review history','secondary');open.setAttribute('aria-label','Review attribute history for '+JSON.stringify(item.object_id));
           open.onclick=()=>{historyId.value=item.object_id;clearObjectHistory();historyRevision=browserRevision;loadObjectHistory(0);};
-          return [item.object_id,Number(item.linked_events).toLocaleString(),Number(item.timed_values).toLocaleString(),open];
+          const events=button('Review events','secondary');events.setAttribute('aria-label','Review recorded events for '+JSON.stringify(item.object_id));
+          events.onclick=()=>{historyId.value=item.object_id;clearObjectHistory();eventRevision=browserRevision;loadObjectEvents(0);};
+          const actions=el('div',null,'row');actions.append(open,events);
+          return [item.object_id,Number(item.linked_events).toLocaleString(),Number(item.timed_values).toLocaleString(),actions];
         })));
         browserPrevious.disabled=index===0;browserNext.disabled=browserFollowing===null;
       }catch(error){if(active()){browserRevision=null;browserStatus.textContent=error.message;}}
@@ -5119,7 +5150,7 @@
       }
       graph=g;setOptions(pick,(state.objectTypes||[]).map(t=>[t.object_type,(t.object_type.trim()===t.object_type?t.object_type:JSON.stringify(t.object_type))+' ('+Number(t.objects).toLocaleString()+')']));
       if(state.caseType)pick.value=state.caseType;
-      browserRun.disabled=historyOpen.disabled=!pick.value;
+      browserRun.disabled=historyOpen.disabled=eventOpen.disabled=!pick.value;
       const touching=g.activities_touching_several_types||[];
       const sharedRows=el('div');sharedRows.id='owgObjectMapSharedActivities';
       const sharedStatus=el('div',null,'muted');sharedStatus.setAttribute('role','status');
