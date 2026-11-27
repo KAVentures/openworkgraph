@@ -254,3 +254,51 @@ def test_google_pkce_offline_scope_and_renewal(tmp_path,monkeypatch):
     assert oauth.disconnect(conn["connection_id"])["provider_revocation"]=="revoked"
     with pytest.raises(oauth.OAuthError):
         oauth.begin("google",client_id="desktop-client",scopes=["https://www.googleapis.com/auth/drive"])
+
+
+def test_changed_subevent_payload_rejects_overlapping_window():
+    p=google.create(config())
+    start=rest._stamp(p["config"]["initial_since"])
+    one=item(p,when=start+timedelta(hours=23,minutes=50))
+    first=run(p,lambda _:page([one]))
+    modified={**one,"events":[{"type":"access","name":"delete"}]}
+    with pytest.raises(rest.FeedError,match="retention_or_source_failed"):
+        run(first,lambda _:page([modified]))
+    assert rest.inventory()["profiles"][0]["checkpoint"]==first["checkpoint"]
+    assert workspace.list_logs()["logs"][0]["events"]==1
+
+
+def test_http_native_profile_dashboard_only_and_strict_json(tmp_path):
+    import os
+    from pathlib import Path
+    import subprocess
+    import sys
+    script=r"""
+from fastapi.testclient import TestClient
+from server.secure_app import app
+from server import local_auth,connector_oauth as oauth
+from test_google_workspace_audit import config,CONNECTION,google
+oauth._save({"version":1,"connections":{CONNECTION:{
+    "provider":"google","host":"","scopes":[google.SCOPE],"client_id":"test-client",
+    "refresh_token":"fixture-secret","connected_at":"2026-01-01T00:00:00Z"}}})
+with TestClient(app) as c:
+    h={"Authorization":"OWG-Session "+local_auth.create_dashboard_session()}
+    bearer={"Authorization":"Bearer "+local_auth.ensure_api_token()}
+    path='/v1/enterprise-connectors/google'
+    assert c.post(path,json=config(),headers=bearer).status_code in (401,403)
+    r=c.post(path,json=config(),headers=h)
+    assert r.status_code==200,r.text
+    p=r.json()
+    assert p["provider"]=="google"
+    assert "fixture-secret" not in r.text
+    assert c.post(path,content=b'{"name":"a","name":"b"}',headers={**h,"Content-Type":"application/json"}).status_code==422
+    assert c.get('/v1/enterprise-connectors',headers=h).json()["provider_reads_performed"] is False
+    assert c.post('/v1/enterprise-connectors/rest/'+p["profile_id"]+'/run',json={
+      "revision":1,"confirm_reads":False,"confirm_retention":True},headers=h).status_code==403
+"""
+    env={**os.environ,"WORKFLOW_OBSERVER_DATA":str(tmp_path/"data"),
+         "WORKFLOW_OBSERVER_AUTH_DIR":str(tmp_path/"auth"),
+         "WORKFLOW_OBSERVER_CONFIG":str(tmp_path/"config.json")}
+    proc=subprocess.run([sys.executable,"-c","import sys;sys.path.insert(0,'tests');"+script],
+                        cwd=Path(__file__).resolve().parents[1],env=env,capture_output=True,text=True,timeout=120)
+    assert proc.returncode==0,proc.stdout+proc.stderr
