@@ -74,6 +74,11 @@ CREATE TABLE IF NOT EXISTS logs (
   imported_at TIMESTAMP NOT NULL, events BIGINT NOT NULL, objects BIGINT NOT NULL,
   rejected_events BIGINT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS connector_bundle_import_receipts (
+ log_id VARCHAR NOT NULL, revision INTEGER NOT NULL,
+ bundle_sha256 VARCHAR NOT NULL, request_id VARCHAR NOT NULL UNIQUE, definition VARCHAR NOT NULL,
+ PRIMARY KEY(log_id,revision), UNIQUE(log_id,bundle_sha256)
+);
 CREATE TABLE IF NOT EXISTS events (
   log_id VARCHAR NOT NULL, event_id VARCHAR NOT NULL, activity VARCHAR NOT NULL,
   ts TIMESTAMP NOT NULL, resource VARCHAR NOT NULL, attributes VARCHAR NOT NULL
@@ -267,6 +272,9 @@ def _check_log(conn: duckdb.DuckDBPyConnection, log_id: str) -> dict[str, Any]:
     identity=source_identity.description(conn,log_id)
     if identity:result['source_identity']=identity
     result.update(object_relationships.metadata(conn,log_id))
+    from .enterprise_connector_bundle_import import metadata as bundle_metadata
+    provenance=bundle_metadata(conn,log_id,result["events"])
+    if provenance:result["connector_bundle_import"]=provenance
     return result
 
 
@@ -954,7 +962,7 @@ def delete_log(log_id: str, *, only_if_expired_at: datetime | None = None) -> di
                 forget_rest_dataset(conn, log_id)
                 from .event_log_agent_access import erase as erase_agent_access
                 erase_agent_access(conn, log_id)
-                for table in ("object_relationships", "event_source_keys", "event_source_namespaces", "discovery_snapshots", "log_appends", "log_quality", "quarantine", "quarantine_decisions", "filter_sets", "object_rule_sets",
+                for table in ("connector_bundle_import_receipts", "object_relationships", "event_source_keys", "event_source_namespaces", "discovery_snapshots", "log_appends", "log_quality", "quarantine", "quarantine_decisions", "filter_sets", "object_rule_sets",
                               "domain_pack_installs", "cohort_metric_definitions", "metric_definitions", "saved_analyses", "signal_snoozes", "signal_reviews", "signal_transitions", "signal_rules", "reference_nets", "case_tags", "case_attribute_upload_changes", "case_attribute_uploads", "event_log_agent_shares", "event_log_agent_tag_grants", "event_log_agent_run_sources", "cost_models", "activity_notes", "event_objects", "events", "objects",
                               "object_attribute_values",
                               "logs"):
