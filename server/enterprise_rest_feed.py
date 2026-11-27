@@ -11,6 +11,7 @@ import csv
 from datetime import datetime, timedelta, timezone
 from hashlib import sha256
 import hmac
+from importlib import import_module
 from io import BytesIO, StringIO
 import json
 import os
@@ -24,7 +25,7 @@ import httpx
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, ValidationError, model_validator
 
 from . import event_log_workspace as workspace
-from shared.enterprise_connector_contract import PROVIDERS, capabilities
+from shared.enterprise_connector_contract import PROVIDERS, NATIVE_ADAPTERS, capabilities
 
 FORMAT = "openworkgraph.enterprise-rest-feed.v1"
 MAX_PROFILES = 20
@@ -181,33 +182,19 @@ def _key(p, domain, value):
     return hmac.new(bytes.fromhex(p["key"]), (domain+"\0"+value).encode(),sha256).hexdigest()
 
 
-def _check_binding(p):
-    if p.get("provider") == "hubspot":
-        from . import hubspot_history_feed as hs
-        return hs.check_binding(p)
-    if p.get("provider") == "dataverse":
-        from . import dataverse_audit_feed as dv
-        return dv.check_binding(p)
-    if p.get("provider") == "sap":
-        from . import sap_procurement_feed as sap
-        return sap.check_binding(p)
-    if p.get("provider") == "servicenow":
-        from . import servicenow_operations_feed as sn
-        return sn.check_binding(p)
-    if p.get("provider") == "salesforce":
-        from . import salesforce_history_feed as sf
-        return sf.check_binding(p)
-    if p.get("provider") == "slack":
-        from . import slack_native_feed as slack
-        return slack.check_binding(p)
-    if p.get("provider") == "sql":
-        from . import enterprise_sql_feed as sql
-        return sql.check_binding(p)
-    if p.get("provider") == "google":
-        from . import google_workspace_audit as google
-        return google.check_binding(p)
-    if p.get("provider","rest")!="rest":
+def _adapter(provider):
+    if provider=="rest":
+        return None
+    module=NATIVE_ADAPTERS.get(provider)
+    if module is None:
         raise FeedError("unknown_enterprise_connector_provider",422)
+    return import_module("."+module,__package__)
+
+
+def _check_binding(p):
+    adapter=_adapter(p.get("provider","rest"))
+    if adapter is not None:
+        return adapter.check_binding(p)
     endpoint=_endpoint(p["config"]["endpoint"])
     token = _endpoint_credential(endpoint,p["config"]["credential_env"])
     if not hmac.compare_digest(_key(p,"credential",token),p["credential_binding"]):
@@ -391,27 +378,12 @@ def _begin(profile_id,revision,now):
                 workspace._check_log(c,p["log_id"])
             start=_stamp(p["checkpoint"] or p["config"]["initial_since"])
             attempted_at=now
-            if p.get("provider")=="google":
-                from . import google_workspace_audit as google
-                now=google.review_cutoff(p,now,start)
-            if p.get("provider")=="slack":
-                from . import slack_native_feed as slack
-                now=slack.cutoff(p,now,start)
-            if p.get("provider")=="salesforce":
-                from . import salesforce_history_feed as sf
-                now=sf.cutoff(p,now,start)
-            if p.get("provider")=="servicenow":
-                from . import servicenow_operations_feed as sn
-                now=sn.cutoff(p,now,start)
-            if p.get("provider")=="sap":
-                from . import sap_procurement_feed as sap
-                now=sap.cutoff(p,now,start)
-            if p.get("provider")=="dataverse":
-                from . import dataverse_audit_feed as dv
-                now=dv.cutoff(p,now,start)
-            if p.get("provider")=="hubspot":
-                from . import hubspot_history_feed as hs
-                now=hs.cutoff(p,now,start)
+            provider=p.get("provider","rest")
+            adapter=_adapter(provider)
+            if provider=="google":
+                now=adapter.review_cutoff(p,now,start)
+            elif adapter is not None and provider!="sql":
+                now=adapter.cutoff(p,now,start)
             if now<start:
                 raise FeedError("clock_before_checkpoint")
             until=min(now,start+timedelta(hours=p["config"]["window_hours"]))
@@ -622,34 +594,14 @@ def run(profile_id,revision,*,confirm_reads,confirm_retention,client_factory=htt
         raise FeedError("exact_revision_required",422)
     p,since,until=_begin(profile_id,revision,now or _now())
     try:
-        if p.get("provider")=="hubspot":
-            from . import hubspot_history_feed as hs
-            rows,counts=hs.extract(p,since,until,client_factory)
-        elif p.get("provider")=="dataverse":
-            from . import dataverse_audit_feed as dv
-            rows,counts=dv.extract(p,since,until,client_factory)
-        elif p.get("provider")=="sap":
-            from . import sap_procurement_feed as sap
-            rows,counts=sap.extract(p,since,until,client_factory)
-        elif p.get("provider")=="servicenow":
-            from . import servicenow_operations_feed as sn
-            rows,counts=sn.extract(p,since,until,client_factory)
-        elif p.get("provider")=="salesforce":
-            from . import salesforce_history_feed as sf
-            rows,counts=sf.extract(p,since,until,client_factory)
-        elif p.get("provider")=="slack":
-            from . import slack_native_feed as slack
-            rows,counts=slack.extract(p,since,until,client_factory)
-        elif p.get("provider")=="sql":
-            from . import enterprise_sql_feed as sql
-            rows,counts=sql.extract(p,since,until)
-        elif p.get("provider")=="google":
-            from . import google_workspace_audit as google
-            rows,counts=google.extract(p,since,until,client_factory)
-        elif p.get("provider","rest")=="rest":
+        provider=p.get("provider","rest")
+        adapter=_adapter(provider)
+        if adapter is None:
             rows,counts=_extract(p,since,until,client_factory)
+        elif provider=="sql":
+            rows,counts=adapter.extract(p,since,until)
         else:
-            raise FeedError("unknown_enterprise_connector_provider",422)
+            rows,counts=adapter.extract(p,since,until,client_factory)
         return _retain(p,rows,counts,until)
     except FeedError as error:
         _fail(p,error)
