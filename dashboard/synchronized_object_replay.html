@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>Synchronized object replay · OpenWorkGraph</title>
+<style>
+:root{color-scheme:light dark;--border:#87948b;--muted:light-dark(#4e6054,#c4d2c8);--panel:light-dark(#fff,#23352a);--bg:light-dark(#f3f6f3,#17251c);--text:light-dark(#203029,#e9efe8);--accent:light-dark(#255e48,#b7ebc6)}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:16px/1.5 system-ui,sans-serif}
+header,main{max-width:1180px;margin:auto;padding:16px}header{padding-top:26px}h1{font-size:clamp(1.5rem,3vw,2.2rem)}h2{font-size:1.2rem}p{overflow-wrap:anywhere;max-width:96ch}a{color:var(--accent)}
+section{background:var(--panel);border:1px solid var(--border);padding:16px;border-radius:10px;margin-bottom:16px;min-width:0}
+label{display:block;font-weight:600;min-width:0}input,select{display:block;max-width:100%;width:100%;font:inherit;margin:5px 0;padding:8px}
+button{font:inherit;font-weight:600;padding:9px 14px;min-height:42px;border:1px solid var(--accent);border-radius:7px;cursor:pointer}button:disabled{cursor:default;opacity:.65}
+:focus-visible{outline:3px solid #4179ca;outline-offset:3px}.row{display:flex;flex-wrap:wrap;gap:12px;align-items:center;margin-top:12px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,240px),1fr));gap:12px}.muted{color:var(--muted)}
+.tablewrap{overflow-x:auto;border:1px solid var(--border);border-radius:6px;max-width:100%}table{width:100%;border-collapse:collapse;min-width:620px}
+th,td{text-align:left;vertical-align:top;padding:8px;border-bottom:1px solid var(--border);overflow-wrap:anywhere;max-width:280px}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}.stat{padding:10px;border:1px solid var(--border);border-radius:6px}.stat strong{display:block;font-size:1.25rem}
+[hidden]{display:none!important}
+</style>
+<script src="/synchronized-object-replay.js" defer></script>
+</head>
+<body>
+<header><a href="/">Back to OpenWorkGraph</a><h1>Synchronized object-centric event replay</h1>
+<p>Check whether every original shared event can advance all its recorded modeled objects together. Exact structural evidence within bounded work; no policy or execution authority.</p></header>
+<main>
+<section aria-labelledby="setupHeading">
+<h2 id="setupHeading">1. Choose retained source and model</h2>
+<div class="grid"><label>Retained OCEL log<select id="log" disabled></select></label>
+<label>Import existing object process model JSON<input type="file" id="modelFile" accept=".json,application/json"></label></div>
+<div class="row"><button id="reload" type="button">Refresh logs</button><button id="discover" type="button" disabled>Discover model from selected log</button><button id="downloadModel" type="button" disabled>Download reviewed model JSON</button></div>
+<p class="muted">Discovery uses existing per-type lifecycle and arc discovery. For independent validation, load a model learned from a different log. Raw retained events are used for replay, including activities hidden by a workspace display filter.</p>
+<p id="setupStatus" role="status">Open this page from the authenticated local dashboard.</p>
+<div id="modelSummary"></div>
+</section>
+<section aria-labelledby="reviewHeading">
+<h2 id="reviewHeading">2. Review exact model against recorded events</h2>
+<div class="row"><button id="run" disabled type="button">Run synchronized replay</button><button id="clear" type="button">Clear review</button><button id="download" disabled type="button">Recheck and download summary JSON</button></div>
+<p id="status" role="status"></p><div id="results" hidden><div class="stats" id="stats"></div><p id="basis"></p><ul id="notes"></ul></div>
+</section>
+<section id="evidence" hidden aria-labelledby="evidenceHeading">
+<h2 id="evidenceHeading">3. Explore reviewed evidence</h2>
+<div class="grid"><label>Component status<select id="componentFilter"><option value="all">All components</option><option value="complete">Complete</option><option value="unfinished">Unfinished</option><option value="deviation">Deviation</option><option value="unknown">Unknown</option><option value="no_events">No events</option></select></label></div>
+<div id="components"></div><div class="row"><button id="componentPrev" disabled type="button">Previous components</button><button id="componentNext" disabled type="button">Next components</button></div>
+<p id="componentStatus" role="status"></p>
+<div id="componentDetail" hidden><h3 id="componentTitle">Selected component</h3>
+<div class="grid"><label>Evidence view<select id="view"><option value="events">Original events</option><option value="objects">Modeled objects</option></select></label><label>Evidence status<select id="detailFilter"></select></label></div>
+<div id="detail"></div><div class="row"><button id="detailPrev" type="button" disabled>Previous evidence</button><button id="detailNext" type="button" disabled>Next evidence</button><button id="downloadPage" type="button" disabled>Recheck and download evidence page</button></div><p id="detailStatus" role="status"></p>
+<div id="participantDetail" hidden><h3 id="participantTitle">Event participants</h3><div id="participants"></div><div class="row"><button id="participantPrev" type="button" disabled>Previous participants</button><button id="participantNext" type="button" disabled>Next participants</button></div><p id="participantStatus" role="status"></p></div>
+</div></section>
+</main></body></html>
