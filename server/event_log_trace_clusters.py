@@ -59,6 +59,13 @@ class _ClusterExportSpec(ClusterSpec):
     after: str | None = Field(default=None, min_length=1, max_length=8192)
 
 
+class _ClusterTagSpec(ClusterSpec):
+    cluster_key: str = Field(pattern=r"^[0-9a-f]{64}$")
+    tag: str = Field(min_length=1, max_length=60)
+    note: str = Field(default="", max_length=500)
+    expected_selection_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+
+
 class _ClusterCaseSpec(ClusterSpec):
     cluster_key: str = Field(pattern=r"^[0-9a-f]{64}$")
     after: str | None = Field(default=None, min_length=1, max_length=200)
@@ -243,8 +250,33 @@ def _case_export(conn, log_id: str, selected: _ClusterExportSpec, key_to_group: 
     return {"cluster": rank, "cluster_key": selected.cluster_key, "total": sizes[group], "rows": rows, "snapshot": snapshot}
 
 
+def _cluster_tag(conn, log_id: str, selected: _ClusterTagSpec, key_to_group: dict[str, int],
+                 sizes: Counter[int], ranks: dict[int, int], *, commit: bool) -> dict[str, Any]:
+    from . import event_log_case_tags as tags
+    if selected.cluster_key not in key_to_group:
+        raise workspace.EventLogWorkspaceError("the cluster has changed; run the cluster report again")
+    group = key_to_group[selected.cluster_key]
+    if sizes[group] > tags.MAX_CASES_BY_FILTER:
+        raise workspace.EventLogWorkspaceError(f"the cluster matches more than {tags.MAX_CASES_BY_FILTER:,} cases")
+    if commit and selected.expected_selection_sha256 is None:
+        raise workspace.EventLogWorkspaceError("preview the cluster tag before applying it")
+    parsed, tag = tags._validate(tags.AddTags, {"tag": selected.tag, "note": selected.note,
+        "case_type": selected.case_type, "cohort": {}, "expected_selection_sha256": selected.expected_selection_sha256})
+    conn.execute("""CREATE OR REPLACE TEMP TABLE ct_selected AS SELECT t.case_id
+        FROM tc t JOIN tcv v USING (path) WHERE v.cluster = ?""", [ranks[group]])
+    count = sizes[group]
+    already = conn.execute("""SELECT count(*) FROM case_tags WHERE log_id = ? AND tag = ?
+        AND case_id IN (SELECT case_id FROM ct_selected)""", [log_id, tag]).fetchone()[0]
+    if commit:
+        return {"tag": tag, "cluster": ranks[group], **tags._apply_selected(conn, log_id, parsed, tag, count, already, 0)}
+    digest, examples = tags._selection_review(conn, log_id, parsed, tag, 0)
+    return {"tag": tag, "cluster": ranks[group], "matched_cases": count, "already_tagged": already,
+            "selection_sha256": digest, "examples": examples}
+
+
 def _analyse(log_id: str, settings: ClusterSpec, review: _ClusterCaseSpec | None = None,
-             export: _ClusterExportSpec | None = None) -> dict[str, Any]:
+             export: _ClusterExportSpec | None = None, tag_spec: _ClusterTagSpec | None = None,
+             tag_commit: bool = False) -> dict[str, Any]:
 
     def run(conn):
         cohorts.restrict(conn, cohorts.parse_cohort(settings.cohort), log_id)
@@ -255,7 +287,7 @@ def _analyse(log_id: str, settings: ClusterSpec, review: _ClusterCaseSpec | None
         rows = conn.execute("SELECT path, count(*) AS n FROM tc GROUP BY path ORDER BY n DESC, path").fetchall()
         cases = sum(n for _, n in rows)
         if not cases:
-            if review is not None or export is not None:
+            if review is not None or export is not None or tag_spec is not None:
                 raise workspace.EventLogWorkspaceError("the cluster has changed; run the cluster report again")
             return {"cases": 0, "clusters": [], "variants": 0}
         presence = Counter()
@@ -305,6 +337,9 @@ def _analyse(log_id: str, settings: ClusterSpec, review: _ClusterCaseSpec | None
             return _case_page(conn, review, {key: c for c, key in cluster_keys.items()}, sizes, rank)
         if export is not None:
             return _case_export(conn, log_id, export, {key: c for c, key in cluster_keys.items()}, sizes, rank)
+        if tag_spec is not None:
+            return _cluster_tag(conn, log_id, tag_spec, {key: c for c, key in cluster_keys.items()}, sizes, rank,
+                                commit=tag_commit)
         stats = {r[0]: r[1:] for r in conn.execute("""SELECT v.cluster, quantile_cont(t.seconds, 0.5), avg(t.seconds),
                 avg(t.events) FROM tc t JOIN tcv v USING (path) GROUP BY v.cluster""").fetchall()}
         out = []
@@ -364,6 +399,18 @@ def cluster_cases(log_id: str, spec: Any) -> dict[str, Any]:
     return {key: data[key] for key in ("case_notion", "cluster", "cluster_key", "total", "cases", "next_after")}
 
 
+def cluster_tag_preview(log_id: str, spec: Any) -> dict[str, Any]:
+    settings = _parse(spec, _ClusterTagSpec)
+    return _analyse(log_id, settings, tag_spec=settings)
+
+
+def cluster_tag_apply(log_id: str, spec: Any) -> dict[str, Any]:
+    settings = _parse(spec, _ClusterTagSpec)
+    if settings.expected_selection_sha256 is None:
+        raise workspace.EventLogWorkspaceError("preview the cluster tag before applying it")
+    return _analyse(log_id, settings, tag_spec=settings, tag_commit=True)
+
+
 def cluster_cases_csv(log_id: str, spec: Any) -> tuple[str, dict[str, Any]]:
     from .event_log_variant_export import _cell
     settings = _parse(spec, _ClusterExportSpec)
@@ -381,4 +428,4 @@ def cluster_cases_csv(log_id: str, spec: Any) -> tuple[str, dict[str, Any]]:
                             if len(data["rows"]) > MAX_EXPORT_CASES else None}
 
 
-__all__ = ["clusters", "cluster_cases", "cluster_cases_csv"]
+__all__ = ["clusters", "cluster_cases", "cluster_cases_csv", "cluster_tag_preview", "cluster_tag_apply"]

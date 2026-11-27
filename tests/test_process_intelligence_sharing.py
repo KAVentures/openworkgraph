@@ -303,7 +303,7 @@ PROCESS_TOOLS = {"list_process_logs", "get_process_overview", "get_process_overv
                  "get_process_trace_clusters", "check_process_compliance", "get_process_performance_spectrum",
                  "get_unusual_process_cases",
                  "get_process_due_dates",
-                 "simulate_process_scenario",
+                 "simulate_process_scenario", "compare_process_scenarios",
                  "get_process_next_steps",
                  "predict_open_process_cases", "predict_next_process_activity",
                  "get_process_insights",
