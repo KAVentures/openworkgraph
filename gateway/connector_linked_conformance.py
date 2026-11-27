@@ -18,7 +18,7 @@ class Selector(Strict):
 
 
 class Rule(Strict):
-    rule_id:str=Field(pattern=r"^[a-zA-Z0-9_-]{1,48}$")
+    rule_id:str=Field(pattern=r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,47}$")
     kind:Literal["required","forbidden","count_range","cooccurs","precedes","response"]
     left:Selector
     right:Selector|None=None
