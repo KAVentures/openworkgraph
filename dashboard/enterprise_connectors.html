@@ -131,6 +131,27 @@ p{overflow-wrap:anywhere;max-width:94ch}.profile{border:1px solid var(--border);
 <p><label><input id="snCreation" type="checkbox"> I separately approve retention of record-creation events for selected tables.</label></p>
 <p><label><input id="snAll" type="checkbox"> I separately approve unrestricted visible records for any selected table without a record-ID restriction.</label></p>
 <button id="snCreateButton" type="submit" disabled>Save ServiceNow profile</button></form></details>
+<details><summary>Create native SAP procurement feed</summary>
+<p>Choose a deployment-approved SAP OData V2 source, exact purchase orders and evidence streams. The dates are day-level business dates represented at midnight UTC for storage, not actual execution times. Material and invoice header reads may receive unselected references transiently; only selected purchase-order events are retained.</p>
+<form id="sapCreate"><div class="grid">
+<label>Profile name<input id="sapName" required maxlength="100"></label>
+<label>Approved SAP source<select id="sapSource" required></select></label>
+<label>Exact purchase order numbers (comma separated)<input id="sapOrders" required maxlength="1100"></label>
+<label>Initial date (UTC midnight)<input id="sapSince" type="date" required></label>
+<label>Window (days)<input id="sapWindow" type="number" min="1" max="7" value="1" required></label>
+<label>Overlap (days)<input id="sapOverlap" type="number" min="0" max="1" value="0" required></label>
+<label>Completed-day lag (days)<input id="sapLag" type="number" min="0" max="7" value="1" required></label>
+<label>Accepted maximum provider page size<input id="sapPage" type="number" min="1" max="500" value="500" required></label>
+</div><div id="sapReview"></div><fieldset><legend>Native streams</legend>
+<label><input id="sapPO" type="checkbox"> Purchase-order creation day</label>
+<label><input id="sapMovement" type="checkbox"> PO-referenced material movement posting day</label>
+<label><input id="sapInvoice" type="checkbox"> PO-referenced supplier invoice posting day</label>
+</fieldset>
+<p><label><input id="sapConfirm" type="checkbox" required> I reviewed the exact deployment source, SAP client, metadata pins, selected order numbers and streams.</label></p>
+<p><label><input id="sapPrecision" type="checkbox" required> I understand that these are day-level dates and cannot establish within-day timing or ordering.</label></p>
+<p><label><input id="sapRetention" type="checkbox" required> I approve retention of the selected pseudonymous PO case events.</label></p>
+<p><label><input id="sapTransient" type="checkbox"> I separately approve transient read of unrelated PO references in material and invoice headers during each selected date window.</label></p>
+<button id="sapCreateButton" type="submit" disabled>Save SAP profile</button></form></details>
 <p id="restStatus" role="status"></p><div id="profiles"></div></section>
 <section><h2>Other configured adapters</h2><p>Use the main dashboard's Privacy → Business system sign-in and Evidence panels for the existing provider-specific consent and configuration workflows. CLI-only adapters remain outside this local inventory.</p><a href="/">Open the main dashboard</a></section>
 </main></body></html>
