@@ -380,6 +380,60 @@
         }
       }
       card.append(controls);
+      if(p.historical_reconciliation_supported){
+        const h=el('details');h.append(el('summary','Historical window reconciliation'),
+          el('p','Re-read one previously traversed change window with the same reviewed scope and exact event keys. This may recover late evidence, and applies current case exclusions, but does not establish complete source history. The live checkpoint does not move.'));
+        const history=p.historical_receipts||[];
+        if(history.length)h.append(table(['Window start','Window end','Outcome','Added','Duplicates','Excluded','Checkpoint','Error'],
+          history.map(x=>[x.since,x.until,x.outcome,x.events_added,x.duplicates_skipped,x.excluded_case_events,x.checkpoint_after,x.error])));
+        else h.append(el('p','No historical receipts yet.'));
+        if(p.historical_active){
+          const a=p.historical_active;
+          h.append(el('p','Active historical intent: '+a.since+' — '+a.until+(a.lease_expired?' (expired; reconcile before another read)':' (running)')));
+          if(a.lease_expired)h.append(button('Reconcile expired historical intent',()=>action(async()=>{
+            if(!window.confirm('I stopped the relevant source workers, inspected the retained log and accept that the interrupted read outcome is uncertain. This will not read the provider.'))return 'Cancelled.';
+            await api(base+'/rest/'+p.profile_id+'/historical-reconcile',{revision:p.revision,request_id:a.request_id,
+                confirm_workers_stopped:true,confirm_uncertain_outcome:true});
+            return 'Expired historical intent reconciled; checkpoint preserved.';
+          })));
+        }else if(p.enabled&&!p.integrity_hold&&p.checkpoint&&p.credential_binding_available){
+          const since=el('input');since.type='text';since.value=p.config.initial_since;
+          const until=el('input');until.type='text';until.value=p.checkpoint;
+          const sl=el('label','Historical change window start (ISO timezone-qualified)');sl.append(since);
+          const ul=el('label','Historical change window end (exclusive)');ul.append(until);
+          const result=el('div'),read=check('Authorize one historical provider read of the exact reviewed window.'),
+            retain=check('Retain recovered evidence using existing source identities; checkpoint stays fixed.'),
+            workers=check('I stopped/reconciled external workers and paused or removed competing local schedules.');
+          let reviewed=null,checking=false,requestId=null;
+          const sync=()=>commit.disabled=busy||checking||!reviewed||!read.box.checked||!retain.box.checked||!workers.box.checked;
+          const invalidate=()=>{reviewed=null;requestId=null;result.replaceChildren();read.box.checked=retain.box.checked=workers.box.checked=false;sync();};
+          const preview=button('Preview historical window',async()=>{
+            if(busy||checking)return;
+            invalidate();checking=true;preview.disabled=true;since.disabled=until.disabled=true;sync();
+            try{
+              const plan=await api(base+'/rest/'+p.profile_id+'/historical-preview',{revision:p.revision,since:since.value,until:until.value});
+              if(!h.isConnected)return;
+              reviewed=plan;requestId=Array.from(crypto.getRandomValues(new Uint8Array(16)),b=>b.toString(16).padStart(2,'0')).join('');
+              result.replaceChildren(table(['Exact historical plan','Value'],[['Window start',plan.since],['Window end',plan.until],
+                ['Current checkpoint',plan.checkpoint],['Excluded cases in profile',plan.excluded_case_count],['Maximum projected rows',plan.max_rows],['Plan SHA-256',plan.plan_sha256],
+                ['Provider read performed',plan.provider_reads_performed]]));
+            }catch(e){if(h.isConnected)result.textContent=e.message;}
+            finally{checking=false;preview.disabled=false;since.disabled=until.disabled=false;sync();}
+          });
+          const commit=button('Read and retain historical window',()=>action(async()=>{
+            if(!reviewed||!read.box.checked||!retain.box.checked||!workers.box.checked)throw Error('Preview and explicitly approve the historical window.');
+            const x=await api(base+'/rest/'+p.profile_id+'/historical-execute',{revision:p.revision,since:reviewed.since,until:reviewed.until,
+                expected_plan_sha256:reviewed.plan_sha256,request_id:requestId,confirm_historical_read:true,
+                confirm_retention:true,confirm_workers_reconciled:true});
+            const receipt=x.receipt;
+            return 'Historical '+receipt.outcome+': '+(receipt.events_added??'unknown')+' added, '+(receipt.duplicates_skipped??'unknown')+' duplicates. Checkpoint '+receipt.checkpoint_after;
+          }),true);
+          since.oninput=until.oninput=invalidate;
+          read.box.onchange=retain.box.onchange=workers.box.onchange=sync;
+          h.append(sl,ul,preview,result,read.node,retain.node,workers.node,commit);
+        }else h.append(el('p','An enabled feed with a completed checkpoint and current credential binding is required.'));
+        card.append(h);
+      }
       const jobs=r.profiles.find(q=>q.target_id===p.profile_id)?.schedules||[];
       const interval=el('input');interval.type='number';interval.min='15';interval.max='10080';interval.step='1';interval.value='60';
       const intervalLabel=el('label','Recurring interval (minutes)');intervalLabel.append(interval);
