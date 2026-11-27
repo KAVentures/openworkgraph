@@ -41,12 +41,13 @@ def validate_state(state):
     last=1
     for row in reviews:
         cohort.exact(row,("revision","evidence_head_sha256","decision_sha256","disposition","reason",
-                          "threshold_outcome","full_paired_coverage","review_sha256"))
+                          "score_sha256","coverage_sha256","threshold_outcome","full_paired_coverage","review_sha256"))
         rev=row["revision"]
         if type(rev) is not int or not last<rev<=state["revision"]:
             raise ValueError("invalid decision review revision")
         last=rev
         cohort.pin(row["evidence_head_sha256"]);cohort.pin(row["decision_sha256"])
+        cohort.pin(row["score_sha256"]);cohort.pin(row["coverage_sha256"])
         if cohort.pin(row["review_sha256"])!=cohort.digest({k:v for k,v in row.items() if k!="review_sha256"}):
             raise ValueError("decision review digest mismatch")
         if row["disposition"] not in ALLOWED or row["reason"] not in ALLOWED[row["disposition"]]:
@@ -57,6 +58,10 @@ def validate_state(state):
             raise ValueError("incomplete coverage cannot pass")
         if row["disposition"]=="continue_external_validation" and row["threshold_outcome"]!="pass":
             raise ValueError("validation continuation requires passing protocol")
+        if row["reason"]=="incomplete_review" and row["full_paired_coverage"]:
+            raise ValueError("incomplete review reason contradicts report")
+        if row["reason"]=="thresholds_not_met" and row["threshold_outcome"]!="fail":
+            raise ValueError("failed threshold reason contradicts report")
 
 
 def validate_history(state,history):
@@ -104,7 +109,7 @@ def status(path,*,expected_head_sha256):
     return {"format":FORMAT,"head_sha256":expected_head_sha256,"registered":True,
             "protocol":state["decision_protocol"],"review_count":len(rows),
             "reviews":rows,"latest_review_current":bool(latest and latest["revision"]==state["revision"]),
-            "latest_review":latest,"rollout_authorized":False}
+            "latest_review":latest,"external_review_submissions_rechecked":False,"rollout_authorized":False}
 
 
 def preview(path,truth,batches,*,expected_head_sha256,expected_protocol_sha256,confirmed):
@@ -142,10 +147,13 @@ def record(path,truth,batches,*,expected_head_sha256,expected_protocol_sha256,ex
         rows=state["decision_reviews"]
         if len(rows)>=MAX_REVIEWS:
             raise ValueError("decision review capacity reached")
-        if rows and rows[-1]["revision"]==state["revision"]:
-            raise workspace.Conflict("latest review already current; new study evidence required")
+        if (rows and rows[-1]["revision"]==state["revision"] and
+                rows[-1]["score_sha256"]==report["score_sha256"] and
+                rows[-1]["disposition"]==disposition and rows[-1]["reason"]==reason):
+            raise workspace.Conflict("latest review already current; new evidence or disposition required")
         row={"revision":state["revision"]+1,"evidence_head_sha256":expected_head_sha256,
-             "decision_sha256":expected_decision_sha256,"disposition":disposition,"reason":reason,
+             "decision_sha256":expected_decision_sha256,"score_sha256":report["score_sha256"],
+             "coverage_sha256":report["coverage_sha256"],"disposition":disposition,"reason":reason,
              "threshold_outcome":outcome,"full_paired_coverage":coverage}
         row["review_sha256"]=cohort.digest(row)
         updated=workspace._commit(conn,state,{**workspace._body(state),"decision_reviews":[*rows,row]},
