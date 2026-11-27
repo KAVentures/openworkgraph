@@ -448,15 +448,22 @@ def _retain(p,rows,counts,until):
     writer.writerows(rows)
     mapping={"event_id_column":"event","case_column":"case","activity_column":"activity",
              "timestamp_column":"time","resource_column":"resource","source_namespace":p["profile_id"]}
-    committed={"log_id":None}
     def checkpoint(conn,log_id):
         _guard(conn,p)
+        if rows and p["log_id"]:
+            added,duplicates=conn.execute("""SELECT added_events,duplicate_events FROM log_appends
+                WHERE log_id=? ORDER BY batch DESC LIMIT 1""",[log_id]).fetchone()
+        elif rows:
+            added=conn.execute("SELECT events FROM logs WHERE log_id=?",[log_id]).fetchone()[0]
+            duplicates=0
+        else:
+            added=duplicates=0
         saved=dict(p)
         saved.update(log_id=log_id,checkpoint=_iso(until),last_success_at=_iso(_now()),status="read_retained",
                      run_id=None,lease_until=0,retry_not_before=0,
-                     last_result={**counts,"outcome":"succeeded","distinct_events_in_window":len(rows)})
+                     last_result={**counts,"outcome":"succeeded","distinct_events_in_window":len(rows),
+                                  "events_added":added,"duplicates_skipped":duplicates})
         _put(conn,saved)
-        committed["log_id"]=log_id
     with workspace._LOCK:
         _check(p)
         if rows:
