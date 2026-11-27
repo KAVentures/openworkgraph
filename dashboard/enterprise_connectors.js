@@ -66,7 +66,7 @@
     const select=$('sfConnection'),previous=select.value;
     select.replaceChildren();
     for(const grant of (grants.connections||[]).filter(g=>g.provider==='salesforce'&&!g.reauthorization_required&&g.has_refresh_token&&(g.scopes||[]).includes('api')&&(g.scopes||[]).some(x=>['id','openid','profile'].includes(x)))){
-      const option=el('option',grant.connection_id+' · '+(grant.host||'instance'));
+      const option=el('option',grant.connection_id+' · '+(grant.api_host||grant.host||'instance'));
       option.value=grant.connection_id;select.append(option);
     }
     if([...select.options].some(o=>o.value===previous))select.value=previous;
