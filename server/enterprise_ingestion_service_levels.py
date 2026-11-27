@@ -3,7 +3,7 @@
 No credential access, source dispatch, remote notification or live-health claim.
 All decisions use only the retained profile and its admitted run journal.
 """
-from datetime import datetime, timezone
+from datetime import timedelta
 import json
 import secrets
 from pydantic import Field, StrictInt, StrictBool, ValidationError, model_validator
@@ -238,7 +238,7 @@ def evaluate_one(c,p,rule,now):
             else:
                 put_episode(c,item)
     rule.update(last_evaluated_at=stamp,next_due_at=rest._iso(
-        now+__import__("datetime").timedelta(minutes=rule["interval_minutes"])),last_observations=observations)
+        now+timedelta(minutes=rule["interval_minutes"])),last_observations=observations)
     put_rule(c,rule)
     prune(c,p["profile_id"])
     return {"profile_id":p["profile_id"],"opened":opened,"closed":closed,"observations":observations}
@@ -249,7 +249,7 @@ def evaluate_due(*, now=None, force=False):
     now=now or rest._now()
     # The scheduler calls this frequently. Before first opt-in, don't create
     # a workspace or monitor tables merely because the desktop is running.
-    if not force and not ws.DATA_DIR.exists():
+    if not force and not ws.database_path().exists():
         return {"evaluated":[],"errors":[]}
     with ws._LOCK:
         c=rest._connect()
@@ -266,8 +266,9 @@ def evaluate_due(*, now=None, force=False):
                     c.execute("BEGIN")
                     try:
                         p=rest._get(c,rule["profile_id"])
-                        results.append(evaluate_one(c,p,rule,now))
+                        result=evaluate_one(c,p,rule,now)
                         c.execute("COMMIT")
+                        results.append(result)
                     except Exception:
                         c.execute("ROLLBACK")
                         raise
