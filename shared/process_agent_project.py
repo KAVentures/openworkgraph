@@ -110,7 +110,7 @@ def build_runtime_project(packet: dict) -> bytes:
     model = ProcessModel.model_validate(spec['process_model'])
     files = {name: (_TEMPLATES / (name + '.txt')).read_text(encoding='utf-8')
              for name in ('agent.py', 'runtime.py', 'test_shadow.py', 'test_agent_sdk.py', 'execute.py', 'test_execution.py', 'monitor.py', 'test_monitor.py', 'send_report.py', 'stop.py', 'configure.py', 'test_configuration.py', 'evaluate.py', 'test_evaluation.py', 'plan_sources.py', 'test_source_planning.py', 'evaluate_sources.py', 'test_source_evaluation.py', 'check_runtime.py', 'review_bindings.py', 'test_binding_rehearsal.py')}
-    for name in ('run_queue.py', 'test_run_queue.py', 'execute_http.py', 'test_execute_http.py'):
+    for name in ('run_queue.py', 'test_run_queue.py', 'execute_http.py', 'test_execute_http.py', 'import_openapi.py', 'test_import_openapi.py'):
         files[name] = (_TEMPLATES / (name + '.txt')).read_text(encoding='utf-8')
     files['owg_report_signing.py'] = (Path(__file__).parent/'automation_report_signing.py').read_text(encoding='utf-8')
     for name in ('process_source_state.py','process_rule_conditions.py'):
@@ -515,6 +515,9 @@ def build_runtime_project(packet: dict) -> bytes:
         'For writes, confirm the provider enforces strong If-Match and Idempotency-Key.\n'
         'Record the canonical execute.digest of the reviewed catalog independently, then run\n'
         'python execute_http.py --operations operations.json --operations-sha256 PIN --catalog catalog.json.\n'
+        'For a supported local OpenAPI 3.0/3.1 JSON file, import_openapi.py inspect, propose and approve\n'
+        'can generate the operation mappings without network access. The proposal is disabled; exact\n'
+        'per-operation review and separate conditional-write approval are required before catalog creation.\n'
         'This is offline metadata, not a provider schema probe. Set tool_server_url in the existing\n'
         'bindings to the exact origin; pin every action and precondition to catalog input_schema_sha256.\n'
         'Use the normal disabled intent template and separate customer approval. Set the distinct\n'

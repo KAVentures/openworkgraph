@@ -1,0 +1,40 @@
+name: direct-http-onboarding
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - 'shared/process_agent_templates/import_openapi.py.txt'
+      - 'shared/process_agent_templates/test_import_openapi.py.txt'
+      - 'shared/process_agent_templates/execute_http.py.txt'
+      - 'shared/process_agent_templates/execute.py.txt'
+      - 'shared/process_agent_project.py'
+      - '.github/workflows/direct-http-onboarding.yml'
+permissions:
+  contents: read
+jobs:
+  offline-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install only required test dependencies
+        run: python -m pip install "httpx>=0.28,<1" "pytest>=8,<9" "pydantic>=2.12,<3" "jsonschema>=4.23,<5"
+      - name: Stage exact portable templates
+        run: |
+          mkdir -p "$RUNNER_TEMP/owg-http-onboarding"
+          for name in execute runtime execute_http import_openapi test_import_openapi; do
+            cp "shared/process_agent_templates/$name.py.txt" "$RUNNER_TEMP/owg-http-onboarding/$name.py"
+          done
+          cp shared/process_source_state.py shared/process_rule_conditions.py "$RUNNER_TEMP/owg-http-onboarding/"
+      - name: Run offline compiler and adapter tests
+        working-directory: ${{ runner.temp }}/owg-http-onboarding
+        run: |
+          python -m compileall -q .
+          python -m unittest -v test_import_openapi
+      - name: Verify generated archive and portable acceptance inventory
+        run: python -m pytest --noconftest -q tests/test_process_agent_project.py tests/test_customer_runtime_acceptance.py
