@@ -325,6 +325,30 @@ const path=require('node:path');
     await page.locator('#retain').click();
     await page.locator('#status').filter({hasText:'Bundle retained: Quality linked browser fixture'}).waitFor();
     await page.locator('#logs').getByRole('heading',{name:'Quality linked browser fixture'}).waitFor();
+    // The integrated CI job passes actual Gateway downloads (not manually
+    // assembled hashes) from the independent synthetic Gateway browser.
+    if(process.env.OWG_BROWSER_EVIDENCE_FIXTURES){
+      for(const [filename,logName,linked] of [['ordinary-quality.json','Gateway ordinary quality handoff',false],
+          ['portable.json','Gateway portable handoff',true],['portable-quality.json','Gateway linked quality handoff',true]]){
+        const exactPath=path.join(process.env.OWG_BROWSER_EVIDENCE_FIXTURES,filename);
+        const exactBytes=await fs.readFile(exactPath),expected=JSON.parse(exactBytes);
+        await page.locator('#target').selectOption('');
+        await page.locator('#name').fill(logName);
+        await page.locator('#file').setInputFiles(exactPath);
+        await page.locator('#preview').click();
+        await page.locator('#reviewPanel').waitFor({state:'visible'});
+        await page.locator('#review').getByText(createHash('sha256').update(exactBytes).digest('hex'),{exact:true}).waitFor();
+        await page.locator('#origin').check();await page.locator('#retention').check();
+        if(linked)await page.locator('#linkageConsent').check();
+        if(expected.quality_review){assert.ok(await page.locator('#retain').isDisabled());await page.locator('#qualityConsent').check();}
+        await page.locator('#retain').click();
+        await page.locator('#status').filter({hasText:'Bundle retained: '+logName}).waitFor();
+        const card=page.locator('#logs article').filter({has:page.getByRole('heading',{name:logName,exact:true})});
+        await card.getByRole('button',{name:'View import receipts'}).click();
+        await page.locator('#history').getByRole('heading',{name:logName+' · import receipts'}).waitFor();
+        if(expected.quality_review)await page.locator('#history').getByText(expected.quality_review.quality_sha256,{exact:true}).waitFor();
+      }
+    }
     await page.setViewportSize({width:390,height:840});
     assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+2));
     assert.deepEqual(errors,[]);assert.deepEqual(foreign,[]);
