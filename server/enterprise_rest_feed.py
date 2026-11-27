@@ -24,6 +24,7 @@ import httpx
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, ValidationError, model_validator
 
 from . import event_log_workspace as workspace
+from shared.enterprise_connector_contract import PROVIDERS, capabilities
 
 FORMAT = "openworkgraph.enterprise-rest-feed.v1"
 MAX_PROFILES = 20
@@ -134,11 +135,29 @@ def _endpoint(value):
     except (ValueError,TypeError):
         raise FeedError("invalid_deployment_endpoint_allowlist") from None
     if value not in allowed:
-        raise FeedError("invalid_connector_secret_catalog","invalid_connector_secret_root","unsafe_connector_secret_ancestor",
-                           "connector_secret_root_must_be_owner_only","unsafe_connector_secret_file","connector_secret_file_unavailable",
-                           "connector_secret_changed_during_read","invalid_connector_secret_file_content","connector_secret_files_require_posix",
-                           "endpoint_not_deployment_allowlisted",403)
+        raise FeedError("endpoint_not_deployment_allowlisted",403)
     return value
+
+
+def _endpoint_credential(endpoint,reference):
+    """Optional exact deployment association; never silently fall back."""
+    raw=os.environ.get("OWG_REST_ENDPOINT_CREDENTIALS")
+    if raw is not None:
+        try:
+            if len(raw)>65536:
+                raise ValueError()
+            value=_strict_json(raw.encode())
+            if (not isinstance(value,dict) or not 1<=len(value)<=100
+                    or any(not isinstance(k,str) or not isinstance(v,str) or not ENV.fullmatch(v)
+                           for k,v in value.items())):
+                raise ValueError()
+            for k in value:
+                _endpoint(k)
+        except (FeedError,ValueError,TypeError):
+            raise FeedError("invalid_rest_endpoint_credential_catalog",403) from None
+        if value.get(endpoint)!=reference:
+            raise FeedError("rest_endpoint_credential_pair_not_approved",403)
+    return _credential(reference)
 
 
 def resolve_secret(reference):
@@ -187,8 +206,10 @@ def _check_binding(p):
     if p.get("provider") == "google":
         from . import google_workspace_audit as google
         return google.check_binding(p)
-    _endpoint(p["config"]["endpoint"])
-    token = _credential(p["config"]["credential_env"])
+    if p.get("provider","rest")!="rest":
+        raise FeedError("unknown_enterprise_connector_provider",422)
+    endpoint=_endpoint(p["config"]["endpoint"])
+    token = _endpoint_credential(endpoint,p["config"]["credential_env"])
     if not hmac.compare_digest(_key(p,"credential",token),p["credential_binding"]):
         raise FeedError("credential_changed_reconfigure_required")
     return token
@@ -219,6 +240,7 @@ def _public(p,now):
                            "checkpoint","last_success_at","last_attempt_at","last_result","retry_not_before")}
     out["config"] = p["config"]
     out["provider"] = p.get("provider", "rest")
+    out["adapter_capabilities"]=capabilities(out["provider"]) if out["provider"] in PROVIDERS else None
     if p.get("provider")=="sql":
         out["source_schema_sha256"]=p.get("source_schema_sha256")
     if p["status"]=="running" and p["lease_until"]<=now:
@@ -254,7 +276,7 @@ def create(value):
     if spec.confirm_configuration is not True or spec.confirm_activity_labels is not True:
         raise FeedError("explicit_configuration_and_label_retention_required",403)
     endpoint=_endpoint(spec.endpoint)
-    token=_credential(spec.credential_env)
+    token=_endpoint_credential(endpoint,spec.credential_env)
     since=_stamp(spec.initial_since)
     now=_now()
     if not now-timedelta(days=366)<=since<=now:
@@ -268,6 +290,8 @@ def create(value):
 
 def create_profile(config,identity,now,*,provider="rest"):
     """Internal factory: provider adapters validate configuration first."""
+    if provider not in PROVIDERS:
+        raise FeedError("unknown_enterprise_connector_provider",422)
     p={"profile_id":"rest_"+secrets.token_hex(12),"revision":1,"enabled":True,"provider":provider,
        "key":secrets.token_hex(32),"config":config,"created_at":_iso(now),"status":"ready",
        "log_id":None,"checkpoint":None,"last_success_at":None,"last_attempt_at":None,
@@ -622,8 +646,10 @@ def run(profile_id,revision,*,confirm_reads,confirm_retention,client_factory=htt
         elif p.get("provider")=="google":
             from . import google_workspace_audit as google
             rows,counts=google.extract(p,since,until,client_factory)
-        else:
+        elif p.get("provider","rest")=="rest":
             rows,counts=_extract(p,since,until,client_factory)
+        else:
+            raise FeedError("unknown_enterprise_connector_provider",422)
         return _retain(p,rows,counts,until)
     except FeedError as error:
         _fail(p,error)
@@ -657,7 +683,11 @@ def run_scheduled(profile_id,revision):
     except FeedError as error:
         if error.code in {"unknown_rest_profile","rest_profile_disabled","profile_changed_or_disabled",
                            "credential_changed_reconfigure_required","rest_run_invalidated",
-                           "endpoint_not_deployment_allowlisted","google_grant_unavailable","google_grant_scope_mismatch","google_reconnect_required",
+                           "endpoint_not_deployment_allowlisted","invalid_rest_endpoint_credential_catalog","rest_endpoint_credential_pair_not_approved",
+                           "unknown_enterprise_connector_provider","invalid_connector_secret_catalog","invalid_connector_secret_root",
+                           "unsafe_connector_secret_ancestor","connector_secret_root_must_be_owner_only","unsafe_connector_secret_file",
+                           "connector_secret_file_unavailable","connector_secret_changed_during_read","invalid_connector_secret_file_content",
+                           "connector_secret_files_require_posix","google_grant_unavailable","google_grant_scope_mismatch","google_reconnect_required",
                            "hubspot_source_definition_changed","hubspot_required_scope_missing","hubspot_private_token_unavailable","hubspot_account_app_or_scope_mismatch",
                            "dataverse_source_definition_changed","dataverse_secret_unavailable","dataverse_application_auth_failed","dataverse_application_identity_mismatch",
                            "sap_source_definition_changed","sap_credential_unavailable","sap_metadata_changed_requires_review",

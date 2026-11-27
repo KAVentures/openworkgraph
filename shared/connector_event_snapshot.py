@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 import hashlib
 import json
 from typing import Literal
+from shared.enterprise_connector_contract import Provider
 
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, model_validator
 
@@ -54,7 +55,7 @@ class Manifest(Strict):
     profile_id: str=Field(pattern=PROFILE)
     profile_revision: StrictInt=Field(ge=1,le=1_000_000)
     profile_sha256: str=Field(pattern=DIGEST)
-    provider: Literal["rest","google","sql","slack","salesforce","servicenow","sap","dataverse","hubspot"]
+    provider: Provider
     since: str=Field(max_length=40)
     until: str=Field(max_length=40)
     checkpoint: str=Field(max_length=40)

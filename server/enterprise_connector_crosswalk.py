@@ -22,7 +22,7 @@ from server import enterprise_rest_feed as rest
 from server import enterprise_connector_snapshot as snapshots
 from server import event_log_workspace as ws
 
-SUPPORTED={"rest","sql","salesforce","servicenow","sap","dataverse","hubspot"}
+from shared.enterprise_connector_contract import CROSSWALK_PROVIDERS as SUPPORTED
 MAX_INPUT=2*1024*1024
 
 

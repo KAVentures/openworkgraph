@@ -17,6 +17,8 @@ from . import connector_oauth, local_scheduler, sap_o2c_sync
 from .local_source_credentials import stripe_source_status
 
 FORMAT = "openworkgraph.enterprise-connector-operations.v1"
+from shared.enterprise_connector_contract import PROVIDERS as RETAINED_PROVIDERS, capabilities
+
 PROVIDERS = (
     ("salesforce","Salesforce","native_multi_object_field_history_and_selected_case_history"),
     ("servicenow","ServiceNow","native_multi_table_audit_creation_and_selected_incident_journal"),
@@ -205,6 +207,7 @@ def inventory(freshness_hours=24,*,now=None):
             "inventory_sources_unavailable":errors,"inventory_complete":not errors,
             "provider_reads_performed":False,"credential_refresh_performed":False,
             "provider_live_health_verified":False,"scheduler_running":schedules.get("scheduler_running"),
+            "retained_adapter_capabilities":[capabilities(p) for p in sorted(RETAINED_PROVIDERS)],
             "providers":providers,"profiles":sorted(rows,key=lambda r:(r["provider"],r["target_id"])),
             "unmatched_schedules":[{"kind":kind,"target_id":target,"schedules":entries}
                                    for (kind,target),entries in sorted(jobs.items())],

@@ -14,6 +14,7 @@ import json
 import secrets
 import time
 from typing import Literal
+from shared.enterprise_connector_contract import Provider
 
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, model_validator
 
@@ -61,7 +62,7 @@ class Strict(BaseModel):
 class Create(Strict):
     organization_id: str=Field(pattern=ID)
     name: str=Field(min_length=1,max_length=100)
-    provider: Literal["rest","google","sql","slack","salesforce","servicenow","sap","dataverse","hubspot"]
+    provider: Provider
     profile_id: str=Field(pattern=PROFILE)
     profile_revision: StrictInt=Field(ge=1,le=1_000_000)
     profile_sha256: str=Field(pattern=DIGEST)

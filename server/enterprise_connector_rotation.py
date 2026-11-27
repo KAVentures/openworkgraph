@@ -13,7 +13,7 @@ from pydantic import Field,StrictBool,StrictInt,ValidationError
 from . import enterprise_rest_feed as rest
 from . import event_log_workspace as ws
 
-SUPPORTED={"dataverse","hubspot"}
+from shared.enterprise_connector_contract import ROTATION_PROVIDERS as SUPPORTED
 
 
 class Rotate(rest.Strict):
