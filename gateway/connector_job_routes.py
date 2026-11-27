@@ -103,6 +103,15 @@ def install_connector_jobs(app,db,settings):
             raise HTTPException(403,"Gateway owner approval required for profile rebinding")
         return await reply(jobs.rebind,organization_id,job_id,await parse(request,Rebind),principal)
 
+    @router.post("/v1/connector-worker/inspect")
+    async def inspect_worker(request:Request,authorization:str|None=Header(default=None)):
+        return await reply(jobs.inspect_worker,bearer(authorization),await parse(request,Claim))
+
+    @router.post("/v1/connector-worker/readiness")
+    async def readiness(request:Request,authorization:str|None=Header(default=None)):
+        from .connector_jobs import Readiness
+        return await reply(jobs.readiness,bearer(authorization),await parse(request,Readiness))
+
     @router.post("/v1/connector-worker/claim")
     async def claim(request:Request,authorization:str|None=Header(default=None)):
         return await reply(jobs.claim,bearer(authorization),await parse(request,Claim))

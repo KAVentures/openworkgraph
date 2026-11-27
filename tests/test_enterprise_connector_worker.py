@@ -39,6 +39,11 @@ def deployed(tmp_path,monkeypatch):
         try:
             if request.url.path.endswith("/claim"):
                 value=jobs.claim(token,Claim.model_validate(body))
+            elif request.url.path.endswith("/inspect"):
+                value=jobs.inspect_worker(token,Claim.model_validate(body))
+            elif request.url.path.endswith("/readiness"):
+                from gateway.connector_jobs import Readiness
+                value=jobs.readiness(token,Readiness.model_validate(body))
             else:
                 value=jobs.complete(token,Receipt.model_validate(body))
                 if loss["complete"]:
