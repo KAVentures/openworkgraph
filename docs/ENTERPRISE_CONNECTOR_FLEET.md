@@ -1,0 +1,85 @@
+# Enterprise connector fleet operations
+
+The Gateway owner can review the registered connector fleet and explicitly
+pause or resume selected dispatch jobs in a single organization transaction.
+This is operational control over existing approved workers, not provisioning,
+independent provider health verification or remote process termination.
+
+## Review
+
+Open Enterprise connector jobs and the Organization connector fleet section.
+The owner-only report combines registered jobs, lease state, reported success,
+worker readiness, overdue dispatch and publication metadata. No provider
+requests or event payload reads are performed by the fleet report. Expired
+leases are observed without modifying their state; the ordinary job inventory
+has its existing expiry reconciliation behavior.
+
+Worklist priority is urgent for ambiguous local outcomes; review for reported
+blockers, stale/missing worker reports, overdue dispatch, repeated failures,
+or publication pin/expiry warnings; otherwise normal. These are review
+heuristics, not an SLA or independent availability measurement. Readiness is
+fresh for up to 120 seconds. Success report age and checkpoint age are distinct.
+Publication event counts are approved manifest counts, not a verification
+of stored payload integrity or cross-source distinct events.
+
+Filter by provider and review priority. Select individual jobs or explicitly
+select the visible rows; selections outside a changed filter remain selected
+and the selected count makes that visible. Reports omit names, profile
+identities, profile digests, grant IDs, lease secrets and source credentials.
+
+## Reviewed bulk changes
+
+Choose pause or resume and preview the exact selection (1–100 jobs).
+Preview uses the organization transaction and pins each job revision,
+history sequence, lease state, decision, and associated publication grant
+state. It is not a dispatch authorization. No blocked selections may be
+silently skipped at apply.
+
+Resume is restricted to ordinary operator pauses, without an active lease.
+An ambiguous, blocked or expired job requires its existing individual review.
+Resume preserves the later of current time and existing due time, so it
+does not waive a provider cooldown.
+
+Pause normally rejects an active lease. To invalidate active leases, the
+owner must include them explicitly in the preview and separately acknowledge
+uncertain local outcomes at apply. This fences subsequent completion but
+cannot recall a provider request or local transaction already dispatched.
+Coordinate stopped workers and reconcile their local checkpoints/outboxes
+before any individual resume. An expired lease cannot be bulk cancelled.
+
+Review current publication upload pins that will be invalidated by revision
+changes. Bulk actions do not delete existing published snapshots, revoke
+previously downloaded copies or change the existing publication expiry
+policy. Review publication grants separately when disclosure must stop.
+
+Apply requires explicit approval and the exact plan digest. A new claim,
+completion, revision or publication change invalidates the plan. All selected
+jobs, their history and audit entries commit together under the same Gateway
+organization lock. A transaction failure rolls back the batch. No automatic
+retry is authorized after a stale plan or an uncertain HTTP response; inspect
+the current job inventory and preview again.
+
+## API
+
+Under /v1/admin/connector-jobs/{organization_id}:
+
+- GET /fleet: owner-only counts and worklist.
+- POST /fleet/preview: owner-only explicit job_ids, action, optional
+  allow_active_lease_cancellation.
+- POST /fleet/apply: same selection, expected_plan_sha256,
+  confirm_exact_dispatch_changes, optional confirm_active_lease_uncertainty.
+
+All routes use the existing named administrator middleware. Worker tokens and
+non-owner administrator sessions cannot access fleet routes. Administrators'
+existing organization visibility remains instance-wide; this does not add
+organization-specific RBAC. Responses use no-store.
+
+## Validation
+
+Tests exercise the existing SQLite/PostgreSQL transactions, tenant/job
+selection isolation, stale plan fencing, concurrent apply, rollback on audit
+failure, active and expired leases, due-time preservation, publication changes,
+owner-only HTTP access and actual browser consent/selection lifecycle.
+A focused draft acceptance job runs these modules and Chromium. Tests are
+registered, not yet proven passing. Full integration and live provider
+acceptance remain required before production deployment.

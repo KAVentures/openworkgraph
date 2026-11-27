@@ -68,6 +68,31 @@ def install_connector_jobs(app,db,settings):
             raise HTTPException(403,"read-only administrator")
         return identity.audit_id
 
+    def fleet_owner(raw,writing=False):
+        principal=admin(raw,writing)
+        identity=admin_accounts.current_admin()
+        if identity is None or not identity.is_owner():
+            raise HTTPException(403,"Gateway owner approval required for connector fleet operations")
+        return principal
+
+    @router.get("/v1/admin/connector-jobs/{organization_id}/fleet")
+    async def fleet_report(organization_id:str,authorization:str|None=Header(default=None)):
+        from .connector_fleet import report
+        fleet_owner(authorization)
+        return await reply(report,jobs,organization_id)
+
+    @router.post("/v1/admin/connector-jobs/{organization_id}/fleet/preview")
+    async def fleet_preview(organization_id:str,request:Request,authorization:str|None=Header(default=None)):
+        from .connector_fleet import Selection,preview
+        fleet_owner(authorization)
+        return await reply(preview,jobs,organization_id,await parse(request,Selection))
+
+    @router.post("/v1/admin/connector-jobs/{organization_id}/fleet/apply")
+    async def fleet_apply(organization_id:str,request:Request,authorization:str|None=Header(default=None)):
+        from .connector_fleet import Apply,apply
+        principal=fleet_owner(authorization,True)
+        return await reply(apply,jobs,organization_id,await parse(request,Apply),principal)
+
     @router.get("/v1/admin/connector-jobs/{organization_id}")
     async def inventory(organization_id:str,authorization:str|None=Header(default=None)):
         admin(authorization)
