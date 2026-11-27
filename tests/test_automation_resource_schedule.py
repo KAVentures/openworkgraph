@@ -199,3 +199,37 @@ def test_http_session_and_no_store(monkeypatch):
         assert response.json()["scenarios"][0]["makespan_days"]==2
         bad=spec(tasks);bad["snapshot_sha256"]="b"*64
         assert client.post(route,json=bad,headers=owner).status_code==409
+
+
+def test_single_local_search_admission_and_recovery(monkeypatch):
+    tasks=[task(1,2)]
+    fixture(monkeypatch,tasks)
+    with schedule._RUN_LOCK:
+        with pytest.raises(pipeline.PipelineError,match="another resource schedule"):
+            schedule.solve(spec(tasks))
+    original=schedule._scenario
+    def fail(*args):
+        raise RuntimeError("simulated failure")
+    with monkeypatch.context() as m:
+        m.setattr(schedule,"_scenario",fail)
+        with pytest.raises(RuntimeError,match="simulated failure"):
+            schedule.solve(spec(tasks))
+    assert schedule._scenario is original
+    assert schedule.solve(spec(tasks))["scenarios"][0]["makespan_days"]==2
+
+
+def test_resource_slot_gap_and_half_open_capacity():
+    t=schedule.Task.model_validate(task(1,3))
+    assert schedule._slot(t,0,1,[(0,2,1),(5,7,1)])==2
+    assert schedule._slot(t,1,1,[(0,2,1),(4,7,1)])==7
+    assert schedule._slot(t,1,2,[(0,2,1),(2,5,1)])==1
+
+
+def test_no_automatic_deadline_optimality_claim(monkeypatch):
+    tasks=[task(1,3,deadline=3),task(2,2,deadline=2)]
+    fixture(monkeypatch,tasks)
+    result=schedule.solve(spec(tasks,{"team":1}))["scenarios"][0]
+    assert result["makespan_days"]==5
+    assert result["deadline_misses_in_returned_schedule"]>=1
+    assert result["deadline_misses_even_without_resource_constraints"]==0
+    assert not result["optimization"]["deadline_objective_optimized"]

@@ -9,6 +9,7 @@ from __future__ import annotations
 from collections import defaultdict
 from hashlib import sha256
 import json
+import threading
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -22,6 +23,7 @@ EXACT_TASKS = 8
 MAX_POOLS = 8
 MAX_ALTERNATIVES = 3
 ACTIVE = {"idea", "assessing", "approved"}
+_RUN_LOCK = threading.Lock()
 ID = Annotated[str, Field(pattern=r"^idea_[a-f0-9]{16}$")]
 POOL = Annotated[str, Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]{0,39}$")]
 CAPACITY = Annotated[int, Field(ge=1, le=50)]
@@ -331,6 +333,15 @@ def _scenario(label, tasks, deps, capacities, precedence):
 
 def solve(payload):
     spec = _parse(payload)
+    if not _RUN_LOCK.acquire(blocking=False):
+        raise pipeline.PipelineError("another resource schedule is running; retry after it finishes")
+    try:
+        return _solve(spec)
+    finally:
+        _RUN_LOCK.release()
+
+
+def _solve(spec):
     snapshot = budget.inventory()
     if snapshot["snapshot_sha256"] != spec.snapshot_sha256:
         raise pipeline.PipelineError("portfolio changed; reload and review the current snapshot")
@@ -357,6 +368,8 @@ def solve(payload):
                                   "prove deadline infeasibility unless the resource-free bound already misses."}
     if blockers:
         response["status"] = "blocked_selected_prerequisites"
+        if budget.inventory()["snapshot_sha256"] != spec.snapshot_sha256:
+            raise pipeline.PipelineError("portfolio changed during scheduling; reload and review again")
         return response
     alternatives = [("Baseline", spec.capacities)] + [(a.label, a.capacities) for a in spec.alternatives]
     results = [_scenario(label, tasks, deps, capacities, precedence) for label, capacities in alternatives]

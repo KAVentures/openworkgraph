@@ -91,3 +91,10 @@ precedence, shared capacity, infeasible demand, unknown prerequisites,
 cycles, exact/heuristic distinction, scenario comparison and dashboard
 authorization. Real customer duration/capacity calibration and native browser
 acceptance remain separate release gates.
+
+Only one resource schedule search may run at a time in the local server
+process. Overlapping requests are refused and may be retried after completion.
+The dashboard also shows a relative-day bar timeline; exact tabular start and
+finish values remain available. Browser acceptance exercises explicit inputs,
+capacity comparison, JSON download, revision preservation, draft invalidation,
+WCAG and phone-width layout.

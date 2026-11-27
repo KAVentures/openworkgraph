@@ -917,6 +917,21 @@
           for(const row of rows){const tr=el('tr');row.forEach(value=>tr.append(el('td',value??'—')));body.append(tr);}
           table.append(head,body);wrap.append(table);return wrap;
         };
+        const timeline=(scenario,name)=>{
+          const chart=el('div');chart.setAttribute('role','group');chart.setAttribute('aria-label','Relative planning-day timeline for '+scenario.label);
+          chart.append(el('p','Day 0 to '+scenario.makespan_days+'; bar positions show relative time, not calendar dates. Exact dates are in the table below.','muted'));
+          for(const row of scenario.schedule){
+            const item=el('div');item.style.cssText='display:grid;grid-template-columns:minmax(0,1fr) minmax(0,2fr);gap:8px;align-items:center;margin:5px 0';
+            const title=el('span',name(row.idea_id)+' · '+row.pool);title.style.overflowWrap='anywhere';
+            const track=el('div');track.style.cssText='height:22px;border:1px solid var(--line);border-radius:4px;position:relative;background:var(--soft)';
+            const bar=el('div');bar.style.cssText='height:100%;position:absolute;border-radius:3px;background:var(--green)';
+            bar.style.left=(100*row.start_day/scenario.makespan_days)+'%';
+            bar.style.width=(100*row.duration_days/scenario.makespan_days)+'%';
+            bar.title='Day '+row.start_day+' to '+row.finish_day_exclusive+' (exclusive)';
+            track.setAttribute('aria-hidden','true');track.append(bar);item.append(title,track);chart.append(item);
+          }
+          return chart;
+        };
         run.onclick=async()=>{
           if(!draft)return;
           const n=++version, spec=draft;report=null;save.disabled=true;run.disabled=true;output.replaceChildren();
@@ -945,7 +960,7 @@
                 if(!s.schedule){section.append(el('p','Demand exceeds capacity for: '+s.oversized_task_ids.map(name).join('; ')));output.append(section);continue;}
                 section.append(el('p','Resource-free precedence bound '+s.resource_free_precedence_bound_days+
                   ' days; returned makespan '+s.makespan_days+' days. '+s.deadline_misses_even_without_resource_constraints+
-                  ' declared deadlines missed even without resource constraints.','muted'),
+                  ' declared deadlines missed even without resource constraints.','muted'),timeline(s,name),
                   table(['Opportunity','Pool','Units','Start day','Finish (exclusive)','Duration','Wait after prerequisites','Deadline','Late days','Precedence slack'],
                     s.schedule.map(t=>[name(t.idea_id),t.pool,t.units,t.start_day,t.finish_day_exclusive,t.duration_days,
                       t.delay_after_dependency_ready_days,t.deadline_day,t.deadline_lateness_days,t.resource_free_total_slack_days])),
