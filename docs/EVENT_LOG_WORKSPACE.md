@@ -3742,6 +3742,77 @@ python -m server.event_log_petri_acceptance --baseline before.pnml --suite suite
 
 The CLI does not contact a service. Exit codes: 0 target suite passed, 1 at least one target case failed, 2 invalid input, 3 target suite inconclusive. The candidate is the target when supplied; baseline and change findings remain in the JSON report. SHA-256 identifies the exact submitted model bytes and the canonical normalized suite. The dashboard uses UTF-8 encoding of its current baseline replay text. Reports contain model labels and the declared suite, and should be shared only deliberately. Passing a finite acceptance suite does not establish full language equivalence, formal policy compliance, or real-world automation correctness.
 
+### Generate reference-model characterization scenarios
+
+Inside **Run workflow acceptance scenarios**, expand **Generate characterization scenarios from the baseline**. The generator requires a completely explored finite marking graph so negative assertions are established rather than guessed. It then explores reachable epsilon-closed marking subsets using breadth-first search, with one shortest representative prefix for each discovered subset. It derives exact completed/fireable/finishable and universal-prefix expectations, plus exact viable next sets when they fit the suite contract. Impossible next activities drawn from the reference alphabet provide negative examples.
+
+A bounded deterministic diversity selection prioritizes semantic categories, distinct markings, visible activities and viable next options. The report discloses candidate count, selected and omitted categories, graph and prefix exploration limits, selection and suite byte limits, exact model and suite digests. A finite selected suite is not exhaustive trace, transition or real-world execution coverage. The reference can itself be wrong or unsafe; generated expectations are characterization tests and require human review.
+
+The preview does not replace an existing editor suite automatically. Select **Replace editor with proposed suite** explicitly, edit as needed, and run the ordinary acceptance review against the baseline or candidate. Download generation evidence separately to retain provenance. A model with an incomplete marking graph does not generate a suite.
+
+The local owner-only endpoint is `POST /v1/event-logs/petri-test-generation?max_cases=20&max_depth=20` with raw PNML body (2 MiB maximum). The scenario limit is 1–40 and prefix depth 1–99. Prefix exploration is bounded to 2,000 subsets and 600,000 counted work units, and selection to 2,000,000 counted feature units. No model, suite or report is retained; the response uses `Cache-Control: no-store`. No agent execution or policy approval is authorized.
+
+### Challenge acceptance suites with synthetic workflow faults
+
+Within **Run workflow acceptance scenarios**, expand **Challenge acceptance suite with synthetic faults**. Review or edit the suite first. Mutation testing requires the exact baseline to pass that suite; a baseline failure or inconclusive result stops the review. Choose up to eight independent mutations across four operators:
+
+- Hide a visible activity (make the transition silent without changing firing conditions).
+- Rename a visible activity to a fresh synthetic label.
+- Remove one transition and its incident arcs (never remove the last transition).
+- Increase one input-arc weight by one, within the supported weight limit.
+
+Selection is deterministic: round-robin by enabled operator, then sorted target identifiers. Each mutation is applied to a fresh copy of the original submitted PNML; saved models are not edited. The report gives the available and selected mutation counts and each recipe, resulting model SHA-256, failed scenario IDs and unknown scenario IDs.
+
+A fault is **detected** if any acceptance case fails, **survived** if all cases pass, or **inconclusive** otherwise. The detection-fraction interval uses all selected mutations as the denominator: detected / selected to (detected + inconclusive) / selected. This is not corrected for semantically equivalent faults and is not an estimate of real-world failure probability. No denominator is invented when no applicable mutations exist.
+
+For surviving mutations, the completed-visible-language checker attempts an exact comparison with the original model. If it finds an added or removed trace, OWG proposes an additional exact completed-trace scenario with the reference model's expected result. Long truncated witnesses and unsupported labels are not used as executable scenarios. Review the proposal and explicitly add it to the suite editor; it is never applied automatically. A completed-language-equivalent mutation can still change prefix behavior, deadlock, timing or other properties. An inconclusive comparison is not an equivalence proof.
+
+The owner-only `POST /v1/event-logs/petri-mutation-review` endpoint accepts `application/octet-stream`: four unsigned big-endian bytes giving the UTF-8 JSON settings byte count, that many JSON bytes, then the reference PNML bytes. JSON is `{"suite": <acceptance suite>, "settings": {"max_mutants": 4, "operators": ["hide_activity", "rename_activity"]}}`; settings can omit either key to use its default. The JSON frame is limited to 256 KiB + 4 KiB and PNML to 2 MiB. Each of at most eight mutations uses existing bounded marking exploration, acceptance and completed-language comparison budgets. Results are non-retained and downloadable as digest-pinned JSON. Mutation testing makes no real business changes, executes no agents and does not certify independently authored business policy.
+
+### Review a model release against pinned criteria
+
+Open **Review a model release against pinned criteria** in the structural and behavioral validation panel. The model just replayed is the baseline. Upload a candidate and explicitly copy the current acceptance suite and policy rules, or edit the proposed specification. For example:
+
+```json
+{
+  "format": "openworkgraph.petri_release_spec.v1",
+  "suite": {
+    "format": "openworkgraph.petri_acceptance_suite.v1",
+    "cases": [
+      {"id": "approved", "trace": ["Register", "Check", "Pay"], "expect": {"completed": true}}
+    ]
+  },
+  "rules": [{"template": "precedence", "a": "Check", "b": "Pay"}],
+  "criteria": {
+    "language": "equivalent",
+    "require_baseline_acceptance": true,
+    "require_candidate_termination": false,
+    "require_candidate_one_safe": false,
+    "require_rule_activation": true,
+    "mutation": {"min_detected_basis_points": 7500, "min_mutants": 4,
+                 "settings": {"max_mutants": 4}}
+  }
+}
+```
+
+**Freeze model release specification** validates and normalizes the inputs and adds the exact baseline and candidate SHA-256 digests. Pinning does not run exploration or assert approval. Download the frozen specification to reproduce the review later. Editing the proposed specification, changing the candidate file, or replaying a different baseline invalidates the dashboard freeze. The copied suite and rules are independent of their source editors; copying them again is an explicit change.
+
+**Review frozen release** recomputes the checks from the submitted model bytes; it refuses either model if its digest does not match. Candidate soundness and the acceptance suite must pass. Baseline acceptance is required by default; set it to false when deliberately changing requirements (not compatible with a mutation adequacy gate). Language criteria can be `equivalent` (default), `preserve_baseline`, `no_new_traces` or `not_required`. Guaranteed termination and one-safeness are optional. Every supplied untimed policy rule and the joint suite must hold on completed candidate traces; by default each individual rule must also have an activated satisfying trace, not merely vacuous satisfaction. An empty policy array means no policy gate, not proven policy compliance.
+
+The optional mutation criterion uses the baseline acceptance suite, and a selected-mutant minimum of 1–8 and threshold of 0–10,000 basis points. It passes only when the minimum sample is met and the observed detection lower bound reaches the threshold; if the upper bound is below the threshold it fails, otherwise it is inconclusive. This is a synthetic test adequacy gate, not a statistical real-world risk estimate.
+
+The report is **blocked** when any required gate fails, **inconclusive** when no gate fails but at least one is unknown, and **model criteria met** only when every required gate passes. The report contains the normalized specification, gate results and independently recomputed component reports. SHA-256 binds the specification and report using compact sorted-key JSON with ASCII escapes (the report digest excludes its own digest field). It is not a signature, an external attestation or execution approval.
+
+Offline CLI with the normal repository dependencies:
+
+```sh
+python -m server.event_log_petri_release pin --baseline before.pnml --candidate after.pnml --spec proposal.json > pin.json
+# Extract the "spec" object from pin.json to frozen.json; preserve the original models.
+python -m server.event_log_petri_release review --baseline before.pnml --candidate after.pnml --spec frozen.json > review.json
+```
+
+Review exit codes: 0 criteria met, 1 blocked, 2 invalid input (including changed model hashes), 3 inconclusive. The owner-only, non-retained API is `POST /v1/event-logs/petri-release/pin` or `/review` with `application/octet-stream`: four unsigned big-endian bytes giving the UTF-8 JSON specification length, those bytes, four unsigned big-endian bytes giving the baseline PNML length, those PNML bytes, and the nonempty candidate PNML bytes. The specification is limited to 384 KiB; each model to 2 MiB. Existing component work limits and the optional eight-mutation maximum apply. Reports include model labels and declared criteria; share them deliberately. No real business work or agents are executed, and a model release report cannot authorize deployment or verify real-world outcomes.
+
 ### Process trees (PTML) from PM4Py and ProM
 
 The file picker also accepts a **process tree** in PTML, as `pm4py.write_ptml` and ProM's Inductive

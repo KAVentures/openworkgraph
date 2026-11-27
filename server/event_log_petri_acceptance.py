@@ -236,7 +236,10 @@ def _assertions(expect, actual):
 
 
 def _review(data, suite):
-    graph = language._graph(data)
+    return _review_graph(language._graph(data), suite)
+
+
+def _review_graph(graph, suite):
     budget = _Budget()
     exhausted = False
     try:

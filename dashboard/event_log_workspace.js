@@ -8876,12 +8876,131 @@
     const acceptanceRun=button('Run acceptance suite','secondary');acceptanceRun.id='owgPetriAcceptanceRun';acceptanceRun.disabled=true;
     const acceptanceStatus=el('div',null,'muted');acceptanceStatus.id='owgPetriAcceptanceStatus';acceptanceStatus.setAttribute('role','status');acceptanceStatus.setAttribute('aria-live','polite');
     const acceptanceOut=el('div');acceptanceOut.id='owgPetriAcceptanceResults';
+    const generatedBox=document.createElement('details');generatedBox.append(el('summary','Generate characterization scenarios from the baseline'),
+      el('div','Generated expectations describe the current model, not independently approved business policy. Review them before adding them to your suite.','muted'));
+    const genCases=input('owgPetriGenCases','number');genCases.min='1';genCases.max='40';genCases.step='1';genCases.value='20';
+    const genDepth=input('owgPetriGenDepth','number');genDepth.min='1';genDepth.max='99';genDepth.step='1';genDepth.value='20';
+    const genRun=button('Generate proposed suite','secondary');genRun.id='owgPetriGenRun';genRun.disabled=true;
+    const genApply=button('Replace editor with proposed suite','secondary');genApply.id='owgPetriGenApply';genApply.disabled=true;
+    const genStatus=el('div',null,'muted');genStatus.id='owgPetriGenStatus';genStatus.setAttribute('role','status');genStatus.setAttribute('aria-live','polite');
+    const genOut=el('div');genOut.id='owgPetriGenResults';
+    generatedBox.append(field('Maximum scenarios',genCases),field('Maximum prefix depth',genDepth),genRun,genApply,genStatus,genOut);
+    let genBusy=false,genRevision=0,generated=null;
+    const clearGenerated=()=>{genRevision++;generated=null;genStatus.textContent='';genOut.replaceChildren();genApply.disabled=true;genRun.disabled=genBusy||!lastNet;};
+    genCases.oninput=clearGenerated;genDepth.oninput=clearGenerated;
+    genRun.onclick=async()=>{
+      const net=lastNet;if(!net||genBusy||net.generation!==state.generation)return;
+      clearGenerated();const revision=genRevision;const current=()=>lastNet===net&&state.generation===net.generation&&revision===genRevision;
+      genBusy=true;genRun.disabled=true;genStatus.textContent='Exploring reference model…';
+      try{
+        if(!genCases.value||!genDepth.value||!genCases.validity.valid||!genDepth.validity.valid)throw new Error('Enter valid whole-number limits.');
+        const q=new URLSearchParams({max_cases:genCases.value,max_depth:genDepth.value});
+        const r=await (await api('/v1/event-logs/petri-test-generation?'+q,{method:'POST',headers:{'Content-Type':'application/xml'},body:net.body})).json();
+        if(!current())return;
+        generated=r;genApply.disabled=!r.suite;
+        genStatus.textContent=r.suite?r.suite.cases.length+' proposed scenarios. '+(r.prefix_exploration_complete?'Complete prefix-state exploration.':'Exploration limited: '+r.limit+'.'):'No suite generated: '+(r.limit||'insufficient coverage')+'.';
+        if(r.suite){
+          genOut.appendChild(el('div','Selected categories: '+r.categories_selected.join(', ')+(r.categories_omitted.length?' · Omitted: '+r.categories_omitted.join(', '):''),'muted'));
+          if(r.selection_limited||r.suite_byte_limited)genOut.appendChild(el('div','Suite selection was limited; review omitted coverage.','muted'));
+          genOut.appendChild(table(['Scenario','Trace','Expectation'],r.suite.cases.map(c=>[c.id,JSON.stringify(c.trace),JSON.stringify(c.expect)])));
+          genOut.appendChild(el('div',r.coverage_caveat,'muted'));
+          const download=button('Download generation evidence (JSON)','secondary');download.onclick=()=>{
+            if(!current()||generated!==r)return;
+            const url=URL.createObjectURL(new Blob([JSON.stringify(r,null,2)],{type:'application/json'}));
+            const link=document.createElement('a');link.href=url;link.download='petri-generation-'+r.suite_sha256.slice(0,12)+'.json';
+            document.body.appendChild(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
+          };genOut.appendChild(download);
+        }
+        genOut.appendChild(el('div',r.caveat,'muted'));
+      }catch(error){if(current())genStatus.textContent=error.message;}
+      finally{genBusy=false;genRun.disabled=!lastNet||lastNet.generation!==state.generation;}
+    };
+    genApply.onclick=()=>{
+      if(!generated?.suite||!lastNet||lastNet.generation!==state.generation)return;
+      acceptanceText.value=JSON.stringify(generated.suite,null,2);clearAcceptance();
+      genStatus.textContent='Proposed suite copied to the editor. Review it before use.';
+    };
+    acceptanceBox.append(generatedBox);
     acceptanceBox.append(field('Scenario ID',acceptanceId),field('Visible trace or prefix (JSON array)',acceptanceTrace),
       field('Expectation',acceptanceExpected),acceptanceNextField,acceptanceAdd,field('Editable acceptance suite JSON',acceptanceText),
       field('Optional candidate model (.pnml)',acceptanceCandidate),acceptanceRun,acceptanceStatus,acceptanceOut);
     soundBox.appendChild(acceptanceBox);
+    const mutationBox=document.createElement('details');
+    mutationBox.append(el('summary','Challenge acceptance suite with synthetic faults'),
+      el('div','Evaluate the current suite against independently perturbed copies of the baseline model. No saved model is changed. Surviving faults with a completed-trace difference can suggest additional regression scenarios.','muted'));
+    const mutationCount=input('owgPetriMutationCount','number');mutationCount.min='1';mutationCount.max='8';mutationCount.step='1';mutationCount.value='4';
+    const mutationOps=[['hide_activity','Hide an activity'],['rename_activity','Rename an activity'],
+      ['remove_transition','Remove a transition'],['increase_input_weight','Increase an input-arc weight']].map(([value,label])=>{
+        const control=document.createElement('input');control.type='checkbox';control.checked=true;control.value=value;
+        const wrapper=el('label');wrapper.append(control,document.createTextNode(' '+label));return {control,wrapper};
+      });
+    const mutationRun=button('Challenge acceptance suite','secondary');mutationRun.id='owgPetriMutationRun';mutationRun.disabled=true;
+    const mutationStatus=el('div',null,'muted');mutationStatus.id='owgPetriMutationStatus';mutationStatus.setAttribute('role','status');mutationStatus.setAttribute('aria-live','polite');
+    const mutationOut=el('div');mutationOut.id='owgPetriMutationResults';
+    mutationBox.append(field('Maximum synthetic faults',mutationCount),...mutationOps.map(x=>x.wrapper),mutationRun,mutationStatus,mutationOut);
+    acceptanceBox.appendChild(mutationBox);
+    let mutationBusy=false,mutationRevision=0;
+    const clearMutation=()=>{mutationRevision++;mutationStatus.textContent='';mutationOut.replaceChildren();mutationRun.disabled=mutationBusy||!lastNet;};
+    mutationCount.oninput=clearMutation;mutationOps.forEach(x=>x.control.onchange=clearMutation);
+    mutationRun.onclick=async()=>{
+      const net=lastNet,revision=mutationRevision;
+      if(!net||mutationBusy||net.generation!==state.generation)return;
+      const current=()=>lastNet===net&&state.generation===net.generation&&mutationRevision===revision;
+      mutationBusy=true;mutationRun.disabled=true;mutationOut.replaceChildren();mutationStatus.textContent='Challenging the declared suite…';
+      try{
+        if(!mutationCount.validity.valid||!mutationCount.value)throw new Error('Choose 1–8 synthetic faults.');
+        const spec={suite:JSON.parse(acceptanceText.value),settings:{max_mutants:Number(mutationCount.value),operators:mutationOps.filter(x=>x.control.checked).map(x=>x.control.value)}};
+        if(!spec.settings.operators.length)throw new Error('Choose at least one fault operator.');
+        const encoder=new TextEncoder(),settings=encoder.encode(JSON.stringify(spec)),baseline=encoder.encode(net.body);
+        if(settings.byteLength>266240||baseline.byteLength>2*1024*1024)throw new Error('Suite or model exceeds the review limit.');
+        const header=new Uint8Array(4);new DataView(header.buffer).setUint32(0,settings.byteLength);
+        const body=new Blob([header,settings,baseline],{type:'application/octet-stream'});
+        const r=await (await api('/v1/event-logs/petri-mutation-review',{method:'POST',headers:{'Content-Type':'application/octet-stream'},body})).json();
+        if(!current())return;
+        if(r.status==='baseline_not_passed'){
+          mutationStatus.textContent='Baseline suite must pass before mutation testing.';
+          mutationOut.appendChild(table(['Baseline scenario','Status'],r.baseline.cases.map(c=>[c.id,c.status])));
+        }else if(r.status==='no_applicable_mutations'){
+          mutationStatus.textContent='No applicable synthetic faults for these operators.';
+        }else{
+          const c=r.counts,bounds=r.detected_fraction_bounds;
+          mutationStatus.textContent=c.detected+' detected · '+c.survived+' survived · '+c.inconclusive+' inconclusive';
+          mutationOut.appendChild(el('div','Selected '+r.selected_mutants+' of '+r.available_mutants+' possible individual faults. Detection fraction: '+pct(bounds.lower)+'–'+pct(bounds.upper)+'. '+r.survivors_with_proven_language_difference+' surviving faults have a proven completed-trace difference.','muted'));
+          mutationOut.appendChild(table(['Fault','Operator','Status','Failed scenarios','Completed-trace equivalence'],r.mutants.map(m=>[
+            m.id,m.recipe.operator.replaceAll('_',' '),m.status,m.failed_case_ids.join(', ')||'—',
+            m.language_comparison?(m.language_comparison.equivalent===true?'Verified equivalent':m.language_comparison.equivalent===false?'Different':'Inconclusive'):'Not checked'
+          ])));
+          for(const m of r.mutants){
+            const details=document.createElement('details');details.append(el('summary',m.id+' · '+m.status),el('div',JSON.stringify(m.recipe),'muted'));
+            if(m.reason)details.appendChild(el('div',m.reason,'muted'));
+            for(const scenario of m.suggested_cases||[]){
+              details.appendChild(el('div',JSON.stringify(scenario)));
+              const adopt=button('Add suggested regression scenario','secondary');adopt.onclick=()=>{
+                if(!current())return;
+                try{
+                  const suite=JSON.parse(acceptanceText.value);
+                  if(!Array.isArray(suite.cases)||suite.cases.length>=40)throw new Error('Suite must have room for another scenario.');
+                  if(suite.cases.some(c=>c.id===scenario.id))throw new Error('Scenario ID already exists.');
+                  suite.cases.push(scenario);acceptanceText.value=JSON.stringify(suite,null,2);clearAcceptance();
+                  mutationStatus.textContent='Suggested scenario added to editor. Review before running the suite.';
+                }catch(error){mutationStatus.textContent=error.message;}
+              };details.appendChild(adopt);
+            }
+            mutationOut.appendChild(details);
+          }
+        }
+        mutationOut.appendChild(el('div',r.caveat,'muted'));
+        const download=button('Download mutation review (JSON)','secondary');download.onclick=()=>{
+          if(!current())return;
+          const url=URL.createObjectURL(new Blob([JSON.stringify(r,null,2)],{type:'application/json'}));
+          const link=document.createElement('a');link.href=url;link.download='petri-mutation-'+r.suite_sha256.slice(0,12)+'.json';
+          document.body.appendChild(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
+        };mutationOut.appendChild(download);
+      }catch(error){if(current())mutationStatus.textContent=error.message;}
+      finally{mutationBusy=false;mutationRun.disabled=!lastNet||lastNet.generation!==state.generation;}
+    };
     let acceptanceBusy=false,acceptanceRevision=0;
-    const clearAcceptance=()=>{acceptanceRevision++;acceptanceStatus.textContent='';acceptanceOut.replaceChildren();acceptanceRun.disabled=acceptanceBusy||!lastNet;};
+    const clearAcceptance=()=>{acceptanceRevision++;acceptanceStatus.textContent='';acceptanceOut.replaceChildren();acceptanceRun.disabled=acceptanceBusy||!lastNet;clearMutation();};
     acceptanceText.oninput=clearAcceptance;acceptanceCandidate.onchange=clearAcceptance;
     acceptanceAdd.onclick=()=>{
       try{
@@ -8946,8 +9065,68 @@
       }catch(error){if(stillCurrent())acceptanceStatus.textContent=error.message;}
       finally{acceptanceBusy=false;acceptanceRun.disabled=!lastNet||lastNet.generation!==state.generation;}
     };
+    const releaseBox=document.createElement('details');
+    releaseBox.append(el('summary','Review a model release against pinned criteria'),
+      el('div','Freeze the exact baseline, candidate, acceptance suite and declared criteria before recomputing model checks. Meeting these criteria does not authorize deployment or certify real agent behavior.','muted'));
+    const releaseCandidate=input('owgPetriReleaseCandidate','file');releaseCandidate.accept='.pnml,application/xml,text/xml';
+    const releaseSpec=document.createElement('textarea');releaseSpec.id='owgPetriReleaseSpec';releaseSpec.rows=12;releaseSpec.maxLength=393216;releaseSpec.style.cssText='width:100%;font-family:monospace';
+    releaseSpec.value=JSON.stringify({format:'openworkgraph.petri_release_spec.v1',suite:{format:'openworkgraph.petri_acceptance_suite.v1',cases:[]},rules:[],criteria:{language:'equivalent',require_baseline_acceptance:true,require_candidate_termination:false,require_candidate_one_safe:false,require_rule_activation:true}},null,2);
+    const releaseCopy=button('Copy current acceptance suite and rules','secondary');releaseCopy.id='owgPetriReleaseCopy';
+    const releasePin=button('Freeze model release specification','secondary');releasePin.id='owgPetriReleasePin';releasePin.disabled=true;
+    const releaseRun=button('Review frozen release','secondary');releaseRun.id='owgPetriReleaseRun';releaseRun.disabled=true;
+    const releaseStatus=el('div',null,'muted');releaseStatus.id='owgPetriReleaseStatus';releaseStatus.setAttribute('role','status');releaseStatus.setAttribute('aria-live','polite');
+    const releaseOut=el('div');releaseOut.id='owgPetriReleaseResults';
+    releaseBox.append(field('Candidate model (.pnml)',releaseCandidate),releaseCopy,field('Release specification JSON (editable before freezing)',releaseSpec),releasePin,releaseRun,releaseStatus,releaseOut);
+    soundBox.appendChild(releaseBox);
+    let releaseBusy=false,releaseRevision=0,releaseFrozen=null;
+    const releaseSync=()=>{releasePin.disabled=releaseBusy||!lastNet||!releaseCandidate.files?.length;releaseRun.disabled=releaseBusy||!releaseFrozen||!lastNet||!releaseCandidate.files?.length;};
+    const clearRelease=()=>{releaseRevision++;releaseFrozen=null;releaseStatus.textContent='';releaseOut.replaceChildren();releaseSync();};
+    releaseSpec.oninput=clearRelease;releaseCandidate.onchange=clearRelease;
+    releaseCopy.onclick=()=>{
+      try{
+        const current=JSON.parse(releaseSpec.value),rules=JSON.parse(policyText.value);
+        if(!Array.isArray(rules.rules))throw new Error('Expected a rules array.');
+        const spec={format:'openworkgraph.petri_release_spec.v1',suite:JSON.parse(acceptanceText.value),rules:rules.rules,criteria:current.criteria||{}};
+        releaseSpec.value=JSON.stringify(spec,null,2);clearRelease();
+      }catch(error){releaseStatus.textContent=error.message;}
+    };
+    const releaseDownload=(name,data)=>{
+      const url=URL.createObjectURL(new Blob([JSON.stringify(data,null,2)],{type:'application/json'}));
+      const link=document.createElement('a');link.href=url;link.download=name;document.body.appendChild(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
+    };
+    const releaseSubmit=async(action)=>{
+      const net=lastNet,chosen=releaseCandidate.files?.[0],revision=releaseRevision,frozen=releaseFrozen;
+      if(!net||!chosen||releaseBusy||net.generation!==state.generation||action==='review'&&!frozen)return;
+      const current=()=>lastNet===net&&state.generation===net.generation&&releaseRevision===revision;
+      releaseBusy=true;releaseSync();releaseOut.replaceChildren();releaseStatus.textContent=action==='pin'?'Freezing exact inputs…':'Recomputing all enabled model criteria…';
+      try{
+        const spec=action==='pin'?JSON.parse(releaseSpec.value):frozen.spec;
+        const encoder=new TextEncoder(),specBytes=encoder.encode(JSON.stringify(spec)),baseline=encoder.encode(net.body);
+        if(specBytes.byteLength>393216||baseline.byteLength>2*1024*1024||chosen.size>2*1024*1024)throw new Error('Release specification or model exceeds the review limit.');
+        const size=n=>{const bytes=new Uint8Array(4);new DataView(bytes.buffer).setUint32(0,n);return bytes;};
+        const body=new Blob([size(specBytes.byteLength),specBytes,size(baseline.byteLength),baseline,chosen],{type:'application/octet-stream'});
+        const r=await (await api('/v1/event-logs/petri-release/'+action,{method:'POST',headers:{'Content-Type':'application/octet-stream'},body})).json();
+        if(!current())return;
+        if(action==='pin'){
+          releaseFrozen=r;releaseStatus.textContent='Specification frozen. Review the exact model criteria.';
+          releaseOut.appendChild(table(['Pinned input','SHA-256'],[['Baseline',r.spec.baseline_sha256],['Candidate',r.spec.candidate_sha256],['Specification',r.spec_sha256]]));
+          const dl=button('Download frozen release specification (JSON)','secondary');dl.onclick=()=>{if(current())releaseDownload('petri-release-spec-'+r.spec_sha256.slice(0,12)+'.json',r.spec);};releaseOut.appendChild(dl);
+        }else{
+          if(r.spec_sha256!==frozen.spec_sha256)throw new Error('Returned specification does not match the frozen specification.');
+          const status={model_criteria_met:'Model criteria met',blocked:'Blocked',inconclusive:'Inconclusive'}[r.status]||r.status;
+          releaseStatus.textContent='Release review: '+status+'.';
+          releaseOut.appendChild(el('div',r.counts.passed+' passed · '+r.counts.failed+' failed · '+r.counts.inconclusive+' inconclusive'));
+          releaseOut.appendChild(table(['Gate','Status','Detail'],r.gates.map(g=>[g.id.replaceAll('_',' '),g.status,JSON.stringify(g.detail)])));
+          releaseOut.appendChild(el('div','Report SHA-256: '+r.report_sha256,'muted'));
+          releaseOut.appendChild(el('div',r.caveat,'muted'));
+          const dl=button('Download release review (JSON)','secondary');dl.onclick=()=>{if(current())releaseDownload('petri-release-'+r.report_sha256.slice(0,12)+'.json',r);};releaseOut.appendChild(dl);
+        }
+      }catch(error){if(current()){releaseStatus.textContent=error.message;if(action==='pin')releaseFrozen=null;}}
+      finally{releaseBusy=false;releaseSync();}
+    };
+    releasePin.onclick=()=>releaseSubmit('pin');releaseRun.onclick=()=>releaseSubmit('review');
     let soundBusy=false;
-    const clearSound=()=>{soundStatus.textContent='';soundOut.replaceChildren();soundRun.disabled=true;clearCompare();clearPolicy();clearAcceptance();};
+    const clearSound=()=>{soundStatus.textContent='';soundOut.replaceChildren();soundRun.disabled=true;clearCompare();clearPolicy();clearAcceptance();clearGenerated();clearRelease();};
     soundRun.onclick=async()=>{
       const net=lastNet;if(!net||soundBusy||net.generation!==state.generation)return;
       soundBusy=true;soundRun.disabled=true;soundOut.replaceChildren();soundStatus.textContent='Exploring reachable markings…';
@@ -9009,6 +9188,9 @@
         compareRun.disabled=compareBusy||!compareFile.files?.length;
         policyRun.disabled=policyBusy;
         acceptanceRun.disabled=acceptanceBusy;
+        mutationRun.disabled=mutationBusy;
+        releaseSync();
+        genRun.disabled=genBusy;
         const f=r.fitness;
         statusLine.textContent='Fitness '+pct(f.log)+' on '+label+': '+Number(f.fitting_cases).toLocaleString()+' of '+Number(r.cases).toLocaleString()+' cases ('+pct(f.fitting_case_share)+') replay without missing or remaining tokens.'+(r.precision.precision!==null?' Precision '+pct(r.precision.precision)+'.':'')+' The net has '+r.net.places+' places and '+r.net.transitions+' transitions ('+r.net.silent_transitions+' silent).'+(r.cases_excluded?' '+Number(r.cases_excluded).toLocaleString()+' cases beyond the length or variant limit were left out.':'');
         if(!r.net.final_marking_declared)out.appendChild(el('div','The file declares no final marking, so cases are expected to end with one token on each place nothing consumes from.','muted'));
