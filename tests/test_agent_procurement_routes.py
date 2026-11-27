@@ -240,6 +240,24 @@ with TestClient(app) as client:
     assert reviewed.status_code==200,reviewed.text
     assert reviewed.json()['result']['candidates'][0]['status_counts']['not_recorded']==2
     assert reviewed.json()['result']['pareto']['candidate_ids']==[]
+    robustness={'format':'openworkgraph.procurement-case-robustness.v1',
+                'expected_plan_sha256':plan['plan_sha256'],
+                'expected_ledger_sha256':reviewed.json()['result']['ledger_sha256'],
+                'plan':plan,'captures':captures,'policy':{'require_all_categories':False},'confirmed':True}
+    robust_body={'document':json.dumps(robustness)}
+    assert client.post(base+'case-robustness',params=params,json=robust_body).status_code==401
+    assert client.post(base+'case-robustness',params=params,json=robust_body,headers=bearer).status_code==403
+    robust=client.post(base+'case-robustness',params=params,json=robust_body,headers=h)
+    assert robust.status_code==200,robust.text
+    assert robust.headers['cache-control']=='no-store'
+    result=robust.json()['result']
+    assert result['distinct_cases']==1 and result['repeats']==2
+    assert result['comparisons'][0]['robustness_status']=='unknown'
+    assert result['comparisons'][0]['deletion_coverage']=='unknown'
+    assert result['comparisons'][0]['full_population']['paired_slots']==2
+    assert not result['result_persisted'] and not result['execution_authorized']
+    assert client.post(base+'case-robustness',params=params,json={'document':json.dumps({**robustness,'expected_ledger_sha256':'f'*64})},headers=h).status_code==422
+
     economics={'plan':plan,'captures':captures,'request':{
         'format':'openworkgraph.procurement-operating-cost.v1',
         'plan_sha256':plan['plan_sha256'],'ledger_sha256':reviewed.json()['result']['ledger_sha256'],

@@ -14,6 +14,7 @@ from shared import agent_procurement_trials as trials
 from shared import agent_procurement_selection as selection
 from shared import agent_procurement_outcomes as outcomes
 from shared import agent_procurement_operating_cost as economics
+from shared import agent_procurement_case_robustness as robustness
 from shared import agent_procurement_router_rehearsal as routing
 from shared import agent_procurement_router_change as change
 from shared import agent_procurement_router_pilot as pilot
@@ -94,6 +95,8 @@ def _inspect(operation, workflow_id, revision, payload):
             result=trials.review(packet,single.loads(payload["plan"]),document)
         elif operation=="operating-cost":
             result=economics.operation(packet,document)
+        elif operation=="case-robustness":
+            result=robustness.operation(packet,document)
         elif operation in ("router-freeze","router-review"):
             if operation=="router-freeze" and catalog.get(workflow_id)["revision"]!=revision:
                 raise HTTPException(409,"Open the latest saved process revision before freezing router rehearsal")
@@ -178,7 +181,7 @@ def _inspect(operation, workflow_id, revision, payload):
 
 
 @router.post("/v1/process-catalog/procurement/{operation}")
-async def inspect_procurement(request: Request, operation: Literal["compare","freeze","review","nominate","assess","decide","outcome-review","rollout-review","deployment-review","deployment-decide","operating-cost","router-freeze","router-review","router-change-freeze","router-change-assess","router-change-decide","router-pilot-freeze","router-pilot-review","router-pilot-decide","router-monitor-freeze","router-monitor-review","router-monitor-decide","router-journal-list","router-journal-append","router-journal-refresh","router-journal-schedule","router-journal-detail","router-journal-decide","router-journal-forget","router-producer-grant","router-producer-revoke","router-producer-manifest","router-finance-reconcile","router-corroboration-require","router-corroboration-manifest","router-corroboration-record","router-source-outcome-bind","router-source-outcome-check","router-source-finance-check"],
+async def inspect_procurement(request: Request, operation: Literal["compare","freeze","review","nominate","assess","decide","outcome-review","rollout-review","deployment-review","deployment-decide","operating-cost","case-robustness","router-freeze","router-review","router-change-freeze","router-change-assess","router-change-decide","router-pilot-freeze","router-pilot-review","router-pilot-decide","router-monitor-freeze","router-monitor-review","router-monitor-decide","router-journal-list","router-journal-append","router-journal-refresh","router-journal-schedule","router-journal-detail","router-journal-decide","router-journal-forget","router-producer-grant","router-producer-revoke","router-producer-manifest","router-finance-reconcile","router-corroboration-require","router-corroboration-manifest","router-corroboration-record","router-source-outcome-bind","router-source-outcome-check","router-source-finance-check"],
                               workflow_id: str = Query(pattern=r"^[A-Za-z0-9_-]{1,80}$"),
                               revision: int = Query(ge=1,le=2**31-1)):
     _require_dashboard(request)
