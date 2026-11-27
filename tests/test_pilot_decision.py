@@ -118,3 +118,31 @@ def test_cli_freeze_and_verify_are_exclusive(tmp_path):
     assert decision.main(["verify","--report",str(packet),"--decision-sha256",value["decision_sha256"],
                           "--out",str(verify),"--confirm"])==0
     assert cohort._load(verify)["self_consistency_verified"]
+
+
+def test_offline_html_report_uses_fixed_fields_and_exact_digest(tmp_path):
+    from evals import pilot_decision_html as html
+    db,v,truth=open_study(tmp_path)
+    p=freeze(db,v);r=report(db,v,p,truth,[])
+    out=html.render(r,r["decision_sha256"],confirmed=True)
+    assert "<table>" in out and "Full-denominator sensitivity" in out
+    assert "Not granted" in out and r["decision_sha256"] in out
+    assert "<script" not in out and "http://" not in out and "https://" not in out
+    assert "Content-Security-Policy" in out
+    with pytest.raises(ValueError):html.render(r,r["decision_sha256"],confirmed=False)
+    with pytest.raises(ValueError):html.render(r,"0"*64,confirmed=True)
+    changed=deepcopy(r)
+    changed["summary"]["gates"][0]["gate"]="<script>alert(1)</script>"
+    changed["decision_sha256"]=cohort.digest({k:x for k,x in changed.items() if k!="decision_sha256"})
+    with pytest.raises(ValueError,match="unexpected gate"):html.render(changed,changed["decision_sha256"],confirmed=True)
+    packet=tmp_path/"report.json";packet.write_text(json.dumps(r))
+    file=tmp_path/"report.html"
+    args=["--report",str(packet),"--decision-sha256",r["decision_sha256"],"--out",str(file),"--confirm"]
+    assert html.main(args)==0 and file.read_text()==out
+    with pytest.raises(SystemExit):html.main(args)
+
+
+def test_outward_rounding_does_not_overstate_precision():
+    from evals.pilot_decision_html import _percent
+    assert _percent({"lower":{"numerator":1,"denominator":3},"upper":{"numerator":1,"denominator":3}})=="33.33% to 33.34%"
+    assert _percent({"lower":{"numerator":-1,"denominator":3},"upper":{"numerator":-1,"denominator":3}})=="-33.34% to -33.33%"
