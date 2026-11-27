@@ -1,7 +1,7 @@
 """Explicit complete-scope portable export under the original organization fence."""
 import json
-from pydantic import StrictBool
-from shared.connector_bundle_import import MAPPING,MAX_BYTES,FORMAT as BUNDLE_FORMAT
+from pydantic import Field,StrictBool
+from shared.connector_bundle_import import MAPPING,MAX_BYTES,FORMAT as BUNDLE_FORMAT,parse_json
 from shared.connector_portable_linkage import Envelope,FORMAT,reconstruct
 from shared.connector_event_snapshot import digest
 from shared.connector_case_projection import project_rows
@@ -11,12 +11,12 @@ from .connector_jobs import JobError
 
 class PortableExport(Export):
     confirm_complete_source_disclosure:StrictBool
-    quality_review:dict|None=None
+    quality_review_json:str|None=Field(default=None,min_length=1,max_length=128*1024)
     confirm_quality_gated_export:StrictBool=False
 
 
 def export_portable(reviewed,org,spec,principal):
-    if (spec.quality_review is not None)!=spec.confirm_quality_gated_export:
+    if (spec.quality_review_json is not None)!=spec.confirm_quality_gated_export:
         raise JobError("explicit_portable_quality_review_required",403)
     if not (spec.confirm_link_assertions and spec.confirm_export and spec.confirm_complete_source_disclosure):
         raise JobError("explicit_complete_source_disclosure_required",403)
@@ -50,10 +50,13 @@ def export_portable(reviewed,org,spec,principal):
         except ValueError:
             raise JobError("portable_linkage_integrity_failure") from None
         out=envelope.model_dump()
-        if spec.quality_review is not None:
+        if spec.quality_review_json is not None:
             from shared.connector_quality_verification import verify_quality
             try:
-                quality,_=verify_quality(spec.quality_review,envelope.source_bundle,
+                raw=spec.quality_review_json.encode('utf-8')
+                if len(raw)>128*1024:
+                    raise ValueError('quality_report_byte_budget_exceeded')
+                quality,_=verify_quality(parse_json(raw),envelope.source_bundle,
                     expected_org=org,expected_pins=[p.model_dump() for p in envelope.pins])
             except ValueError as exc:
                 raise JobError(str(exc),422) from None
