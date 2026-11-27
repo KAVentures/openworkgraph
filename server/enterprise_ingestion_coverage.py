@@ -6,7 +6,6 @@ upstream completeness guarantee, or proof of a historical source snapshot.
 """
 from datetime import timedelta
 import json
-import math
 from pydantic import Field, StrictInt, ValidationError, model_validator
 
 from . import enterprise_rest_feed as rest
@@ -35,7 +34,7 @@ def erase(c, profile_id):
         c.execute("DELETE FROM enterprise_ingestion_coverage WHERE profile_id=?", [profile_id])
 
 
-def seconds(a, b):
+def microseconds(a, b):
     # Avoid floating point rounding in all interval arithmetic.
     delta = b-a
     return (delta.days*86400+delta.seconds)*1000000+delta.microseconds
@@ -164,10 +163,10 @@ def partition(intervals,start,end,initial,checkpoint):
             kind="not_yet_checkpointed"
         if out and out[-1]["kind"]==kind:
             out[-1]["until"]=rest._iso(b)
-            out[-1]["microseconds"]+=seconds(a,b)
+            out[-1]["microseconds"]+=microseconds(a,b)
         else:
             out.append({"kind":kind,"since":rest._iso(a),"until":rest._iso(b),
-                        "microseconds":seconds(a,b)})
+                        "microseconds":microseconds(a,b)})
     return out
 
 
@@ -183,7 +182,7 @@ def backlog(p, now):
     # SAP uses completed whole-day windows, and Google has application-specific
     # cutoff semantics. Do not claim this is their precise next eligible window.
     reference=now-timedelta(minutes=lag or 0)
-    outstanding=max(0,seconds(anchor,reference))
+    outstanding=max(0,microseconds(anchor,reference))
     window_us=window*3600*1000000
     return {"anchor":rest._iso(anchor),"planning_reference":rest._iso(reference),
             "uncheckpointed_microseconds":outstanding,
@@ -267,7 +266,7 @@ def review(value,*,now=None):
             c.close()
     included=[r for r in rows if r["coverage_index_consistent"]]
     totals={k:sum(r["microseconds_by_kind"][k] for r in included) for k in KINDS}
-    denominator=seconds(start,end)*len(included)
+    denominator=microseconds(start,end)*len(included)
     return {"format":FORMAT,"observed_at":rest._iso(now),"since":rest._iso(start),"until":rest._iso(end),
             "profiles":rows,"summary":{"selected_profiles":len(rows),"included_profiles":len(included),
                 "excluded_inconsistent_profiles":len(rows)-len(included),
