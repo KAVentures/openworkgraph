@@ -292,3 +292,25 @@ async def ingestion_run_history(request:Request,profile_id:str|None=None,
 async def onboarding_readiness(request:Request,support_only:bool=Query(default=False)):
     from . import enterprise_source_onboarding as onboarding
     return await call(request,onboarding.inspect,support_only=support_only)
+
+
+@router.get("/v1/enterprise-connectors/integrity")
+async def retained_integrity_inventory(request:Request):
+    from . import enterprise_retained_integrity as integrity
+    return await call(request,integrity.inventory)
+
+
+@router.post("/v1/enterprise-connectors/integrity/preview")
+async def retained_integrity_preview(request:Request,action:str=Query(default="hold")):
+    from . import enterprise_retained_integrity as integrity
+    require(request)
+    body=await _json_body(request,"Retained evidence integrity review",strict=True,limit=4096)
+    return await call(request,integrity.inspect,body,action=action)
+
+
+@router.post("/v1/enterprise-connectors/integrity/apply")
+async def retained_integrity_apply(request:Request,action:str=Query(default="hold")):
+    from . import enterprise_retained_integrity as integrity
+    require(request)
+    body=await _json_body(request,"Reviewed retained evidence containment",strict=True,limit=4096)
+    return await call(request,integrity.apply,body,action=action)
