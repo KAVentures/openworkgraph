@@ -85,3 +85,7 @@ confounders, establish parallel trends, verify actual causal effect,
 estimate work effort, or claim realized savings. If the intervention
 changes the start activity/resource itself, conditioning on that label
 can distort interpretation. Choose the dimension deliberately.
+
+## Verification
+
+The new regressions cover 160 independent randomized rational decomposition and standardization oracles, composition-only changes, unsupported and ambiguous strata, retained case membership, stale evidence, original-period accounting, bounded scans, authenticated API and Chromium source-review/export workflows. Full native CI remains required.

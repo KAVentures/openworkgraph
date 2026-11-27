@@ -64,6 +64,29 @@ const path=require('node:path');
   assert.deepEqual(report.report,body);
   const [csv]=await Promise.all([page.waitForEvent('download'),page.locator('#owgImpactReportCsv').click()]);
   assert.match(await fs.readFile(await csv.path(),'utf8'),/treated.*baseline/);
+  // Common-support review reuses the actual retained log and projection.
+  const mix=page.locator('#owgImpactCaseMix');
+  await mix.locator('summary').first().click();
+  await page.locator('#owgMixDate').fill('2024-03-01');
+  await page.locator('#owgMixDimension').selectOption('first_resource');
+  await page.locator('#owgMixPrepare').click();
+  assert.equal(JSON.parse(await page.locator('#owgMixPrepared').inputValue()).body.case_mix.dimension,'first_resource');
+  const [mixResponse]=await Promise.all([page.waitForResponse(r=>r.url().endsWith('/impact/case-mix')),page.locator('#owgMixRun').click()]);
+  assert.equal(mixResponse.status(),200,await mixResponse.text());
+  const mixData=await mixResponse.json();
+  assert.equal(mixData.common_support_strata,2);
+  assert.ok(Math.abs(mixData.groups.all.standardized_change+12*3600)<0.5*3600);
+  await page.locator('#owgMixOutput').getByRole('heading',{name:'Stratum support and exact evidence'}).waitFor();
+  await page.locator('#owgMixOutput').getByText('A · common support',{exact:true}).click();
+  const [mixEvidence]=await Promise.all([page.waitForResponse(r=>r.url().endsWith('/impact/case-mix/evidence')),
+    page.locator('#owgMixOutput').getByRole('button',{name:'Review all follow_up cases',exact:true}).first().click()]);
+  assert.equal(mixEvidence.status(),200,await mixEvidence.text());
+  assert.equal((await mixEvidence.json()).selected_cases,120);
+  const [mixDownload]=await Promise.all([page.waitForEvent('download'),page.locator('#owgMixDownload').click()]);
+  assert.deepEqual(JSON.parse(await fs.readFile(await mixDownload.path(),'utf8')),mixData);
+  await page.locator('#owgMixMinimum').fill('15');
+  assert(await page.locator('#owgMixDownload').isDisabled());
+  await mix.locator('summary').first().click();
   // The SLA field appears only for SLA breaches.
   assert.equal(await page.locator('#owgImpactSla').isVisible(),false);
   await page.locator('#owgImpactMetric').selectOption('sla_breach');

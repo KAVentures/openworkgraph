@@ -73,7 +73,7 @@
     const pct=v=>v==null?'Not comparable':(100*v).toFixed(2)+'%';
     const title=r=>r.label_kind==='observed'?r.label:r.label_kind+' start label';
     async function openEvidence(row,group,period,after=null){
-      if(!report||!request)return;
+      if(!report||!request||selected!==scopeKey())return;
       const n=generation,k=++ticket,key=scopeKey(),current=report,p=request;
       evidence.replaceChildren(el('p','Checking exact stratum evidence…'));
       try{
@@ -121,6 +121,7 @@
     }
     run.onclick=async()=>{
       if(!request)return;
+      if(selected!==scopeKey()){selected=scopeKey();invalidate('Selected log or projection changed. Prepare again.');return;}
       const n=++generation,key=scopeKey(),p=request;ticket++;report=null;out.replaceChildren();evidence.replaceChildren();run.disabled=download.disabled=true;
       status.textContent='Computing bounded exact common-support review…';
       try{

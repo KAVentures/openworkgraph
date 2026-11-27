@@ -187,6 +187,20 @@ with TestClient(app) as client:
     assert result.status_code == 200 and result.headers["cache-control"] == "no-store", result.text
     assert result.json()["change"]["median_change"] == -4 * 3600
     assert client.post(path, json={"intervention_at": "nope"}, headers=headers).status_code == 422
+    mix=path+"/case-mix"
+    body={"analysis":spec,"case_mix":{"dimension":"first_activity","minimum_cases":5}}
+    assert client.post(mix,json=body,headers=bearer).status_code in (401,403)
+    result=client.post(mix,json=body,headers=headers)
+    assert result.status_code==200,result.text
+    assert result.headers["cache-control"]=="no-store"
+    r=result.json()
+    assert r["groups"]["all"]["standardized_change"]==-4*3600
+    evidence={**body,"expected_review_sha256":r["review_sha256"],"stratum_sha256":r["strata"][0]["stratum_sha256"],"group":"all","period":"follow_up"}
+    assert client.post(mix+"/evidence",json=evidence,headers=bearer).status_code in (401,403)
+    e=client.post(mix+"/evidence",json=evidence,headers=headers)
+    assert e.status_code==200 and e.json()["selected_cases"]==40,e.text
+    assert client.post(mix+"/evidence",json={**evidence,"expected_review_sha256":"0"*64},headers=headers).status_code==422
+    assert client.get("/event-log-case-mix.js").status_code==200
 '''
     env = os.environ.copy()
     env.update({"WORKFLOW_OBSERVER_DATA": str(tmp_path / "data"), "WORKFLOW_OBSERVER_AUTH_DIR": str(tmp_path / "auth"),
