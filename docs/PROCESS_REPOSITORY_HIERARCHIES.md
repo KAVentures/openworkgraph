@@ -179,3 +179,7 @@ not queried, so deleting a child does not alter these historical declaration
 comparisons. This is a descriptive map diff, not a dependency graph,
 execution plan or value rollup. Full native and browser acceptance remain
 required.
+
+
+For bounded organization-wide coverage, exact pin diversity, reuse, overlap
+and reference review, see [Repository portfolio intelligence](PROCESS_REPOSITORY_PORTFOLIO.md).
