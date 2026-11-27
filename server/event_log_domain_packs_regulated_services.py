@@ -254,8 +254,69 @@ GRANT_ADMINISTRATION = _build(
     ],
 )
 
+# Reuse the proven parent/child contract: source links, not inferred joins.
+# These profiles require an OCEL-compatible two-type retained log.
+from .event_log_domain_packs_object_operations import _bundle
+
+
+AUDIT_ENGAGEMENT = _bundle(
+    "audit_engagement_evidence_items", "Audit engagement and evidence-item administration",
+    "Review recorded engagement closure against separately checked evidence items, "
+    "including missing or late item checks and cross-engagement link errors.",
+    "auditevidence", ("engagement", "Audit engagement"), ("evidence_item", "Evidence item"),
+    ("Record engagement review opening", "Record evidence item check",
+     "Record evidence item exception", "Record engagement closure"),
+    (168, 720),
+    [
+        "Map an engagement with a declared set of evidence items, not an entire organization "
+        "or audit population. Item additions or transfers can legitimately deviate.",
+        "The check label does not prove authenticity, independence, sufficient audit evidence "
+        "or the correctness of an audit opinion. No audit sign-off is authorized.",
+    ],
+)
+
+UTILITY_READING_BATCH = _bundle(
+    "utility_meter_reading_batch", "Utility meter-reading batch administration",
+    "Inspect retained batch closure, per-reading checks and exceptions across many reading "
+    "records without counting every reading as a separate batch.",
+    "utilityread", ("reading_batch", "Reading batch"), ("reading", "Reading record"),
+    ("Record reading batch opening", "Record reading check",
+     "Record reading exception", "Record reading batch closure"),
+    (24, 72),
+    [
+        "Use reading-record identifiers rather than customer or household identifiers. "
+        "Select batches with a declared set of readings and one closure.",
+        "A recorded check does not verify metering accuracy, consumption, billing accuracy, "
+        "service safety or permission to invoice; no reading values are processed.",
+    ],
+)
+
+DOCUMENT_DIGITIZATION = _bundle(
+    "document_digitization_batch", "Document digitization batch administration",
+    "Review recorded batch closure, per-document checks, and exception records while "
+    "preserving the distinction between batches and individual documents.",
+    "digitbatch", ("digitization_batch", "Digitization batch"), ("document_item", "Document item"),
+    ("Record digitization batch opening", "Record document check",
+     "Record document exception", "Record digitization batch closure"),
+    (48, 168),
+    [
+        "Use stable administrative document identifiers without importing document contents "
+        "into this pack. Rebatching, partial closures and rescans can legitimately deviate.",
+        "A check label does not prove OCR accuracy, document integrity, retention compliance, "
+        "access permission, or authority to destroy an original.",
+    ],
+)
+
+REGULATED_OBJECT_PACKS = {
+    p["pack_id"]: {p["version"]: p}
+    for p in (AUDIT_ENGAGEMENT, UTILITY_READING_BATCH, DOCUMENT_DIGITIZATION)
+}
+
+
 REGULATED_SERVICE_PACKS = {
     p["pack_id"]: {p["version"]: p}
     for p in (REFERRAL_ADMINISTRATION, PERMIT_ADMINISTRATION, CONSTRUCTION_RFI,
               CUSTOMS_DOCUMENTATION, ADMISSIONS_ADMINISTRATION, GRANT_ADMINISTRATION)
 }
+ALL_REGULATED_SERVICE_PACKS = {**REGULATED_SERVICE_PACKS, **REGULATED_OBJECT_PACKS}
+
