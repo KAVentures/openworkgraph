@@ -32,7 +32,7 @@ jobs:
       - name: Run exact pilot and existing canonical scoring tests
         # These tests deliberately use no database or application fixture.
         run: |
-          python -m pytest --noconftest -q tests/test_prospective_pilot_cohort.py tests/test_pilot_execution.py tests/test_pilot_blinded_batches.py tests/test_pilot_workspace.py tests/test_pilot_reviewer_package.py tests/test_product_value_eval.py tests/test_pilot_decision_bounds.py tests/test_pilot_decision.py
+          python -m pytest --noconftest -q tests/test_prospective_pilot_cohort.py tests/test_pilot_execution.py tests/test_pilot_blinded_batches.py tests/test_pilot_workspace.py tests/test_pilot_reviewer_package.py tests/test_product_value_eval.py tests/test_pilot_decision_bounds.py tests/test_pilot_decision.py tests/test_pilot_registered_review.py
   offline-reviewer-browser:
     runs-on: ubuntu-latest
     timeout-minutes: 12
