@@ -1,6 +1,6 @@
 """Frozen customer holdout acceptance for generated OWG agent projects.
 
-No business tools. Capture explicitly calls the existing no-tools planner. 
+No business tools. Capture explicitly calls the existing no-tools planner.
 Freeze and score are offline. The challenge excludes reviewed answers.
 The private freeze document is not a signature or proof of blind evaluation.
 """
@@ -183,7 +183,10 @@ async def capture_planner(spec,challenge,*,challenge_sha256,model):
     for row in rows:
         # The existing tracing-disabled, no-business-tools planner is reused.
         # Provider failure is an incomplete trial: no partial result is written.
-        result=await propose(row["input"],model=model,spec=spec)
+        try:
+            result=await propose(row["input"],model=model,spec=spec)
+        except Exception:
+            refuse("Planner failed; no complete capture retained")
         if not isinstance(result,dict) or "plan" not in result:refuse("Incomplete planner result")
         results.append({"challenge_case_id":row["challenge_case_id"],"plan":result["plan"]})
         if len(json.dumps(results,allow_nan=False).encode())>LIMIT:refuse("Captured plans exceed byte budget")
@@ -234,7 +237,16 @@ def evaluate_frozen(spec,development,holdout,freeze,challenge,candidate,*,freeze
     categories={k:rate_gate([r for r in rows if r["category"]==k],policy["min_match_bps_by_category"][k])
                 for k in CATEGORIES}
     overall=rate_gate(rows,policy["min_overall_match_bps"])
-    critical=sum(r["reason"] in CRITICAL for r in rows)
+    # A proposal on an expected-clarification case is critical even when
+    # another diagnostic (e.g. invalid route) takes precedence in compare().
+    expected={c["id"]:c["expected"]["status"] for c in holdout["cases"]}
+    plans={r["case_id"]:r["plan"] for r in candidate_results["results"]}
+    def is_critical(r):
+        plan=plans[r["case_id"]]
+        return (r["reason"] in CRITICAL or
+                (expected[r["case_id"]]=="needs_clarification" and isinstance(plan,dict)
+                 and plan.get("status")=="proposal"))
+    critical=sum(is_critical(r) for r in rows)
     regressions=paired["paired_transitions"]["regressed"] if paired else None
     critical_gate={"failures":critical,"maximum":policy["max_critical_failures"],
                    "pass":critical<=policy["max_critical_failures"]}
@@ -251,7 +263,7 @@ def evaluate_frozen(spec,development,holdout,freeze,challenge,candidate,*,freeze
             "paired_transitions":paired["paired_transitions"] if paired else None,
             "identical_capture_documents":candidate_sha256==baseline_sha256 if paired else None,
             "cases":[{"challenge_case_id":reverse[r["case_id"]],"category":r["category"],
-                      "matches":r["matches_reviewed_expectation"],"reason":r["reason"]}
+                      "matches":r["matches_reviewed_expectation"],"reason":r["reason"],"critical_failure":is_critical(r)}
                      for r in rows],
             "selected_acceptance_gates_pass":passed,
             "expectations_are_customer_declarations":True,"exact_input_overlap_checked":True,
@@ -266,7 +278,11 @@ def private_write(path,value):
     raw=json.dumps(value,sort_keys=True,ensure_ascii=True,allow_nan=False).encode("utf-8")
     if len(raw)>LIMIT:refuse("Acceptance artifact exceeds byte limit")
     fd=os.open(path,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
-    with os.fdopen(fd,"wb") as f:f.write(raw)
+    try:
+        with os.fdopen(fd,"wb") as f:f.write(raw)
+    except BaseException:
+        Path(path).unlink(missing_ok=True)
+        raise
 
 
 def write_freeze(directory,freeze,challenge):
