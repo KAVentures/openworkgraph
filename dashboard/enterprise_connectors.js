@@ -247,6 +247,19 @@
         if(!window.confirm('Remove this feed configuration? Retained event log stays.'))return 'Cancelled.';
         await api(base+'/rest/'+p.profile_id+'/remove',{revision:p.revision,confirm_remove:true});return 'Feed removed; retained log not deleted.';
       })));
+      const cm=p.credential_management;
+      if(cm){
+        card.append(table(['Credential management','Value'],[['Delivery',cm.delivery],['Reviewed rotation supported',cm.reviewed_rotation_supported],['Last identity-verified rotation',cm.last_rotation?.at]]));
+        if(cm.reviewed_rotation_supported&&!p.enabled&&p.status!=='dataset_deleted'){
+          const rotate=button('Verify and bind replacement credential',()=>action(async()=>{
+            if(!window.confirm('I stopped all local and Gateway workers, reconciled any active leases and outboxes, and installed the replacement credential through deployment management.'))return 'Cancelled.';
+            if(!window.confirm('Authorize identity-only provider authentication and bind the replacement if the exact account/application identity matches? The feed stays disabled.'))return 'Cancelled.';
+            await api(base+'/rest/'+p.profile_id+'/rotate-credential',{revision:p.revision,confirm_rotation:true,confirm_identity_probe:true,confirm_workers_stopped:true});
+            return 'Replacement identity verified. Feed remains disabled; checkpoint preserved. Enable and reauthorize scheduling separately.';
+          }));
+          controls.append(rotate);
+        }
+      }
       card.append(controls);
       const jobs=r.profiles.find(q=>q.target_id===p.profile_id)?.schedules||[];
       const interval=el('input');interval.type='number';interval.min='15';interval.max='10080';interval.step='1';interval.value='60';

@@ -134,14 +134,25 @@ def _endpoint(value):
     except (ValueError,TypeError):
         raise FeedError("invalid_deployment_endpoint_allowlist") from None
     if value not in allowed:
-        raise FeedError("endpoint_not_deployment_allowlisted",403)
+        raise FeedError("invalid_connector_secret_catalog","invalid_connector_secret_root","unsafe_connector_secret_ancestor",
+                           "connector_secret_root_must_be_owner_only","unsafe_connector_secret_file","connector_secret_file_unavailable",
+                           "connector_secret_changed_during_read","invalid_connector_secret_file_content","connector_secret_files_require_posix",
+                           "endpoint_not_deployment_allowlisted",403)
     return value
+
+
+def resolve_secret(reference):
+    from .enterprise_connector_secrets import resolve, SecretError
+    try:
+        return resolve(reference)
+    except SecretError as error:
+        raise FeedError(str(error)) from None
 
 
 def _credential(env):
     if not isinstance(env,str) or not ENV.fullmatch(env):
         raise FeedError("invalid_credential_reference")
-    value = os.environ.get(env,"")
+    value = resolve_secret(env)
     if not 1<=len(value)<=4096 or any(ord(c)<33 or ord(c)>126 for c in value):
         raise FeedError("credential_unavailable")
     return value
@@ -217,6 +228,8 @@ def _public(p,now):
         out["credential_binding_available"]=True
     except FeedError:
         out["credential_binding_available"]=False
+    from .enterprise_connector_rotation import metadata
+    out["credential_management"]=metadata(p)
     out.update(provider_live_health="unknown", source_completeness_verified=False,
                credentials_exposed=False, execution_authorized=False)
     return out

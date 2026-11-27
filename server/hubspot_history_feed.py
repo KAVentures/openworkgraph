@@ -102,7 +102,7 @@ def catalog():
 
 
 def token(src):
-    value=os.environ.get(src["credential_env"],"")
+    value=rest.resolve_secret(src["credential_env"])
     if not value.startswith("pat-") or not 16<=len(value)<=4096 or any(ord(c)<33 or ord(c)>126 for c in value):
         raise rest.FeedError("hubspot_private_token_unavailable")
     return value
@@ -213,15 +213,15 @@ def projection(p,selection,item,since,until):
 
 
 class Reader:
-    def __init__(self,p,client):
-        self.p=p;self.src=source(p["config"]);self.client=client
+    def __init__(self,p,client,*,credential_check=rest._check):
+        self.p=p;self.src=source(p["config"]);self.client=client;self.credential_check=credential_check
         self.deadline=time.monotonic()+rest.MAX_SECONDS;self.pages=0;self.bytes=0
 
     def post(self,path,payload):
         if self.pages>=rest.MAX_PAGES:
             raise rest.FeedError("provider_page_budget_exceeded")
         self.pages+=1
-        secret=rest._check(self.p)
+        secret=self.credential_check(self.p)
         body=payload if path!=IDENTITY else {"tokenKey":secret}
         remaining=self.deadline-time.monotonic()
         if remaining<=0:

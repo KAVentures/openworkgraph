@@ -143,6 +143,14 @@ async def google_create(request:Request):
     return await call(request,google.create,body)
 
 
+@router.post("/v1/enterprise-connectors/rest/{profile_id}/rotate-credential")
+async def rotate_credential(request:Request,profile_id:str):
+    from .enterprise_connector_rotation import rotate
+    require(request)
+    body=await _json_body(request,"Reviewed connector credential rotation",strict=True,limit=1024)
+    return await call(request,rotate,profile_id,body)
+
+
 @router.post("/v1/enterprise-connectors/rest/{profile_id}/run")
 async def rest_run(request:Request,profile_id:str):
     require(request)

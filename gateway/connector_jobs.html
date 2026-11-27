@@ -16,7 +16,7 @@
 <section id="historyPanel" hidden><h2>Job history</h2><div id="history"></div></section>
 </main><script nonce="__NONCE__">
 (()=>{'use strict';const $=id=>document.getElementById(id),el=(tag,text)=>{const n=document.createElement(tag);if(text!==undefined)n.textContent=String(text);return n};
-const session=()=>[sessionStorage.getItem('owg_admin_token')||'',sessionStorage.getItem('owg_admin_org')||''];const [token,org]=session();let allowed=false,generation=0,busy=false;
+const session=()=>[sessionStorage.getItem('owg_admin_token')||'',sessionStorage.getItem('owg_admin_org')||''];const [token,org]=session();let allowed=false,owner=false,generation=0,busy=false;
 const valid=()=>session()[0]===token&&session()[1]===org;const base='/v1/admin/connector-jobs',path=base+'/'+encodeURIComponent(org);
 const date=v=>v==null?'—':new Date(v*1000).toLocaleString();
 function clear(){generation++;allowed=false;$('jobs').replaceChildren();$('history').replaceChildren();$('historyPanel').hidden=true;$('createPanel').hidden=true;$('secret').value='';$('secretPanel').hidden=true;$('identity').textContent='Administrator session changed. Return to administration.';}
@@ -32,12 +32,17 @@ if(allowed){card.append(button(j.enabled?'Pause job':'Resume job',()=>action(asy
 const ambiguous=!j.enabled&&['expired_lease_requires_reconciliation','cancelled_active_lease','worker_uncertain'].includes(j.paused_reason);
 if(ambiguous&&!confirm('I independently reconciled the worker outbox and local checkpoint and stopped any old worker. Resume?'))return;
 await api(jobpath+'/state',{expected_revision:j.revision,enabled:!j.enabled,confirm_change:true,confirm_ambiguous_recovery:ambiguous});})));
+if(!j.enabled&&owner){const section=el('details');section.append(el('summary','Rebind a newer revision of this same local profile'));section.append(el('p','Stop and reconcile all old workers and outboxes. Remove or expire any previous event publication. Obtain the new pin using the source-host --describe-profile command after credential verification and local reauthorization.'));
+const rev=el('input');rev.type='number';rev.min=String(j.profile_revision+1);rev.max='1000000';rev.value=String(j.profile_revision+1);const rl=el('label','New exact local profile revision');rl.append(rev);
+const digest=el('input');digest.maxLength=64;digest.placeholder='64 lowercase hexadecimal characters';const dl=el('label','New exact local profile SHA-256');dl.append(digest);
+const consent=el('input');consent.type='checkbox';const cl=el('label');cl.append(consent,document.createTextNode(' I verified the same local profile and source scope, reconciled old workers and explicitly reauthorize dispatch and counts-only receipts.'));
+section.append(rl,dl,cl,button('Rebind and rotate worker credential',()=>action(async()=>{if(!consent.checked||!Number.isInteger(Number(rev.value))||Number(rev.value)<=j.profile_revision||!/^[a-f0-9]{64}$/.test(digest.value))throw Error('Provide the reviewed newer pin and confirm reconciliation.');showSecret(await api(jobpath+'/rebind',{expected_revision:j.revision,profile_id:j.profile_id,old_profile_revision:j.profile_revision,old_profile_sha256:j.profile_sha256,new_profile_revision:Number(rev.value),new_profile_sha256:digest.value,confirm_same_source:true,confirm_workers_reconciled:true,confirm_dispatch_and_receipts:true}));})));card.append(section);}
 if(!j.enabled)card.append(button('Rotate worker credential',()=>action(async()=>{if(!confirm('Revoke the old worker credential and issue a new one? The job remains paused.'))return;showSecret(await api(jobpath+'/rotate',{expected_revision:j.revision,confirmed:true}));})));}children.push(card);} $('jobs').replaceChildren(...(children.length?children:[el('p','No registered connector jobs.')]));
 }
 async function load(){const turn=++generation;try{const r=await api(path);if(turn!==generation)return;render(r);$('status').textContent='Local Gateway job inventory refreshed. No provider contacted.';}catch(e){if(turn===generation)$('status').textContent=e.message;}}
 $('refresh').onclick=load;$('hideSecret').onclick=()=>{$('secret').value='';$('secretPanel').hidden=true;};
 $('create').onsubmit=e=>{e.preventDefault();action(async()=>{const r=await api(base,{organization_id:org,name:$('name').value,provider:$('provider').value,profile_id:$('profile').value,profile_revision:Number($('revision').value),profile_sha256:$('digest').value,interval_minutes:Number($('interval').value),confirm_dispatch:$('dispatch').checked,confirm_counts_only_receipts:$('receipts').checked});showSecret(r);$('dispatch').checked=$('receipts').checked=false;});};
 window.addEventListener('pageshow',()=>{if(!valid())clear();});window.addEventListener('pagehide',()=>{$('secret').value='';$('secretPanel').hidden=true;});
-(async()=>{if(!token||!org){clear();return;}try{const me=await api('/v1/admin/auth/me');allowed=me.can_write===true;$('identity').textContent='Organization: '+org+' · '+me.role;$('createPanel').hidden=!allowed;await load();}catch(e){$('status').textContent=e.message;}})();
+(async()=>{if(!token||!org){clear();return;}try{const me=await api('/v1/admin/auth/me');allowed=me.can_write===true;owner=me.is_owner===true;$('identity').textContent='Organization: '+org+' · '+me.role;$('createPanel').hidden=!allowed;await load();}catch(e){$('status').textContent=e.message;}})();
 })();
 </script></body></html>
