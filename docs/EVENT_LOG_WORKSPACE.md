@@ -3999,3 +3999,18 @@ Activity A and B accept an exact label in place of the suggested activity. Use
 The checked definition is also used for violation evidence and saved signals.
 Adding or removing a queued rule clears the previous check; run it again to
 review violations or save a signal.
+
+### Exact activity labels in due-date and breakdown reports
+
+Due-date checks, time patterns and the activity-share breakdown can use an exact activity label
+instead of a suggestion. Use **Find labels** to search the current case notion,
+then choose a match. The due-date report, evidence and saved signal use the same
+label; the breakdown report, case evidence and CSV use the same label. Time
+patterns and their case evidence use the selected exact label.
+
+### Association result freshness
+
+Changing an association outcome or its settings clears the previous results and
+case actions. Run the analysis again before inspecting, tagging, filtering or
+saving cases. A response to an earlier request is discarded if settings change
+while it is running.
