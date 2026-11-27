@@ -1963,7 +1963,7 @@
       if(caseType!==undefined)url.searchParams.set('case_type',caseType);
       return url.pathname+url.search;
     };
-    const filters=cohortFields(prefix+'Filter','Select complete cases',activityNames,{exactActivity:false});
+    const filters=cohortFields(prefix+'Filter','Select complete cases',activityNames,{exactActivity:false,caseType:options.caseType});
     const exactActivity=input(prefix+'ExactActivity','text','Exact activity label (optional)');exactActivity.maxLength=400;
     const activityPicker=filters.node.querySelector('#'+prefix+'FilterActivity');
     const activityLookup=activityLabelLookup(exactActivity,{id:part=>prefix+'Activity'+part,
@@ -2599,7 +2599,9 @@
     box.appendChild(el('legend',legend));
     const label=input(prefix+'Label','text','Name');label.maxLength=80;
     const from=input(prefix+'From','date'),before=input(prefix+'Before','date');
-    const resource=input(prefix+'Resource','text','any');
+    const resource=input(prefix+'Resource','text','Exact resource label (optional)');resource.maxLength=400;resource.autocomplete='off';
+    const resourceLookup=activityLabelLookup(resource,{id:part=>prefix+'Resource'+part,subject:'resource in '+legend,kind:'resource',caseType:options.caseType});
+    resource.addEventListener('input',resourceLookup.reset);
     const activity=select(prefix+'Activity',[['','any'],...activityNames.slice(0,500).map(a=>[a,a])]);
     const attribute=input(prefix+'Attribute','text','name=value');
     const eventAttribute=input(prefix+'EventAttribute','text','name=value');eventAttribute.title='Cases with at least one event carrying this value, such as a column kept from a CSV import';
@@ -2608,7 +2610,7 @@
     const rangeMin=input(prefix+'RangeMin','number','from');rangeMin.step='any';
     const rangeMax=input(prefix+'RangeMax','number','below');rangeMax.step='any';
     const row=el('div',null,'row');row.style.alignItems='end';
-    row.append(field('Name',label),field('Started from (UTC)',from),field('Started before (UTC)',before),field('Resource',resource),field('Contains activity',activity),field('Case attribute',attribute),field('Event attribute',eventAttribute),field('Tagged',tag));
+    row.append(field('Name',label),field('Started from (UTC)',from),field('Started before (UTC)',before),field('Resource',resource),resourceLookup.wrap,field('Contains activity',activity),field('Case attribute',attribute),field('Event attribute',eventAttribute),field('Tagged',tag));
     let exactActivity=null;
     if(options.exactActivity!==false){
       exactActivity=input(prefix+'ExactActivity','text','Exact activity label (optional)');exactActivity.maxLength=400;
@@ -2623,6 +2625,10 @@
     box.append(row,rangeRow);
     return {node:box,read:()=>{
       const spec=cohortSpec({label:label.value,from:from.value,before:before.value,resource:resource.value,activity:activity.value,attribute:attribute.value,eventAttribute:eventAttribute.value,tag:tag.value,rangeName:rangeName.value,rangeMin:rangeMin.value,rangeMax:rangeMax.value});
+      if(resource.value){
+        if(Array.from(resource.value).length>200)throw new Error('Resource labels must have at most 200 characters.');
+        spec.resource=resource.value;
+      }
       if(exactActivity&&exactActivity.value){
         if(Array.from(exactActivity.value).length>200)throw new Error('Activity labels must have at most 200 characters.');
         spec.activity=exactActivity.value;
