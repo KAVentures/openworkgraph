@@ -34,7 +34,6 @@ CATALOGS = {
 OTHER = {"google": "stored_oauth_grant", "salesforce": "stored_oauth_grant",
          "servicenow": "stored_oauth_grant", "slack": "reviewed_token_profile"}
 SAFE_ALIAS = re.compile(r"[A-Za-z][A-Za-z0-9_-]{0,39}\Z")
-SAFE_ERROR = re.compile(r"[a-z][a-z0-9_]{0,100}\Z")
 # Never return an arbitrary exception's message, even if it matches a regex.
 # Known codes come from the deployment parsers and local credential contract.
 KNOWN_ERRORS = frozenset({
@@ -115,7 +114,7 @@ def catalog_entries():
             if not isinstance(sources, dict):
                 raise ValueError()
         except Exception as exc:
-            statuses.append(catalog_status(provider, configured, "invalid",
+            statuses.append(catalog_status(provider, configured, "invalid", sources=None,
                                            error=error_code(exc, "catalog_validation_failed")))
             continue
         statuses.append(catalog_status(provider, configured, "valid" if sources else "empty",
@@ -239,10 +238,10 @@ def summarize(statuses, entries, profiles, rest_report, secret_report):
         selected = [p for p in profiles if p["provider"] == provider]
         providers.append({"provider": provider, "catalog_state": catalog["state"] if catalog else "not_applicable",
                           "configured_sources": len(sources) if catalog and catalog["state"] != "invalid" else None,
-                          "ready_local_sources": sum(e["local_credential_state"] == "locally_available" for e in sources),
-                          "blocked_local_sources": sum(e["local_credential_state"] == "blocked" for e in sources),
+                          "ready_local_sources": sum(e["local_credential_state"] == "locally_available" for e in sources) if catalog and catalog["state"] != "invalid" else None,
+                          "blocked_local_sources": sum(e["local_credential_state"] == "blocked" for e in sources) if catalog and catalog["state"] != "invalid" else None,
                           "unconfigured_ready_sources": sum(e["local_credential_state"] == "locally_available"
-                              and not e["profile_ids"] and not e["definition_drift_profiles"] for e in sources),
+                              and not e["profile_ids"] and not e["definition_drift_profiles"] for e in sources) if catalog and catalog["state"] != "invalid" else None,
                           "retained_profiles": len(selected),
                           "profiles_requiring_review": sum(p["requires_operator_review"] for p in selected),
                           "onboarding_mode": "deployment_catalog" if provider in CATALOGS else
