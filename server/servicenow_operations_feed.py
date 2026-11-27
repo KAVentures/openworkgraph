@@ -184,7 +184,7 @@ def project(p,selection,mode,raw,since,until):
     at=timestamp(raw["sys_created_on"])
     if not since<=at<until:
         raise rest.FeedError("servicenow_event_outside_requested_window",502)
-    return (at,event),[rest._key(p,"servicenow_event",mode+":"+table+":"+event),
+    return (at,event),[rest._key(p,"servicenow_event",mode+":"+(table+":" if mode=="created" else "")+event),
                        rest._key(p,"servicenow_case",table+":"+case),activity,rest._iso(at),""]
 
 
@@ -262,7 +262,7 @@ class Reader:
 
 
 def extract(p,since,until,client_factory=httpx.Client):
-    rows=[];counts={}
+    rows=[];counts={};seen=set()
     with client_factory(timeout=10,follow_redirects=False,trust_env=False) as client:
         reader=Reader(p,client)
         for selection in p["config"]["selections"]:
@@ -275,6 +275,9 @@ def extract(p,since,until,client_factory=httpx.Client):
                     repeated=reader.stream(selection,mode,since,until,budget)
                     if repeated!=batch:
                         raise rest.FeedError("servicenow_repeat_read_mismatch",502)
+                if any(row[0] in seen for row in batch):
+                    raise rest.FeedError("servicenow_cross_stream_identity_conflict",502)
+                seen.update(row[0] for row in batch)
                 counts[selection["table"]+":"+mode]=len(batch)
                 rows.extend(batch)
         return rows,{"pages":reader.pages,"records_received":len(rows),"duplicate_records_in_window":0,
