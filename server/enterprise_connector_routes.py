@@ -322,3 +322,17 @@ async def zendesk_create(request:Request):
     require(request)
     body=await _json_body(request,"Zendesk retained ticket audit profile",strict=True,limit=4096)
     return await call(request,zendesk.create,body)
+
+
+@router.get("/v1/enterprise-connectors/coverage")
+async def coverage_inventory(request:Request):
+    from . import enterprise_ingestion_coverage as coverage
+    return await call(request,coverage.inventory)
+
+
+@router.post("/v1/enterprise-connectors/coverage/review")
+async def coverage_review(request:Request):
+    from . import enterprise_ingestion_coverage as coverage
+    require(request)
+    body=await _json_body(request,"Committed request window review",strict=True,limit=8192)
+    return await call(request,coverage.review,body)
