@@ -191,6 +191,9 @@ with TestClient(app) as client:
     assert result.json()["pairs"] == 1
     assert result.json()["forward_lead_time_seconds"]["p50"] == 3600
     assert not result.json()["execution_authorized"]
+    repeat=client.post(url,json={**spec,"repeat_review":True,"deadline_seconds":3600},headers=headers)
+    assert repeat.status_code==200,repeat.text
+    assert repeat.json()["repeated_milestone_review"]["deadline_review"]["within_pairs"]==1
     for raw in (b'{"source_type":"order","source_type":"delivery"}', b'{"sample_limit":NaN}', b'[]'):
         rejected = client.post(url, content=raw, headers={**headers, "Content-Type": "application/json"})
         assert rejected.status_code == 422, rejected.text
@@ -206,3 +209,100 @@ with TestClient(app) as client:
     result = subprocess.run([sys.executable, "-c", code], cwd=Path(__file__).resolve().parents[1],
                             env=env, capture_output=True, text=True, timeout=120)
     assert result.returncode == 0, result.stderr + result.stdout
+
+
+def test_repeated_milestones_full_population_and_pinned_pages():
+    log=_import()
+    spec=_spec(repeat_review=True,deadline_seconds=7200,sample_limit=2)
+    result=leads.analyze(log,spec)
+    r=result["repeated_milestone_review"]
+    assert result["forward_pairs"]==3  # original report unchanged
+    assert r["pairs"]==7
+    assert r["status_counts"]=={"observed_forward":3,"target_only_before_source":1,
+        "target_missing":1,"source_missing":1,"both_missing":1}
+    assert r["latest_source_differs_from_first_pairs"]==1
+    assert r["first_source_to_subsequent_target_seconds"]["p50"]==7200
+    assert r["latest_source_to_same_target_seconds"]["maximum"]==10800
+    d=r["deadline_review"]
+    assert d["source_observed_pairs"]==5
+    assert (d["within_pairs"],d["observed_late_pairs"],d["unresolved_pairs"])==(2,1,2)
+    assert d["within_share_bounds"]=={"lower":.4,"upper":.8}
+    next_page=leads.analyze(log,{**spec,"repeat_offset":2,
+        "expected_repeat_sha256":r["review_sha256"]})["repeated_milestone_review"]
+    assert next_page["review_sha256"]==r["review_sha256"]
+    assert next_page["page"]["rows"][0]["source_object_id"]=="o3"
+    forward=leads.analyze(log,{**spec,"repeat_status":"observed_forward",
+        "expected_repeat_sha256":r["review_sha256"],"sample_limit":50})["repeated_milestone_review"]
+    assert forward["page"]["matching_pairs"]==3
+    last=next(x for x in forward["page"]["rows"] if x["source_object_id"]=="o7")
+    assert last["first_source_to_subsequent_target_seconds"]==14400
+    assert last["latest_source_to_same_target_seconds"]==10800
+    assert last["source_events_through_selected_target"]==2
+    with pytest.raises(workspace.EventLogWorkspaceError,match="changed"):
+        leads.analyze(log,{**spec,"deadline_seconds":1,"expected_repeat_sha256":r["review_sha256"]})
+    with workspace._LOCK:
+        conn=workspace._connect()
+        try:conn.execute("UPDATE events SET ts=ts+INTERVAL '1 minute' WHERE log_id=? AND event_id='o7b'",[log])
+        finally:conn.close()
+    with pytest.raises(workspace.EventLogWorkspaceError,match="changed"):
+        leads.analyze(log,{**spec,"expected_repeat_sha256":r["review_sha256"]})
+
+
+def test_repeated_milestones_recovers_later_target_and_preserves_ties():
+    from server.event_log_repeated_milestones import pair_timing
+    from datetime import datetime,timedelta
+    base=datetime(2026,1,1)
+    def times(*values):return [base+timedelta(seconds=x) for x in values]
+    r=pair_timing("a","b",times(10,20,20,40),times(0,20,20,30),10)
+    assert r["status"]=="observed_forward"
+    assert r["target_events_before_first_source"]==1
+    assert r["target_events_on_or_after_first_source"]==3
+    assert r["source_events_through_selected_target"]==3
+    assert r["source_events_after_selected_target"]==1
+    assert r["source_events_at_selected_target_timestamp"]==2
+    assert r["target_events_at_selected_target_timestamp"]==2
+    assert r["first_source_to_subsequent_target_seconds"]==10
+    assert r["latest_source_to_same_target_seconds"]==0
+    assert r["deadline_status"]=="within"
+
+
+def test_repeated_milestones_binary_search_against_small_exhaustive_oracle():
+    from itertools import combinations_with_replacement
+    from datetime import datetime,timedelta
+    from server.event_log_repeated_milestones import pair_timing
+    base=datetime(2026,1,1)
+    values=[c for n in range(4) for c in combinations_with_replacement(range(4),n)]
+    for a in values:
+        for b in values:
+            r=pair_timing("a","b",[base+timedelta(seconds=x) for x in a],
+                [base+timedelta(seconds=x) for x in b],1)
+            subsequent=[t for t in b if a and t>=a[0]]
+            if subsequent:
+                chosen=min(subsequent)
+                assert r["first_source_to_subsequent_target_seconds"]==chosen-a[0]
+                assert r["latest_source_to_same_target_seconds"]==chosen-max(s for s in a if s<=chosen)
+                assert r["status"]=="observed_forward"
+            else:
+                assert r["first_source_to_subsequent_target_seconds"] is None
+                assert r["status"]!="observed_forward"
+
+
+@pytest.mark.parametrize("change",[{"deadline_seconds":1},{"repeat_offset":1},
+    {"repeat_review":True,"repeat_offset":1},{"repeat_review":True,"deadline_seconds":True},
+    {"repeat_review":True,"deadline_seconds":-1},{"repeat_review":"true"},
+    {"repeat_review":True,"repeat_status":"wrong"},{"repeat_review":True,"expected_repeat_sha256":"bad"}])
+def test_invalid_repeated_review_settings(change):
+    with pytest.raises(workspace.EventLogWorkspaceError):leads.parse(_spec(**change))
+
+
+def test_repeated_review_empty_selection_and_aggregate_only():
+    log=_import()
+    empty=leads.analyze(log,_spec(repeat_review=True,qualifier="not-present",
+        deadline_seconds=0,sample_limit=0))["repeated_milestone_review"]
+    assert empty["pairs"]==0
+    assert empty["deadline_review"]["within_share_bounds"]=={"lower":None,"upper":None}
+    assert empty["first_source_to_subsequent_target_seconds"]["p50"] is None
+    assert not empty["page"]["rows"]
+    aggregate=leads.analyze(log,_spec(repeat_review=True,sample_limit=0))["repeated_milestone_review"]
+    assert aggregate["pairs"]==7 and not aggregate["page"]["rows"]
+    assert "repeated_milestone_review" not in leads.analyze(log,_spec())
