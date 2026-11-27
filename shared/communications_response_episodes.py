@@ -6,7 +6,7 @@ An outbound message is only an observed reply proxy, not verified resolution.
 from __future__ import annotations
 
 from collections import Counter, defaultdict
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from statistics import median
 
 FORMAT="openworkgraph.communications-response-episodes.v1"
@@ -14,6 +14,8 @@ MIN_THREADS=5
 MAX_DEADLINES=8
 MAX_MINUTES=43200
 MAX_GROUPS=100
+MAX_WEEKS=26
+AGE_BANDS=(60,240,1440,4320,10080,43200)
 STATES=("observed_within_deadline","observed_after_deadline","no_reply_deadline_elapsed","no_reply_within_deadline")
 
 
@@ -108,11 +110,105 @@ def _grouped(groups,deadlines):
     eligible=[(key,rows) for key,rows in groups.items() if len({t for t,_ in rows})>=MIN_THREADS]
     eligible.sort(key=lambda item:(-len(item[1]),str(item[0])))
     visible=eligible[:MAX_GROUPS]
-    omitted=[rows for key,rows in groups.items() if key not in {k for k,_ in visible}]
+    visible_keys={key for key,_ in visible}
+    omitted=[rows for key,rows in groups.items() if key not in visible_keys]
     return {"rows":[{"group_kind":key[0],"label":key[1],**summarize(rows,deadlines)} for key,rows in visible],
             "suppressed_or_limited_groups":len(omitted),
             "episodes_in_suppressed_or_limited_groups":sum(len(r) for r in omitted),
             "minimum_distinct_threads":MIN_THREADS,"maximum_groups":MAX_GROUPS}
+
+
+def _window(rows,start,end,*,include_end):
+    """Sweep episode endpoints in a window, using exact integer exposure.
+
+    Starts/replies at the same timestamp are applied together. Opening
+    backlog is immediately before the start; closing backlog is before end
+    unless the final inclusive observation cutoff is selected.
+    """
+    changes=defaultdict(int)
+    support=set()
+    opening=arrivals=replies=exposure=0
+    def inside(t):
+        return start<=t and (t<end or include_end and t==end)
+    for key,row in rows:
+        a,b=row["started"],row["reply"]
+        if a>end or (a==end and not include_end) or (b is not None and b<start):
+            continue
+        support.add(key)
+        if a<start and (b is None or b>=start):opening+=1
+        if inside(a):
+            arrivals+=1;changes[a]+=1
+        if b is not None and inside(b):
+            replies+=1;changes[b]-=1
+        left,right=max(a,start),min(b if b is not None else end,end)
+        if right>left:exposure+=_seconds(left,right)
+    backlog=peak=opening
+    for stamp,delta in sorted(changes.items()):
+        backlog+=delta
+        if backlog<0:raise ValueError("inconsistent observed response episode accounting")
+        peak=max(peak,backlog)
+    if backlog!=opening+arrivals-replies:raise ValueError("inconsistent response window balance")
+    span=_seconds(start,end)
+    return {"opening_observed_backlog":opening,"new_episodes":arrivals,"observed_replies":replies,
+            "closing_observed_backlog":backlog,"net_backlog_change":arrivals-replies,
+            "peak_observed_backlog":peak,"episode_wait_seconds":exposure/1000000,
+            "time_weighted_observed_backlog":exposure/span if span else None,
+            "distinct_threads_touched":len(support)}
+
+
+def workload(rows,cutoff,deadlines):
+    if not rows:
+        return {"available":False,"reason":"no_eligible_episodes","weekly_windows":[],"aging_bands":[]}
+    first=min(row["started"] for _,row in rows)
+    overall=_window(rows,first,cutoff,include_end=True)
+    # Display at most the last 26 UTC calendar weeks, with a partial first
+    # or final week where necessary. Earlier starts are still included in
+    # opening backlog and exposure. No per-event timestamp is exported.
+    monday=cutoff.replace(hour=0,minute=0,second=0,microsecond=0)-timedelta(days=cutoff.weekday())
+    first_monday=first.replace(hour=0,minute=0,second=0,microsecond=0)-timedelta(days=first.weekday())
+    earliest=max(first_monday,monday-timedelta(weeks=min(MAX_WEEKS-1,(monday-first_monday).days//7)))
+    start=max(earliest,first)
+    weekly=[];suppressed=0
+    while start<=cutoff:
+        boundary=start.replace(hour=0,minute=0,second=0,microsecond=0)+timedelta(days=7-start.weekday())
+        end=min(boundary,cutoff)
+        final=end==cutoff and end<boundary
+        # If cutoff lies exactly at the next Monday, leave boundary events
+        # to a final zero-span bucket so no event is counted twice.
+        metrics=_window(rows,start,end,include_end=final)
+        y,w,_=start.isocalendar()
+        if metrics["distinct_threads_touched"]>=MIN_THREADS:
+            weekly.append({"week":f"{y}-W{w:02d}","partial_week":start!=start.replace(hour=0,minute=0,second=0,microsecond=0) or start.weekday()!=0 or final,
+                           **metrics})
+        else:suppressed+=1
+        if final:break
+        start=end
+    open_rows=[row for _,row in rows if row["reply"] is None]
+    ages=[row["elapsed_us"] for row in open_rows]
+    bands=[]
+    lower=0
+    for upper in (*AGE_BANDS,None):
+        count=sum(age>=lower*60*1000000 and (upper is None or age<upper*60*1000000) for age in ages)
+        bands.append({"minimum_age_minutes_inclusive":lower,"maximum_age_minutes_exclusive":upper,"open_episodes":count})
+        lower=upper
+    aging=[]
+    for minutes in deadlines:
+        target=minutes*60*1000000
+        remaining=[(target-age)/1000000 for age in ages if age<=target]
+        overdue=[(age-target)/1000000 for age in ages if age>target]
+        aging.append({"deadline_minutes":minutes,"open_episodes":len(ages),
+                      "past_deadline":len(overdue),"within_or_at_deadline":len(remaining),
+                      "due_within_next_hour":sum(x<=3600 for x in remaining),
+                      "due_within_next_day":sum(x<=86400 for x in remaining),
+                      "median_seconds_past_deadline":median(overdue) if overdue else None})
+    return {"available":True,"overall":overall,"observation_span_seconds":_seconds(first,cutoff)/1000000,
+            "weekly_windows":weekly,"weekly_windows_withheld_below_support":suppressed,
+            "minimum_distinct_threads_per_week":MIN_THREADS,"maximum_weeks":MAX_WEEKS,
+            "older_weeks_not_displayed":earliest>first_monday,"aging_bands":bands,"open_deadline_exposure":aging,
+            "interpretation":"Backlog is the number of eligible observed response episodes awaiting the next recorded outbound. "
+                "Episode-wait seconds measure elapsed exposure, not staff work time. Weekly endpoints are UTC, "
+                "simultaneous events are netted, and small weekly groups are withheld. Due counts are relative to the declared cutoff, not current live workload. "
+                "No staffing capacity, resolution, service compliance or missing source messages are inferred."}
 
 
 def analyze(threads,*,cutoff,deadlines,unthreaded_messages):
@@ -158,7 +254,8 @@ def analyze(threads,*,cutoff,deadlines,unthreaded_messages):
                 "dated_messages_after_cutoff_in_fully_dated_threads":counts["messages_after_cutoff"],
                 "threads_with_follow_up":counts["threads_with_follow_up"],
                 "threads_with_open_episode":counts["threads_with_open_episode"]},
-            "overall":summarize(rows,deadlines),"by_first_inbound_intent":_grouped(by_intent,deadlines),
+            "overall":summarize(rows,deadlines),"workload":workload(rows,cutoff,deadlines),
+            "by_first_inbound_intent":_grouped(by_intent,deadlines),
             "by_episode_start_week":_grouped(by_week,deadlines),"by_episode_kind":_grouped(by_kind,deadlines),
             "thread_identifiers_returned":False,"message_text_returned":False,
             "export_completeness_verified":False,"actual_response_or_resolution_verified":False,

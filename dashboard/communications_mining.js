@@ -429,6 +429,26 @@
             table(headers,group.rows.flatMap(x=>targetRows(x.label??'Mixed first timestamp',x))));
           box.append(details);
         }
+        const work=a.workload;
+        if(work?.available){
+          const w=work.overall;
+          box.append(el('h4','Observed response backlog and workload'),
+            table(['Measure','Value'],[['Observed new episodes',w.new_episodes],['Observed replies',w.observed_replies],
+              ['Open at cutoff',w.closing_observed_backlog],['Peak observed backlog',w.peak_observed_backlog],
+              ['Time-weighted observed backlog',w.time_weighted_observed_backlog===null?'—':w.time_weighted_observed_backlog.toFixed(2)],
+              ['Total episode-wait exposure (hours)',(w.episode_wait_seconds/3600).toFixed(2)]]),
+            el('h4','Open episode aging'),
+            table(['Age from (minutes, inclusive)','Age until (minutes, exclusive)','Open episodes'],
+              work.aging_bands.map(b=>[b.minimum_age_minutes_inclusive,b.maximum_age_minutes_exclusive??'No upper bound',b.open_episodes])),
+            table(['Deadline (min)','Past deadline','Within deadline','Due within 1 hour','Due within 1 day','Median seconds overdue'],
+              work.open_deadline_exposure.map(d=>[d.deadline_minutes,d.past_deadline,d.within_or_at_deadline,d.due_within_next_hour,d.due_within_next_day,d.median_seconds_past_deadline??'—'])));
+          const trend=el('details');trend.append(el('summary','Weekly response backlog flow (UTC)'),
+            el('p',work.weekly_windows_withheld_below_support+' low-support weeks withheld; up to '+work.maximum_weeks+' recent weeks. '+(work.older_weeks_not_displayed?'Earlier weeks not shown; their open episodes remain in opening counts.':''),'muted'),
+            table(['UTC week','Opening backlog','New episodes','Observed replies','Closing backlog','Peak','Episode-wait hours'],
+              work.weekly_windows.map(x=>[x.week+(x.partial_week?' (partial)':''),x.opening_observed_backlog,x.new_episodes,
+                x.observed_replies,x.closing_observed_backlog,x.peak_observed_backlog,(x.episode_wait_seconds/3600).toFixed(2)])));
+          box.append(trend,el('p',work.interpretation,'muted'));
+        }
         const exportButton=button('Download response episode aggregates','secondary');
         exportButton.id='owgCommsEpisodeDownload';
         exportButton.onclick=()=>{const url=URL.createObjectURL(new Blob([JSON.stringify(a,null,2)],{type:'application/json'})),link=el('a');
