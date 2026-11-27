@@ -150,3 +150,38 @@ def test_consent_exact_review_and_revocation(mixed):
     reviewed.publications.remove("customer",dg["job_id"],Remove(expected_publication_revision=dg["revision"],confirm_delete=True),"owner",dg["grant_id"])
     with pytest.raises(JobError,match="snapshot_missing_or_changed"):
         temporal_review(reviewed,"customer",Alignment.model_validate(req),"owner")
+
+
+def test_case_weighted_directional_rollup_excludes_overlapping_and_unknown():
+    from gateway.connector_temporal_review import summarize_source_pairs
+    def group(a,b):
+        return {"source_pairs":[{"left_job_id":"a","right_job_id":"b",**compare(a,b)}]}
+    rows=[group([(0,0)],[(1_000_000,2_000_000)]),
+          group([(0,0)]*100,[(5_000_000,8_000_000)]*100),
+          group([(10_000_000,10_000_000)],[(0,1_000_000)]),
+          group([(0,2_000_000)],[(1_000_000,1_000_000)]),
+          group([None],[(1_000_000,1_000_000)])]
+    r=summarize_source_pairs(rows,{"a":"sap","b":"rest"})[0]
+    assert r["linked_groups"]==5
+    assert r["wholly_left_before_right_groups"]==2
+    assert r["wholly_right_before_left_groups"]==1
+    assert r["not_wholly_separated_groups"]==2
+    assert r["groups_with_overlaps"]==1 and r["groups_with_unaligned_dates"]==1
+    assert r["pair_counts"]["event_pairs"]==10004
+    d=r["left_before_right_gap_distribution"]
+    assert d["groups"]==2
+    assert d["p50_bounds"]=={"minimum_seconds":1.0,"maximum_seconds":2.0}
+    assert d["p90_bounds"]=={"minimum_seconds":5.0,"maximum_seconds":8.0}
+    assert r["right_before_left_gap_distribution"]["groups"]==1
+
+
+def test_temporal_output_is_stable_across_selection_order(mixed):
+    reviewed,req,dg,pg=mixed
+    r=temporal_review(reviewed,"customer",Alignment.model_validate(req),"owner")
+    reorder={**req,"snapshots":list(reversed(req["snapshots"])),
+             "groups":[{**req["groups"][0],"members":list(reversed(req["groups"][0]["members"]))}],
+             "expected_temporal_scope_sha256":r["temporal_scope_sha256"]}
+    again=temporal_review(reviewed,"customer",Alignment.model_validate(reorder),"owner")
+    assert again==r
+    assert r["source_pair_rollup"][0]["groups_with_unaligned_dates"]==1
+    assert r["source_pair_rollup"][0]["left_before_right_gap_distribution"] is None
