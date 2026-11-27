@@ -29,12 +29,14 @@ def unique(pairs):
     return out
 
 
-async def parse(request,model):
+async def parse(request,model,maximum=8192):
+    if request.headers.get('content-type','').split(';')[0].strip().lower()!='application/json':
+        raise HTTPException(415,'application/json required')
     data=bytearray()
     async for chunk in request.stream():
-        data.extend(chunk)
-        if len(data)>8192:
+        if len(data)+len(chunk)>maximum:
             raise HTTPException(413,"connector job request too large")
+        data.extend(chunk)
     try:
         return model.model_validate(json.loads(data,object_pairs_hook=unique))
     except (ValueError,ValidationError,UnicodeError,RecursionError):
@@ -106,3 +108,5 @@ def install_connector_jobs(app,db,settings):
         return render_page("connector_jobs.html")
 
     app.include_router(router)
+    from .connector_event_routes import install
+    install(app,jobs,admin)
