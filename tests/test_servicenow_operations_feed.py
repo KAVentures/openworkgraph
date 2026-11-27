@@ -108,7 +108,7 @@ def test_all_eight_tables_repeat_and_overlap_retention():
         assert "fieldnameINassignment_group,state" in q
         assert "documentkeyIN"+sid(sn.TABLES.index(table)+1) in q
         assert q.endswith("ORDERBYsys_created_on^ORDERBYsys_id")
-        return page([item(p,table,at=start+timedelta(hours=23,minutes=30))])
+        return page([item(p,table,101+sn.TABLES.index(table),at=start+timedelta(hours=23,minutes=30))])
     first=run(p,fetch)
     assert len(calls)==16 and first["events_added"]==8
     assert first["last_result"]["stream_counts"]=={table+":audit":1 for table in sn.TABLES}
@@ -293,3 +293,45 @@ def test_inventory_is_passive_and_sanitized(monkeypatch):
     assert row["provider"]=="servicenow" and row["provider_live_health"]=="unknown"
     for secret in (HOST,CONNECTION,TOKEN,sid(1)):
         assert secret not in json.dumps(r)
+
+
+def test_same_audit_identity_in_distinct_table_streams_is_rejected():
+    p=sn.create(config(selections=[selection(),selection("problem")]))
+    with pytest.raises(rest.FeedError,match="servicenow_cross_stream_identity_conflict"):
+        run(p,lambda req:page([item(p,table_from(req))]))
+    assert workspace.list_logs()["logs"]==[]
+
+
+def test_native_route_requires_dashboard_and_explicit_read_consent(tmp_path):
+    import os
+    from pathlib import Path
+    import subprocess
+    import sys
+    script=r"""
+from fastapi.testclient import TestClient
+from server.secure_app import app
+from server import local_auth,connector_oauth as oauth
+from test_servicenow_operations_feed import config,CONNECTION,HOST,selection
+oauth._save({"version":1,"connections":{CONNECTION:{
+    "provider":"servicenow","host":HOST,"scopes":["useraccount"],
+    "client_id":"test-client","refresh_token":"fixture-secret","connected_at":"2026-01-01T00:00:00Z"}}})
+with TestClient(app) as c:
+    h={"Authorization":"OWG-Session "+local_auth.create_dashboard_session()}
+    bearer={"Authorization":"Bearer "+local_auth.ensure_api_token()}
+    path='/v1/enterprise-connectors/servicenow'
+    assert c.post(path,json=config(selections=[selection()]),headers=bearer).status_code in (401,403)
+    r=c.post(path,json=config(selections=[selection()]),headers=h)
+    assert r.status_code==200,r.text
+    p=r.json()
+    assert p["provider"]=="servicenow" and "fixture-secret" not in r.text
+    assert c.post(path,content=b'{"name":"a","name":"b"}',headers={**h,"Content-Type":"application/json"}).status_code==422
+    assert c.get('/v1/enterprise-connectors',headers=h).json()["provider_reads_performed"] is False
+    assert c.post('/v1/enterprise-connectors/rest/'+p["profile_id"]+'/run',json={
+      "revision":1,"confirm_reads":False,"confirm_retention":True},headers=h).status_code==403
+"""
+    env={**os.environ,"WORKFLOW_OBSERVER_DATA":str(tmp_path/"data"),
+         "WORKFLOW_OBSERVER_AUTH_DIR":str(tmp_path/"auth"),
+         "WORKFLOW_OBSERVER_CONFIG":str(tmp_path/"config.json")}
+    proc=subprocess.run([sys.executable,"-c","import sys;sys.path.insert(0,'tests');"+script],
+                        cwd=Path(__file__).resolve().parents[1],env=env,capture_output=True,text=True,timeout=120)
+    assert proc.returncode==0,proc.stdout+proc.stderr
