@@ -11,7 +11,8 @@ Provider = Literal["rest", "google", "sql", "slack", "salesforce",
                    "servicenow", "sap", "dataverse", "hubspot", "databricks", "snowflake", "netsuite", "workday", "oracle_fusion"]
 PROVIDERS = frozenset(get_args(Provider))
 CROSSWALK_PROVIDERS = frozenset({"rest", "sql", "salesforce", "servicenow",
-                                 "sap", "dataverse", "hubspot"})
+                                 "sap", "dataverse", "hubspot", "databricks", "snowflake",
+                                 "netsuite", "workday", "oracle_fusion"})
 ROTATION_PROVIDERS = frozenset({"dataverse", "hubspot"})
 FILE_SECRET_PROVIDERS = frozenset({"rest", "sql", "slack", "sap", "dataverse", "hubspot", "databricks", "snowflake", "netsuite", "workday", "oracle_fusion"})
 
