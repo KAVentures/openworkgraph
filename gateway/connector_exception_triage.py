@@ -92,6 +92,11 @@ class Change(Strict):
         return self
 
 
+class Export(Strict):
+    expected_revision:StrictInt=Field(ge=1)
+    confirm_disposition_export:StrictBool
+
+
 class Delete(Strict):
     expected_revision:StrictInt=Field(ge=1)
     confirm_delete:StrictBool
@@ -266,6 +271,27 @@ class Queues:
             result=self._public(c,org,d);self.reviewed._fresh(d["expires_at"])
             return {"queue":result,"items":pending}
 
+    def export(self,org,queue,spec,principal):
+        if not spec.confirm_disposition_export:
+            raise JobError("explicit_disposition_export_required",403)
+        with self.jobs._tx(org) as c:
+            d=self._require(c,org,queue)
+            if d["revision"]!=spec.expected_revision:
+                raise JobError("exception_queue_revision_changed")
+            rows=self.q(c,"SELECT definition FROM connector_exception_items WHERE organization_id=? AND queue_id=? ORDER BY item_id",org,queue).fetchall()
+            if len(rows)!=d["exception_count"] or len(rows)>MAX_ITEMS:
+                raise JobError("exception_queue_integrity_failure")
+            fields=("item_id","linked_case_id","rule_id","status","reason","left_count","right_count",
+                    "state","disposition","revision")
+            items=[{k:item[k] for k in fields} for item in (json.loads(row[0]) for row in rows)]
+            out={"format":"openworkgraph.exception-dispositions.v1","queue":self._public(c,org,d),
+                 "items":items,"actual_process_compliance_verified":False}
+            out["export_sha256"]=digest(out)
+            self._audit(c,org,d,principal,"dispositions_exported",
+                        {"queue_revision":d["revision"],"items":len(items),"export_sha256":out["export_sha256"]})
+            self.reviewed._fresh(d["expires_at"])
+            return out
+
     def delete(self,org,queue,spec,principal):
         if not spec.confirm_delete:raise JobError("explicit_exception_queue_deletion_required",403)
         with self.jobs._tx(org) as c:
@@ -274,3 +300,19 @@ class Queues:
             self._audit(c,org,d,principal,"deleted",{"queue_revision":d["revision"]})
             self._remove(c,org,queue)
             return {"deleted":True,"publications_deleted":False,"source_data_deleted":False}
+
+
+def disposition_csv(report):
+    """Fixed codes, numeric counts and opaque identifiers; no arbitrary labels."""
+    import csv
+    from io import StringIO
+    out=StringIO(newline="")
+    writer=csv.DictWriter(out,fieldnames=["item_id","linked_case_id","rule_id","status","reason",
+        "left_count","right_count","state","disposition","revision","queue_id","queue_revision",
+        "conformance_sha256","export_sha256"])
+    writer.writeheader()
+    q=report["queue"]
+    for row in report["items"]:
+        writer.writerow({**row,"queue_id":q["queue_id"],"queue_revision":q["revision"],
+                         "conformance_sha256":q["conformance_sha256"],"export_sha256":report["export_sha256"]})
+    return out.getvalue()
