@@ -70,8 +70,8 @@ router = APIRouter()
 XLSX_MAX_BYTES = 64 * 1024 * 1024
 SQLITE_MAX_BYTES = 256 * 1024 * 1024
 _SCRIPT = Path(__file__).resolve().parents[1] / "dashboard" / "event_log_workspace.js"
-_TYPES = {"csv": "text/csv", "sourcecsv": "text/csv", "sourcecsv-review": "text/csv", "csv-review": "text/csv", "xes": "application/xml", "xes-attributes": "application/xml", "ocel": "application/json", "ocelxml": "application/xml"}
-_SUFFIX = {"csv": "csv", "sourcecsv": "csv", "sourcecsv-review": "review.csv", "csv-review": "review.csv", "xes": "xes", "xes-attributes": "xes", "ocel": "jsonocel", "ocelxml": "xmlocel"}
+_TYPES = {"csv": "text/csv", "sourcecsv": "text/csv", "sourcecsv-review": "text/csv", "csv-review": "text/csv", "xes": "application/xml", "xes-attributes": "application/xml", "ocel": "application/json", "ocelxml": "application/xml", "jsonl": "application/x-ndjson", "csv-attributes": "text/csv"}
+_SUFFIX = {"csv": "csv", "sourcecsv": "csv", "sourcecsv-review": "review.csv", "csv-review": "review.csv", "xes": "xes", "xes-attributes": "xes", "ocel": "jsonocel", "ocelxml": "xmlocel", "jsonl": "jsonl", "csv-attributes": "csv"}
 
 
 def _source_identity_mapping(
@@ -317,6 +317,22 @@ def event_log_signal_timeline(
     return _respond(signal_timeline.timeline, transition=transition, limit=limit, before=before)
 
 
+@router.get("/v1/event-logs/signal-episode-review")
+def event_log_signal_episode_review(
+    request: Request, start_date: str = Query(max_length=10), end_date: str = Query(max_length=10),
+    status: str = Query(default="all",max_length=60),
+    log_id: str | None = Query(default=None,pattern=r"^[A-Za-z0-9_-]{1,128}$"),
+    rule_id: str | None = Query(default=None,pattern=r"^[A-Za-z0-9_-]{1,128}$"),
+    offset: int = Query(default=0,ge=0,le=100000), limit: int = Query(default=50,ge=1,le=100),
+    expected_review_sha256: str | None = Query(default=None,pattern=r"^[0-9a-f]{64}$"),
+):
+    """Bounded local journal episode review; no evaluation or action."""
+    from . import event_log_signal_episode_review as episodes
+    _require_dashboard(request)
+    return _respond(episodes.review,start_date=start_date,end_date=end_date,status=status,
+                    offset=offset,limit=limit,expected_review_sha256=expected_review_sha256,log_id=log_id,rule_id=rule_id)
+
+
 @router.post("/v1/event-logs/xlsx-to-csv")
 async def convert_xlsx_event_log(request: Request, sheet: str | None = Query(default=None, max_length=200)):
     """Convert one worksheet of an .xlsx file to CSV for the ordinary CSV import. Nothing is stored."""
@@ -354,6 +370,302 @@ async def convert_sqlite_event_log(request: Request, table: str | None = Query(d
             result = await run_in_threadpool(sqlite_import.to_csv, spool, table, folder=DATA_DIR)
         except sqlite_import.SqliteError as exc:
             raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+@router.post("/v1/event-logs/petri-soundness")
+async def event_log_petri_soundness(request: Request):
+    """Bounded structural and behavioral validation of one explicitly marked ordinary PNML net."""
+    from . import event_log_petri_soundness as soundness
+    from . import event_log_petri_replay as replay
+    _require_dashboard(request)
+    data = bytearray()
+    async for chunk in request.stream():
+        if len(data) + len(chunk) > replay.MAX_BYTES:
+            raise HTTPException(413, "the Petri net file is larger than 2 MB")
+        data.extend(chunk)
+    try:
+        result = await run_in_threadpool(soundness.analyze, bytes(data))
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+@router.post("/v1/event-logs/petri-release/{action}")
+async def event_log_petri_release(request: Request, action: str):
+    """Freeze exact inputs or recompute all requested model release criteria."""
+    from . import event_log_petri_release as release
+    from . import event_log_petri_acceptance as acceptance
+    from . import event_log_petri_replay as replay
+    _require_dashboard(request)
+    if action not in {"pin", "review"}:
+        raise HTTPException(404, "unknown release action")
+    if request.headers.get("content-type", "").split(";")[0].strip().lower() != "application/octet-stream":
+        raise HTTPException(415, "send framed release specification and PNML bytes")
+    data = bytearray()
+    async for chunk in request.stream():
+        if len(data) + len(chunk) > 8 + release.MAX_SPEC_BYTES + 2 * replay.MAX_BYTES:
+            raise HTTPException(413, "release review payload is too large")
+        data.extend(chunk)
+    if len(data) < 8:
+        raise HTTPException(422, "missing specification or model length")
+    n = int.from_bytes(data[:4], "big")
+    if n > release.MAX_SPEC_BYTES:
+        raise HTTPException(413, "release spec is too large")
+    if n < 1 or len(data) < 8 + n:
+        raise HTTPException(422, "invalid spec framing")
+    offset = 8 + n
+    m = int.from_bytes(data[4+n:offset], "big")
+    if m > replay.MAX_BYTES or len(data) - offset - m > replay.MAX_BYTES:
+        raise HTTPException(413, "each model must be at most 2 MB")
+    if m < 1 or len(data) <= offset + m:
+        raise HTTPException(422, "both models are required")
+    try:
+        spec = acceptance._strict_json(bytes(data[4:4+n]))
+        result = await run_in_threadpool(release.pin if action == "pin" else release.review,
+                                         bytes(data[offset:offset+m]), bytes(data[offset+m:]), spec)
+    except (workspace.EventLogWorkspaceError, UnicodeError, RecursionError) as exc:
+        raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+@router.post("/v1/event-logs/petri-mutation-review")
+async def event_log_petri_mutation_review(request: Request):
+    """Assess one supplied suite against independent synthetic model faults."""
+    from . import event_log_petri_mutation as mutation
+    from . import event_log_petri_acceptance as acceptance
+    from . import event_log_petri_replay as replay
+    _require_dashboard(request)
+    if request.headers.get("content-type", "").split(";")[0].strip().lower() != "application/octet-stream":
+        raise HTTPException(415, "send framed mutation settings and PNML bytes")
+    data = bytearray()
+    max_spec = acceptance.MAX_SUITE_BYTES + 4096
+    async for chunk in request.stream():
+        if len(data) + len(chunk) > 4 + max_spec + replay.MAX_BYTES:
+            raise HTTPException(413, "mutation review payload is too large")
+        data.extend(chunk)
+    if len(data) < 4:
+        raise HTTPException(422, "missing settings length")
+    n = int.from_bytes(data[:4], "big")
+    if n > max_spec or len(data) - 4 - n > replay.MAX_BYTES:
+        raise HTTPException(413, "mutation review input exceeds the byte limit")
+    if n < 1 or len(data) <= 4 + n:
+        raise HTTPException(422, "invalid mutation review framing")
+    try:
+        spec = acceptance._strict_json(bytes(data[4:4+n]))
+        result = await run_in_threadpool(mutation.review, bytes(data[4+n:]), spec)
+    except (workspace.EventLogWorkspaceError, UnicodeError) as exc:
+        raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+@router.post("/v1/event-logs/petri-test-generation")
+async def event_log_petri_test_generation(request: Request,
+                                          max_cases: int = Query(default=20, ge=1, le=40),
+                                          max_depth: int = Query(default=20, ge=1, le=99)):
+    """Generate characterization scenarios from one explicitly submitted PNML model."""
+    from . import event_log_petri_test_generation as generation
+    from . import event_log_petri_replay as replay
+    _require_dashboard(request)
+    data = bytearray()
+    async for chunk in request.stream():
+        if len(data) + len(chunk) > replay.MAX_BYTES:
+            raise HTTPException(413, "the Petri net file is larger than 2 MB")
+        data.extend(chunk)
+    try:
+        result = await run_in_threadpool(generation.generate, bytes(data),
+                                         {"max_cases": max_cases, "max_depth": max_depth})
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+@router.post("/v1/event-logs/petri-acceptance")
+async def event_log_petri_acceptance(request: Request):
+    """Run an explicitly supplied acceptance suite on one or two models."""
+    from . import event_log_petri_acceptance as acceptance
+    from . import event_log_petri_replay as replay
+    _require_dashboard(request)
+    if request.headers.get("content-type", "").split(";")[0].strip().lower() != "application/octet-stream":
+        raise HTTPException(415, "send framed acceptance suite and PNML bytes")
+    data = bytearray()
+    async for chunk in request.stream():
+        if len(data) + len(chunk) > 8 + acceptance.MAX_SUITE_BYTES + 2 * replay.MAX_BYTES:
+            raise HTTPException(413, "acceptance payload is too large")
+        data.extend(chunk)
+    if len(data) < 8:
+        raise HTTPException(422, "missing suite or model length")
+    n = int.from_bytes(data[:4], "big")
+    if n > acceptance.MAX_SUITE_BYTES:
+        raise HTTPException(413, "acceptance suite is too large")
+    if n < 1 or len(data) < 8 + n:
+        raise HTTPException(422, "invalid suite framing")
+    offset = 8 + n
+    m = int.from_bytes(data[4+n:offset], "big")
+    if m > replay.MAX_BYTES or len(data) - offset - m > replay.MAX_BYTES:
+        raise HTTPException(413, "each model must be at most 2 MB")
+    if m < 1 or len(data) < offset + m:
+        raise HTTPException(422, "invalid baseline framing")
+
+    def pairs(items):
+        result = {}
+        for key, value in items:
+            if key in result:
+                raise ValueError("Repeated JSON key")
+            result[key] = value
+        return result
+
+    def constant(_):
+        raise ValueError("Non-finite JSON value")
+
+    try:
+        spec = json.loads(bytes(data[4:4+n]).decode("utf-8"), object_pairs_hook=pairs, parse_constant=constant)
+    except (ValueError, UnicodeError, RecursionError):
+        raise HTTPException(422, "suite must be strict UTF-8 JSON") from None
+    try:
+        result = await run_in_threadpool(acceptance.review, bytes(data[offset:offset+m]), spec,
+                                         bytes(data[offset+m:]) or None)
+    except (workspace.EventLogWorkspaceError, UnicodeError) as exc:
+        raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+@router.post("/v1/event-logs/petri-policy-review")
+async def event_log_petri_policy_review(request: Request):
+    """Check one or two PNML models against a declared untimed policy suite.
+
+    Binary framing: u32 rules length, UTF-8 JSON rules, u32 baseline length,
+    baseline bytes, optional candidate bytes. No source or report is retained.
+    """
+    from . import event_log_petri_policy as policy
+    from . import event_log_petri_replay as replay
+    _require_dashboard(request)
+    if request.headers.get("content-type", "").split(";")[0].strip().lower() != "application/octet-stream":
+        raise HTTPException(415, "send framed model and rule bytes")
+    data = bytearray()
+    async for chunk in request.stream():
+        if len(data) + len(chunk) > 8 + policy.MAX_RULE_BYTES + 2 * replay.MAX_BYTES:
+            raise HTTPException(413, "model policy review payload is too large")
+        data.extend(chunk)
+    if len(data) < 8:
+        raise HTTPException(422, "missing rule or model length")
+    n = int.from_bytes(data[:4], "big")
+    if n > policy.MAX_RULE_BYTES:
+        raise HTTPException(413, "rule specification is too large")
+    if n < 1 or len(data) < 8 + n:
+        raise HTTPException(422, "invalid rule framing")
+    m = int.from_bytes(data[4+n:8+n], "big")
+    offset = 8 + n
+    if m > replay.MAX_BYTES or len(data) - offset - m > replay.MAX_BYTES:
+        raise HTTPException(413, "each model must be at most 2 MB")
+    if m < 1 or len(data) < offset + m:
+        raise HTTPException(422, "invalid baseline framing")
+
+    def pairs(items):
+        result = {}
+        for key, value in items:
+            if key in result:
+                raise ValueError("Repeated JSON key")
+            result[key] = value
+        return result
+
+    def constant(_):
+        raise ValueError("Non-finite JSON value")
+
+    try:
+        spec = json.loads(bytes(data[4:4+n]).decode("utf-8"), object_pairs_hook=pairs, parse_constant=constant)
+    except (ValueError, UnicodeError, RecursionError):
+        raise HTTPException(422, "rules must be strict UTF-8 JSON") from None
+    try:
+        result = await run_in_threadpool(policy.review, bytes(data[offset:offset+m]), spec,
+                                         bytes(data[offset+m:]) or None)
+    except (workspace.EventLogWorkspaceError, UnicodeError) as exc:
+        raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+@router.post("/v1/event-logs/petri-language-comparison")
+async def event_log_petri_language_comparison(request: Request):
+    """Compare two exact PNML byte streams, with no storage or external execution.
+
+    Binary body: four-byte unsigned big-endian baseline length, baseline bytes,
+    then candidate bytes. Each model is independently limited to 2 MB.
+    """
+    from . import event_log_petri_language as language
+    from . import event_log_petri_replay as replay
+    _require_dashboard(request)
+    if request.headers.get("content-type", "").split(";")[0].strip().lower() != "application/octet-stream":
+        raise HTTPException(415, "send two framed PNML byte streams")
+    data = bytearray()
+    async for chunk in request.stream():
+        if len(data) + len(chunk) > 4 + 2 * replay.MAX_BYTES:
+            raise HTTPException(413, "the model pair is too large")
+        data.extend(chunk)
+    if len(data) < 4:
+        raise HTTPException(422, "missing baseline length")
+    size = int.from_bytes(data[:4], "big")
+    if size > replay.MAX_BYTES or len(data) - 4 - size > replay.MAX_BYTES:
+        raise HTTPException(413, "each model must be at most 2 MB")
+    if size < 1 or size >= len(data) - 4:
+        raise HTTPException(422, "both models must be nonempty")
+    try:
+        result = await run_in_threadpool(language.compare, bytes(data[4:4+size]), bytes(data[4+size:]))
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+@router.post("/v1/event-logs/ptml-to-pnml")
+async def convert_ptml_process_tree(request: Request):
+    """Convert a PTML process tree (ProM, PM4Py) to a PNML workflow net for replay. Nothing is stored."""
+    from . import event_log_ptml_import as ptml_import
+    _require_dashboard(request)
+    data = bytearray()
+    async for chunk in request.stream():
+        data += chunk
+        if len(data) > ptml_import.MAX_BYTES:
+            raise HTTPException(413, "the process tree file is larger than 2 MB")
+    try:
+        result = await run_in_threadpool(ptml_import.to_pnml, bytes(data))
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+@router.post("/v1/event-logs/process-tree-to-pnml")
+async def convert_process_tree_notation(request: Request):
+    """Convert a process tree in PM4Py's printed notation to a PNML net: {"notation": "->( 'A', 'B' )"}."""
+    from . import event_log_ptml_import as ptml_import
+    _require_dashboard(request)
+    spec = await _json_body(request, "process tree", strict=True, limit=ptml_import.MAX_NOTATION_CHARS * 2)
+    if not isinstance(spec, dict) or set(spec) != {"notation"}:
+        raise HTTPException(422, "send the tree as notation")
+    try:
+        result = await run_in_threadpool(ptml_import.notation_to_pnml, spec["notation"])
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+@router.post("/v1/event-logs/ocel-sqlite-to-json")
+async def convert_ocel_sqlite_event_log(request: Request):
+    """Read an OCEL 2.0 SQLite database as an OCEL 2.0 JSON document for the ordinary OCEL import. Not stored."""
+    from . import event_log_sqlite as sqlite_import
+    _require_dashboard(request)
+    with tempfile.SpooledTemporaryFile(max_size=8 << 20, dir=str(DATA_DIR)) as spool:
+        size = 0
+        async for chunk in request.stream():
+            size += len(chunk)
+            if size > SQLITE_MAX_BYTES:
+                raise HTTPException(413, "the database is larger than the supported limit")
+            spool.write(chunk)
+        spool.seek(0)
+        try:
+            result = await run_in_threadpool(sqlite_import.to_ocel_json, spool, folder=DATA_DIR)
+        except sqlite_import.SqliteError as exc:
+            raise HTTPException(422, str(exc)) from None
+    # Conversion can outlive the dashboard session; do not release revoked data.
+    _require_dashboard(request)
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
@@ -408,7 +720,8 @@ async def convert_parquet_event_log(request: Request):
 
 @router.post("/v1/event-logs/timestamp-formats")
 async def detect_timestamp_formats(request: Request, column: str = Query(min_length=1, max_length=200),
-                                   delimiter: str = Query(default=",", max_length=1)):
+                                   delimiter: str = Query(default=",", max_length=1),
+                                   time_column: str = Query(default="", max_length=200)):
     """Which known timestamp formats read every value of one column, from the start of a CSV file (body,
     at most 256 KB). Nothing is stored."""
     from . import event_log_timestamp_formats as formats
@@ -417,7 +730,8 @@ async def detect_timestamp_formats(request: Request, column: str = Query(min_len
     if len(body) > 256 * 1024:
         raise HTTPException(413, "send at most the first 256 KB of the file")
     try:
-        samples = formats.sample_column(body.decode("utf-8", errors="replace"), "\t" if delimiter == "t" else delimiter, column)
+        samples = formats.sample_column(body.decode("utf-8", errors="replace"), "\t" if delimiter == "t" else delimiter, column,
+                                        time_column=time_column)
         result = await run_in_threadpool(formats.detect, samples)
     except formats.TimestampFormatError as exc:
         raise HTTPException(422, str(exc)) from None
@@ -473,8 +787,11 @@ async def preview_event_log_import(
     attribute_column: list[str] = Query(default=[], max_length=200),
     delimiter: str = Query(default=",", max_length=1),
     keep_rejected: bool = Query(default=False),
+    header_row: int = Query(default=1, ge=1, le=50),
     naive_timestamp_offset: str = Query(default="", max_length=6),
     timestamp_format: str = Query(default="", max_length=64),
+    encoding: str = Query(default="", pattern="^(|utf-8|windows-1252|utf-16)$"),
+    time_column: str = Query(default="", max_length=200),
     identity: dict = Depends(_source_identity_mapping),
 ):
     _require_dashboard(request)
@@ -488,8 +805,10 @@ async def preview_event_log_import(
     mapping = {"case_column": case_column, "activity_column": activity_column,
                "timestamp_column": timestamp_column, "resource_column": resource_column,
                "attribute_columns": attribute_column[:64], "delimiter": "\t" if delimiter == "t" else delimiter,
+               **({"header_row": header_row} if header_row > 1 else {}),
                "keep_rejected": keep_rejected, "naive_timestamp_offset": naive_timestamp_offset,
-               "timestamp_format": timestamp_format, **identity}
+               "timestamp_format": timestamp_format, **({"encoding": encoding} if encoding else {}),
+               **({"time_column": time_column} if time_column else {}), **identity}
     return await run_in_threadpool(_respond, preview.preview_csv, bytes(body), mapping, partial=partial)
 
 
@@ -505,8 +824,11 @@ async def import_event_log(
     attribute_column: list[str] = Query(default=[], max_length=200),
     delimiter: str = Query(default=",", max_length=1),
     keep_rejected: bool = Query(default=False),
+    header_row: int = Query(default=1, ge=1, le=50),
     naive_timestamp_offset: str = Query(default="", max_length=6),
     timestamp_format: str = Query(default="", max_length=64),
+    encoding: str = Query(default="", pattern="^(|utf-8|windows-1252|utf-16)$"),
+    time_column: str = Query(default="", max_length=200),
     identity: dict = Depends(_source_identity_mapping),
 ):
     _require_dashboard(request)
@@ -525,9 +847,12 @@ async def import_event_log(
                    "timestamp_column": timestamp_column, "resource_column": resource_column,
                    "attribute_columns": attribute_column[:64],
                    "delimiter": "\t" if delimiter == "t" else delimiter,
+                   **({"header_row": header_row} if header_row > 1 else {}),
                    **({"keep_rejected": True} if keep_rejected else {}),
                    **({"naive_timestamp_offset": naive_timestamp_offset} if naive_timestamp_offset else {}),
-                   **({"timestamp_format": timestamp_format} if timestamp_format else {})}
+                   **({"timestamp_format": timestamp_format} if timestamp_format else {}),
+                   **({"encoding": encoding} if encoding else {}),
+                   **({"time_column": time_column} if time_column else {})}
         mapping.update(identity)
         return _respond(workspace.import_log, spool, name=name, source_format=format, mapping=mapping)
 
@@ -543,8 +868,11 @@ async def append_event_log(
     attribute_column: list[str] = Query(default=[], max_length=200),
     delimiter: str = Query(default=",", max_length=1),
     keep_rejected: bool = Query(default=False),
+    header_row: int = Query(default=1, ge=1, le=50),
     naive_timestamp_offset: str = Query(default="", max_length=6),
     timestamp_format: str = Query(default="", max_length=64),
+    encoding: str = Query(default="", pattern="^(|utf-8|windows-1252|utf-16)$"),
+    time_column: str = Query(default="", max_length=200),
     identity: dict = Depends(_source_identity_mapping),
 ):
     _require_dashboard(request)
@@ -562,9 +890,12 @@ async def append_event_log(
                    "timestamp_column": timestamp_column, "resource_column": resource_column,
                    "attribute_columns": attribute_column[:64],
                    "delimiter": "\t" if delimiter == "t" else delimiter,
+                   **({"header_row": header_row} if header_row > 1 else {}),
                    **({"keep_rejected": True} if keep_rejected else {}),
                    **({"naive_timestamp_offset": naive_timestamp_offset} if naive_timestamp_offset else {}),
-                   **({"timestamp_format": timestamp_format} if timestamp_format else {})}
+                   **({"timestamp_format": timestamp_format} if timestamp_format else {}),
+                   **({"encoding": encoding} if encoding else {}),
+                   **({"time_column": time_column} if time_column else {})}
         mapping.update(identity)
         try:
             result = await run_in_threadpool(workspace.append_log, log_id, spool, source_format=format, mapping=mapping)
@@ -822,6 +1153,33 @@ async def export_event_log_matching_cases(request: Request, log_id: str,
         raise HTTPException(422, str(exc)) from None
     return FileResponse(filename, media_type=_TYPES[format], filename=f"{log_id}-matching-cases.{suffix}",
                         headers={"Cache-Control": "no-store"}, background=BackgroundTask(os.unlink, filename))
+
+
+@router.post("/v1/event-logs/{log_id}/export/matching-cases.xlsx")
+async def export_event_log_matching_cases_xlsx(request: Request, log_id: str):
+    """The matching-case CSV export's rows as an Excel workbook. Not stored."""
+    import shutil
+    from . import event_log_xlsx_export as xlsx_export
+    _require_dashboard(request)
+    spec = await _json_body(request, "matching-case export settings", strict=True, limit=32768)
+
+    def prepare():
+        folder = tempfile.mkdtemp(prefix="owg-xlsx-matching-", dir=str(DATA_DIR))
+        try:
+            xlsx_export.write_matching(log_id, spec, Path(folder) / "events.xlsx")
+        except BaseException:
+            shutil.rmtree(folder, ignore_errors=True)
+            raise
+        return folder
+
+    try:
+        folder = await run_in_threadpool(prepare)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return FileResponse(str(Path(folder) / "events.xlsx"),
+                        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        filename=f"{log_id}-matching-cases.xlsx", headers={"Cache-Control": "no-store"},
+                        background=BackgroundTask(shutil.rmtree, folder, ignore_errors=True))
 
 
 def _anonymized(log_id: str, case_type: str | None, cohort: dict[str, Any], min_cases: int, time_mode: str,
@@ -1246,6 +1604,22 @@ async def event_log_stuck_cases(request: Request, log_id: str):
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
+@router.post("/v1/event-logs/{log_id}/stuck-cases.csv")
+async def event_log_stuck_cases_csv(request: Request, log_id: str):
+    """Every stuck case, not only the first ``limit``, as a CSV worklist."""
+    from . import event_log_stuck as stuck
+    _require_dashboard(request)
+    spec = await _json_body(request, "stuck-case settings", strict=True, limit=16384)
+    try:
+        text, meta = await run_in_threadpool(stuck.stuck_cases_csv, log_id, spec)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return Response(text, media_type="text/csv; charset=utf-8", headers={
+        "Cache-Control": "no-store", "Content-Disposition": f'attachment; filename="{log_id}-stuck-cases.csv"',
+        "X-OWG-Stuck-Cases": f"stuck={meta['stuck_cases']}; judged={meta['judged_open_cases']}; "
+                             f"not_judged={meta['not_judged_open_cases']}"})
+
+
 @router.get("/v1/event-logs/{log_id}/automation-candidates")
 def event_log_automation_candidates(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
                                     limit: int = Query(default=15, ge=1, le=50),
@@ -1253,6 +1627,28 @@ def event_log_automation_candidates(request: Request, log_id: str, case_type: st
     from . import event_log_automation_candidates as automation
     _require_dashboard(request)
     return _respond(automation.candidates, log_id, case_type, limit=limit, cohort=cohort)
+
+
+@router.post("/v1/event-logs/{log_id}/automation-estimate")
+async def event_log_automation_estimate(request: Request, log_id: str,
+                                        case_type: str | None = Query(default=None, max_length=200),
+                                        cohort: dict[str, Any] = Depends(_case_filter)):
+    """Hours-per-week ranges for the automation candidates from the owner's stated assumptions.
+
+    Body: {"handling_minutes": [low, high], "automatable_share"?: {...}, "hourly_cost"?: number, "limit"?: 1-50}."""
+    from . import event_log_automation_estimate as estimate
+    _require_dashboard(request)
+    spec = await _json_body(request, "automation estimate", strict=True, limit=8192)
+    allowed = {"handling_minutes", "automatable_share", "hourly_cost", "limit"}
+    if not isinstance(spec, dict) or "handling_minutes" not in spec or set(spec) - allowed:
+        raise HTTPException(422, "Send handling_minutes with optional automatable_share, hourly_cost and limit")
+    limit = spec.get("limit", 15)
+    if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 50:
+        raise HTTPException(422, "limit must be 1 to 50")
+    return await run_in_threadpool(_respond, estimate.estimate, log_id, case_type,
+                                   handling_minutes=spec["handling_minutes"],
+                                   automatable_share=spec.get("automatable_share"),
+                                   hourly_cost=spec.get("hourly_cost"), limit=limit, cohort=cohort)
 
 
 @router.get("/v1/event-logs/{log_id}/decision-points")
@@ -1531,13 +1927,17 @@ def event_log_funnel(request: Request, log_id: str, step: list[str] = Query(defa
                      within_hours: float | None = Query(default=None, gt=0),
                      evidence_step: int | None = Query(default=None, ge=1, le=8),
                      evidence_status: str = Query(default="reached", pattern="^(reached|dropped)$"),
+                     evidence_page: bool = Query(default=False),
+                     evidence_after: str | None = Query(default=None, min_length=1, max_length=200),
+                     evidence_revision: str | None = Query(default=None, min_length=64, max_length=64),
                      case_type: str | None = Query(default=None, max_length=200),
                      cohort: dict = Depends(_case_filter)):
     """How many cases reach each chosen step in order, the time between steps and where the rest stopped."""
     from . import event_log_funnel as funnel
     _require_dashboard(request)
     return _respond(funnel.funnel, log_id, step, case_type, within_hours=within_hours, cohort=cohort,
-                    evidence_step=evidence_step, evidence_status=evidence_status)
+                    evidence_step=evidence_step, evidence_status=evidence_status, evidence_page=evidence_page,
+                    evidence_after=evidence_after, evidence_revision=evidence_revision)
 
 
 @router.get("/v1/event-logs/{log_id}/unusual-cases")
@@ -1550,6 +1950,22 @@ def event_log_unusual_cases(request: Request, log_id: str, limit: int = Query(de
     from . import event_log_unusual_cases as unusual
     _require_dashboard(request)
     return _respond(unusual.unusual_cases, log_id, case_type, limit=limit, cohort=cohort, signal=signal, offset=offset)
+
+
+@router.get("/v1/event-logs/{log_id}/unusual-cases.csv")
+def event_log_unusual_cases_csv(request: Request, log_id: str, signal: str | None = Query(default=None, max_length=32),
+                                case_type: str | None = Query(default=None, max_length=200),
+                                cohort: dict = Depends(_case_filter)):
+    """Every unusual case, not only one page, as a CSV worklist."""
+    from . import event_log_unusual_cases as unusual
+    _require_dashboard(request)
+    try:
+        text, meta = unusual.unusual_cases_csv(log_id, case_type, cohort=cohort, signal=signal)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return Response(text, media_type="text/csv; charset=utf-8", headers={
+        "Cache-Control": "no-store", "Content-Disposition": f'attachment; filename="{log_id}-unusual-cases.csv"',
+        "X-OWG-Unusual-Cases": f"rows={meta['rows']}; unusual={meta['unusual_cases']}; cases={meta['cases']}"})
 
 
 @router.get("/v1/event-logs/{log_id}/due-dates")
@@ -1642,26 +2058,28 @@ def event_log_case_alignment(request: Request, log_id: str, case_id: str = Query
 @router.get("/v1/event-logs/{log_id}/model-change")
 def event_log_model_change(request: Request, log_id: str, split: str | None = Query(default=None, max_length=64),
                            noise: float = Query(default=0.2, ge=0, lt=1),
+                           activities: float = Query(default=1.0, gt=0, le=1),
                            case_type: str | None = Query(default=None, max_length=200),
                            cohort: dict = Depends(_case_filter)):
     """How the discovered model differs before and after a date: orderings, activities and cross-fit."""
     from . import event_log_model_change as change
     _require_dashboard(request)
     return _respond(change.model_change, log_id, case_type, split=split, noise=noise, cohort=cohort,
-                    include_case_evidence=True)
+                    include_case_evidence=True, activities=activities)
 
 
 @router.get("/v1/event-logs/{log_id}/model-comparison")
 def event_log_model_comparison(request: Request, log_id: str, group_a: str = Query(min_length=3, max_length=400),
                                group_b: str = Query(min_length=3, max_length=400),
                                noise: float = Query(default=0.2, ge=0, lt=1),
+                               activities: float = Query(default=1.0, gt=0, le=1),
                                case_type: str | None = Query(default=None, max_length=200),
                                cohort: dict = Depends(_case_filter)):
     """The discovered models of two groups of cases (case attribute values) compared."""
     from . import event_log_model_change as change
     _require_dashboard(request)
     return _respond(change.model_comparison, log_id, group_a, group_b, case_type, noise=noise, cohort=cohort,
-                    include_case_evidence=True)
+                    include_case_evidence=True, activities=activities)
 
 
 @router.get("/v1/event-logs/{log_id}/story")
@@ -1982,6 +2400,22 @@ def event_log_process_map(request: Request, log_id: str, case_type: str | None =
     return _respond(process_maps.process_map, log_id, case_type, activities=activities, paths=paths, cohort=cohort)
 
 
+@router.get("/v1/event-logs/{log_id}/process-map.dot")
+def event_log_process_map_dot(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
+                              activities: float = Query(default=1.0, gt=0, le=1), paths: float = Query(default=1.0, gt=0, le=1),
+                              cohort: dict[str, Any] = Depends(_case_filter)):
+    """The simplified map at the same slider settings as a Graphviz DOT graph."""
+    from . import event_log_map_dot as map_dot
+    _require_dashboard(request)
+    try:
+        dot, meta = map_dot.map_dot(log_id, case_type, activities=activities, paths=paths, cohort=cohort)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return Response(dot, media_type="text/vnd.graphviz", headers={
+        "Cache-Control": "no-store", "Content-Disposition": f'attachment; filename="{log_id}-map.dot"',
+        "X-OWG-Map": f"activities={meta['activities']}; transitions={meta['transitions']}"})
+
+
 @router.get("/v1/event-logs/{log_id}/playback")
 def event_log_playback(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
                        activities: float = Query(default=1.0, gt=0, le=1),
@@ -2128,6 +2562,27 @@ def event_log_organization(request: Request, log_id: str, case_type: str | None 
     _require_dashboard(request)
     return _respond(organization.organization, log_id, case_type, names=names, cohort=cohort,
                     automation_resources=automation_resource, limit=limit)
+
+
+@router.get("/v1/event-logs/{log_id}/organization.graphml")
+def event_log_organization_graphml(request: Request, log_id: str,
+                                   case_type: str | None = Query(default=None, max_length=200),
+                                   names: str = Query(default="pseudonymous", max_length=20),
+                                   automation_resource: list[str] | None = Query(default=None, max_length=50),
+                                   limit: int = Query(default=100, ge=1, le=organization.MAX_EDGES),
+                                   cohort: dict[str, Any] = Depends(_case_filter)):
+    """The handover and working-together network as GraphML, pseudonymous unless names are asked for."""
+    from . import event_log_organization_graphml as graphml
+    _require_dashboard(request)
+    try:
+        xml, meta = graphml.organization_graphml(log_id, case_type, names=names, cohort=cohort,
+                                                 automation_resources=automation_resource, limit=limit)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return Response(xml, media_type="application/graphml+xml", headers={
+        "Cache-Control": "no-store", "Content-Disposition": f'attachment; filename="{log_id}-resources.graphml"',
+        "X-OWG-Network": f"resources={meta['resources']}; handovers={meta['handovers']}; "
+                         f"working_together={meta['working_together']}; names={meta['names']}"})
 
 
 @router.post("/v1/event-logs/{log_id}/organization/cases")
@@ -2366,6 +2821,15 @@ def event_log_domain_packs_installed(request: Request, log_id: str):
 def event_log_domain_pack_configurations(request: Request, log_id: str, pack_id: str = PathParam(pattern=_PACK_ID)):
     _require_dashboard(request)
     return _respond(domain_packs.configuration_history, log_id, pack_id)
+
+
+@router.post("/v1/event-logs/{log_id}/domain-packs/{pack_id}/preflight")
+async def event_log_domain_pack_preflight(request: Request, log_id: str, pack_id: str = PathParam(pattern=_PACK_ID)):
+    from . import event_log_domain_pack_preflight as preflight
+    _require_dashboard(request)
+    spec = await _json_body(request, "domain pack preflight", strict=True)
+    _require_dashboard(request)
+    return await run_in_threadpool(_respond, preflight.preview, log_id, pack_id, spec)
 
 
 @router.post("/v1/event-logs/{log_id}/domain-packs/{pack_id}")
@@ -2943,6 +3407,15 @@ async def event_log_import_filter_set(request: Request, log_id: str):
     return await run_in_threadpool(_respond, filters.import_set, log_id, spec)
 
 
+@router.post("/v1/event-logs/{log_id}/filter-sets/{set_id}/update")
+async def event_log_update_filter_set(request: Request, log_id: str, set_id: str):
+    _require_dashboard(request)
+    spec = await _json_body(request, "saved filter update", strict=True, limit=65536)
+    response = await run_in_threadpool(_respond, filter_sets.update, log_id, set_id, spec)
+    _require_dashboard(request)
+    return response
+
+
 @router.post("/v1/event-logs/{log_id}/filter-sets/{set_id}/delete")
 def event_log_delete_filter_set(request: Request, log_id: str, set_id: str):
     _require_dashboard(request)
@@ -3081,6 +3554,40 @@ async def event_log_trace_cluster_cases(request: Request, log_id: str):
     return await run_in_threadpool(_respond, trace_clusters.cluster_cases, log_id, spec)
 
 
+@router.post("/v1/event-logs/{log_id}/trace-clusters/tag/preview")
+async def event_log_preview_trace_cluster_tag(request: Request, log_id: str):
+    _require_dashboard(request)
+    spec = await _json_body(request, "trace cluster tag preview", strict=True, limit=32768)
+    response = await run_in_threadpool(_respond, trace_clusters.cluster_tag_preview, log_id, spec)
+    _require_dashboard(request)
+    return response
+
+
+@router.post("/v1/event-logs/{log_id}/trace-clusters/tag")
+async def event_log_apply_trace_cluster_tag(request: Request, log_id: str):
+    _require_dashboard(request)
+    spec = await _json_body(request, "trace cluster tag", strict=True, limit=32768)
+    response = await run_in_threadpool(_respond, trace_clusters.cluster_tag_apply, log_id, spec)
+    _require_dashboard(request)
+    return response
+
+
+@router.post("/v1/event-logs/{log_id}/trace-clusters/cases.csv")
+async def event_log_trace_cluster_cases_csv(request: Request, log_id: str):
+    _require_dashboard(request)
+    spec = await _json_body(request, "trace cluster export settings", strict=True, limit=32768)
+    try:
+        content, info = await run_in_threadpool(trace_clusters.cluster_cases_csv, log_id, spec)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    _require_dashboard(request)
+    headers = {"Cache-Control": "no-store", "Content-Disposition": f'attachment; filename="{log_id}-cluster-cases.csv"',
+               "X-OWG-Cluster-Cases": f"total={info['total']}; written={info['written']}; truncated={str(info['truncated']).lower()}"}
+    if info["next_after"] is not None:
+        headers["X-OWG-Next-Cursor"] = info["next_after"]
+    return Response(content, media_type="text/csv; charset=utf-8", headers=headers)
+
+
 @router.post("/v1/event-logs/{log_id}/conformance")
 async def event_log_conformance(request: Request, log_id: str,
                                 case_type: str | None = Query(default=None, max_length=200),
@@ -3099,6 +3606,23 @@ def event_log_model_discovery(request: Request, log_id: str, case_type: str | No
     return _respond(model_discovery.discover, log_id, case_type, noise=noise, activities=activities, cohort=cohort)
 
 
+@router.get("/v1/event-logs/{log_id}/model-discovery.ptml")
+def event_log_model_discovery_ptml(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
+                                   noise: float = Query(default=0.2, ge=0, lt=1),
+                                   activities: float = Query(default=1.0, gt=0, le=1),
+                                   cohort: dict[str, Any] = Depends(_case_filter)):
+    """The discovered process tree as PTML, for PM4Py and ProM."""
+    from . import event_log_ptml as ptml
+    _require_dashboard(request)
+    try:
+        xml, meta = ptml.discovered_ptml(log_id, case_type, noise=noise, activities=activities, cohort=cohort)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return Response(xml, media_type="application/xml", headers={
+        "Cache-Control": "no-store", "Content-Disposition": f'attachment; filename="{log_id}-discovered.ptml"',
+        "X-OWG-Process-Tree": f"nodes={meta['nodes']}; activities={meta['activities']}"})
+
+
 @router.get("/v1/event-logs/{log_id}/model-discovery.pnml")
 def event_log_model_discovery_pnml(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
                                    noise: float = Query(default=0.2, ge=0, lt=1),
@@ -3113,6 +3637,23 @@ def event_log_model_discovery_pnml(request: Request, log_id: str, case_type: str
     return Response(xml, media_type="application/xml", headers={
         "Cache-Control": "no-store", "Content-Disposition": f'attachment; filename="{log_id}-discovered.pnml"',
         "X-OWG-Petri-Net": f"places={meta['places']}; transitions={meta['transitions']}; silent={meta['silent_transitions']}"})
+
+
+@router.get("/v1/event-logs/{log_id}/model-discovery.bpmn")
+def event_log_model_discovery_bpmn(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
+                                   noise: float = Query(default=0.2, ge=0, lt=1),
+                                   activities: float = Query(default=1.0, gt=0, le=1),
+                                   cohort: dict[str, Any] = Depends(_case_filter)):
+    """The discovered model as BPMN 2.0 with diagram interchange, for process designers."""
+    from . import event_log_bpmn_export as bpmn
+    _require_dashboard(request)
+    try:
+        xml, meta = bpmn.discovered_bpmn(log_id, case_type, noise=noise, activities=activities, cohort=cohort)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return Response(xml, media_type="application/xml", headers={
+        "Cache-Control": "no-store", "Content-Disposition": f'attachment; filename="{log_id}-discovered.bpmn"',
+        "X-OWG-BPMN": f"tasks={meta['tasks']}; gateways={meta['gateways']}; flows={meta['flows']}"})
 
 
 @router.get("/v1/event-logs/{log_id}/variant.pnml")
@@ -3213,6 +3754,17 @@ async def event_log_simulation_capacity(request: Request, log_id: str,
     return result
 
 
+@router.post("/v1/event-logs/{log_id}/simulation/temporal-sensitivity")
+async def event_log_simulation_temporal_sensitivity(request: Request, log_id: str,
+                                          case_type: str | None = Query(default=None, max_length=200)):
+    from . import event_log_simulation_temporal as temporal
+    _require_dashboard(request)
+    spec = await _json_body(request, "temporal validation settings", strict=True, limit=16384)
+    result = await run_in_threadpool(_respond, temporal.review, log_id, spec, case_type)
+    _require_dashboard(request)
+    return result
+
+
 @router.post("/v1/event-logs/{log_id}/simulation/validation")
 async def event_log_simulation_validation(request: Request, log_id: str,
                                           case_type: str | None = Query(default=None, max_length=200)):
@@ -3267,8 +3819,29 @@ def export_event_log_xlsx(request: Request, log_id: str, case_type: str | None =
                         background=BackgroundTask(shutil.rmtree, folder, ignore_errors=True))
 
 
+@router.get("/v1/event-logs/{log_id}/events.parquet")
+def export_event_log_parquet(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200)):
+    """The log's events as a typed Apache Parquet file (the CSV export's rows). Not stored."""
+    import shutil
+    from . import event_log_parquet_export as parquet_export
+    _require_dashboard(request)
+    folder = tempfile.mkdtemp(prefix="owg-parquet-export-", dir=str(DATA_DIR))
+    path = Path(folder) / "events.parquet"
+    try:
+        meta = parquet_export.write(log_id, path, case_type)
+    except workspace.EventLogWorkspaceError as exc:
+        shutil.rmtree(folder, ignore_errors=True)
+        raise HTTPException(422, str(exc)) from None
+    except BaseException:
+        shutil.rmtree(folder, ignore_errors=True)
+        raise
+    return FileResponse(str(path), media_type="application/vnd.apache.parquet", filename=f"{log_id}.parquet",
+                        headers={"Cache-Control": "no-store", "X-OWG-Rows": str(meta["rows"])},
+                        background=BackgroundTask(shutil.rmtree, folder, ignore_errors=True))
+
+
 @router.get("/v1/event-logs/{log_id}/export")
-def export_event_log(request: Request, log_id: str, format: str = Query(pattern="^(csv|sourcecsv|csv-review|sourcecsv-review|xes|xes-attributes|ocel|ocelxml)$"),
+def export_event_log(request: Request, log_id: str, format: str = Query(pattern="^(csv|csv-attributes|sourcecsv|csv-review|sourcecsv-review|jsonl|xes|xes-attributes|ocel|ocelxml)$"),
                      case_type: str | None = Query(default=None, max_length=200)):
     _require_dashboard(request)
     handle = tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix="." + _SUFFIX[format],
@@ -3413,6 +3986,16 @@ def event_log_hidden_activities(request: Request, log_id: str):
     return _respond(hidden_activities.hidden, log_id)
 
 
+@router.post("/v1/event-logs/{log_id}/hidden-activities/search")
+async def event_log_search_hidden_activity_choices(request: Request, log_id: str):
+    from . import event_log_hidden_activities as hidden_activities
+    _require_dashboard(request)
+    spec = await _json_body(request, "original activity search", strict=True, limit=4096)
+    response = await run_in_threadpool(_respond, hidden_activities.search_original_activities, log_id, spec)
+    _require_dashboard(request)
+    return response
+
+
 @router.post("/v1/event-logs/{log_id}/hidden-activities")
 async def event_log_set_hidden_activities(request: Request, log_id: str):
     """Body ``{"activities": [...]}`` replaces the hidden list; an empty list shows every activity."""
@@ -3421,6 +4004,8 @@ async def event_log_set_hidden_activities(request: Request, log_id: str):
     spec = await _json_body(request, "hidden activities", strict=True, limit=131072)
     try:
         result = await run_in_threadpool(hidden_activities.set_hidden, log_id, spec)
+    except hidden_activities.HiddenActivitiesConflict as exc:
+        raise HTTPException(409, str(exc)) from None
     except workspace.EventLogWorkspaceError as exc:
         raise HTTPException(422, str(exc)) from None
     return JSONResponse(result, headers={"Cache-Control": "no-store"})

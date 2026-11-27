@@ -108,3 +108,23 @@ passed 1,000 randomized matrices covering 150,403 case-capture observations,
 four mismatched-input refusal checks and one duplicate-document check in
 local testing. Additional generated-runtime and CLI regressions are
 included; full CI remains required.
+
+## Compare two repeated capture cohorts
+
+    python evaluate.py --cases reviewed-cases.json --baseline-results baseline1.json --baseline-repeat-results baseline2.json --results candidate1.json --repeat-results candidate2.json --output cohort-review.json
+
+Each side requires 2–10 captured documents. Repeat the corresponding additional
+capture option for more inputs. The same specification, reviewed suite and
+opaque case IDs are required for every document; all are rescored offline.
+The report compares every whole baseline/candidate capture pair (up to 100),
+counts regressions, improvements and newly critical cases, and reports the
+observed range of matching-case-count differences. Separately, per-case
+independent-choice bounds allow a different observed capture for each case;
+these may be wider than the whole-document range. Possible and universal
+regressions/improvements are reported for each case and category. Duplicate
+and shared document digests are disclosed; they do not demonstrate independent
+model executions. Exit 2 indicates at least one candidate capture fails a
+reviewed expectation; exit 0 does not authorize deployment. No raw inputs or
+planner text are copied, no provider is contacted, and no probabilities,
+confidence intervals or verified business outcomes are inferred. Existing
+single, paired and one-cohort modes remain unchanged.

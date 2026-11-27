@@ -21,28 +21,39 @@
   const budgetCurrency=select('opportunityBudgetPreviewCurrency',['USD','EUR','GBP','SEK'].map(c=>[c,c]));
   const ceiling=input('opportunityBudgetPreviewCeiling');ceiling.value='0.00';
   ceiling.maxLength=15;ceiling.placeholder='Budget envelope (e.g., 5000.00)';
+  const stress=input('opportunityBudgetStress','checkbox');
+  const scenarioText=el('textarea');scenarioText.id='opportunityBudgetStressScenarios';scenarioText.rows=6;scenarioText.maxLength=3000;
+  scenarioText.placeholder='[{"label":"Cost pressure","approved_multiplier":"1.10","unapproved_multiplier":"1.30","contingency":"100.00"}]';
+  const scenarioControls=el('div');scenarioControls.hidden=true;scenarioControls.append(label('Explicit scenario JSON (1–8 scenarios)',scenarioText),el('p','Multipliers are decimal strings; 1.10 means 10% above the entered estimate. Contingency is a fixed amount in the selected currency.'));
   const budgetConfirm=input('opportunityBudgetPreviewConfirm','checkbox');
-  const budgetRefresh=()=>{budgetConfirm.checked=false;budgetOutput.replaceChildren();budgetStatus.textContent='';};
+  let budgetGeneration=0;
+  const budgetRefresh=()=>{budgetGeneration++;budgetConfirm.checked=false;budgetOutput.replaceChildren();budgetStatus.textContent='';};
+  stress.onchange=()=>{scenarioControls.hidden=!stress.checked;budgetRefresh();};scenarioText.oninput=budgetRefresh;
   const budgetPreview=button('Preview selected opportunity budgets','opportunityBudgetPreview',()=>work(async ok=>{
+    const generation=budgetGeneration;
     const entries=page.filter(p=>picked.has(p.workflow_id));
     if(!entries.length)throw new Error('Select at least one opportunity from this loaded page.');
     if(!/^(0|[1-9][0-9]{0,11})(\.[0-9]{1,2})?$/.test(ceiling.value))
       throw new Error('Enter a nonnegative budget envelope with at most two decimal places.');
     if(!budgetConfirm.checked)throw new Error('Review and confirm the selected comparison first.');
+    let scenarios;
+    if(stress.checked){try{scenarios=JSON.parse(scenarioText.value);}catch{throw Error('Enter valid scenario JSON.');}
+      if(!Array.isArray(scenarios)||scenarios.length<1||scenarios.length>8)throw Error('Enter one to eight explicit cost scenarios.');}
+    const selectedCurrency=budgetCurrency.value,selectedCeiling=ceiling.value;
     const refs=[];
     for(const row of entries) {
       const current=await call('/v1/human/processes/'+encodeURIComponent(row.workflow_id)+'/opportunity');
-      if(!ok())return;
+      if(!ok()||generation!==budgetGeneration)return;
       const item=current.artifact;
       if(!current.integrity_ok||!item||item.revision!==row.revision)
         throw new Error('Selected opportunity changed or is unavailable. Reload the pipeline before comparing.');
       refs.push({workflow_id:row.workflow_id,revision:item.revision,content_sha256:item.content_sha256});
     }
     const report=await call('/v1/human/process-opportunity-pipeline/preview',{
-      currency:budgetCurrency.value,ceiling:ceiling.value,
-      selections:refs,user_confirmed:true
+      currency:selectedCurrency,ceiling:selectedCeiling,
+      selections:refs,user_confirmed:true,...(scenarios?{stress_scenarios:scenarios}:{})
     });
-    if(!ok())return;
+    if(!ok()||generation!==budgetGeneration)return;
     budgetOutput.replaceChildren();
     budgetOutput.append(el('p','Status: '+String(report.status).replaceAll('_',' ')+
       ' · '+report.selected_count+' explicitly selected opportunities'));
@@ -59,6 +70,19 @@
       }
       budgetOutput.append(summary);
     } else budgetOutput.append(el('p','At least one chosen revision/source is unavailable or not eligible; no portfolio total is shown.'));
+    if(report.stress_review){
+      const s=report.stress_review;
+      budgetOutput.append(el('h3','Selected budget stress review'));
+      if(s.status==='withheld')budgetOutput.append(el('p','All scenario estimates withheld because a selected revision is blocked.'));
+      else{
+        budgetOutput.append(el('p','Headroom across tested scenarios: '+s.headroom_range.lower+' to '+s.headroom_range.upper+' '+s.currency+' · all within envelope: '+String(s.all_tested_scenarios_within_envelope)));
+        for(const r of s.scenarios){const details=el('details');details.append(el('summary',r.label+' · total '+r.scenario_total_including_contingency+' · headroom '+r.headroom+' '+s.currency),
+          el('p','Approved '+r.approved_stage_estimate+' · unapproved '+r.unapproved_stage_estimate+' · contingency '+r.contingency),
+          el('p','Largest feasible uniform multiplier: '+(r.largest_feasible_uniform_multiplier_on_grid??'None')+(r.uniform_multiplier_search_capped?' (search cap reached)':'')));
+          const list=el('ul');for(const i of r.items)list.append(el('li',i.workflow_id+' · '+i.original_estimate+' × '+i.applied_multiplier+' = '+i.scenario_estimate));details.append(list);budgetOutput.append(details);}
+        for(const note of s.interpretation)budgetOutput.append(el('p',note));
+      }
+    }
     budgetOutput.append(el('p','Selected, human-entered planning estimates only. No business scope is independently deduplicated; approval stages are not spending permission. Not actual costs, causal impact or realized savings.'),
       el('p','Checked at '+report.snapshot_checked_at+' · request fingerprint '+report.selection_reference_digest+' (not provider source authentication).'));
     budgetOutput.append(button('Download this exact checked budget preview','opportunityBudgetDownload',()=>{
@@ -74,6 +98,7 @@
     el('p','Select entries below, declare a budget envelope and preview only those current revisions. This never authorizes spending or reports the entire company portfolio.'),
     label('Currency (no automatic conversion)',budgetCurrency),
     label('Declared budget envelope, in major currency units',ceiling),
+    label('Include explicit cost stress scenarios',stress),scenarioControls,
     label('I reviewed the selected opportunity budgets and confirm this read-only comparison',budgetConfirm),
     budgetPreview,budgetStatus,budgetOutput);
   for(const field of [budgetCurrency,ceiling])field.onchange=field.oninput=budgetRefresh;

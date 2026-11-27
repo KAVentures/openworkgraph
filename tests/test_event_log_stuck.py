@@ -93,6 +93,29 @@ def test_literal_end_activities_and_zero_wait_ranking():
     assert ranked["cases"][0]["case_id"] == "open-A" and ranked["cases"][0]["times_usual_threshold"] is None
 
 
+def test_csv_worklist_has_every_stuck_case_not_only_the_limit():
+    rows = []
+    for i in range(30):   # history: Check follows Receive within 1-3 hours
+        t = START + timedelta(days=i)
+        rows += [(f"c{i}", "Receive", t), (f"c{i}", "Check", t + timedelta(hours=1 + i % 3)), (f"c{i}", "Close", t + timedelta(hours=4))]
+    end = START + timedelta(days=40)
+    rows += [(f"=late{k}", "Receive", end - timedelta(hours=10 + k)) for k in range(3)] + [("last", "Receive", end)]
+    out = StringIO()
+    w = csv.writer(out)
+    w.writerow(["case", "activity", "time"])
+    w.writerows((c, a, t.isoformat()) for c, a, t in rows)
+    log = workspace.import_log(BytesIO(out.getvalue().encode()), name="t", source_format="csv", mapping=MAPPING)["log_id"]
+    spec = {"end_activities": ["Close"], "limit": 1}
+    assert stuck.stuck_cases(log, spec)["cases_truncated"] is True
+    text, meta = stuck.stuck_cases_csv(log, spec)
+    table = list(csv.reader(StringIO(text)))
+    assert table[0] == stuck.CSV_COLUMNS and meta["stuck_cases"] == 3 and len(table) == 4
+    assert [r[0] for r in table[1:]] == ["'=late2", "'=late1", "'=late0"]   # most overdue first, formulas neutralized
+    first = dict(zip(table[0], table[1]))
+    assert first["latest_activity"] == "Receive" and float(first["idle_seconds"]) == 12 * 3600
+    assert float(first["times_stuck_threshold"]) > 3 and first["as_of"] == meta["as_of"] == end.isoformat().replace("+00:00", "Z")
+
+
 def test_route_requires_the_dashboard(tmp_path):
     import os
     import subprocess
@@ -113,6 +136,11 @@ with TestClient(app) as client:
     r = client.post(path, json={"end_activities": ["B"], "min_support": 5}, headers=owner)
     assert r.status_code == 200 and r.json()["open_cases"] == 0, r.text
     assert client.post(path, json={"percentile": 2}, headers=owner).status_code == 422
+    assert client.post(path + ".csv", json={}, headers=bearer).status_code == 403
+    r = client.post(path + ".csv", json={"end_activities": ["B"], "min_support": 5}, headers=owner)
+    assert r.status_code == 200 and r.headers["content-type"].startswith("text/csv"), r.text
+    assert r.text.startswith("case_id,latest_activity,") and r.headers["x-owg-stuck-cases"] == "stuck=0; judged=0; not_judged=0"
+    assert client.post(path + ".csv", json={"percentile": 2}, headers=owner).status_code == 422
 '''
     env = os.environ.copy()
     env.update({"WORKFLOW_OBSERVER_DATA": str(tmp_path / "data"), "WORKFLOW_OBSERVER_AUTH_DIR": str(tmp_path / "auth"),
