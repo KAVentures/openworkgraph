@@ -29,11 +29,11 @@ class Edit(Strict):
     item_id:str=Field(pattern=DIGEST)
     expected_revision:StrictInt=Field(ge=1)
     operation:Literal["plan","in_progress","reported_done","cancelled"]
-    due_days:StrictInt|None=Field(default=None,ge=1,le=90)
+    due_hours:StrictInt|None=Field(default=None,ge=1,le=168)
 
     @model_validator(mode="after")
     def fields(self):
-        if (self.operation=="plan")!=(self.due_days is not None):
+        if (self.operation=="plan")!=(self.due_hours is not None):
             raise ValueError("only planning requires a due interval")
         return self
 
@@ -71,7 +71,7 @@ def transition(item,edit,now,expires):
             raise JobError("followup_requires_actionable_disposition",422)
         if old and not old.get("stale") and old["state"] in ("planned","in_progress"):
             raise JobError("followup_already_active")
-        due=now+edit.due_days*86400
+        due=now+edit.due_hours*3600
         if due>=expires:
             raise JobError("followup_due_after_publication_expiry",422)
         new={"action":action,"state":"planned","created_at":now,"due_at":due,
