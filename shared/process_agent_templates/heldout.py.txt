@@ -1,9 +1,11 @@
 """Frozen customer holdout acceptance for generated OWG agent projects.
 
-No business tools or model calls. The challenge excludes reviewed answers.
+No business tools. Capture explicitly calls the existing no-tools planner. 
+Freeze and score are offline. The challenge excludes reviewed answers.
 The private freeze document is not a signature or proof of blind evaluation.
 """
 import argparse
+import asyncio
 from collections import Counter
 import json
 import os
@@ -146,6 +148,48 @@ def validate_frozen(spec,development,holdout,freeze,challenge,*,freeze_sha256):
     return policy
 
 
+def validate_challenge(spec,challenge,challenge_sha256):
+    from runtime import validate_spec
+    validate_spec(spec)
+    pin(challenge,challenge_sha256)
+    shape(challenge,("format","process_reference","spec_sha256","challenge_id","cases"),
+          "Invalid public challenge")
+    if (challenge["format"]!=CHALLENGE or challenge["process_reference"]!=reference(spec)
+            or challenge["spec_sha256"]!=digest(spec)
+            or not isinstance(challenge["challenge_id"],str) or not HEX.fullmatch(challenge["challenge_id"])):
+        refuse("Challenge specification differs")
+    rows=challenge["cases"]
+    if not isinstance(rows,list) or not 1<=len(rows)<=50:refuse("Invalid challenge population")
+    seen=set();inputs=set()
+    for row in rows:
+        shape(row,("challenge_case_id","input"),"Invalid public challenge row")
+        key=row["challenge_case_id"]
+        if (not isinstance(key,str) or not OPAQUE.fullmatch(key) or key in seen
+                or not isinstance(row["input"],dict)
+                or len(json.dumps(row["input"],allow_nan=False).encode())>65536):
+            refuse("Invalid challenge case")
+        identity=digest(row["input"])
+        if identity in inputs:refuse("Duplicate exact challenge input")
+        inputs.add(identity);seen.add(key)
+    return rows
+
+
+async def capture_planner(spec,challenge,*,challenge_sha256,model):
+    """Planner-side command; never receives private review, policy or suite."""
+    rows=validate_challenge(spec,challenge,challenge_sha256)
+    if not isinstance(model,str) or not 1<=len(model)<=160:refuse("Invalid model selection")
+    from agent import propose
+    results=[]
+    for row in rows:
+        # The existing tracing-disabled, no-business-tools planner is reused.
+        # Provider failure is an incomplete trial: no partial result is written.
+        result=await propose(row["input"],model=model,spec=spec)
+        if not isinstance(result,dict) or "plan" not in result:refuse("Incomplete planner result")
+        results.append({"challenge_case_id":row["challenge_case_id"],"plan":result["plan"]})
+        if len(json.dumps(results,allow_nan=False).encode())>LIMIT:refuse("Captured plans exceed byte budget")
+    return {"format":CAPTURE,"challenge_sha256":challenge_sha256,"results":results}
+
+
 def captured_results(spec,holdout,freeze,capture,expected):
     pin(capture,expected)
     shape(capture,("format","challenge_sha256","results"),"Invalid heldout capture")
@@ -247,6 +291,13 @@ def main(argv=None):
         sub.add_argument("--development",required=True)
         sub.add_argument("--holdout",required=True)
         sub.add_argument("--output",required=True)
+    capture=mode.add_parser("capture")
+    capture.add_argument("--challenge",required=True)
+    capture.add_argument("--challenge-sha256",required=True)
+    capture.add_argument("--model",required=True)
+    capture.add_argument("--output",required=True)
+    capture.add_argument("--confirm-send-case-inputs-to-model",action="store_true")
+    capture.add_argument("--confirm-retain-model-output",action="store_true")
     freeze=mode.choices["freeze"]
     freeze.add_argument("--policy",required=True)
     freeze.add_argument("--confirm-retain-sensitive-challenge",action="store_true")
@@ -260,6 +311,15 @@ def main(argv=None):
     try:
         if Path(args.output).exists():refuse("Choose a new output path")
         spec=strict_load(Path(__file__).parent/"workflow.spec.json",262144)
+        if args.mode=="capture":
+            if not args.confirm_send_case_inputs_to_model or not args.confirm_retain_model_output:
+                refuse("Separately approve model disclosure and local output retention")
+            result=asyncio.run(capture_planner(spec,strict_load(args.challenge),
+                    challenge_sha256=args.challenge_sha256,model=args.model))
+            private_write(args.output,result)
+            print(json.dumps({"capture_sha256":digest(result),"cases":len(result["results"]),
+                              "execution_authorized":False}))
+            return 0
         dev=strict_load(args.development,262144);test=strict_load(args.holdout,262144)
         if args.mode=="freeze":
             if not args.confirm_retain_sensitive_challenge:refuse("Confirm local retention of selected sensitive case inputs")
