@@ -57,17 +57,17 @@ def setup(tmp_path, monkeypatch):
     monkeypatch.setattr(httpx.Client, "send", lambda *a, **k: pytest.fail("unexpected provider request"))
     monkeypatch.setenv(WORKDAY_REF, WORKDAY_PASSWORD)
     monkeypatch.setenv(REST_REF, REST_TOKEN)
-    monkeypatch.setenv(wd.CATALOG, json.dumps({"private-source": WD}))
+    monkeypatch.setenv(wd.CATALOG, json.dumps({"private_source": WD}))
     monkeypatch.setenv("OWG_REST_ALLOWED_ENDPOINTS", json.dumps([URL, OTHER_URL]))
     monkeypatch.setenv("OWG_REST_ENDPOINT_CREDENTIALS", json.dumps({URL: REST_REF}))
 
 
 def wd_source(monkeypatch, **overrides):
-    monkeypatch.setenv(wd.CATALOG, json.dumps({"private-source": {**WD, **overrides}}))
+    monkeypatch.setenv(wd.CATALOG, json.dumps({"private_source": {**WD, **overrides}}))
 
 
 def wd_profile():
-    return wd.create({"name": "Private Workday profile", "source_alias": "private-source",
+    return wd.create({"name": "Private Workday profile", "source_alias": "private_source",
                       "source_sha256": wd.catalog_public()["sources"][0]["source_sha256"],
                       "initial_since": rest._iso(rest._now()-timedelta(days=3)),
                       "confirm_configuration": True, "confirm_source_read": True,
@@ -170,7 +170,7 @@ def test_local_sqlite_validation_does_not_open_database(tmp_path, monkeypatch):
 
 
 def test_bigquery_key_format_checks_without_oauth(monkeypatch):
-    monkeypatch.setenv(bq.CATALOG, json.dumps({"private-bq": BQ}))
+    monkeypatch.setenv(bq.CATALOG, json.dumps({"private_bq": BQ}))
     monkeypatch.setenv(BIGQUERY_REF, "invalid-base64")
     assert source(onboarding.inspect(), "bigquery")["error_code"] == "invalid_bigquery_rsa_private_key"
     key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
@@ -201,8 +201,8 @@ def test_missing_pair_policy_does_not_imply_approved_credentials(monkeypatch):
 
 
 def test_shared_reference_and_support_projection(monkeypatch):
-    monkeypatch.setenv(wd.CATALOG, json.dumps({"private-source": WD,
-                                               "private-second": {**WD, "event_report": "Second_Events"}}))
+    monkeypatch.setenv(wd.CATALOG, json.dumps({"private_source": WD,
+                                               "private_second": {**WD, "event_report": "Second_Events"}}))
     p = wd_profile()
     q = rest_profile()
     report = onboarding.inspect()
@@ -214,7 +214,7 @@ def test_shared_reference_and_support_projection(monkeypatch):
     exported = json.dumps(support)
     for value in (URL, OTHER_URL, WORKDAY_REF, WORKDAY_PASSWORD, REST_REF, REST_TOKEN,
                   WD["tenant"], WD["host"], WD["event_report"], WD["integration_user"],
-                  "private-source", "private-second", p["profile_id"], q["profile_id"],
+                  "private_source", "private_second", p["profile_id"], q["profile_id"],
                   "Private Workday profile", "Private REST profile", "Private activity"):
         assert value not in exported
     local = json.dumps(report)
