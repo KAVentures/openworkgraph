@@ -122,9 +122,19 @@ async def agent_logs(request: Request):
 @router.get("/v1/process-intelligence/{log_id}/trace-clusters")
 async def agent_trace_clusters(request: Request, log_id: str, k: int | None = Query(default=None, ge=2, le=12),
                                max_k: int = Query(default=8, ge=2, le=12),
-                               case_type: str | None = Query(default=None, max_length=200)):
+                               case_type: str | None = Query(default=None, max_length=200),
+                               case_filter: str | None = Query(default=None, max_length=8192)):
     _require_agent_access(request)
-    return await _answer(sharing.trace_clusters, log_id, case_type, k, max_k)
+    chosen = None
+    if case_filter is not None:
+        import json
+        try:
+            chosen = json.loads(case_filter)
+        except ValueError:
+            raise HTTPException(422, "case_filter must be a JSON object") from None
+        if not isinstance(chosen, dict):
+            raise HTTPException(422, "case_filter must be a JSON object")
+    return await _answer(sharing.trace_clusters, log_id, case_type, k, max_k, chosen)
 
 
 @router.post("/v1/process-intelligence/{log_id}/compliance")
@@ -353,9 +363,19 @@ async def agent_object_map(request: Request, log_id: str):
 @router.get("/v1/process-intelligence/{log_id}/heuristics-net")
 async def agent_heuristics_net(request: Request, log_id: str,
                                dependency_threshold: float = Query(default=0.5, ge=0, le=1),
-                               case_type: str | None = Query(default=None, max_length=200)):
+                               case_type: str | None = Query(default=None, max_length=200),
+                               case_filter: str | None = Query(default=None, max_length=8192)):
     _require_agent_access(request)
-    return await _answer(sharing.heuristics_net, log_id, case_type, dependency_threshold)
+    chosen = None
+    if case_filter is not None:
+        import json
+        try:
+            chosen = json.loads(case_filter)
+        except ValueError:
+            raise HTTPException(422, "case_filter must be a JSON object") from None
+        if not isinstance(chosen, dict):
+            raise HTTPException(422, "case_filter must be a JSON object")
+    return await _answer(sharing.heuristics_net, log_id, case_type, dependency_threshold, chosen)
 
 
 @router.get("/v1/process-intelligence/{log_id}/data-quality")
@@ -366,16 +386,36 @@ async def agent_data_quality(request: Request, log_id: str):
 
 @router.get("/v1/process-intelligence/{log_id}/footprints")
 async def agent_footprints(request: Request, log_id: str, noise: float = Query(default=0.2, ge=0, lt=1),
-                           case_type: str | None = Query(default=None, max_length=200)):
+                           case_type: str | None = Query(default=None, max_length=200),
+                           case_filter: str | None = Query(default=None, max_length=8192)):
     _require_agent_access(request)
-    return await _answer(sharing.footprints, log_id, case_type, noise)
+    chosen = None
+    if case_filter is not None:
+        import json
+        try:
+            chosen = json.loads(case_filter)
+        except ValueError:
+            raise HTTPException(422, "case_filter must be a JSON object") from None
+        if not isinstance(chosen, dict):
+            raise HTTPException(422, "case_filter must be a JSON object")
+    return await _answer(sharing.footprints, log_id, case_type, noise, chosen)
 
 
 @router.get("/v1/process-intelligence/{log_id}/model-quality")
 async def agent_model_quality(request: Request, log_id: str, levels: str | None = Query(default=None, max_length=100),
-                              case_type: str | None = Query(default=None, max_length=200)):
+                              case_type: str | None = Query(default=None, max_length=200),
+                              case_filter: str | None = Query(default=None, max_length=8192)):
     _require_agent_access(request)
-    return await _answer(sharing.model_quality, log_id, case_type, levels)
+    chosen = None
+    if case_filter is not None:
+        import json
+        try:
+            chosen = json.loads(case_filter)
+        except ValueError:
+            raise HTTPException(422, "case_filter must be a JSON object") from None
+        if not isinstance(chosen, dict):
+            raise HTTPException(422, "case_filter must be a JSON object")
+    return await _answer(sharing.model_quality, log_id, case_type, levels, chosen)
 
 
 @router.get("/v1/process-intelligence/{log_id}/attributes")
@@ -409,9 +449,19 @@ async def agent_process_model(request: Request, log_id: str, noise: float = Quer
 
 @router.get("/v1/process-intelligence/{log_id}/model-deviations")
 async def agent_model_deviations(request: Request, log_id: str, noise: float = Query(default=0.2, ge=0, lt=1),
-                                 case_type: str | None = Query(default=None, max_length=200)):
+                                 case_type: str | None = Query(default=None, max_length=200),
+                                 case_filter: str | None = Query(default=None, max_length=8192)):
     _require_agent_access(request)
-    return await _answer(sharing.model_deviations, log_id, case_type, noise)
+    chosen = None
+    if case_filter is not None:
+        import json
+        try:
+            chosen = json.loads(case_filter)
+        except ValueError:
+            raise HTTPException(422, "case_filter must be a JSON object") from None
+        if not isinstance(chosen, dict):
+            raise HTTPException(422, "case_filter must be a JSON object")
+    return await _answer(sharing.model_deviations, log_id, case_type, noise, chosen)
 
 
 @router.get("/v1/process-intelligence/{log_id}/reference-nets")
