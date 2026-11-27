@@ -720,25 +720,39 @@ async def agent_preview_signal(request: Request, log_id: str):
 
 @router.get("/v1/process-intelligence/{log_id}/rework")
 async def agent_rework(request: Request, log_id: str, limit: int = Query(default=20, ge=1, le=100),
-                       case_type: str | None = Query(default=None, max_length=200)):
+                       case_type: str | None = Query(default=None, max_length=200),
+                       case_filter: str | None = Query(default=None, max_length=8192)):
     _require_agent_access(request)
-    return await _answer(sharing.rework, log_id, case_type, limit)
+    chosen = None
+    if case_filter is not None:
+        import json
+        try:
+            chosen = json.loads(case_filter)
+        except ValueError:
+            raise HTTPException(422, "case_filter must be a JSON object") from None
+        if not isinstance(chosen, dict):
+            raise HTTPException(422, "case_filter must be a JSON object")
+    return await _answer(sharing.rework, log_id, case_type, limit, chosen)
 
 
 @router.get("/v1/process-intelligence/{log_id}/waiting-times")
 async def agent_waiting_times(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
-                              working_calendar: str | None = Query(default=None, max_length=4096)):
+                              working_calendar: str | None = Query(default=None, max_length=4096),
+                              case_filter: str | None = Query(default=None, max_length=8192)):
     _require_agent_access(request)
-    calendar = None
-    if working_calendar is not None:
-        import json
+    import json
+    parsed = {}
+    for name, raw in (("working_calendar", working_calendar), ("case_filter", case_filter)):
+        if raw is None:
+            parsed[name] = None
+            continue
         try:
-            calendar = json.loads(working_calendar)
+            parsed[name] = json.loads(raw)
         except ValueError:
-            raise HTTPException(422, "working_calendar must be a JSON object") from None
-        if not isinstance(calendar, dict):
-            raise HTTPException(422, "working_calendar must be a JSON object")
-    return await _answer(sharing.waiting_times, log_id, case_type, calendar)
+            raise HTTPException(422, f"{name} must be a JSON object") from None
+        if not isinstance(parsed[name], dict):
+            raise HTTPException(422, f"{name} must be a JSON object")
+    return await _answer(sharing.waiting_times, log_id, case_type, parsed["working_calendar"], parsed["case_filter"])
 
 
 @router.get("/v1/process-intelligence/{log_id}/drift")
