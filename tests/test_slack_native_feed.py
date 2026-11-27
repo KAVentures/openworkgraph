@@ -308,3 +308,54 @@ def test_inventory_is_passive_and_does_not_export_scope_or_secret(monkeypatch):
     assert row["provider"]=="slack" and row["provider_live_health"]=="unknown"
     for secret in (TOKEN,ENV,ORG,TEAM,CHANNEL,USER):
         assert secret not in json.dumps(r)
+
+
+def test_principal_pin_survives_windows_and_is_not_public():
+    p=slack.create(config())
+    first=run(p,route(lambda _:page([audit_event(p)])))
+    assert "slack_principal_pin" not in first
+    assert "_slack_principal_pin" not in first["last_result"]
+    with pytest.raises(rest.FeedError,match="slack_principal_changed"):
+        run(first,route(lambda _:pytest.fail("changed principal must prevent audit"),
+                        identity=lambda:auth(user_id="UOTHER")))
+    assert rest.inventory()["profiles"][0]["checkpoint"]==first["checkpoint"]
+
+
+def test_placeholder_actor_and_missing_entity_fallback_cases():
+    p=slack.create(config(case_basis="actor"))
+    item=audit_event(p)
+    item["actor"]["user"]["id"]="USLACKUSER"
+    first=run(p,route(lambda _:page([item])))
+    assert first["last_result"]["fallback_case_events"]==1
+
+
+def test_http_native_profile_dashboard_only_and_strict_json(tmp_path):
+    import os
+    from pathlib import Path
+    import subprocess
+    import sys
+    script=r"""
+from fastapi.testclient import TestClient
+from server.secure_app import app
+from server import local_auth
+from test_slack_native_feed import config,TOKEN
+with TestClient(app) as c:
+    h={"Authorization":"OWG-Session "+local_auth.create_dashboard_session()}
+    bearer={"Authorization":"Bearer "+local_auth.ensure_api_token()}
+    path='/v1/enterprise-connectors/slack'
+    assert c.post(path,json=config(),headers=bearer).status_code in (401,403)
+    r=c.post(path,json=config(),headers=h)
+    assert r.status_code==200,r.text
+    p=r.json()
+    assert p["provider"]=="slack" and TOKEN not in r.text
+    assert c.post(path,content=b'{"name":"a","name":"b"}',headers={**h,"Content-Type":"application/json"}).status_code==422
+    assert c.get('/v1/enterprise-connectors',headers=h).json()["provider_reads_performed"] is False
+    assert c.post('/v1/enterprise-connectors/rest/'+p["profile_id"]+'/run',json={
+      "revision":1,"confirm_reads":False,"confirm_retention":True},headers=h).status_code==403
+"""
+    env={**os.environ,"WORKFLOW_OBSERVER_DATA":str(tmp_path/"data"),
+         "WORKFLOW_OBSERVER_AUTH_DIR":str(tmp_path/"auth"),
+         "WORKFLOW_OBSERVER_CONFIG":str(tmp_path/"config.json")}
+    proc=subprocess.run([sys.executable,"-c","import sys;sys.path.insert(0,'tests');"+script],
+                        cwd=Path(__file__).resolve().parents[1],env=env,capture_output=True,text=True,timeout=120)
+    assert proc.returncode==0,proc.stdout+proc.stderr
