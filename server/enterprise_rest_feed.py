@@ -467,6 +467,8 @@ def _extract(p,since,until,client_factory):
 
 
 def _retain(p,rows,counts,until):
+    counts=dict(counts)
+    principal_pin=counts.pop("_slack_principal_pin",None)
     stream=StringIO(newline="")
     writer=csv.writer(stream,lineterminator="\n")
     writer.writerow(["event","case","activity","time","resource"])
@@ -490,6 +492,10 @@ def _retain(p,rows,counts,until):
                                   "events_added":added,"duplicates_skipped":duplicates})
         if p.get("provider")=="sql":
             saved["source_schema_sha256"]=counts["source_schema_sha256"]
+        if p.get("provider")=="slack":
+            if not principal_pin:
+                raise FeedError("slack_principal_pin_missing")
+            saved["slack_principal_pin"]=principal_pin
         _put(conn,saved)
     with workspace._LOCK:
         _check(p)
