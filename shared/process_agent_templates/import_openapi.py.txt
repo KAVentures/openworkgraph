@@ -5,7 +5,6 @@ authorization. No URL is fetched, reference is downloaded or example run.
 """
 import argparse
 from copy import deepcopy
-from hashlib import sha256
 import json
 import os
 from pathlib import Path
@@ -97,7 +96,7 @@ def fixed_origin(value):
         require(value==normalized and parts.path=="" and parts.netloc==parts.netloc.lower()
                 and (parts.scheme=="https" or parts.hostname in ("127.0.0.1","::1")),
                 "fixed_https_or_numeric_loopback_origin_required")
-        require(not any(c in value for c in "{}\\") and value.isascii(),"invalid_fixed_origin")
+        require(not any(c in value for c in "{}\\") and value.isascii() and all(33<=ord(c)<=126 for c in value),"invalid_fixed_origin")
         return value
     except (ValueError,ImplementationError):
         raise ImplementationError("fixed_https_or_numeric_loopback_origin_required") from None
@@ -320,6 +319,47 @@ def approve(spec,doc,proposal,expected,reviewed_names,*,confirm_contracts,confir
     return result
 
 
+def compare(spec,previous,expected,doc):
+    """Compare exact prior reviewed contract with new offline API description.
+
+    This compares representable request contracts, not actual provider
+    behavior. No old review is propagated even if all rows are unchanged.
+    """
+    from execute_http import Operations
+    prior=Operations(spec,previous,expected)
+    current=inventory(doc,prior.origin)
+    lookup={(r["path"],r["method"]):r for r in current["operations"]}
+    rows=[];selection=[]
+    for name,old in sorted(prior.operations.items()):
+        key=(old["path"],old["method"].lower())
+        candidate=lookup.get(key)
+        if candidate is None or candidate["status"]!="candidate":
+            rows.append({"operation_id":name,"method":old["method"],"path":old["path"],
+                         "status":"unavailable","reason":candidate["reason"] if candidate else "operation_missing",
+                         "changed_contract_fields":[]})
+            continue
+        new=candidate["operation"]
+        changed=sorted(k for k in old if k!="reviewed_provider_contract" and old[k]!=new[k])
+        rows.append({"operation_id":name,"method":old["method"],"path":old["path"],
+                     "new_operation_id":new["name"],
+                     "status":"changed" if changed else "same_representable_contract",
+                     "reason":None,"changed_contract_fields":changed,
+                     "added_arguments":sorted(set(new["fields"])-set(old["fields"])),
+                     "removed_arguments":sorted(set(old["fields"])-set(new["fields"])),
+                     "changed_argument_types":sorted(k for k in set(old["fields"])&set(new["fields"])
+                                                     if old["fields"][k]!=new["fields"][k])})
+        selection.append({"path":key[0],"method":key[1]})
+    proposed=propose(spec,doc,prior.origin,selection) if len(selection)==len(rows) else None
+    result={"format":"openworkgraph.openapi-contract-comparison.v1",
+            "previous_catalog_sha256":expected,"new_openapi_sha256":current["openapi_sha256"],
+            "process_reference":reference(spec),"origin":prior.origin,"operations":rows,
+            "all_previous_operations_representable":proposed is not None,
+            "all_representable_contracts_unchanged":all(r["status"]=="same_representable_contract" for r in rows),
+            "new_disabled_proposal":proposed,"provider_behavior_verified":False,
+            "fresh_review_required":True,"execution_authorized":False}
+    return {**result,"comparison_sha256":digest(result)}
+
+
 def write_new(path,value):
     data=json.dumps(value,ensure_ascii=True,indent=2,allow_nan=False).encode()
     require(len(data)<=MAX_BYTES,"output_byte_budget")
@@ -331,12 +371,13 @@ def write_new(path,value):
 def main(argv=None):
     p=argparse.ArgumentParser(description=__doc__)
     sub=p.add_subparsers(dest="command",required=True)
-    i=sub.add_parser("inspect");pr=sub.add_parser("propose");ap=sub.add_parser("approve")
-    for cmd in (i,pr,ap):
+    i=sub.add_parser("inspect");pr=sub.add_parser("propose");ap=sub.add_parser("approve");cp=sub.add_parser("compare")
+    for cmd in (i,pr,ap,cp):
         cmd.add_argument("--openapi",required=True);cmd.add_argument("--out",required=True)
     for cmd in (i,pr):cmd.add_argument("--origin",required=True)
-    for cmd in (pr,ap):cmd.add_argument("--spec",default=str(Path(__file__).parent/"workflow.spec.json"))
+    for cmd in (pr,ap,cp):cmd.add_argument("--spec",default=str(Path(__file__).parent/"workflow.spec.json"))
     pr.add_argument("--selection",required=True)
+    cp.add_argument("--previous-operations",required=True);cp.add_argument("--previous-operations-sha256",required=True)
     ap.add_argument("--proposal",required=True);ap.add_argument("--proposal-sha256",required=True)
     ap.add_argument("--review-operation",action="append",required=True)
     ap.add_argument("--confirm-provider-contracts",action="store_true",required=True)
@@ -349,12 +390,15 @@ def main(argv=None):
             spec=load_object(args.spec,MAX_BYTES);selection=load_object(args.selection)
             require(set(selection)=={"operations"},"invalid_selection")
             result=propose(spec,doc,args.origin,selection["operations"])
+        elif args.command=="compare":
+            spec=load_object(args.spec,MAX_BYTES)
+            result=compare(spec,load_object(args.previous_operations,MAX_BYTES),args.previous_operations_sha256,doc)
         else:
             spec=load_object(args.spec,MAX_BYTES)
             result=approve(spec,doc,load_object(args.proposal,MAX_BYTES),args.proposal_sha256,args.review_operation,
                            confirm_contracts=args.confirm_provider_contracts,confirm_writes=args.confirm_write_contracts)
         write_new(args.out,result)
-        print(digest(result) if args.command=="approve" else result.get("proposal_sha256",result["openapi_sha256"]))
+        print(digest(result) if args.command=="approve" else result.get("comparison_sha256") or result.get("proposal_sha256") or result["openapi_sha256"])
     except (ImplementationError,OSError,ValueError,TypeError,KeyError,RecursionError,OverflowError,ImportError):
         p.exit(2,"OpenAPI onboarding refused: invalid input, unsupported contract, changed pin or missing explicit review.\n")
     return 0
