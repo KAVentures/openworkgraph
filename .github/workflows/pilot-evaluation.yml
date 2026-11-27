@@ -4,6 +4,7 @@ on:
     types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - 'evals/pilot_*.py'
+      - 'evals/pilot_reviewer/**'
       - 'evals/prospective_pilot_cohort.py'
       - 'evals/product_value.py'
       - 'evals/*product_review.py'
@@ -31,4 +32,18 @@ jobs:
       - name: Run exact pilot and existing canonical scoring tests
         # These tests deliberately use no database or application fixture.
         run: |
-          python -m pytest --noconftest -q tests/test_prospective_pilot_cohort.py tests/test_pilot_execution.py tests/test_pilot_blinded_batches.py tests/test_product_value_eval.py
+          python -m pytest --noconftest -q tests/test_prospective_pilot_cohort.py tests/test_pilot_execution.py tests/test_pilot_blinded_batches.py tests/test_pilot_workspace.py tests/test_pilot_reviewer_package.py tests/test_product_value_eval.py
+  offline-reviewer-browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install isolated browser test runner
+        run: |
+          python -m pip install "pytest>=8,<9" "playwright==1.56.0"
+          python -m playwright install --with-deps chromium
+      - name: Verify the actual local-file reviewer journey
+        run: python -m pytest --noconftest -q tests/test_pilot_reviewer_browser.py
