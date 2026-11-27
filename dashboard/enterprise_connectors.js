@@ -47,7 +47,7 @@
       const h=threshold();
       const [r,feeds,grants,sql]=await Promise.all([api(base+'?freshness_hours='+h),api(base+'/rest'),api('/v1/connector-oauth').catch(()=>({connections:[]})),api(base+'/sql/catalog').catch(()=>({sources:[],unavailable:true}))]);
       if(turn!==generation)return;
-      latest=r;render(r);renderProfiles(feeds,r);renderGoogleGrants(grants);renderSqlCatalog(sql);$('download').disabled=false;
+      latest=r;render(r);renderProfiles(feeds,r);renderGoogleGrants(grants);renderSfGrants(grants);renderSqlCatalog(sql);$('download').disabled=false;
       $('status').textContent='Local inventory refreshed. No provider reads performed.';
     }catch(error){if(turn===generation)$('status').textContent=error.message;}
     finally{if(turn===generation)$('refresh').disabled=busy;}
@@ -60,6 +60,28 @@
     }
     if([...select.options].some(o=>o.value===previous))select.value=previous;
     $('googleCreateButton').disabled=!select.options.length||busy;
+  }
+  const sfObjects=['AccountHistory','ContactHistory','LeadHistory','OpportunityFieldHistory','CaseHistory'];
+  function renderSfGrants(grants){
+    const select=$('sfConnection'),previous=select.value;
+    select.replaceChildren();
+    for(const grant of (grants.connections||[]).filter(g=>g.provider==='salesforce'&&!g.reauthorization_required&&g.has_refresh_token&&(g.scopes||[]).includes('api')&&(g.scopes||[]).some(x=>['id','openid','profile'].includes(x)))){
+      const option=el('option',grant.connection_id+' · '+(grant.host||'instance'));
+      option.value=grant.connection_id;select.append(option);
+    }
+    if([...select.options].some(o=>o.value===previous))select.value=previous;
+    $('sfCreateButton').disabled=busy||!select.options.length;
+  }
+  for(const name of sfObjects){
+    const fieldset=el('fieldset');fieldset.append(el('legend',name));
+    const selected=check('Include '+name);selected.box.id='sfSelect'+name;
+    const fields=el('input');fields.id='sfFields'+name;fields.placeholder='Status,Owner';fields.maxLength=2500;
+    const ids=el('input');ids.id='sfIds'+name;ids.placeholder='Optional comma-separated record IDs';ids.maxLength=2000;
+    const fl=el('label','Tracked field API names (comma separated)');fl.append(fields);
+    const il=el('label','Exact record IDs (comma separated)');il.append(ids);
+    fields.disabled=ids.disabled=true;
+    selected.box.onchange=()=>{fields.disabled=ids.disabled=!selected.box.checked;fields.required=selected.box.checked;};
+    fieldset.append(selected.node,fl,il);$('sfSelections').append(fieldset);
   }
   let sqlSources=[];
   function renderSqlCatalog(catalog){
@@ -101,8 +123,8 @@
     for(const p of feeds.profiles){
       const card=el('article');card.className='profile';card.append(el('h3',p.config.name),
         el('p',p.profile_id+' · revision '+p.revision+' · '+p.status),
-        table(['Configuration','Value'],[...(p.provider==='google'?[['Provider','Google Workspace audit'],['Application',p.config.application],['Customer',p.config.customer_id],['User scope',p.config.user_key],['Case notion',p.config.case_basis],['Reporting lag (minutes)',p.config.ingestion_lag_minutes]]:p.provider==='slack'?[['Provider','Slack native'],['Mode',p.config.mode],['Enterprise',p.config.enterprise_id],['Workspace',p.config.team_id],['Channel',p.config.channel_id],['Case notion',p.config.case_basis],['Audit action filters',p.config.actions.join(', ')||'All'],['Audit actor filter',p.config.actor_id],['Reporting lag (minutes)',p.config.ingestion_lag_minutes]]:p.provider==='sql'?[['Provider','Native SQL'],['Source alias',p.config.source_alias],['Engine',p.config.engine],['Reviewed source definition',p.config.source_sha256],['Retained schema pin',p.source_schema_sha256||'No successful snapshot yet']]:[['Fixed endpoint',p.config.endpoint]]),['Credential binding available',p.credential_binding_available],['Change window (hours)',p.config.window_hours],['Overlap (minutes)',p.config.overlap_minutes],['Last attempt',p.last_attempt_at],['Last successful retention',p.last_success_at],['Checkpoint',p.checkpoint],['Retained log',p.log_id],['Last result',p.last_result?JSON.stringify(p.last_result):null]]));
-      const read=check(p.provider==='google'?'Authorize one bounded Google audit read for the exact customer, application and user scope.':p.provider==='slack'?'Authorize one bounded read from the exact selected Slack scope.':p.provider==='sql'?'Authorize one bounded read-only SQL snapshot from the exact approved source.':'Authorize one bounded read from the exact configured endpoint.');
+        table(['Configuration','Value'],[...(p.provider==='google'?[['Provider','Google Workspace audit'],['Application',p.config.application],['Customer',p.config.customer_id],['User scope',p.config.user_key],['Case notion',p.config.case_basis],['Reporting lag (minutes)',p.config.ingestion_lag_minutes]]:p.provider==='salesforce'?[['Provider','Salesforce field history'],['Instance',p.config.instance_host],['Organization',p.config.organization_id],['User',p.config.user_id],['Reviewed object/field/record scope',JSON.stringify(p.config.selections)],['Reporting lag (minutes)',p.config.ingestion_lag_minutes]]:p.provider==='slack'?[['Provider','Slack native'],['Mode',p.config.mode],['Enterprise',p.config.enterprise_id],['Workspace',p.config.team_id],['Channel',p.config.channel_id],['Case notion',p.config.case_basis],['Audit action filters',p.config.actions.join(', ')||'All'],['Audit actor filter',p.config.actor_id],['Reporting lag (minutes)',p.config.ingestion_lag_minutes]]:p.provider==='sql'?[['Provider','Native SQL'],['Source alias',p.config.source_alias],['Engine',p.config.engine],['Reviewed source definition',p.config.source_sha256],['Retained schema pin',p.source_schema_sha256||'No successful snapshot yet']]:[['Fixed endpoint',p.config.endpoint]]),['Credential binding available',p.credential_binding_available],['Change window (hours)',p.config.window_hours],['Overlap (minutes)',p.config.overlap_minutes],['Last attempt',p.last_attempt_at],['Last successful retention',p.last_success_at],['Checkpoint',p.checkpoint],['Retained log',p.log_id],['Last result',p.last_result?JSON.stringify(p.last_result):null]]));
+      const read=check(p.provider==='google'?'Authorize one bounded Google audit read for the exact customer, application and user scope.':p.provider==='salesforce'?'Authorize one bounded read of the exact approved Salesforce history scope.':p.provider==='slack'?'Authorize one bounded read from the exact selected Slack scope.':p.provider==='sql'?'Authorize one bounded read-only SQL snapshot from the exact approved source.':'Authorize one bounded read from the exact configured endpoint.');
       const retain=check('Authorize retention of the selected mapped events locally.');
       const run=button('Run next window',()=>action(async()=>{
         if(!read.box.checked||!retain.box.checked)throw Error('Confirm both read and retention.');
@@ -201,6 +223,19 @@
         confirm_org_audit:audit&&$('slackOrg').checked,confirm_transient_message_content:!audit&&$('slackTransient').checked});
       for(const id of ['slackConfirm','slackRetention','slackOrg','slackTransient'])$(id).checked=false;
       return 'Slack profile saved. No source was read.';
+    });
+  };
+  $('sfCreate').onsubmit=event=>{
+    event.preventDefault();
+    action(async()=>{
+      const values=id=>$(id).value.split(',').map(x=>x.trim()).filter(Boolean);
+      const selections=sfObjects.filter(n=>$('sfSelect'+n).checked).map(n=>({object:n,fields:values('sfFields'+n),record_ids:values('sfIds'+n)}));
+      if(!selections.length)throw Error('Choose at least one history object.');
+      await api(base+'/salesforce',{name:$('sfName').value,connection_id:$('sfConnection').value,instance_host:$('sfHost').value.trim(),organization_id:$('sfOrg').value.trim(),user_id:$('sfUser').value.trim(),selections,
+        initial_since:$('sfSince').value,window_hours:Number($('sfWindow').value),overlap_minutes:Number($('sfOverlap').value),ingestion_lag_minutes:Number($('sfLag').value),page_size:Number($('sfPage').value),
+        confirm_configuration:$('sfConfirm').checked,confirm_field_labels:$('sfLabels').checked,confirm_identity_metadata:$('sfIdentity').checked,confirm_unrestricted_records:$('sfAll').checked});
+      for(const id of ['sfConfirm','sfLabels','sfIdentity','sfAll'])$(id).checked=false;
+      return 'Salesforce profile saved. No source was read.';
     });
   };
   $('refresh').onclick=load;
