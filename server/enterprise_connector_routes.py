@@ -50,6 +50,70 @@ def script():
     return FileResponse(DASH/"enterprise_connectors.js",media_type="application/javascript",headers=HEADERS)
 
 
+@router.get("/enterprise-bundle-import")
+def bundle_page():
+    return FileResponse(DASH/"enterprise_bundle_import.html",media_type="text/html",headers={
+        **HEADERS,"Content-Security-Policy":"default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'"})
+
+
+@router.get("/enterprise-bundle-import.js")
+def bundle_script():
+    return FileResponse(DASH/"enterprise_bundle_import.js",media_type="application/javascript",headers=HEADERS)
+
+
+async def _bundle_bytes(request):
+    from shared.connector_bundle_import import MAX_BYTES
+    require(request)
+    if request.headers.get("content-type","").split(";",1)[0].strip().lower()!="application/json":
+        raise HTTPException(415,"Connector bundle must be JSON")
+    if request.headers.get("content-encoding","identity").lower()!="identity":
+        raise HTTPException(415,"Compressed connector uploads are not supported")
+    raw=bytearray()
+    async for chunk in request.stream():
+        if len(raw)+len(chunk)>MAX_BYTES:
+            raise HTTPException(413,"Connector bundle exceeds byte budget")
+        raw.extend(chunk)
+    require(request)
+    return bytes(raw)
+
+
+@router.get("/v1/enterprise-connectors/bundle-import")
+async def bundle_inventory(request:Request):
+    from . import enterprise_connector_bundle_import as importer
+    return await call(request,importer.inventory)
+
+
+@router.get("/v1/enterprise-connectors/bundle-import/{log_id}/receipts")
+async def bundle_history(request:Request,log_id:str):
+    from . import enterprise_connector_bundle_import as importer
+    return await call(request,importer.history,log_id)
+
+
+@router.post("/v1/enterprise-connectors/bundle-import/preview")
+async def bundle_preview(request:Request,target:str|None=Query(default=None,max_length=64)):
+    from . import enterprise_connector_bundle_import as importer
+    if request.headers.get("x-owg-bundle-inspection-confirmed")!="true":
+        require(request)
+        raise HTTPException(403,"Explicit local bundle inspection approval required")
+    return await call(request,importer.preview,await _bundle_bytes(request),target)
+
+
+@router.post("/v1/enterprise-connectors/bundle-import/retain")
+async def bundle_retain(request:Request,target:str|None=Query(default=None,max_length=64),
+                        expected_revision:int=Query(default=0,ge=0,le=100),name:str|None=Query(default=None,max_length=100)):
+    from . import enterprise_connector_bundle_import as importer
+    require(request)
+    if request.headers.get("x-owg-local-storage-confirmed")!="true" or request.headers.get("x-owg-bundle-origin-reviewed")!="true":
+        raise HTTPException(403,"Explicit local retention and origin review required")
+    return await call(request,importer.retain,await _bundle_bytes(request),
+        file_sha256=request.headers.get("x-owg-bundle-file-sha256"),
+        canonical_bundle_sha256=request.headers.get("x-owg-bundle-canonical-sha256"),
+        request_id=request.headers.get("x-owg-bundle-request-id"),target=target,
+        expected_revision=expected_revision,name=name,confirm_retention=True,confirm_origin_review=True,
+        confirm_linkage_review=request.headers.get("x-owg-bundle-linkage-reviewed")=="true",
+        confirm_quality_review=request.headers.get("x-owg-bundle-quality-reviewed")=="true")
+
+
 @router.get("/v1/enterprise-connectors")
 async def inventory(request:Request,freshness_hours:int=Query(default=24,ge=1,le=720)):
     return await call(request,operations.inventory,freshness_hours)

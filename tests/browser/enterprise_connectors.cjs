@@ -239,6 +239,116 @@ const path=require('node:path');
     await page.addScriptTag({content:await fs.readFile(require.resolve('axe-core/axe.min.js'),'utf8')});
     const axe=await page.evaluate(()=>window.axe.run(document.querySelector('main'),{runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21a','wcag21aa']}}));
     assert.deepEqual(axe.violations.map(v=>v.id),[]);
+    // Ordinary Gateway JSON bundle fixtures use the same canonical SHA-256
+    // contract as the real server; no network provider is contacted.
+    const {createHash}=require('node:crypto');
+    const canonical=v=>Array.isArray(v)?'['+v.map(canonical).join(',')+']':v&&typeof v==='object'?'{'+Object.keys(v).sort().map(k=>JSON.stringify(k)+':'+canonical(v[k])).join(',')+'}':JSON.stringify(v);
+    const sha=v=>createHash('sha256').update(canonical(v)).digest('hex');
+    const job='cj_'+'a'.repeat(32),stamp='2026-01-01T10:00:00.000000+00:00';
+    const makeBundle=(ids,grant)=>{
+      const events=ids.map(id=>({event_id:id.repeat(64),case_id:'b'.repeat(64),activity:'A_'+'c'.repeat(64),observed_at:stamp}));
+      const manifest={format:'openworkgraph.connector-event-snapshot.v1',profile_id:'rest_'+'d'.repeat(24),profile_revision:1,profile_sha256:'e'.repeat(64),provider:'rest',since:'2026-01-01T00:00:00.000000+00:00',until:'2026-01-02T00:00:00.000000+00:00',checkpoint:'2026-01-02T00:00:00.000000+00:00',event_count:events.length,case_count:1,activity_mode:'coded',rows_sha256:sha(events)};
+      return {format:'openworkgraph.connector-event-bundle.v1',manifests:[{job_id:job,grant_id:'cep_'+grant.repeat(32),manifest,manifest_sha256:sha(manifest)}],events:events.map(e=>({...e,source_namespace:job})),event_count:events.length,cross_source_identity_verified:false,provider_completeness_verified:false,mapping:{event_id_column:'event_id',case_column:'case_id',activity_column:'activity',timestamp_column:'observed_at',source_namespace_column:'source_namespace'}};
+    };
+    const firstFile=path.join(scratch,'first-bundle.json'),laterFile=path.join(scratch,'later-bundle.json');
+    await fs.writeFile(firstFile,JSON.stringify(makeBundle(['1'],'1')));
+    await fs.writeFile(laterFile,JSON.stringify(makeBundle(['1','2'],'2')));
+    await page.getByRole('link',{name:'Import published connector evidence'}).click();
+    await page.locator('#logs').getByText('No verified bundle logs yet.').waitFor();
+    await page.locator('#file').setInputFiles(firstFile);
+    assert.ok(await page.locator('#preview').isDisabled());
+    await page.locator('#inspectConsent').check();
+    await page.locator('#preview').click();
+    await page.locator('#reviewPanel').waitFor({state:'visible'});
+    assert.ok(await page.locator('#retain').isDisabled());
+    await page.locator('#origin').check();await page.locator('#retention').check();
+    await page.locator('#retain').click();
+    await page.locator('#status').filter({hasText:'Bundle retained:'}).waitFor();
+    await page.locator('#logs').getByRole('heading',{name:'Published enterprise evidence'}).waitFor();
+    await page.locator('#target').selectOption({index:1});
+    await page.locator('#file').setInputFiles(laterFile);
+    await page.locator('#preview').click();await page.locator('#reviewPanel').waitFor({state:'visible'});
+    await page.locator('#origin').check();await page.locator('#retention').check();
+    await page.locator('#retain').click();
+    await page.locator('#status').filter({hasText:'1 added, 1 duplicates'}).waitFor();
+    await page.getByRole('button',{name:'View import receipts'}).click();
+    await page.locator('#history').getByRole('heading').waitFor();
+    assert.equal(await page.locator('#history table').count(),2);
+    await page.locator('#preview').click();await page.locator('#reviewPanel').waitFor({state:'visible'});
+    await page.locator('#origin').check();await page.locator('#retention').check();
+    await page.locator('#retain').click();
+    await page.locator('#status').filter({hasText:'Existing receipt:'}).waitFor();
+    // Construct a complete two-source portable package with an exact reviewed
+    // case digest; verify the local UI demands linkage-specific consent.
+    const srcA=makeBundle(['1'],'1'),srcB=makeBundle(['2'],'2');
+    const jobB='cj_'+'b'.repeat(32);
+    srcB.manifests[0].job_id=jobB;
+    srcB.manifests[0].manifest.profile_id='rest_'+'f'.repeat(24);
+    srcB.manifests[0].manifest_sha256=sha(srcB.manifests[0].manifest);
+    srcB.events[0].source_namespace=jobB;
+    const source={...srcA,manifests:[...srcA.manifests,...srcB.manifests],events:[...srcA.events,...srcB.events],event_count:2};
+    const pins=source.manifests.map(({manifest,...p})=>({...p,publication_revision:1,expires_at:1900000000}));
+    const scope=sha({format:'openworkgraph.reviewed-connector-cases.v1',organization_id:'customer',snapshots:pins.map((p,i)=>({...p,manifest:source.manifests[i].manifest}))});
+    const members=[[job,'b'.repeat(64)],[jobB,'b'.repeat(64)]],caseId=sha({scope_sha256:scope,members});
+    const group={linked_case_id:caseId,basis:'operator_assertion',members:members.map(([job_id,case_id])=>({job_id,case_id,events:1})),sources:[job,jobB].map(job_id=>({job_id,provider:'rest',event_count:1,first_observed:stamp,last_observed:stamp})),events:2,first_observed:stamp,last_observed:stamp,observed_span_seconds:0,cross_source_timestamp_ties:1,strict_adjacent_source_switches:0,day_precision_present:false,same_source_many_to_one:false,business_identity_independently_verified:false};
+    const reviewHash=sha({format:'openworkgraph.reviewed-connector-cases.v1',scope_sha256:scope,groups:[group],include_unlinked:true,confirm_many_to_one:false});
+    const projected=source.events.map(e=>({...e,case_id:caseId,activity:e.source_namespace+'.'+e.activity}));
+    const portableFile=path.join(scratch,'portable-bundle.json');
+    await fs.writeFile(portableFile,JSON.stringify({format:'openworkgraph.portable-reviewed-connector-cases.v1',organization_id:'customer',source_bundle:source,pins,groups:[{members:members.map(([job_id,case_id])=>({job_id,case_id})),basis:'operator_assertion'}],confirm_many_to_one:false,include_unlinked:true,scope_sha256:scope,review_sha256:reviewHash,projected_rows_sha256:sha(projected)}));
+    await page.locator('#target').selectOption('');
+    await page.locator('#name').fill('Portable reviewed browser fixture');
+    await page.locator('#file').setInputFiles(portableFile);
+    await page.locator('#preview').click();
+    await page.locator('#reviewPanel').waitFor({state:'visible'});
+    await page.locator('#linkageLabel').waitFor({state:'visible'});
+    await page.locator('#origin').check();await page.locator('#retention').check();
+    assert.ok(await page.locator('#retain').isDisabled());
+    await page.locator('#linkageConsent').check();
+    await page.locator('#retain').click();
+    await page.locator('#status').filter({hasText:'Bundle retained: Portable reviewed browser fixture'}).waitFor();
+    await page.locator('#logs').getByRole('heading',{name:'Portable reviewed browser fixture'}).waitFor();
+    const qualityPath=path.join(scratch,'portable-quality-report.json');
+    const generateQuality=require('node:child_process').spawnSync(process.env.OWG_BROWSER_PYTHON||'python',['tests/browser/quality_report_fixture.py',portableFile,qualityPath],{encoding:'utf8'});
+    assert.equal(generateQuality.status,0,generateQuality.stderr);
+    const q=JSON.parse(await fs.readFile(qualityPath,'utf8'));
+    const gatedFile=path.join(scratch,'quality-linked-bundle.json');
+    await fs.writeFile(gatedFile,JSON.stringify({...JSON.parse(await fs.readFile(portableFile,'utf8')),quality_review:q}));
+    await page.locator('#target').selectOption('');
+    await page.locator('#name').fill('Quality linked browser fixture');
+    await page.locator('#file').setInputFiles(gatedFile);
+    await page.locator('#preview').click();
+    await page.locator('#qualityLabel').waitFor({state:'visible'});
+    await page.locator('#linkageLabel').waitFor({state:'visible'});
+    await page.locator('#origin').check();await page.locator('#retention').check();await page.locator('#linkageConsent').check();
+    assert.ok(await page.locator('#retain').isDisabled());
+    await page.locator('#qualityConsent').check();
+    await page.locator('#retain').click();
+    await page.locator('#status').filter({hasText:'Bundle retained: Quality linked browser fixture'}).waitFor();
+    await page.locator('#logs').getByRole('heading',{name:'Quality linked browser fixture'}).waitFor();
+    // The integrated CI job passes actual Gateway downloads (not manually
+    // assembled hashes) from the independent synthetic Gateway browser.
+    if(process.env.OWG_BROWSER_EVIDENCE_FIXTURES){
+      for(const [filename,logName,linked] of [['ordinary-quality.json','Gateway ordinary quality handoff',false],
+          ['portable.json','Gateway portable handoff',true],['portable-quality.json','Gateway linked quality handoff',true]]){
+        const exactPath=path.join(process.env.OWG_BROWSER_EVIDENCE_FIXTURES,filename);
+        const exactBytes=await fs.readFile(exactPath),expected=JSON.parse(exactBytes);
+        await page.locator('#target').selectOption('');
+        await page.locator('#name').fill(logName);
+        await page.locator('#file').setInputFiles(exactPath);
+        await page.locator('#preview').click();
+        await page.locator('#reviewPanel').waitFor({state:'visible'});
+        await page.locator('#review').getByText(createHash('sha256').update(exactBytes).digest('hex'),{exact:true}).waitFor();
+        await page.locator('#origin').check();await page.locator('#retention').check();
+        if(linked)await page.locator('#linkageConsent').check();
+        if(expected.quality_review){assert.ok(await page.locator('#retain').isDisabled());await page.locator('#qualityConsent').check();}
+        await page.locator('#retain').click();
+        await page.locator('#status').filter({hasText:'Bundle retained: '+logName}).waitFor();
+        const card=page.locator('#logs article').filter({has:page.getByRole('heading',{name:logName,exact:true})});
+        await card.getByRole('button',{name:'View import receipts'}).click();
+        await page.locator('#history').getByRole('heading',{name:logName+' · import receipts'}).waitFor();
+        if(expected.quality_review)await page.locator('#history').getByText(expected.quality_review.quality_sha256,{exact:true}).waitFor();
+      }
+    }
     await page.setViewportSize({width:390,height:840});
     assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+2));
     assert.deepEqual(errors,[]);assert.deepEqual(foreign,[]);

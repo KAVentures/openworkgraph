@@ -176,66 +176,11 @@ class ReviewedCases:
                     "identity_independently_verified":False}
 
     def _compute(self,org,spec,loaded):
-        cases,manifests,providers,count,scope,expires=loaded
-        assigned={};groups=[];basis_counts=Counter();linked_events=0
-        for group in sorted(spec.groups,key=group_key):
-            members=group_key(group)
-            if any(k not in cases for k in members):
-                raise JobError("case_member_missing_from_exact_snapshot")
-            identity=digest({"scope_sha256":scope,"members":members})
-            for k in members:
-                assigned[k]=identity
-            basis_counts[group.basis]+=1
-            by_source=defaultdict(list)
-            events=[]
-            for k in members:
-                job,case=k
-                for e in cases[k]:
-                    events.append((e["observed_at"],job,e["event_id"]))
-                    by_source[job].append(e["observed_at"])
-            events.sort();linked_events+=len(events)
-            sources=[{"job_id":job,"provider":providers[job],"event_count":len(ts),
-                      "first_observed":min(ts),"last_observed":max(ts)}
-                     for job,ts in sorted(by_source.items())]
-            day_precision=any(providers[job]=="sap" for job in by_source)
-            tied_cross_source=0;ordered_switches=0
-            buckets=defaultdict(set)
-            for ts,job,_ in events:
-                buckets[ts].add(job)
-            times=sorted(buckets)
-            tied_cross_source=sum(len(buckets[t])>1 for t in times)
-            if not day_precision:
-                ordered_switches=sum(len(buckets[a])==len(buckets[b])==1 and buckets[a]!=buckets[b]
-                                     for a,b in zip(times,times[1:]))
-            groups.append({"linked_case_id":identity,"basis":group.basis,
-                           "members":[{"job_id":j,"case_id":k,"events":len(cases[j,k])} for j,k in members],
-                           "sources":sources,"events":len(events),"first_observed":times[0],"last_observed":times[-1],
-                           "observed_span_seconds":None if day_precision else elapsed(times[0],times[-1]),
-                           "cross_source_timestamp_ties":tied_cross_source,
-                           "strict_adjacent_source_switches":None if day_precision else ordered_switches,
-                           "day_precision_present":day_precision,"same_source_many_to_one":len(members)>len(by_source),
-                           "business_identity_independently_verified":False,
-                           **({"evidence_sha256":group.evidence_sha256} if group.evidence_sha256 else {})})
-        unlinked_cases=len(cases)-len(assigned)
-        unlinked_events=count-linked_events
-        plan={"format":FORMAT,"scope_sha256":scope,"groups":groups,"include_unlinked":spec.include_unlinked,
-              "confirm_many_to_one":spec.confirm_many_to_one}
-        review=digest(plan)
-        summary={"source_jobs":len(manifests),"input_cases":len(cases),"input_events":count,
-                 "linked_groups":len(groups),"linked_input_cases":len(assigned),"linked_events":linked_events,
-                 "unlinked_cases":unlinked_cases,"unlinked_events":unlinked_events,
-                 "export_cases":len(groups)+(unlinked_cases if spec.include_unlinked else 0),
-                 "export_events":linked_events+(unlinked_events if spec.include_unlinked else 0),
-                 "case_count_reduction":len(assigned)-len(groups),
-                 "day_precision_groups":sum(g["day_precision_present"] for g in groups),
-                 "groups_with_timestamp_ties":sum(bool(g["cross_source_timestamp_ties"]) for g in groups),
-                 "many_to_one_groups":sum(g["same_source_many_to_one"] for g in groups),
-                 "basis_counts":dict(sorted(basis_counts.items()))}
-        return assigned,{"format":FORMAT,"scope_sha256":scope,"review_sha256":review,"expires_at":expires,
-                         "manifests":manifests,"summary":summary,"groups":groups,
-                         "include_unlinked":spec.include_unlinked,"business_identity_independently_verified":False,
-                         "source_completeness_verified":False,"automatic_links_inferred":False,
-                         "chronological_switches_are_not_verified_handoffs":True}
+        from shared.connector_case_projection import compute_review
+        try:
+            return compute_review(spec,loaded)
+        except ValueError as exc:
+            raise JobError(str(exc)) from None
 
     def preview(self,org,spec,principal):
         with self.jobs._tx(org) as c:
@@ -251,33 +196,25 @@ class ReviewedCases:
             raise JobError("explicit_link_assertion_and_export_required",403)
         with self.jobs._tx(org) as c:
             loaded=self._read(c,org,spec)
-            assigned,report=self._compute(org,spec,loaded)
-            if report["review_sha256"]!=spec.expected_review_sha256:
-                raise JobError("cross_source_review_changed")
-            cases,manifests,providers,count,scope,expires=loaded
-            rows=[]
-            for k,events in sorted(cases.items()):
-                job,case=k
-                linked=k in assigned
-                if not linked and not spec.include_unlinked:
-                    continue
-                target=assigned[k] if linked else digest({"scope_sha256":scope,"unlinked_member":list(k)})
-                for e in events:
-                    # Preserve source event identity and source-specific
-                    # activity semantics; do not merge same-named activities.
-                    # Job IDs are 35 chars and original labels <=160.
-                    rows.append({"source_namespace":job,"event_id":e["event_id"],"case_id":target,
-                                 "activity":job+"."+e["activity"],"observed_at":e["observed_at"]})
-            rows.sort(key=lambda r:(r["case_id"],r["observed_at"],r["source_namespace"],r["event_id"]))
-            self._fresh(expires)
-            self._audit(c,org,spec,principal,"export",{"review_sha256":report["review_sha256"],
-                        "export_events":len(rows),"linked_groups":len(spec.groups)})
-            return {**report,"events":rows,"event_count":len(rows),
-                    "mapping":{"event_id_column":"event_id","case_column":"case_id","activity_column":"activity",
-                               "timestamp_column":"observed_at","source_namespace_column":"source_namespace",
-                               "case_namespace":"reviewed_"+report["review_sha256"][:24]},
-                    "new_log_required_for_changed_plan":True,"source_activity_labels_namespaced":True,
-                    "local_copies_not_revoked_by_gateway_expiry":True}
+            return self._export_loaded(c,org,spec,principal,loaded)
+
+    def _export_loaded(self,c,org,spec,principal,loaded):
+        """One shared projection under the caller's existing organization transaction."""
+        assigned,report=self._compute(org,spec,loaded)
+        if report["review_sha256"]!=spec.expected_review_sha256:
+            raise JobError("cross_source_review_changed")
+        cases,manifests,providers,count,scope,expires=loaded
+        from shared.connector_case_projection import project_rows
+        rows=project_rows(spec,loaded,assigned)
+        self._fresh(expires)
+        self._audit(c,org,spec,principal,"export",{"review_sha256":report["review_sha256"],
+                    "export_events":len(rows),"linked_groups":len(spec.groups)})
+        return {**report,"events":rows,"event_count":len(rows),
+                "mapping":{"event_id_column":"event_id","case_column":"case_id","activity_column":"activity",
+                           "timestamp_column":"observed_at","source_namespace_column":"source_namespace",
+                           "case_namespace":"reviewed_"+report["review_sha256"][:24]},
+                "new_log_required_for_changed_plan":True,"source_activity_labels_namespaced":True,
+                "local_copies_not_revoked_by_gateway_expiry":True}
 
 
 def linked_csv(bundle):
