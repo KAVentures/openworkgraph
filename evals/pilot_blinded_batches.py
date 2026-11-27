@@ -262,7 +262,7 @@ def _batch(plan,schedule,ledger,states,enrolled,truth,batch,completion_revisions
 
 
 def reconcile(plan,schedule,ledger,truth,batches,*,expected_plan_sha256,
-              expected_schedule_sha256,expected_ledger_sha256,confirmed,review_dispositions=None):
+              expected_schedule_sha256,expected_ledger_sha256,confirmed,review_dispositions=None,_observe=None):
     execution._confirmed(confirmed)
     states,_,enrolled,*_=execution.replay(plan,schedule,ledger,
         expected_plan_sha256=expected_plan_sha256,expected_schedule_sha256=expected_schedule_sha256,
@@ -309,7 +309,7 @@ def reconcile(plan,schedule,ledger,truth,batches,*,expected_plan_sha256,
         status=("review_pending" if (eid,arm) in seen else "review_unavailable") if raw=="completed" else (
                  "other" if raw=="started" else raw)
         dispositions.append({"episode_id":eid,"arm":arm,"status":exclusions.get((eid,arm),status)})
-    result=cohort.score(plan,truth,runs,dispositions,expected_plan_sha256=expected_plan_sha256,confirmed=True)
+    result=cohort.score(plan,truth,runs,dispositions,expected_plan_sha256=expected_plan_sha256,confirmed=True,_observe=_observe)
     body={"format":"owg.pilot-blinded-reconciliation.v1",
           "ledger_sha256":expected_ledger_sha256,"schedule_sha256":expected_schedule_sha256,
           "batch_sha256s":sorted(pins),"completed_attempts":len(completion_revisions),
