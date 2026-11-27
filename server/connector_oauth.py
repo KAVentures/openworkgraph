@@ -68,7 +68,14 @@ class Provider:
     extra_authorize: tuple[tuple[str, str], ...] = ()
 
 
+GOOGLE_AUDIT_SCOPE = "https://www.googleapis.com/auth/admin.reports.audit.readonly"
+
 PROVIDERS: dict[str, Provider] = {
+    "google": Provider(
+        "google", "Google Workspace", "https://accounts.google.com/o/oauth2/v2/auth",
+        "https://oauth2.googleapis.com/token", "https://oauth2.googleapis.com/revoke",
+        "fixed", (GOOGLE_AUDIT_SCOPE,),
+        extra_authorize=(("access_type", "offline"), ("prompt", "consent"))),
     "salesforce": Provider(
         "salesforce", "Salesforce", "https://{host}/services/oauth2/authorize",
         "https://{host}/services/oauth2/token", "https://{host}/services/oauth2/revoke",
@@ -173,6 +180,7 @@ def _public(conn_id: str, conn: dict[str, Any]) -> dict[str, Any]:
     return {
         "connection_id": conn_id, "provider": conn["provider"],
         "label": PROVIDERS[conn["provider"]].label, "host": conn.get("host") or None,
+        "api_host": (conn.get("api_host") or conn.get("host")) if conn["provider"]=="salesforce" else None,
         "scopes": conn.get("scopes", []), "connected_at": conn.get("connected_at"),
         "last_refreshed_at": conn.get("last_refreshed_at"),
         "has_refresh_token": bool(conn.get("refresh_token")),
@@ -194,6 +202,8 @@ def begin(provider: str, *, client_id: str, host: str | None = None, scopes: lis
     chosen = list(scopes) if scopes else list(spec.default_scopes)
     if not 1 <= len(chosen) <= 20 or any(not isinstance(s, str) or not _SCOPE.fullmatch(s) for s in chosen):
         raise OAuthError("invalid scopes")
+    if provider == "google" and set(chosen) != {GOOGLE_AUDIT_SCOPE}:
+        raise OAuthError("Google Workspace sign-in requires exactly the read-only audit scope")
     resolved = _host_for(spec, host)
     redirect = _redirect_uri(port)
     verifier = secrets.token_urlsafe(64)
@@ -268,6 +278,8 @@ def complete(state: str, code: str) -> dict[str, Any]:
     body = _token_request(spec, pending["host"], form)
     conn_id = "conn_" + secrets.token_hex(8)
     granted = body.get("scope")
+    if spec.name == "google" and isinstance(granted, str) and granted and set(granted.split()) != {GOOGLE_AUDIT_SCOPE}:
+        raise OAuthError("Google Workspace did not return the exact requested audit scope")
     conn = {
         "provider": spec.name, "host": pending["host"], "client_id": pending["client_id"],
         "client_secret": pending["client_secret"],
@@ -385,6 +397,8 @@ def access_token(connection_id: str) -> str:
             body = _token_request(spec, conn["host"], form)
         except OAuthError:
             raise OAuthError("sign-in refresh could not be confirmed; reconnect this business system") from None
+        if spec.name == "google" and "scope" in body and (not isinstance(body["scope"], str) or set(body["scope"].split()) != {GOOGLE_AUDIT_SCOPE}):
+            raise OAuthError("Google Workspace refresh scope changed; reconnect")
         if "refresh_token" in body:
             replacement = body["refresh_token"]
             if not isinstance(replacement, str) or not replacement:
@@ -430,9 +444,11 @@ def disconnect(connection_id: str) -> dict[str, Any]:
                     response = client.delete(spec.revoke.format(host=conn["host"]),
                                              headers={"Authorization": "Bearer " + access_token_unsafe_from(conn, spec)})
                 else:
-                    form = {"token": token, "client_id": conn["client_id"]}
-                    if conn.get("client_secret"):
-                        form["client_secret"] = conn["client_secret"]
+                    form = {"token": token}
+                    if spec.name != "google":
+                        form["client_id"] = conn["client_id"]
+                        if conn.get("client_secret"):
+                            form["client_secret"] = conn["client_secret"]
                     response = client.post(spec.revoke.format(host=conn["host"]), data=form)
             revoked = "revoked" if response.status_code in (200, 204) else f"provider_refused_http_{response.status_code}"
         except (httpx.HTTPError, OAuthError):
