@@ -18,6 +18,7 @@ on:
       - 'tests/test_*_feed.py'
       - 'tests/browser/enterprise_connectors.cjs'
       - 'tests/browser/connector_crosswalks*'
+      - 'tests/browser/quality_report_fixture.py'
       - '.github/workflows/enterprise-stack-acceptance.yml'
   workflow_dispatch:
 
@@ -32,7 +33,7 @@ jobs:
   integrated-contract:
     # Validate the consolidated candidate even while it remains a draft.
     # Ordinary feature drafts continue to use the existing cheap smoke path.
-    if: github.event_name == 'workflow_dispatch' || startsWith(github.head_ref, 'integration/enterprise-connectors-')
+    if: github.event_name == 'workflow_dispatch' || (startsWith(github.head_ref, 'integration/enterprise-connectors-') || startsWith(github.head_ref, 'integration/enterprise-evidence-journey-'))
     runs-on: ubuntu-latest
     timeout-minutes: 30
     services:
@@ -63,6 +64,7 @@ jobs:
         run: |
           python -m compileall -q server gateway shared
           node --check dashboard/enterprise_connectors.js
+          node --check dashboard/enterprise_bundle_import.js
           node --check tests/browser/enterprise_connectors.cjs
           node --check tests/browser/connector_crosswalks.cjs
           python - <<'PY'
@@ -100,7 +102,12 @@ jobs:
             tests/test_connector_bundle_import.py \
             tests/test_connector_portable_linkage.py \
             tests/test_connector_quality_verified_import.py \
-            tests/test_connector_quality_verifier_pure.py
+            tests/test_connector_quality_verifier_pure.py \
+            tests/test_connector_temporal_review.py \
+            tests/test_connector_publication_quality.py \
+            tests/test_connector_linked_conformance.py \
+            tests/test_connector_exception_triage.py \
+            tests/test_enterprise_evidence_journey.py
       - name: Install isolated Chromium runtime
         if: success() || failure()
         run: |
@@ -109,7 +116,7 @@ jobs:
       - name: Enterprise connector configuration acceptance
         if: success() || failure()
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/enterprise_connectors.cjs
-      - name: Crosswalk and saved review acceptance
+      - name: End-to-end evidence quality, linkage, conformance, triage and portable export acceptance
         if: success() || failure()
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/connector_crosswalks.cjs
       - name: Verify repository database isolation
