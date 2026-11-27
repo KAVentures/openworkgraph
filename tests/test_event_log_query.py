@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import json
+import csv
+import io
 from io import BytesIO
 
 import pytest
@@ -51,6 +53,72 @@ def test_case_level_group_by_attribute_with_duration_measures():
         {"attribute:region": "US", "count": 1, "median_duration_seconds": 259200.0, "max_events": 4}]
     assert result["matching"] == {"rows": 3, "cases": 3}
     assert result["query_basis"] == "typed_spec_compiled_to_parameterized_sql"
+
+
+def test_review_group_uses_exact_scope_and_rejects_view_changes():
+    from server import event_log_analysis_review as review
+    from server import event_log_hidden_activities as hidden
+
+    log = _log()
+    spec = {"level": "cases", "dimensions": ["attribute:missing", "has_rework"],
+            "measures": [{"fn": "count"}, {"fn": "sum", "of": "metric:checks"}],
+            "metrics": [{"kind": "activity_count", "name": "checks", "activity": "Check"}],
+            "where": {"ends_with": "Close"}, "order": "dimensions", "limit": 1}
+    result = review.source_bound(log, spec)
+    assert result["rows"] == [[None, "no rework", 1, 1.0]]
+    assert result["rows_truncated"]
+    body = {"spec": result["spec"], "group_sha256": result["case_review_groups"][0], "offset": 0,
+            "expected_case_review_sha256": result["case_review_sha256"]}
+    page = review.group_cases(log, body)
+    assert page["group"] == {"attribute:missing": None, "has_rework": "no rework"}
+    assert page["case_notion"] == "order"
+    assert page["matching_cases"] == 1 and page["next_offset"] is None
+    assert page["cases"] == [{"case_id": "o1", "duration_seconds": 7200.0,
+                              "event_count": 3, "distinct_activities": 3, "metrics": {"checks": 1.0}}]
+    with pytest.raises(workspace.EventLogWorkspaceError, match="not present"):
+        review.group_cases(log, {**body, "group_sha256": "0" * 64})
+    with pytest.raises(workspace.EventLogWorkspaceError, match="view changed"):
+        review.group_cases(log, {**body, "spec": {**spec, "where": {}}})
+    hidden.set_hidden(log, {"activities": ["Check"]})
+    assert review.source_bound(log, spec)["source_content_sha256"] == result["source_content_sha256"]
+    with pytest.raises(workspace.EventLogWorkspaceError, match="view changed"):
+        review.group_cases(log, body)
+
+
+def test_review_group_paging_is_stable_and_dashboard_only(monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from server import event_log_analysis_review as review
+    from server import event_log_routes
+
+    rows = ["case,activity,time"] + [
+        f"c{i:02},Start,2024-01-01T00:00:00Z" for i in range(30)
+    ]
+    log = workspace.import_log(
+        BytesIO(("\n".join(rows) + "\n").encode()), name="pages", source_format="csv",
+        mapping={"case_column": "case", "activity_column": "activity", "timestamp_column": "time"},
+    )["log_id"]
+    spec = {"level": "cases", "dimensions": ["first_activity"], "measures": [{"fn": "count"}]}
+    result = review.source_bound(log, spec)
+    body = {"spec": spec, "group_sha256": result["case_review_groups"][0], "offset": 0,
+            "expected_case_review_sha256": result["case_review_sha256"]}
+
+    monkeypatch.setattr(event_log_routes, "dashboard_session_valid", lambda token: token == "valid")
+    app = FastAPI()
+    app.include_router(event_log_routes.router)
+    client = TestClient(app)
+    path = f"/v1/event-logs/{log}/analysis/groups/cases"
+    assert client.post(path, json=body, headers={"Authorization": "Bearer valid"}).status_code == 403
+    headers = {"Authorization": "OWG-Session valid"}
+    response = client.post(path, json=body, headers=headers)
+    assert response.status_code == 200 and response.headers["cache-control"] == "no-store"
+    first = response.json()
+    assert first["matching_cases"] == 30 and first["next_offset"] == 25
+    response = client.post(path, json={**body, "offset": 25}, headers=headers)
+    assert response.status_code == 200
+    second = response.json()
+    assert second["next_offset"] is None
+    assert [row["case_id"] for row in first["cases"] + second["cases"]] == [f"c{i:02}" for i in range(30)]
 
 
 def test_case_filters_variants_and_ordering():
@@ -300,3 +368,32 @@ def test_event_attribute_sum_discloses_partial_coverage_and_complete_policy():
     assert complete["metrics"][0]["cases_without_value"] == 2
     with pytest.raises(workspace.EventLogWorkspaceError):
         calculate("ignore_everything")
+
+
+@pytest.mark.parametrize("attribute", ['amount"usd', r'amount\usd', 'amount/usd', 'amount~usd', 'amount.usd', 'amount" OR 1=1 --'])
+def test_numeric_metric_uses_literal_event_attribute_name(attribute):
+    data = io.StringIO(newline="")
+    writer = csv.writer(data)
+    writer.writerow(["case", "activity", "time", attribute])
+    writer.writerow(["a", "Start", "2024-01-01T00:00:00Z", "3"])
+    writer.writerow(["a", "End", "2024-01-01T01:00:00Z", "7"])
+    log = workspace.import_log(BytesIO(data.getvalue().encode()), name="literal", source_format="csv", mapping={
+        "case_column": "case", "activity_column": "activity", "timestamp_column": "time",
+        "attribute_columns": [attribute]})["log_id"]
+    result = query.run(log, {"level": "cases", "measures": [{"fn": "sum", "of": "metric:total"}],
+        "metrics": [{"name": "total", "kind": "event_attribute_sum", "attribute": attribute, "unit": "USD"}]})
+    assert result["rows"] == [[10.0]]
+    statistic = query.run(log, {"level": "cases", "measures": [{"fn": "sum", "of": "metric:mean"}],
+        "metrics": [{"name": "mean", "kind": "event_attribute_statistic", "attribute": attribute,
+                     "unit": "USD", "statistic": "average"}]})
+    assert statistic["rows"] == [[5.0]]
+
+
+def test_numeric_metric_uses_literal_case_attribute_name():
+    name = 'price/"~\\total'
+    source = {**OCEL, "objects": [dict(obj, attributes=[
+        {"name": name, "time": "1970-01-01T00:00:00Z", "value": "5"}]) for obj in OCEL["objects"]]}
+    log = workspace.import_log(BytesIO(json.dumps(source).encode()), name="literal", source_format="ocel")["log_id"]
+    result = query.run(log, {"level": "cases", "measures": [{"fn": "sum", "of": "metric:price"}],
+        "metrics": [{"name": "price", "kind": "case_attribute_number", "attribute": name, "unit": "USD"}]})
+    assert result["rows"] == [[15.0]]

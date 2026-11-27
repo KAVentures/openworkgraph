@@ -58,6 +58,49 @@ def test_case_filter_restricts_the_profile():
     assert result["cases"] == 16 and result["deviating_cases"] == 0 and result["cases_before_filter"] == 20
 
 
+def test_cutoff_fits_only_earlier_cases_and_checks_later_cases():
+    rows = ["case,activity,time"]
+    for index in range(6):
+        rows += [f"base{index},Order,2024-01-01T09:00:00Z",
+                 f"base{index},Invoice,2024-01-01T09:{8 + index:02d}:00Z"]
+    rows += [
+        "cross,Order,2024-01-01T23:59:00Z", "cross,Invoice,2024-01-02T00:00:00Z",
+        "late,Order,2024-01-02T00:00:00Z", "late,Invoice,2024-01-02T01:00:00Z",
+        "ordinary,Order,2024-01-02T09:00:00Z", "ordinary,Invoice,2024-01-02T09:10:00Z",
+        "unknown,Order,2024-01-02T09:00:00Z", "unknown,Escalate,2024-01-02T09:40:00Z",
+    ]
+    log = workspace.import_log(BytesIO("\n".join(rows).encode()), name="baseline",
+                                source_format="csv", mapping=MAPPING)["log_id"]
+    cutoff = "2024-01-02T01:00:00+01:00"
+    result = tp.temporal_profile(log, baseline_cutoff=cutoff)
+    assert result["cases"] == 3 and result["deviating_cases"] == 1 and result["pairs_checked"] == 2
+    assert result["baseline"] == {"cutoff": "2024-01-02T00:00:00Z", "baseline_cases": 6,
+                                 "assessment_cases": 3, "crossing_cases": 1,
+                                 "assessment_cases_with_profile": 2, "assessment_pair_occurrences": 3,
+                                 "assessment_pair_occurrences_without_profile": 1}
+    pair, = result["pairs"]
+    assert (pair["from"], pair["to"]) == ("Order", "Invoice")
+    assert pair["baseline_occurrences"] == 6 and pair["occurrences"] == 2
+    assert pair["mean_seconds"] == 630 and pair["deviation_share"] == 0.5
+    page = tp.temporal_cases(log, baseline_cutoff=cutoff, source="Order", destination="Invoice",
+                             direction="slower")
+    assert [row["case_id"] for row in page["cases"]] == ["late"]
+    assert page["deviations"] == pair["slower"]
+    assert page["baseline"]["crossing_cases"] == 1
+    assert tp.temporal_cases(log, baseline_cutoff=cutoff, direction="faster")["cases"] == []
+    filtered = tp.temporal_profile(log, baseline_cutoff=cutoff, cohort={"activity": "Invoice"})
+    assert filtered["cases_before_filter"] == 10 and filtered["cases"] == 2
+    assert filtered["baseline"]["assessment_pair_occurrences_without_profile"] == 0
+    empty = tp.temporal_profile(log, baseline_cutoff="2023-01-01T00:00:00Z")
+    assert empty["baseline"]["assessment_cases_with_profile"] == 0 and empty["pairs"] == []
+
+
+@pytest.mark.parametrize("cutoff", ["", "2024-01-02T00:00", "invalid", 42])
+def test_cutoff_must_be_timezone_qualified(cutoff):
+    with pytest.raises(EventLogWorkspaceError, match="baseline_cutoff"):
+        tp.temporal_profile("not-read", baseline_cutoff=cutoff)
+
+
 def test_case_evidence_pages_match_report_counts_by_pair_and_direction():
     log = _log()
     summary = tp.temporal_profile(log, zeta=0.5)

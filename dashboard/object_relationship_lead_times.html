@@ -86,6 +86,13 @@
           <input id="sampleLimit" type="number" min="0" max="50" step="1" value="20" required>
         </label>
       </div>
+      <p><label for="repeatReview"><input id="repeatReview" type="checkbox"> Include repeated milestone timing review</label></p>
+      <div id="repeatSettings" hidden>
+        <p class="muted">Compare the first source to the first subsequent target and the latest preceding source to that same target. This is additional to the first-to-first result.</p>
+        <label for="repeatDeadline">Optional deadline from first source (seconds)
+          <input id="repeatDeadline" type="number" min="0" max="31536000" step="1" placeholder="Leave blank for no deadline">
+        </label>
+      </div>
       <datalist id="knownTypes"></datalist>
       <datalist id="sourceActivityList"></datalist>
       <datalist id="targetActivityList"></datalist>
@@ -130,6 +137,25 @@
           <th scope="col">First source event (UTC)</th><th scope="col">First target event (UTC)</th><th scope="col">Elapsed</th></tr></thead>
         <tbody id="sampleRows"></tbody>
       </table>
+    </div>
+    <div id="repeatResults" hidden>
+      <h2>Repeated milestone timing review</h2>
+      <div id="repeatMetrics" class="stats" role="group" aria-label="Repeated milestone statistics"></div>
+      <p id="repeatNotes" class="callout"></p>
+      <p id="repeatPin" class="muted" style="overflow-wrap:anywhere"></p>
+      <label for="repeatStatus">Repeated milestone evidence status
+        <select id="repeatStatus">
+          <option value="all">All pairs</option><option value="observed_forward">Observed subsequent target</option>
+          <option value="target_only_before_source">Only earlier targets</option><option value="target_missing">Target activity missing</option>
+          <option value="source_missing">Source activity missing</option><option value="both_missing">Both activities missing</option>
+        </select>
+      </label>
+      <p id="repeatPageStatus" role="status" class="muted"></p>
+      <div class="tablewrap"><table><thead><tr><th scope="col">Source</th><th scope="col">Target</th><th scope="col">Status</th>
+        <th scope="col">First source</th><th scope="col">First subsequent target</th><th scope="col">Latest preceding source</th>
+        <th scope="col">First elapsed</th><th scope="col">Latest elapsed</th><th scope="col">Earlier targets</th><th scope="col">Deadline status</th></tr></thead><tbody id="repeatRows"></tbody></table></div>
+      <div class="row" style="margin-top:12px"><button id="repeatPrev" type="button" class="secondary">Previous pair page</button>
+        <button id="repeatNext" type="button" class="secondary">Next pair page</button></div>
     </div>
     <details><summary>Data provenance and caveats</summary><pre id="provenance" style="white-space:pre-wrap;overflow-wrap:anywhere"></pre></details>
   </section>

@@ -80,3 +80,103 @@ does not write to a company account or source provider.
   additional files present.
 - Full cross-platform, generated starter and packaged CI must pass before
   this capability is merged.
+
+
+## Compare two generated runtime releases before an upgrade
+
+Extract the original and candidate releases into separate dedicated directories.
+Obtain both manifest SHA-256 digests from trusted records outside the archives.
+Use a trusted copy of the current verifier (do not execute a verifier supplied
+by an untrusted candidate):
+
+```sh
+python /trusted/verify_release.py --root /review/baseline \
+  --manifest-sha256 BASELINE_PIN \
+  --compare-root /review/candidate \
+  --compare-manifest-sha256 CANDIDATE_PIN
+```
+
+The standard-library-only command verifies both generated-file inventories
+against their independently retained pins before producing a JSON comparison.
+Missing pins, changed files, inconsistent manifests or a different workflow ID
+cause refusal rather than a partial report. The report distinguishes:
+
+- newer or older saved revisions, unchanged revision identity, and reuse of
+  the same revision number with different content;
+- exact workflow-specification bytes versus canonical process-model changes;
+- generated paths added, removed or changed, their relevant SHA-256 digests,
+  and unchanged file count.
+
+A change to generator code can therefore be reviewed even when the design
+has not changed. An older candidate is flagged as such, not automatically
+rejected or deployed. The comparison also works with older compatible
+manifest-v1 bundles. It reads only generated inventory files and does not
+execute, copy, overwrite or install either runtime. The result is a local
+snapshot, not a filesystem lock or a signature. Successful comparison is
+not an assertion of dependency compatibility, runtime equivalence,
+customer-managed binding safety, remote deployment or business outcomes.
+Customer-managed files remain outside the generated inventory; review them
+separately. Run synthetic acceptance and the applicable reviewed case,
+binding, and provider checks before any upgrade. No execution is authorized.
+
+Tests cover same-design code changes, added/removed paths, upgrades,
+rollbacks, revision reuse, missing pins, changed files, forged manifests
+and the standalone CLI.
+
+
+### Inspect changes to the underlying saved design
+
+The comparison also reports added, removed and modified stable activity,
+transition, business-rule, decision-table and outcome-expectation identities.
+Modified objects list changed top-level field names; the report does not
+copy labels, goals, rule expressions, table contents or other model values.
+A reordered retained identity list is flagged separately. Entry/terminal
+changes and other changed model/contract field names are included. Identity
+strings themselves may contain customer information and should be reviewed
+before sharing the report.
+
+The structural inventory is bounded and rejects duplicate or malformed
+identities. It describes exact JSON changes, not semantic equivalence,
+validity of a newly edited design, or whether customer bindings still work.
+The spec is read with the existing byte bound and checked against its pinned
+digest before interpreting these changes. The single-release verifier also
+uses the same verified specification bytes for parsing rather than reopening
+the spec after hashing it. The check is not a filesystem lock; use dedicated
+directories that are not being modified during review.
+
+## Inspect unopened generated runtime archives
+
+Use a trusted current verifier obtained separately from the archive and the
+manifest SHA-256 from an independent trusted record. No extraction is needed:
+
+```sh
+python /trusted/verify_release.py --archive runtime.zip --manifest-sha256 MANIFEST_PIN
+python /trusted/verify_release.py --archive baseline.zip --manifest-sha256 BASELINE_PIN \\
+  --compare-archive candidate.zip --compare-manifest-sha256 CANDIDATE_PIN
+```
+
+Archive review requires pins, unlike optional-pin directory inspection. The
+verifier accepts a closed generated inventory only: every member must appear
+in the pinned manifest except the manifest itself. It refuses extra files,
+missing files, duplicate or case-aliased names, unsafe paths, Windows device
+names, directory/symlink/special-file entries, conflicting ancestor paths,
+encrypted or unsupported compression, oversized archives and members. ZIP
+and expanded totals are bounded to 64 MiB, with the existing file/manifest
+bounds. No extracted file or candidate code is executed. The ZIP container
+hash is reported separately from manifest and generated file hashes; a
+repack can change container bytes without changing reviewed file contents.
+Comparison uses the same structural and exact file delta engine as directory
+review. No signature, actual deployment, customer bindings or dependency
+compatibility is verified. Use a trusted verifier, not one shipped in an
+unreviewed candidate. This is not a general-purpose safe extraction utility.
+
+Tests exercise deterministic exported ZIPs, standalone CLI, member attacks,
+byte budgets, pin mismatches, missing and changed members, and upgrade deltas.
+Full generated runtime and platform CI remain required.
+
+Archive verification also rejects inconsistent capitalization of any shared
+directory prefix (for example nested/a.py and NESTED/b.py), regardless of
+member order. Corrupt DEFLATE errors produce a sanitized integrity failure.
+The versioned process reference must have a nonempty workflow ID, a positive
+integer revision and a lowercase 64-character content digest even if the
+manifest and specification otherwise agree.

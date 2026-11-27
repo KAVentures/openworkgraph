@@ -22,6 +22,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from . import event_log_workspace as workspace
 
 MAX_MAPPINGS_PER_LOG = 50
+TEMPLATE_FORMAT = "openworkgraph.activity-mapping.v1"
 MAX_GROUPS = 200
 Label = Annotated[str, Field(min_length=1, max_length=200)]
 
@@ -71,7 +72,7 @@ def _describe(mapping_id: str, created, definition: str, applied: bool) -> dict[
     body = json.loads(definition)
     return {"mapping_id": mapping_id, "created_at": created.isoformat() + "Z" if created else None, "applied": bool(applied),
             "definition_sha256": _digest(body), **body,
-            "mapped_activities": sum(len(g["activities"]) for g in body["groups"])}
+            "mapped_activities": len({activity for group in body["groups"] for activity in group["activities"]})}
 
 
 def _with_conn(log_id: str, fn):
@@ -112,6 +113,27 @@ def create(log_id: str, payload: Any) -> dict[str, Any]:
         row = conn.execute("SELECT mapping_id, created_at, definition, applied FROM activity_mappings "
                            "WHERE log_id = ? AND mapping_id = ?", [log_id, mapping_id]).fetchone()
         return {**_describe(*row), "activities_not_in_log": unknown[:50]}
+    return _with_conn(log_id, run)
+
+
+def preview_template(log_id: str, document: Any) -> dict[str, Any]:
+    if (not isinstance(document, dict) or set(document) != {"format", "mapping"}
+            or document["format"] != TEMPLATE_FORMAT):
+        raise workspace.EventLogWorkspaceError("choose an OWG activity mapping file")
+    mapping = _parse(document["mapping"])
+    definition = mapping.model_dump()
+
+    def run(conn):
+        labels = sorted({activity for group in mapping.groups for activity in group.activities})
+        rows = conn.execute("""SELECT activity, count(*) FROM events
+            WHERE log_id=? AND list_contains(?, activity) GROUP BY activity""", [log_id, labels]).fetchall()
+        counts = dict(rows)
+        groups = [{"label": group.label, "activities": len(group.activities),
+                   "matched_events": sum(counts.get(activity, 0) for activity in set(group.activities)),
+                   "missing_activities": [activity for activity in group.activities if activity not in counts]}
+                  for group in mapping.groups]
+        return {"format": TEMPLATE_FORMAT, "mapping": definition, "groups": groups,
+                "applied": False}
     return _with_conn(log_id, run)
 
 
@@ -166,11 +188,13 @@ def apply_to_case_events(conn, log_id: str) -> dict[str, Any] | None:
     described = applied_mapping(conn, log_id)
     if described is None:
         return None
-    pairs = [(a, g["label"]) for g in described["groups"] for a in g["activities"]]
+    # Previously saved definitions can repeat the same activity in groups with
+    # the same label. Keep their definition intact, but never multiply events.
+    pairs = list(dict.fromkeys((a, g["label"]) for g in described["groups"] for a in g["activities"]))
     before = conn.execute("SELECT count(*) FROM ce").fetchone()[0]
     conn.execute("CREATE OR REPLACE TEMP TABLE ce_map AS SELECT unnest(?) AS original, unnest(?) AS label",
                  [[p[0] for p in pairs], [p[1] for p in pairs]])
-    relabeled = conn.execute("SELECT count(*) FROM ce JOIN ce_map m ON ce.activity = m.original").fetchone()[0]
+    relabeled = conn.execute("SELECT count(*) FROM ce JOIN ce_map m ON ce.activity = m.original WHERE ce.activity <> m.label").fetchone()[0]
     conn.execute("UPDATE ce SET activity = m.label FROM ce_map m WHERE ce.activity = m.original")
     collapsed = 0
     if described["collapse_repeats"]:

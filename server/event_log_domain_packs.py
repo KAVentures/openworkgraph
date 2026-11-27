@@ -34,11 +34,15 @@ from . import event_log_object_constraints as object_constraints
 from . import event_log_object_process_model as object_model
 from . import event_log_query as query
 from . import event_log_workspace as workspace
-from .event_log_domain_packs_returns import RETURNS_REFUNDS_1_0_0
-from .event_log_domain_packs_claims import INSURANCE_CLAIMS_1_0_0
-from .event_log_domain_packs_operations import (
+from .event_log_domain_packs_operations import OPERATIONS_PACKS
+from .event_log_domain_packs_operational_control import (
     MANUFACTURING_QUALITY_1_0_0, SUPPLIER_QUALIFICATION_1_0_0, FINANCIAL_CLOSE_1_0_0,
 )
+from .event_log_domain_packs_returns import RETURNS_REFUNDS_1_0_0
+from .event_log_domain_packs_claims import INSURANCE_CLAIMS_1_0_0
+from .event_log_domain_packs_service_governance import SERVICE_GOVERNANCE_PACKS
+from .event_log_domain_packs_business_support import BUSINESS_SUPPORT_PACKS
+from .event_log_domain_packs_object_operations import OBJECT_OPERATIONS_PACKS
 
 FORMAT = "openworkgraph.domain-pack.v1"
 INSTALL_FORMAT = "openworkgraph.domain-pack-install.v1"
@@ -760,7 +764,9 @@ EMPLOYEE_ONBOARDING_1_0_0: dict[str, Any] = {
 }
 
 
-PACKS: dict[str, dict[str, dict[str, Any]]] = {"returns_refunds": {"1.0.0": RETURNS_REFUNDS_1_0_0},
+PACKS: dict[str, dict[str, dict[str, Any]]] = {**OPERATIONS_PACKS,
+                                              **OBJECT_OPERATIONS_PACKS,
+                                              "returns_refunds": {"1.0.0": RETURNS_REFUNDS_1_0_0},
                                               "order_to_cash": {"1.0.0": ORDER_TO_CASH_1_0_0},
                                               "procure_to_pay": {"1.0.0": PROCURE_TO_PAY_1_0_0},
                                               "service_management": {"1.0.0": SERVICE_MANAGEMENT_1_0_0},
@@ -770,6 +776,8 @@ PACKS: dict[str, dict[str, dict[str, Any]]] = {"returns_refunds": {"1.0.0": RETU
                                               "employee_onboarding": {"1.0.0": EMPLOYEE_ONBOARDING_1_0_0},
                                               "expense_reimbursement": {"1.0.0": EXPENSE_REIMBURSEMENT_1_0_0},
                                               "insurance_claims": {"1.0.0": INSURANCE_CLAIMS_1_0_0},
+                                              **SERVICE_GOVERNANCE_PACKS,
+                                              **BUSINESS_SUPPORT_PACKS,
                                               "manufacturing_quality": {"1.0.0": MANUFACTURING_QUALITY_1_0_0},
                                               "supplier_qualification": {"1.0.0": SUPPLIER_QUALIFICATION_1_0_0},
                                               "financial_close": {"1.0.0": FINANCIAL_CLOSE_1_0_0}}
@@ -794,6 +802,7 @@ class InstallSpec(_Strict):
     version: Annotated[str, Field(pattern=r"^\d{1,4}\.\d{1,4}\.\d{1,4}$")]
     mapping: Mapping
     expected_installation: Annotated[str, Field(pattern=r"^[a-f0-9]{64}$")] | None = None
+    expected_preview: Annotated[str, Field(pattern=r"^[a-f0-9]{64}$")] | None = None
     parameters: dict[Annotated[str, Field(max_length=40)], float] = Field(default_factory=dict, max_length=20)
 
 
@@ -924,11 +933,11 @@ def resolve(pack: dict[str, Any], mapping: dict[str, dict[str, str]], params: di
             continue
         if resolved["object_type"] in modelled:
             arcs.append(resolved)
-    # These packs explicitly disclose every unmapped optional activity, even
-    # when several roles occur in one omitted definition. Preserve the existing
-    # per-definition contract for previously shipped packs.
-    if pack["pack_id"] in {"insurance_claims", "manufacturing_quality",
-                           "supplier_qualification", "financial_close"}:
+    # The claims pack explicitly discloses every unmapped optional intake/receipt
+    # activity. Preserve the existing per-definition not_applicable contract
+    # for previously shipped packs, whose consumers expect only omitted rules.
+    if (pack["pack_id"] in {"insurance_claims", "manufacturing_quality", "supplier_qualification", "financial_close"}
+            or pack["pack_id"] in OPERATIONS_PACKS):
         reported_missing = {row["unmapped_role"] for row in out["not_applicable"]}
         for index, activity in enumerate(pack["activities"]):
             role = activity["role"]
@@ -1054,6 +1063,11 @@ def install(log_id: str, pack_id: str, spec: Any) -> dict[str, Any]:
                 current = _installation_token(previous) if previous is not None else None
                 if parsed.expected_installation != current:
                     raise DomainPackConflict("domain pack installation changed; reload setup before saving")
+            if parsed.expected_preview is not None:
+                from .event_log_domain_pack_preflight import basis
+                token, _ = basis(conn, log_id, pack_id, parsed, params, definitions, previous)
+                if token != parsed.expected_preview:
+                    raise DomainPackConflict("domain pack preview changed; rerun the trial before installing")
             saved = {json.loads(d)["metric"]["name"]: m for m, d in conn.execute(
                 "SELECT metric_id, definition FROM metric_definitions WHERE log_id = ?", [log_id]).fetchall()}
             if previous and _version_key(parsed.version) < _version_key(previous["version"]):

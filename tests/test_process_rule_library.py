@@ -88,6 +88,91 @@ def test_drift_reports_each_status(library):
     assert library.drift([current])['evaluates_rules'] is False
 
 
+def _record(model):
+    return {"workflow_id": "p", "revision": 3, "content_sha256": "c"*64,
+            "process_model": model}
+
+
+def _selection(row):
+    return {"rule_id": row["rule_id"], "library_revision": row["latest_revision"],
+            "content_sha256": row["latest_content_sha256"]}
+
+
+def test_atomic_upgrade_preview_and_transitive_table_invalidation(library):
+    from copy import deepcopy
+    from test_process_decision_dependencies import graph as dependency_graph
+    model = ProcessModel.model_validate(dependency_graph()).model_dump()
+    source_rules = [r for r in model["business_rules"] if r["id"] in {"score_high", "score_low"}]
+    first = library.save({"name": "Credit rules", "rules": source_rules})
+    sid = first["rule_set_id"]
+    # Build a fully reviewed fixture with exact historical rule pins.
+    for r in model["business_rules"]:
+        source = next((s for s in first["rules"] if s["id"] == r["id"]), None)
+        if source:
+            r["library_ref"] = {"rule_set_id": sid, "revision": 1,
+                                "rule_id": r["id"], "content_sha256": source["content_sha256"]}
+    original = deepcopy(model)
+    updated = deepcopy(source_rules)
+    for r in updated:
+        r["predicate"]["conditions"][0]["expected"] = 750
+        r["text"] += " revised"
+    library.save({"rule_set_id": sid, "expected_revision": 1, "name": "Credit rules", "rules": updated})
+    preview = library.upgrade_review(_record(model))
+    assert preview["selectable_rule_count"] == 2
+    assert preview["proposed_process_model"] is None
+    assert all(r["text_changed"] and r["predicate_changed"] for r in preview["linked_rules"])
+    assert all(r["direct_decision_table_ids"] == ["credit_table"] for r in preview["linked_rules"])
+    selected = [_selection(r) for r in preview["linked_rules"]]
+    result = library.upgrade_review(_record(model), selected)
+    assert result["selected_rule_ids"] == ["score_high", "score_low"]
+    assert result["cleared_rule_confirmations"] == ["score_high", "score_low"]
+    assert result["cleared_decision_table_confirmations"] == ["approval_table", "credit_table"]
+    proposal = result["proposed_process_model"]
+    assert all(not t["user_confirmed"] for t in proposal["decision_tables"])
+    assert all(r["library_ref"]["revision"] == 2 and not r["user_confirmed"]
+               for r in proposal["business_rules"] if r["id"] in result["selected_rule_ids"])
+    assert all(r["user_confirmed"] for r in proposal["business_rules"] if r["id"].startswith("credit_"))
+    assert model == original and not result["process_model_saved"] and not result["execution_authorized"]
+    assert library.get(sid, 1)["rules"][0]["predicate"]["conditions"][0]["expected"] == 700
+    # A new source revision invalidates the entire selection.
+    library.save({"rule_set_id": sid, "expected_revision": 2, "name": "Credit rules", "rules": updated})
+    with pytest.raises(library.RuleLibraryError, match="changed"):
+        library.upgrade_review(_record(model), selected)
+    assert model == original
+
+
+def test_upgrade_refuses_edited_forged_removed_or_duplicate_links(library):
+    from copy import deepcopy
+    first = library.save({"name": "Purchasing", "rules": [LIMIT]})
+    sid = first["rule_set_id"]
+    model = library.link(graph(), "small", sid, "limit")
+    library.save({"rule_set_id": sid, "expected_revision": 1, "name": "Purchasing", "rules": [LIMIT]})
+    preview = library.upgrade_review(_record(model))
+    [row] = preview["linked_rules"]
+    assert row["status"] == "newer_revision_same_content"
+    selection = _selection(row)
+    assert library.upgrade_review(_record(model), [selection])["selected_rule_ids"] == ["small"]
+    with pytest.raises(library.RuleLibraryError, match="duplicated"):
+        library.upgrade_review(_record(model), [selection, selection])
+    for key, value, expected in [
+        ("revision", 199, "pinned_rule_missing"),
+        ("content_sha256", "f"*64, "pinned_digest_mismatch"),
+    ]:
+        bad = deepcopy(model)
+        bad["business_rules"][0]["library_ref"][key] = value
+        row = library.upgrade_review(_record(bad))["linked_rules"][0]
+        assert row["status"] == expected and not row["selectable"]
+        assert library.drift([_record(bad)])["findings"][0]["status"] == expected
+        with pytest.raises(library.RuleLibraryError):
+            library.upgrade_review(_record(bad), [selection])
+    edited = deepcopy(model)
+    edited["business_rules"][0]["text"] = "Locally edited"
+    assert library.upgrade_review(_record(edited))["linked_rules"][0]["status"] == "edited_in_design"
+    library.save({"rule_set_id": sid, "expected_revision": 2, "name": "Purchasing",
+                  "rules": [dict(LIMIT, id="other")]})
+    assert library.upgrade_review(_record(model))["linked_rules"][0]["status"] == "removed_from_library"
+
+
 def test_rule_library_routes(tmp_path):
     code = r'''
 import json
@@ -126,6 +211,23 @@ with TestClient(app) as client:
     assert client.post("/v1/process-catalog/rule-library", content=changed, headers=owner).status_code == 200
     drift = client.get("/v1/process-catalog/rule-library/drift", headers=owner).json()
     assert [f["status"] for f in drift["findings"]] == ["library_rule_changed"], drift
+    latest = catalog.get(wid)
+    upgrade = f"/v1/process-catalog/rule-library/upgrade-review?workflow_id={wid}&revision={latest['revision']}"
+    base = {"expected_content_sha256": latest["content_sha256"]}
+    assert client.post(upgrade, json=base, headers=bearer).status_code == 403
+    assert client.post(upgrade, json={"expected_content_sha256": "0"*64}, headers=owner).status_code == 409
+    preview = client.post(upgrade, json=base, headers=owner)
+    assert preview.status_code == 200, preview.text
+    [row] = preview.json()["linked_rules"]
+    selected = {"rule_id": row["rule_id"], "library_revision": row["latest_revision"],
+                "content_sha256": row["latest_content_sha256"]}
+    proposed = client.post(upgrade, json={**base, "selections": [selected]}, headers=owner)
+    assert proposed.status_code == 200, proposed.text
+    assert proposed.json()["proposed_process_model"]["business_rules"][0]["library_ref"]["revision"] == 2
+    assert catalog.get(wid)["revision"] == latest["revision"]
+    assert client.post(upgrade, json={**base, "selections": [{**selected, "library_revision": 1}]}, headers=owner).status_code == 409
+    stale_process = f"/v1/process-catalog/rule-library/upgrade-review?workflow_id={wid}&revision={rev}"
+    assert client.post(stale_process, json=base, headers=owner).status_code == 409
     bad = json.dumps({"rule_id": "small", "rule_set_id": sid, "library_rule_id": "limit", "extra": 1})
     assert client.post("/v1/process-catalog/rule-library/link" + q, content=bad, headers=owner).status_code == 422
 '''

@@ -81,6 +81,7 @@ const path=require('node:path');
    await page.locator('#owgEventLogResults table').first().waitFor();
    assert.match(await page.locator('#owgEventLogResults table').first().innerText(),/\n4\t12\t3\t/);
    const objects=[{id:'order-1',type:'order'},{id:'item-1',type:'item'},{id:'item-2',type:'item'}];
+   objects[0].relationships=[{objectId:'item-1',qualifier:'contains'}];
    const ocel={objectTypes:[],eventTypes:[],objects,events:[{
      id:'event-1',type:'Open',time:'2024-04-01T00:00:00Z',
      attributes:[{name:'lifecycle:transition',value:'complete'}],
@@ -111,9 +112,26 @@ const path=require('node:path');
    const objectExport=JSON.parse(await fs.readFile(await ocelFile.path(),'utf8'));
    assert.deepEqual(objectExport.objects.map(object=>object.id),['item-1','item-2','order-1']);
    assert.deepEqual(objectExport.events.map(event=>event.id),['event-1']);
+   await page.locator('#owgDeriveExportFormat').selectOption('xlsx');
+   const [xlsxFile]=await Promise.all([page.waitForEvent('download'),page.locator('#owgDeriveExport').click()]);
+   assert.match(xlsxFile.suggestedFilename(),/matching-cases\.xlsx$/);
+   assert.equal((await fs.readFile(await xlsxFile.path())).subarray(0,2).toString(),'PK');
+   await page.locator('#owgDeriveExportFormat').selectOption('jsonl');
+   const [jsonlFile]=await Promise.all([page.waitForEvent('download'),page.locator('#owgDeriveExport').click()]);
+   assert.match(jsonlFile.suggestedFilename(),/matching-cases\.jsonl$/);
+   assert.deepEqual((await fs.readFile(await jsonlFile.path(),'utf8')).trim().split('\n').map(line=>JSON.parse(line).case_id),['order-1']);
+   await page.locator('#owgDeriveExportFormat').selectOption('csv-attributes');
+   const [attributeFile]=await Promise.all([page.waitForEvent('download'),page.locator('#owgDeriveExport').click()]);
+   assert.match(attributeFile.suggestedFilename(),/matching-cases\.csv$/);
+   const attributeRows=(await fs.readFile(await attributeFile.path(),'utf8')).trim().split(/\r?\n/);
+   assert.match(attributeRows[0],/^case_id,activity,timestamp,resource/);
+   assert.equal(attributeRows.length,2);
 
+   await page.getByRole('button',{name:'Preview copy',exact:true}).click();
+   await page.locator('#owgDerivePreview').getByText('The copy would also retain 1 supplied object relationship.',{exact:false}).waitFor();
    await page.locator('#owgDeriveName').fill('Order subset');
    await page.locator('#owgDeriveRun').click();
+   await page.locator('#owgDeriveResult').getByText('Retained 1 supplied object relationship.',{exact:false}).waitFor();
    await page.locator('#owgDeriveOpen').click();
    await page.locator('#owgEventLogStatus').filter({hasText:'Opened Order subset'}).waitFor();
    assert.equal(await page.locator('#owgEventLogCaseType option').first().getAttribute('value'),'item');

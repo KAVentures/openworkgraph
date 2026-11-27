@@ -45,10 +45,23 @@ sample rather than adding a copy. It is deleted like any other log.
 | Format | Import | Export | Notes |
 | --- | --- | --- | --- |
 | CSV | yes | yes | You map the case, activity, timestamp and (optional) resource columns. |
-| Excel (.xlsx) | yes | no | One worksheet is converted to CSV on this computer, then mapped and imported like any CSV (below). |
+| Excel (.xlsx) | yes | yes | Import: one worksheet is converted to CSV on this computer, then mapped and imported like any CSV (below). Export: the CSV export's rows as text cells ([Excel event-log export](#excel-event-log-export)). |
+| SQLite database | yes | no | One table is converted to CSV, then mapped like any CSV ([SQLite database files](#sqlite-database-files)). |
+| JSON Lines | yes | no | One JSON object per line, flattened to CSV columns ([JSON Lines files](#json-lines-files)). |
+| Apache Parquet | yes | yes | Import: converted to CSV ([Parquet files](#parquet-files)). Export: the CSV export's rows with a typed UTC timestamp column ([Parquet event-log export](#parquet-event-log-export)). |
 | XES (IEEE 1849) | yes | yes | `concept:name`, `time:timestamp` and `org:resource`; up to 32 other attributes of 500 characters each are imported as strings. Choose **XES with retained attributes** to include static trace and event attributes in the export. |
 | OCEL 2.0 JSON | yes | yes | Objects, object types, events, event-to-object links and supplied directed object-to-object relationships with qualifiers. Object attribute values keep their times (below). |
 | OCEL 2.0 XML | yes | yes | The same retained content in the OCEL 2.0 worked-example XML layout (`.xmlocel`). Objects must precede events as in the original 2.0 printed root schema. See the relationship contract for schema/example errata and format limits. |
+| OCEL 2.0 SQLite | no | yes | `GET /v1/event-logs/{log_id}/ocel.sqlite`: the OCEL 2.0 relational layout with per-type event and object tables. |
+| gzip (`.gz`) | yes | no | Any import may be gzip-compressed ([Compressed files](#compressed-files)). |
+
+**CSV with retained event attributes** (`format=csv-attributes`, also for
+matching cases) writes the exact CSV export's four columns, then one column per
+retained event attribute (such as the extra columns kept at import), sorted by
+name. Text values are written as stored; other values as compact JSON; a missing
+value is an empty cell. Importing the file with those columns kept gives the
+same events and values back. A log with more than 500 distinct event attributes,
+or with an attribute named like one of the four columns, is refused; use OCEL.
 
 The attribute export uses the selected case notion and includes values in the
 download, including supported lifecycle fields. The standard XES choice exports
@@ -70,6 +83,26 @@ mapping, `naive_timestamp_offset=+01:00` in the API). That choice is recorded
 with the import. XML with a `DOCTYPE` or entity declaration is refused before
 parsing.
 
+### Delimiters
+
+When you choose a CSV or text file, the dashboard reads its first rows on this computer and picks the
+delimiter (comma, semicolon, tab or pipe) that splits the header into the most columns, with the next
+rows splitting into the same number. Quoted cells may contain the delimiter. Comma wins ties, and a
+`.tsv` file is always read as tab-separated. You can still change **Delimiter** before importing.
+
+### Text encodings
+
+CSV files are read as UTF-8 unless the mapping names another `encoding` (`encoding=` on the import,
+append and preview routes): `windows-1252`, the Western European "ANSI" encoding that spreadsheets and
+older systems often save, or `utf-16`, which Excel's "Unicode text" export uses (with a byte-order
+mark). Such a file is converted to UTF-8 in a temporary file under the workspace folder before the
+normal CSV import reads it, and the copy is removed afterwards. Decoding is strict: a byte that is
+not valid in the named encoding refuses the file with its offset rather than being replaced. A
+non-default encoding is part of the import's recorded transform; the content digest still describes
+the original bytes. A file that is not valid UTF-8 and names no encoding is refused with a hint (and
+the line, where the parser reports it). The dashboard chooses **Text encoding** from the file's first
+bytes: a UTF-16 or UTF-8 byte-order mark, UTF-8 when they decode strictly, otherwise Windows-1252.
+
 ### Compressed files
 
 Any import or appended file may be gzip-compressed, as public logs such as the BPI Challenge
@@ -80,15 +113,48 @@ without limit; a damaged archive is refused. The dashboard picks the format from
 report's digests describe the decompressed bytes, so the same log compressed or not counts as the same
 file.
 
+### Resources in OCEL files
+
+OCEL 2.0 has no resource field. As in PM4Py and XES, an event's resource travels as its
+`org:resource` event attribute:
+
+- **Export:** OCEL JSON and XML write each event's resource as `org:resource`, listed first among
+  its attributes. Events without a resource have none.
+- **Import:** an `org:resource` attribute becomes the event's resource, so handover, role and
+  resource analyses work on OCEL logs from other tools. It is taken out of the event's other
+  attributes and does not count toward their limit.
+- **Invalid values:** a value that cannot be a resource (too long, or with control characters)
+  stays an ordinary attribute instead of refusing the file.
+
+A log therefore keeps its resources through an OCEL export and re-import. Logs imported before
+this change keep `org:resource` as an attribute until they are imported again.
+
 ### Timestamp formats
 
 ISO 8601 times (`2024-03-04T14:05:00Z`, `2024-03-04 14:05:00+01:00`) need no
 setting. For other layouts, such as `13/03/2024 14:05`, `04.03.2024 14:05:00`
-or `04-MAR-24 02.05.00 PM`, declare the format of the timestamp column as a
+`04-MAR-24 02.05.00 PM` or `04.03.2024 14:05:00,123` (fractional seconds after a comma or a point are
+recognised too), declare the format of the timestamp column as a
 strptime pattern ("Timestamp format" in the CSV mapping, `timestamp_format=` in
 the API). Patterns may use `%d %m %Y %y %H %I %M %S %f %p %b %B %z`, with
 spaces and `/ . - : , T` between them. They need a year, a month and a day,
 and `%I` needs `%p`.
+
+Times written as Unix time (as many APIs and JSON exports do) use one of two
+named formats instead of a pattern: `unix-seconds` (up to 10 digits, such as
+`1709561100` or `1709561100.25`, at most 6 decimals) and `unix-milliseconds`
+(up to 13 digits, such as `1709561100123`, at most 3 decimals). They count from
+1970-01-01 UTC, so they need no offset decision, and one given anyway does not
+shift them. Signs, exponents, separators and longer values are rejected as
+unparseable. Format detection offers them when every sampled value is a
+plain number of 9–10 (seconds) or 12–13 (milliseconds) digits.
+
+Excel serial date numbers (`45355.5868055556` for 4 March 2024 14:05, as some
+CSV files saved from spreadsheets contain) use the named format `excel-serial`:
+days since 1899-12-30 (Excel's 1900 date system) with the time of day as the
+fraction, rounded to the millisecond. They are local times, so the import also
+needs the offset decision. Format detection offers it when every sampled value
+is a number from 20000 to 99999 (1954 to 2173), optionally with decimals.
 
 Every value must match the pattern exactly. A value with trailing text, an
 impossible date such as 31/02, or a value in another layout is rejected as
@@ -106,6 +172,18 @@ dashboard then lists both with how the first value would read, and you choose.
 Quarantined rows are released with ISO parsing only, so re-import a file that
 needs a format.
 
+### XES and OCEL times without an offset
+
+XES and OCEL times should carry a UTC offset, but some tools write them without one. PM4Py, for
+example, writes the times of a log without time zones as `2024-03-04T14:05:00`. Such a file used to
+import no events. Now it is refused with a hint until you choose the offset those times use: the same
+**Offset for times without one** as for CSV (`naive_timestamp_offset=` on the import and append
+routes). Times that carry an offset are read as written, and times that are not ISO 8601 are still
+rejected. The offset also applies to the times of OCEL object attribute values. The import reports
+`timestamps_with_assumed_offset`, or `timestamps_without_offset` when no offset was chosen, and the
+offset is part of the import's recorded transform. The dashboard looks at the first times of an XES
+or OCEL file and proposes this computer's offset when some have none.
+
 ### Reusing an earlier mapping
 
 When a CSV file's header has every column an earlier import mapped (case,
@@ -122,6 +200,17 @@ header, optional `other_headers` with columns for up to three other delimiters,
 and optional `preferred_log_id`. Each match includes its
 `missing_attribute_columns`.
 
+### Separate date and time columns
+
+Some exports, such as SAP and other ERP change documents, put the date and the time of day in two
+columns ("Posting Date" and "Time"). Choose the date column as the timestamp column and the other as
+**Time-of-day column** (`time_column=` on the import, append, preview and format-detection routes).
+Each row is read as the date, a space and the time, so a declared format covers both, for example
+`%d.%m.%Y %H:%M:%S`. A row without a time keeps only its date, which a format with a time rejects
+rather than reading as midnight. A row without a date has no timestamp. The time column is recorded
+in the import's transform. The dashboard preselects both when a file has a column named like a date
+and another named like a time.
+
 ### Preview a CSV mapping
 
 Use **Preview CSV mapping** before confirming storage. OWG shows the accepted
@@ -134,6 +223,15 @@ identities when appending.
 An import or append runs one at a time. You can prepare another file while a
 save is running. The completed save keeps newer file and mapping choices in
 the form.
+
+### Unnamed and duplicate columns
+
+Column names must be non-empty and unambiguous (not repeated, also ignoring case), so a mapping can
+never pick a different column than the one you meant; a file with an empty or repeated column name
+is refused. One exception: many exports end every line with a delimiter (`case;activity;time;`),
+which leaves one unnamed last column. That column is ignored when it is empty in every row. If it
+holds a value in any row the file is refused, rather than a value being dropped silently, and two or
+more unnamed trailing columns are still refused.
 
 ### SQLite database files
 
@@ -155,6 +253,21 @@ are offered, not views, virtual tables or SQLite's own tables, and each is read 
 most 256 MB. NULL becomes an empty cell and binary values are left empty and counted. SQLite stores
 no time zone, so the import asks which offset times without one use.
 
+### OCEL 2.0 SQLite databases
+
+A SQLite file that holds the OCEL 2.0 tables (`event`, `object`, `event_object`, `object_object`,
+`event_map_type`, `object_map_type`) is recognised when it is chosen and imported as an
+object-centric log, keeping its object types, qualified event-object links, object-to-object
+relationships and timed object attributes, instead of being read as one table.
+`POST /v1/event-logs/ocel-sqlite-to-json` turns it into an OCEL 2.0 JSON document that the ordinary
+OCEL import then reads; `sqlite-to-csv` reports `"ocel": true` for such files. Event times come from
+the `event_<Type>` tables and attributes from their other columns; an object's rows in
+`object_<Type>` give its attribute values at `ocel_time` (only the `ocel_changed_field` column for a
+change row). Times without an offset, as some tools write them, are read as UTC and counted
+(`times_without_offset_read_as_utc`); events without a time are left out and counted. The same
+read-only, untrusted-schema handling and limits as other SQLite files apply, plus at most 5,000,000
+rows in all. Nothing is stored.
+
 ### JSON Lines files
 
 A `.jsonl` or `.ndjson` file (one JSON object per line, as APIs and log shippers write) is converted
@@ -165,6 +278,11 @@ Blank lines are skipped; any other line that is not a JSON object refuses the fi
 number. At most 2,000,000 lines, 500 columns and 1 MB per line are read, and the upload may be at
 most 256 MB. `POST /v1/event-logs/jsonl-to-csv` with the file as the body returns `rows`, `columns`
 and `csv`. Nothing is stored. A `.json` file is still read as OCEL 2.0 JSON.
+
+**JSON Lines** in the export menu (`GET /v1/event-logs/{log_id}/export?format=jsonl`) writes one
+object per event under the chosen case notion with `case_id`, `activity`, `timestamp` (ISO 8601 UTC)
+and `resource` (`null` when missing), in the CSV export's order. The matching-case export offers the
+same format. Importing the file gives the same CSV as the CSV export.
 
 ### Parquet files
 
@@ -177,6 +295,15 @@ cell, and binary values are left empty and counted. At most 2,000,000 rows and 5
 and the upload may be at most 512 MB. `POST /v1/event-logs/parquet-to-csv` with the file as the body
 returns `rows`, `columns`, `csv` and `dates_have_no_offset`. Nothing is stored: the upload is copied
 to a temporary file in the data folder, read and removed.
+
+### Title rows and Excel's delimiter hint
+
+Report-style exports often put a title or an export date above the column names. Set the line that
+holds the column names with `header_row=` (1 to 50) on the import, append and preview routes; the
+lines above it are skipped and the setting is part of the import's recorded transform. A first line
+`sep=;` (Excel's delimiter hint) is skipped automatically and its delimiter is used. Timestamp format
+detection finds the column names below such lines by itself. The dashboard skips a `sep=` line when it
+reads the columns; choosing a header row in the dashboard is not available yet.
 
 ### Excel workbooks
 
@@ -367,7 +494,8 @@ AI bearer tokens and MCP clients cannot read or change imported business logs.
 | `POST /v1/event-logs/xlsx-to-csv?sheet=...` | Convert one worksheet of the `.xlsx` request body to CSV (`csv`, `sheet`, `sheets`, `rows`, `columns`, `date_columns`, `dates_have_no_offset`). Nothing is stored. |
 | `POST /v1/event-logs/{log_id}/delete` | Delete the log and every row that belongs to it. |
 | `GET`/`POST /v1/event-logs/{log_id}/expiry` (`{"delete_after": ISO time \| null}`) | Read, set or clear the date after which the log is deleted automatically (below). |
-| `POST /v1/event-logs/{log_id}/export/matching-cases` | Download matching cases. Body contains `cohort` and optional `case_id`, `include_unfiltered`, `case_type`, `events_from` and `events_before`. Query `format` is `csv` (default), `csv-review`, `xes`, `xes-attributes`, `ocel`, `ocelxml`, `sourcecsv`, or `sourcecsv-review`. Source-ID formats require the `source_case` notion. |
+| `POST /v1/event-logs/{log_id}/export/matching-cases` | Download matching cases. Body contains `cohort` and optional `case_id`, `include_unfiltered`, `case_type`, `events_from` and `events_before`. Query `format` is `csv` (default), `csv-attributes`, `csv-review`, `jsonl`, `xes`, `xes-attributes`, `ocel`, `ocelxml`, `sourcecsv`, or `sourcecsv-review`. Source-ID formats require the `source_case` notion. |
+| `POST /v1/event-logs/{log_id}/export/matching-cases.xlsx` | Download matching cases as an Excel workbook. The body is the same as for `export/matching-cases`. Worksheets hold the exact CSV rows as text cells, 1,048,575 events each, continuing on further worksheets up to 16. |
 | `POST /v1/event-logs/{log_id}/derive` | Save the cases matching a filter as a new log (below). |
 | `POST /v1/event-logs/combine` | Combine 2 to 10 saved logs into a new log (below). |
 | `GET /v1/event-logs/{log_id}/quality` | Stored quality and mapping reports per import and append, plus current whole-log diagnostics (below). |
@@ -411,7 +539,7 @@ AI bearer tokens and MCP clients cannot read or change imported business logs.
 | `GET`/`POST /v1/event-logs/{log_id}/case-tags`, `POST .../case-tags/remove` | Analyst tags on cases (below). |
 | `GET`/`POST /v1/event-logs/{log_id}/activity-glossary`, `POST .../activity-glossary/delete`, `POST .../activity-glossary/import`, `GET .../activity-glossary.csv` | The owner's notes per activity (below). |
 | `GET /v1/event-logs/{log_id}/root-cause?outcome=...` | Case features associated with an outcome, with confidence intervals. |
-| `GET /v1/event-logs/{log_id}/export?format=csv\|xes\|ocel\|ocelxml` | Download the log. |
+| `GET /v1/event-logs/{log_id}/export?format=csv\|csv-attributes\|jsonl\|xes\|ocel\|ocelxml` | Download the log. |
 | `GET /v1/event-logs/{log_id}/ocel.sqlite` | Owner-only download of the retained OCEL 2.0 log as standard SQLite event/object and relationship tables; created temporarily and cleaned up after response. |
 | `GET /v1/event-logs/{log_id}/report.html?sla_seconds=&variants=` | Download a self-contained HTML report (below). |
 | `GET`/`POST /v1/event-logs/{log_id}/saved-reports`, `GET .../saved-reports/{name}` | Copies of the report saved on this computer (below). |
@@ -696,9 +824,14 @@ The response gives:
 of cases can be compared with the rest. Repeated executions are not verified
 rework.
 
+Open **Price another activity** to search for an activity outside the suggested
+list or enter an exact label. The editor keeps prices for labels that have yet
+to appear in the log. Use **Show priced activities only** to review overrides
+without scrolling through the suggestions.
+
 **Saved prices.** **Save prices** keeps the model (currency, activity prices,
 default price and hourly cost) with the log. Next time, the dashboard fills the
-prices in. The HTML report, and its saved and scheduled copies, then include a
+prices in. **Load saved prices** restores the saved model to the editor. The HTML report, and its saved and scheduled copies, then include a
 **Process cost** section, which shows:
 
 * the total cost;
@@ -717,6 +850,16 @@ The section uses the report's case filter. API:
 
 A log keeps one model. It is deleted with the log and not copied when matching
 cases are saved as a new log.
+
+**Reuse a model.** Open **Transfer cost model** and download the editor's
+prices as JSON. In the destination log, choose the JSON file to validate its
+currency and prices, then select **Load previewed prices** to fill the editor.
+Select **Calculate cost** to try the model and **Save prices** to keep it with
+the destination log. The file contains only the currency, activity labels,
+and prices. Its envelope is
+`{"format":"openworkgraph.event-log-cost-model.v1","model":{...}}`.
+`POST /v1/event-logs/{log_id}/cost-model/preview` validates the file and
+returns the normalized model without changing saved prices.
 
 ### Cohort benchmark
 
@@ -782,6 +925,42 @@ selected cluster's `cluster_key`. It returns the total and a page of members ord
 by literal case key, with an optional `limit` of 1–100 (default 50). Send the returned
 `next_after` as `after` to continue. If the cluster changes, rerun the report to get
 its current key. This route requires a dashboard session.
+
+From **Inspect cases**, **Tag cases in this cluster** recomputes the cluster in
+the original case scope and can mark its current members, including clusters
+whose paths cannot fit a variant filter. Preview the count and sample before
+applying; existing tag notes on matching cases will be replaced. The preview is
+checked again at save time, so changes to membership or existing notes require
+another preview. The cluster is recomputed on the current log, not a frozen
+report-time case list. Tagging is limited to 100,000 cases; inspect or download
+larger case lists instead. Tagging does not change stored events and the cluster
+report must be run again afterward. `POST /v1/event-logs/{log_id}/trace-clusters/tag/preview`
+accepts the clustering settings, `cluster_key`, tag and note; apply with the
+same settings and `expected_selection_sha256` at `/trace-clusters/tag`. Both
+routes require a dashboard session. The server rechecks membership and existing
+notes under the workspace lock and applies the tag transactionally.
+
+**Download cluster report JSON** includes the original request, the complete
+returned cluster summary, settings and case notion. The CSV gives one row per
+cluster with the same coverage counts and the displayed top variants and
+contrasting activities. These are the returned top five variants and up to six
+contrasting activities per side, not a list of every variant or activity. Both
+report downloads reflect the last completed analysis and are cleared when its
+settings change. CSV text is escaped for spreadsheet review.
+
+From **Inspect cases**, **Download cluster cases (CSV)** recomputes the selected
+cluster with its original settings and scope, then downloads case keys, duration,
+event count and first/last activity. Each file contains up to 50,000 cases in
+case-key order. When more cases remain, download subsequent files using the next
+page control; the dashboard reports progress. A continuation cursor is bound to
+the log, cluster and settings. Formula-like text is escaped for spreadsheet review.
+The cluster key detects a
+change in the cluster's variant composition and counts since the report, but it
+does not freeze case membership before the first download. For a multi-file
+export, a streaming digest of all exported case rows is checked on every later
+page; changed membership or exported values require starting again. Pages are
+recomputed from the current log, and no case list is retained by this check.
+This download requires a dashboard session.
 
 Clusters describe the structure of the imported log. They are not process types,
 causes, or a judgement of how any case was handled.
@@ -895,6 +1074,20 @@ log and case notion shown above the file picker. The simulator recalibrates
 from the current data. Explicit overrides stay in the submitted inputs, and
 omitted values use the current calibration. The new report identifies the log
 and case notion used for the run.
+
+Use **Compare staffing alternatives** after loading measured values to compare
+two to four proposals against the same calibration and seed. The table shows
+median and 90th percentile cycle time, completions, and the activities with
+the longest mean waits. The table withholds deltas when overloaded queues or
+incomplete runs invalidate the comparison.
+
+**Download comparison inputs** saves the submitted settings. **Download
+comparison report** also includes the results, source log and case notion,
+calibration digest, and reasons for withholding deltas. Open either file
+under **Rerun a saved staffing comparison**. Review or edit the settings
+and run the comparison explicitly. OWG recalibrates from the selected
+log and case notion, so a different log or a later revision may yield
+different results.
 
 Calibration selects complete paths of at most 100 events. It first counts case
 lengths, excludes longer cases whole, then keeps cases whose activities fit
@@ -1320,6 +1513,15 @@ The dashboard-only `POST /v1/event-logs/{log_id}/case-table/export` accepts
 
 ## Case tags
 
+**Preview tag selection** shows how many cases match, which already have the tag, and a sample
+of their current notes. A previewed assignment checks the same membership and existing notes
+before applying. Reopen the preview if they have changed. From **Show cases**, use **Edit note**
+to correct or clear a note while keeping the original assignment timestamp.
+
+`POST /v1/event-logs/{log_id}/case-tags/preview` takes the same selection as the add route.
+Pass its `selection_sha256` as `expected_selection_sha256` when applying. `POST .../case-tags/note`
+takes the tag, literal `case_id`, new `note`, `expected_note` and `expected_tagged_at` from the list.
+
 While investigating, tag cases such as "checked", "root cause: missing PO" or
 "exclude: test data", and come back to them. A tag is a label of 1–60
 characters with an optional note (up to 500 characters). Tags are stored on this
@@ -1481,6 +1683,19 @@ not even on handover edges. Handover counts say who touched a case next, not who
 responsible or how well anyone worked. One million events are analysed in seconds
 (`OWG_SCALE_ACCEPTANCE=1 pytest tests/test_event_log_organization.py`).
 
+**Download network (GraphML)** saves the same network for Gephi, yEd or Cytoscape
+(`GET /v1/event-logs/{log_id}/organization.graphml`, with the same parameters as `organization`):
+
+- one node per resource, with its event, case and activity counts and its kind;
+- directed `handover` and `subcontracting` edges;
+- `working_together` edges weighted by shared cases. Their `symmetric` attribute is true and
+  their direction carries no meaning; the graph stays directed so networkx and other strict
+  readers load it.
+
+Resources stay pseudonymous unless **Show resource names** is checked, and the file says which.
+No duration, speed or score is added. Node identifiers are generated, and labels are escaped XML
+text. The `X-OWG-Network` header counts resources and edges and states the naming choice.
+
 ### Roles
 
 "Discover roles" groups resources that perform a similar mix of activities. This is organizational
@@ -1526,13 +1741,19 @@ Celonis Action Engine and UiPath process alerts. Rules belong to one log, are im
   case population checked. The draft preview leaves saved signals and evaluation history alone.
 - `POST /v1/event-logs/{log_id}/signals/{rule_id}/delete` removes one.
 - `POST /v1/event-logs/{log_id}/signals/evaluate` checks every rule now.
+- `POST /v1/event-logs/{log_id}/signals/{rule_id}/evaluate` checks and records one saved rule.
 
 Use **Preview signal** to check the current draft before choosing **Save signal**.
 When the analysis has a case filter, choose **Current case filter** to save its
 conditions with the rule. Signal conditions and their case filters use the
 original recorded activities. **All cases** is selected by default. Later changes to
 the analysis filter leave saved rules unchanged. For case conditions, enter
-**Minimum matching cases** to set the trigger count.
+**Minimum matching cases** to set the trigger count. Use **Check** beside a
+saved rule to evaluate it on its own, or **Check signals** to evaluate the log’s
+whole list. In a preview or a saved result, open an evidence case to see its
+recorded events under the rule’s case notion. Expand the list for the rest of
+the sample. A count shows when more cases matched than were returned as
+evidence.
 
 Use **Move signal rules between logs** to download rule definitions as JSON, or
 select a JSON file and preview the import. The file includes each rule’s case notion,
@@ -1639,6 +1860,13 @@ Saved analyses are stored with the log and deleted with it, at most 50 per log:
 The dashboard's "Build an analysis" section runs, exports (JSON and CSV), saves and re-runs
 them.
 
+For a case-level result, select **Review cases** on a result row to see its
+matching cases, their durations, event counts, and any defined metric values.
+The case list uses the original filters, dimensions, and case notion. Open a
+case to inspect its retained events. If the log, applied activity mapping,
+hidden activities, or case tags have changed, rerun the analysis before
+opening the group.
+
 ### Case metrics
 
 A case-level analysis can define up to four typed case metrics in `metrics` and measure them with
@@ -1688,9 +1916,9 @@ the selected events, their timed attributes, and supplied relationships between
 those objects. Set a case filter, a time window, or both. With a time window, the download retains events
 at or after the start and strictly before the end. Either bound can be left blank.
 
-Choose **Preview copy** to see how many cases, events and linked objects the
-current case selection and optional time window would retain. Saving a copy
-recalculates the selection against the source log.
+Choose **Preview copy** to see how many cases, events, linked objects and
+supplied object relationships the current selection would retain. Saving a
+copy recalculates the selection against the source log.
 
 **Save or export matching cases → Save as new log** (after **Analyse**), or
 `POST /v1/event-logs/{log_id}/derive` with
@@ -1703,10 +1931,10 @@ under the chosen case notion and the source's activity mapping.
   so a case keeps its full history. The objects those events are linked to are
   copied too, with their links and timed attribute values. In an
   object-centric log, an event linked to a matching case also brings its other
-  objects, which keep only the copied events.
+  objects, which keep only the copied events. A supplied object relationship is
+  copied when both endpoints are retained. It keeps its direction and qualifier.
 * **What is not copied:** activity mapping, saved filters and analyses,
-  signals, domain packs, source-identity keys, object-to-object relationships
-  and quality reports. The new log starts without them.
+  signals, domain packs, source-identity keys and quality reports.
 * **The source log:** unchanged.
 * **Time window (optional):** `events_from` and/or `events_before` (times with
   a UTC offset; the dashboard's *Only events from / before* fields) trim the
@@ -1716,6 +1944,21 @@ under the chosen case notion and the source's activity mapping.
   `{"name": "Q1", "events_from": "2024-01-01T00:00:00Z", "events_before":
   "2024-04-01T00:00:00Z"}` saves the whole log's first quarter. The response's
   `time_window` reports the cases with events in it and the events left out.
+* **Activity trim (optional):** `trim_from_activity` and/or `trim_to_activity`
+  (the dashboard's *Keep events from the first … until …* fields) keep each
+  matching case's events from the first occurrence of one activity to the last
+  (`trim_mode: "longest"`, the default) or the next (`"first"`) occurrence of
+  another, both included: the endpoints trim of other process-mining tools.
+  Leave one out to trim only the start or only the end of each case. With the
+  same activity at both ends, `"first"` keeps one cycle up to its next
+  occurrence. Activity names are those of the analysis, after any activity
+  mapping. The events in between are kept whatever their activity. A matching
+  case without the endpoints is left out. A time window applies first, so the
+  endpoints are looked for inside it. The response's `activity_trim` reports the
+  cases with the endpoints and the events left out. The same fields work for
+  the matching-case export (`POST /v1/event-logs/{log_id}/export/matching-cases`)
+  and the preview. In a flat export of an object-centric log, a case keeps only
+  its own segment, even when it shares events with other cases.
 * **The new log:** counts against the 50-log limit. It can be analysed,
   exported, compared with the source (see *Comparing two logs*) or deleted like
   any other log.
@@ -2007,6 +2250,14 @@ their definitions for review, and **Check object rules** evaluates them against 
 **Update loaded rule set** saves edits to the loaded revision. Deleting a saved set leaves the
 current draft available. Deleting its log also deletes its saved sets.
 
+Use **Transfer object rule definitions** to download the editor's rule set as a
+JSON file. In another log, preview the file to see which exact object types,
+activity labels, or supplied relationship qualifiers are absent. The preview
+checks label presence only. Load the definitions into the editor, then save as
+a new rule set or check the rules explicitly. The JSON contains the name and
+definitions. The preview endpoint is
+`POST /v1/event-logs/{log_id}/object-rule-sets/template/preview`.
+
 Choose a second retained object log and select **Compare object rules** to evaluate the same draft
 against both whole logs. The comparison shows violating and activated counts, the violation rate,
 and the percentage-point change from the baseline. A rate change requires a complete result and
@@ -2093,6 +2344,23 @@ format. The process tree is translated block by block:
 The net has one source place, marked with one token, and one sink place. The sink is declared in
 `finalmarkings`, as PM4Py and ProM read it. Silent transitions carry the ProM `$invisible$` flag.
 
+**Download process tree (PTML)** saves the discovered tree itself, in the PTML format that
+`pm4py.read_ptml` and ProM's process-tree plug-ins read
+(`GET /v1/event-logs/{log_id}/model-discovery.ptml`, same parameters as the PNML export). It
+keeps the block structure that the PNML and BPMN exports flatten:
+
+- activities become `manualTask` and skips become `automaticTask`;
+- `seq`, `xor` and `and` become `sequence`, `xor` and `and`;
+- a loop becomes `xorLoop` with its body, its redo part and a silent exit.
+
+Identifiers are UUIDs derived from each node's position, so the same tree gives the same file.
+The `X-OWG-Process-Tree` header counts nodes and activities.
+
+**Process tree in PM4Py notation** (under the download) shows the same tree as PM4Py prints it, for
+example `->( 'Receive', X( tau, 'Approve' ), 'Close' )`. It can be pasted into
+`pm4py.objects.process_tree.utils.generic.parse`. Labels are written as they are, so a label
+containing a single quote may need editing before PM4Py's parser accepts it.
+
 Place and transition identifiers are generated (`p0`, `t0`, …); activity names appear only as
 transition names. Tests replay every trace up to six steps and check that the net accepts exactly
 the traces the process tree accepts.
@@ -2101,6 +2369,25 @@ the traces the process tree accepts.
 case-filter parameters. It returns `application/xml` with an `X-OWG-Petri-Net` header that counts
 places, transitions and silent transitions. Dashboard session only. Like the discovered draft, the
 net is a candidate model for review, not a verified workflow.
+
+### BPMN export of the discovered model
+
+`GET /v1/event-logs/{log_id}/model-discovery.bpmn` takes the same parameters as the PNML export.
+It returns BPMN 2.0 XML with diagram interchange (shapes and edges) for Camunda Modeler, bpmn.io,
+Signavio and other BPMN designers. The dashboard's **Download BPMN** button sits next to the
+Petri net download.
+
+The file uses the same writer and layout as the process catalog's BPMN export:
+
+- activities become tasks;
+- choices and loops become exclusive gateways;
+- concurrent branches become diverging and converging parallel gateways;
+- the model gets start and end events.
+
+Observed branch shares stay on their sequence flows as unconfirmed rule text. The process
+documentation names the log, case notion, discovery settings and model digest, and marks the file
+as an unreviewed, non-executable draft. The `X-OWG-BPMN` header counts tasks, gateways and flows.
+OWG's own BPMN import reads the file back into an editable draft.
 
 ## Process map with abstraction sliders
 
@@ -2133,6 +2420,19 @@ for a spreadsheet: one row per activity (events and cases), start activity, path
 cases and the median, mean and 90th-percentile gap in seconds) and end activity, with cells that
 would start a formula prefixed with `'`.
 Nothing is uploaded; activity names in the file are as sensitive as the log.
+
+**Download map (Graphviz DOT)** saves the same map as a Graphviz graph, as PM4Py and bupaR draw
+directly-follows graphs. Use it to re-lay out the map with `dot -Tsvg`, or open it in Graphviz
+Online, Gephi or yEd. The server builds it from the current slider settings and case filter with
+`GET /v1/event-logs/{log_id}/process-map.dot`, which takes the same parameters as `process-map`.
+
+- Each shown activity is a box labelled with its event count.
+- Start and end are circles.
+- Each path's arrow is labelled with its count and median gap, and its width grows with frequency.
+
+Node identifiers are generated (`a0`, `a1`, …). Activity names appear only inside escaped,
+quoted labels, so a name cannot add statements to the graph. The `X-OWG-Map` header counts
+activities and paths. Dashboard session only.
 
 ## Predicting open cases
 
@@ -2625,6 +2925,11 @@ an attribute value or range both offer to become this filter in one click: "Filt
 and "Filter". They are offered only while no global filter is active, so they never silently
 replace one. They set exactly the finding's `attribute` or `attribute_range`.
 
+When importing a filter from another log, preview it first to check the matching
+case count, case notion, and activity labels unavailable in the destination.
+Importing then saves the reviewed definition with that log. The preview endpoint
+is `POST /v1/event-logs/{log_id}/filter-sets/import/preview`.
+
 **Saved filters.** A new dashboard filter remembers the selected case notion.
 Applying it restores that notion and the filter together. Older filters saved
 without a case notion use the current selection.
@@ -2646,6 +2951,11 @@ on the destination. The JSON carries the filter name, rules and saved case
 notion. Import validates the rules and case notion against the destination log.
 Filter names are unique within each log.
 
+
+Use **Update from active filter** to replace a saved filter's criteria with the
+current selection. The saved filter keeps its identity and name. If another
+edit changed it since the list was loaded, OWG asks you to reload and review
+before updating.
 
 The case evidence drill-down also uses the active case filter, so browsing cases shows the same
 cases the filtered views count ("N matching cases (case filter applied)"). Object-type maps keep
@@ -2803,6 +3113,20 @@ and authorizes nothing.
 `GET /v1/event-logs/{log_id}/automation-candidates?limit=&case_type=` plus the usual case-filter
 parameters; dashboard session only.
 
+**Download JSON** and **Download CSV** save the ranking shown. The CSV has one row per activity
+with the score and its volume, routine and waiting components, occurrences, cases, per-week
+rate, routing pattern, same-predecessor and same-successor shares, median wait before, resources
+and repeats per case. Cells that a spreadsheet would read as formulas start with `'`.
+
+### Estimating the time automation could free
+
+Below the ranking, **Estimate** turns the top candidates into hours-per-week ranges (and, with an hourly cost,
+cost-per-year ranges) from assumptions you enter: the minutes one occurrence takes, low and high. The log only
+supplies occurrences per week. The share automation could take over is assumed per routing pattern (fixed
+60-90 %, mostly fixed 30-60 %, variable 0-30 %) and shown with the result. Every figure is a range labelled
+measured or assumed, not a measured saving. `POST /v1/event-logs/{log_id}/automation-estimate` with
+`{"handling_minutes": [low, high], "automatable_share"?, "hourly_cost"?, "limit"?}`; the active case filter applies.
+
 ## Performance spectrum
 
 The performance spectrum shows how long each step-to-step segment took, over calendar time. It
@@ -2849,6 +3173,15 @@ case filter. Send the exact activity pair as `{"segment":["A","B"]}`, with optio
 (default 50). Use the returned `next_after` as `after` to continue. Both routes require a
 dashboard session.
 
+**Download JSON** saves the spectrum as drawn, including the sampled lines. **Download CSV** has
+two kinds of row:
+
+- one `segment` row per segment, with occurrences, the median, 25th, 75th and 95th percentile
+  duration in seconds, and the shares that finish in start order (`fifo_share`) or are released
+  together (`batched_share`);
+- one `period` row per busy period of that segment, with its UTC start, its occurrences by speed
+  class and its median duration.
+
 ## Heuristics net
 
 **Heuristics net** (the heuristics miner of ProM and PM4Py, after Weijters and Ribeiro's Flexible
@@ -2880,6 +3213,12 @@ as the two literal labels for a transition or back-and-forth loop, or one for a 
 For a repeated activity, send a transition with the same label twice. Send the returned
 `next_after` as `after` to page by literal case key. The optional `limit` is 1–100 (default 50).
 
+**Download JSON** saves the net shown, including its settings, splits, joins and loops.
+**Download CSV** lists every arrow the miner kept, one per row: from, to, occurrences, dependency
+measure (empty for start and end arrows) and why it was kept (`threshold`, `best_connection`,
+`short_loop`, `start` or `end`). Changing a threshold disables the download until the net is
+discovered again.
+
 ## Activity profile
 
 **Activity profile** shows one activity from every side, like the activity views of Celonis and
@@ -2896,6 +3235,10 @@ from activities literally named `(start)` or `(end)`. The profile API marks boun
 
 `GET /v1/event-logs/{log_id}/activity-profile?profile_activity=Check` plus the case-filter
 parameters (`activity` there is the case filter). Agents use `get_process_activity_profile`.
+
+**Download JSON** and **Download CSV** save the profile shown. The CSV has one row per neighbour
+(`comes_after` and `comes_before`, with times, share and median gap in hours, and the case start
+or end as `(start of case)` or `(end of case)`), per weekday and per UTC hour.
 
 ## Activities that happen together
 
@@ -2947,6 +3290,15 @@ for a case ending. Each response gives the exact branch total and up to `limit` 
 default 50) in literal case-key order. Send the returned `next_after` as `after` in the next body.
 Each page reflects the current log.
 
+**Download JSON** and **Download CSV** save the branches at the current point. Each CSV row gives:
+
+- the path that leads there and whether it is anchored at the case start or anywhere;
+- the next activity, or `(case ends)`;
+- its cases and share;
+- the median hours from the previous step and to the case end.
+
+Going deeper or back replaces the download with the new point.
+
 ## Due dates
 
 Use **Inspect cases** next to a deadline group to view its case keys, due and completion times,
@@ -2957,6 +3309,14 @@ takes the due-date settings and case filter from the summary, plus `due_group`. 
 
 Case filters choose which cases appear. Open cases are evaluated at the latest event in the
 selected case notion, so filtering to cases that are still open preserves the observation cutoff.
+
+Set **As of (UTC, optional)** to reconstruct a deadline report using only events at or before that
+time. Event-based filters and completion checks use that truncated history. For attribute deadlines,
+the report uses values recorded on events by the cutoff. Joined or object-level attributes lack an
+observation timestamp and remain available in the default current report. Case tags and case-level
+filter attributes reflect the current workspace. Each case page uses the report's cutoff, and the
+linked case history shows the full retained record. JSON and CSV downloads contain aggregate scores
+and the assessment time. Pass an offset-qualified `as_of` to either dashboard due-date API.
 
 **Due dates** checks whether the step that matters, such as *Pay invoice* or *Ship order*, happened
 by the date it was due, as UiPath Process Mining's due dates and Celonis's on-time views do. The due
@@ -3025,6 +3385,20 @@ log. Agents use
 `get_unusual_process_cases`; case IDs and paths are included only for logs shared at the cases
 level.
 
+**Download all unusual cases (CSV)** saves every matching case, not only the page shown, highest
+score first. It uses the chosen reason and the case filter
+(`GET /v1/event-logs/{log_id}/unusual-cases.csv`, with the same parameters as `unusual-cases`
+without paging; dashboard session only). Columns:
+
+- `case_id` and `score`;
+- `signals`, separated by semicolons;
+- `reasons`, the readable details separated by ` | `;
+- `events`, `hours` and `path`, with up to 50 activities joined by ` → `;
+- `path_truncated`.
+
+Cells that a spreadsheet would read as formulas start with `'`. The `X-OWG-Unusual-Cases` header
+counts rows, unusual cases and cases.
+
 ## Milestone funnel
 
 **Milestone funnel** follows cases through 2 to 8 activities you choose, in order, as Celonis's
@@ -3051,6 +3425,11 @@ parameters. Dashboard sessions can additionally request `evidence_step=2&evidenc
 truncation flag. Case evidence is not available through the shared agent tool; agents with access
 to a shared log use `get_process_funnel` (aggregates only).
 
+**Download JSON** and **Download CSV** save the funnel shown. The CSV has one row per step with
+cases reached, share of step 1, conversion from the previous step, cases dropped (and how many may
+still be open), the median hours from the previous step and what stopped cases did last. Changing
+a step, the window or the evidence choice disables the download until the funnel is shown again.
+
 ## Model change
 
 **Model change** shows how the discovered process model differs before and after a date, as ProM's
@@ -3070,8 +3449,11 @@ Each period needs at least 10 cases; a start-date case filter cannot be combined
 Both models are drafts from their own cases, and a change in how events are recorded looks the same
 as a change in the work.
 
-`GET /v1/event-logs/{log_id}/model-change?split=2024-03-01&noise=0.2` plus the other case-filter
-parameters. Agents use `get_process_model_change` (aggregates only).
+`GET /v1/event-logs/{log_id}/model-change?split=2024-03-01&noise=0.2&activities=1` plus the other case-filter
+parameters. **Activities shown** (`activities`, a share of events, most frequent activities first) keeps a
+log with more activities than a model holds comparable, as in model discovery and model quality; both the
+period and the group comparison take it. Agents use `get_process_model_change` (aggregates only), which picks
+a share that fits automatically.
 
 **Compare groups** in the same section runs the comparison between two groups of cases chosen by
 case attribute values, such as `region=EU` and `region=US`, as Celonis compares org units (a value
@@ -3104,6 +3486,11 @@ not say which model is right. Up to eight levels can be scored at once.
 `GET /v1/event-logs/{log_id}/model-quality?levels=0,0.1,0.2&activities=1` plus the case-filter
 parameters. Agents with access to a shared log use `get_process_model_quality` (aggregates only).
 
+Choose **Download PNML** on a score row to keep the exact Petri net used for that score.
+**Replay scored net** opens that net in the Petri net check against the current retained case
+selection. JSON and CSV score reports include coverage counts and PNML digests. On the dashboard
+API, `include_nets=true` adds the PNML and its SHA-256 digest per row and the case filter used.
+
 ## Footprints
 
 **Footprints** (the footprint matrices of van der Aalst's *Process Mining*, PM4Py's footprints
@@ -3135,6 +3522,15 @@ Send `retained_activities` from the report's `activities`, plus a `group` of `tr
 or `end`. The body also needs `activities` containing the two transition labels or one start or
 end label. The dashboard-only response gives the exact totals and cases in literal key order.
 Send `next_after` as `after` to continue, and use `limit` from 1 to 100 (default 50).
+
+**Download JSON** saves the comparison shown. **Download CSV** gives the matrix in long form:
+
+- one row per ordered activity pair;
+- the log's and the model's relation (`→`, `←`, `||` or `#`);
+- whether the two agree.
+
+Changing the model or activity coverage disables the download until the footprints are compared
+again.
 
 ## Check against a Petri net (PNML import and token replay)
 
@@ -3273,6 +3669,185 @@ tagged. Tagging again with the same tag does not duplicate it.
 body, plus the case-filter parameters (`tag` there is the filter for cases already tagged, so the
 new tag is `new_tag`). A tag is the analyst's label, not a finding.
 
+### Structural and behavioral net validation
+
+After replaying a net, expand **Structural and behavioral net validation** and choose **Validate net soundness**. This checks the *model*, independently of observed cases or cohort filters. A log can fit an unsound net, and a sound net need not fit a particular log.
+
+The checker explores reachable markings by firing enabled ordinary place/transition net transitions. For a completely explored finite graph it verifies classical workflow-net soundness: unique marked source and sink, all nodes on a structural source-to-sink path, the option to reach the exact final marking from every reachable marking, proper completion, and no dead transitions. It also reports one-safeness separately (a weighted sound net need not be one-safe), final-marking reachability, deadlock and non-completing marking witnesses. Witnesses use transition IDs and reached token counts, not guessed business activity order. Cycles with exits can be sound while allowing an infinite execution. The separate **Every maximal execution completes** property is verified only if complete exploration establishes an acyclic reachability graph and no reachable nonfinal deadlock. An observed repeatable cycle refutes that stronger guarantee even in a partial graph; the report includes an entry marking, a transition sequence reaching it, and a cycle returning to it. No fairness, scheduling or time assumptions are made. The shortest completion is measured in transition firings (including silent transitions); the longest execution is reported only when every maximal execution is guaranteed to complete. Truncated witnesses are explicitly marked as prefixes, not independently replayable complete paths.
+
+Results have three possible values: **Verified**, **Failed**, and **Inconclusive**. Limits are 200 places, 300 transitions, 5,000 reachable markings, 256 tokens per place and 300,000 transition checks. If a limit is reached, an observed counterexample remains valid; unexplored absence is not evidence of soundness, dead transitions, or unboundedness. The checker does not approximate high-level, reset, inhibitor or other extended nets, does not guess final markings, and rejects unrecognized semantic/tool-specific extensions. Some otherwise replayable external PNML files may consequently be refused. The supported subset is the explicitly marked ordinary PNML P/T net, including OWG-generated nets.
+
+The dashboard can download a JSON report containing the input PNML SHA-256, coverage, property verdicts, limits and counterexamples. The local dashboard-session-only endpoint is `POST /v1/event-logs/petri-soundness` with the raw PNML body (at most 2 MB); returns JSON with `Cache-Control: no-store`. No net or report is retained by this operation, and no connector or business-action authorization is implied.
+
+### Compare completed behavior of two Petri-net revisions
+
+In **Structural and behavioral net validation**, expand **Compare two model revisions**. Replay the baseline model, select the candidate PNML file, and choose **Compare completed behavior**. The checker independently constructs bounded reachable marking graphs and compares their visible completed-trace languages using epsilon closure and a product of determinized marking subsets. Silent transitions do not consume activities; duplicate labels are handled nondeterministically. Only the exact final marking accepts a trace, including the empty trace where applicable.
+
+Two directional results distinguish candidate regressions (baseline traces removed) from expanded behavior (new traces allowed by the candidate). The first discovered distinguishing trace in each direction is shortest by number of visible activities. A complete comparison can prove equality or inclusion even when the language is infinite, as with a loop. If either marking graph is incomplete, neither inclusion is established. A product-search limit leaves unproved properties inconclusive; an already discovered distinguishing trace remains evidence of non-inclusion. The product is limited to 3,000 subset pairs and 500,000 counted exploration work units, in addition to the soundness checker's per-model bounds. Transition labels are bounded to 200 characters and long witness sequences are marked as truncated.
+
+**Download model comparison (JSON)** exports both submitted model digests, coverage, directional verdicts and witnesses. The owner-only, non-retained endpoint is `POST /v1/event-logs/petri-language-comparison` with `Content-Type: application/octet-stream`. Its body contains the unsigned four-byte big-endian length of the baseline, then exactly that many baseline bytes, then the candidate bytes. Each model is limited to 2 MB. Digests identify the exact submitted bytes (the dashboard encodes its current replayed baseline text as UTF-8 and sends the candidate file bytes unchanged).
+
+This is completed **visible trace language** equivalence, not branching-time equivalence, identical concurrency, absence of deadlocks, guaranteed termination, policy compliance, equal costs/timing or business-outcome equivalence. Use soundness and independent evidence alongside it; no result grants execution authority.
+
+### Verify declared compliance rules on a Petri-net model
+
+Expand **Verify declared compliance rules on the model** in the structural and behavioral validation panel. Use the rule builder or paste an editable JSON object containing a `rules` array. It accepts the same five untimed activity-only templates as the existing log compliance checker: `response`, `chain_response`, `precedence`, `not_coexistence` and `existence`. Labels match exactly. Time-bounded response and segregation-of-duties rules are explicitly refused: an ordinary P/T net does not model timestamps or resources.
+
+For each rule and the entire suite jointly, OWG explores the product of reachable Petri markings and deterministic finite rule-monitor states. Silent transitions do not count as visible steps. Only completed traces ending at the exact final marking are classified. The joint check matters: two rules can each be satisfiable on different executions while no single completed execution satisfies both.
+
+Results distinguish verified satisfaction, observed counterexamples, vacuous-only satisfaction, absence of any completed trace, and inconclusive exploration. A rule that is never activated is not evidence that its required step occurs. A model with no completed trace is not reported as verified. Each result includes the possibility of satisfying, violating, activated satisfying and vacuous traces, with concrete witness sequences when found. The search prioritizes shortest visible paths and then total firings; incomplete marking graphs may hide shorter witnesses. Long traces are explicitly marked as prefixes. Rule indices in witnesses refer to the zero-based original ordered suite.
+
+Optionally upload a candidate revision to compare against the same baseline and rule suite. A change from no possible violating trace to a possible violation is a model-policy regression; the reverse is a removal of that possibility. Unchanged possibility is not proof of identical violating trace languages. See the separate completed-behavior comparison for exact visible trace equivalence. The JSON export pins both model byte digests, canonical normalized rule-suite digest, all rules, witnesses and search coverage.
+
+The owner-only endpoint is `POST /v1/event-logs/petri-policy-review`, with `Content-Type: application/octet-stream`. The frame is a four-byte unsigned big-endian rule JSON byte count, that many UTF-8 rule JSON bytes, a four-byte unsigned big-endian baseline byte count, that many baseline PNML bytes, then optional candidate PNML bytes. Rules are limited to 64 KiB and 20 entries; each model is limited to 2 MiB. Unknown keys, duplicate rules, duplicate JSON keys and unsupported templates are refused. A maximum of 10,000 product states per check and 600,000 counted work units per model is enforced in addition to the marking-graph bounds. Later checks may be inconclusive when the shared budget is exhausted. The response is non-retained and `Cache-Control: no-store`.
+
+These are model-level untimed activity trace properties, not legal compliance, real-world case evidence, policy approval or a grant of agent execution authority. A completed-trace property does not by itself establish that all executions complete; use the separate soundness and termination checks.
+
+### Executable workflow acceptance scenarios
+
+Expand **Run workflow acceptance scenarios** in the model validation panel. Reuse the net just replayed as a baseline, author scenarios with the builder or edit the portable JSON suite, and optionally upload a candidate PNML revision. The suite is a declared acceptance test, not a policy inferred from observations. Example:
+
+```json
+{
+  "format": "openworkgraph.petri_acceptance_suite.v1",
+  "cases": [
+    {"id": "approved", "trace": ["Register", "Check", "Pay"], "expect": {"completed": true}},
+    {"id": "no-unapproved-payment", "trace": ["Register", "Pay"], "expect": {"completed": false}},
+    {"id": "after-register", "trace": ["Register"], "expect": {
+      "fireable": true, "finishable": true, "exact_next": ["Check"]
+    }}
+  ]
+}
+```
+
+The seven expectation keys are:
+
+- `completed`: the exact supplied visible trace can end at the declared final marking.
+- `fireable`: at least one reachable firing sequence matches the visible trace, regardless of whether completion is possible.
+- `finishable`: at least one matched marking can still reach the final marking.
+- `all_prefix_states_finishable`: at least one marking matches the prefix and every such marking has a path to final. False for an impossible prefix on a complete graph; inconclusive on an incomplete graph. This is not a guarantee that all future executions terminate.
+- `required_next`: every listed visible next activity can extend this prefix to a completed trace, possibly with different continuations.
+- `forbidden_next`: none of the listed visible activities can be the next step on a completion path.
+- `exact_next`: the complete set of viable next visible activities equals the listed set.
+
+Silent transitions are traversed without consuming a visible activity. Duplicate labels use nondeterministic marking subsets; a prefix can be fireable but not finishable. The report returns the longest observed matching prefix, counts of matching and known completable markings, exact noncompletable counts when the graph is complete, viable next activities, and a shortest observed completion suffix by visible length then transition firings. Only a completely explored marking graph certifies absence or shortest length. For a prefix that cannot execute, an empty exact-next set can pass; require fireability or finishability explicitly when needed. Multiple assertions in one case must all pass; failure and inconclusive states remain distinct. A candidate regression is a previously passing case that now fails; an unknown result does not count as a known regression or improvement.
+
+The owner-only, non-retained endpoint is `POST /v1/event-logs/petri-acceptance`, with `Content-Type: application/octet-stream`. The frame is a four-byte unsigned big-endian suite JSON byte count, those UTF-8 bytes, a four-byte unsigned big-endian baseline byte count, those PNML bytes, and optional candidate PNML bytes. Strict JSON rejects duplicate keys, nonfinite values and invalid suite fields. Each model is limited to 2 MiB; suite to 256 KiB, 40 cases, 100 visible activities per trace and 100 per next-step expectation. The graph uses the existing marking exploration limits. A shared 600,000-unit work budget per model can leave later scenarios inconclusive; no unexplored behavior is treated as absent.
+
+The same engine can run offline from the repository or installed Python environment, with its normal dependencies:
+
+```sh
+python -m server.event_log_petri_acceptance --baseline before.pnml --suite suite.json --candidate after.pnml > report.json
+```
+
+The CLI does not contact a service. Exit codes: 0 target suite passed, 1 at least one target case failed, 2 invalid input, 3 target suite inconclusive. The candidate is the target when supplied; baseline and change findings remain in the JSON report. SHA-256 identifies the exact submitted model bytes and the canonical normalized suite. The dashboard uses UTF-8 encoding of its current baseline replay text. Reports contain model labels and the declared suite, and should be shared only deliberately. Passing a finite acceptance suite does not establish full language equivalence, formal policy compliance, or real-world automation correctness.
+
+### Generate reference-model characterization scenarios
+
+Inside **Run workflow acceptance scenarios**, expand **Generate characterization scenarios from the baseline**. The generator requires a completely explored finite marking graph so negative assertions are established rather than guessed. It then explores reachable epsilon-closed marking subsets using breadth-first search, with one shortest representative prefix for each discovered subset. It derives exact completed/fireable/finishable and universal-prefix expectations, plus exact viable next sets when they fit the suite contract. Impossible next activities drawn from the reference alphabet provide negative examples.
+
+A bounded deterministic diversity selection prioritizes semantic categories, distinct markings, visible activities and viable next options. The report discloses candidate count, selected and omitted categories, graph and prefix exploration limits, selection and suite byte limits, exact model and suite digests. A finite selected suite is not exhaustive trace, transition or real-world execution coverage. The reference can itself be wrong or unsafe; generated expectations are characterization tests and require human review.
+
+The preview does not replace an existing editor suite automatically. Select **Replace editor with proposed suite** explicitly, edit as needed, and run the ordinary acceptance review against the baseline or candidate. Download generation evidence separately to retain provenance. A model with an incomplete marking graph does not generate a suite.
+
+The local owner-only endpoint is `POST /v1/event-logs/petri-test-generation?max_cases=20&max_depth=20` with raw PNML body (2 MiB maximum). The scenario limit is 1–40 and prefix depth 1–99. Prefix exploration is bounded to 2,000 subsets and 600,000 counted work units, and selection to 2,000,000 counted feature units. No model, suite or report is retained; the response uses `Cache-Control: no-store`. No agent execution or policy approval is authorized.
+
+### Challenge acceptance suites with synthetic workflow faults
+
+Within **Run workflow acceptance scenarios**, expand **Challenge acceptance suite with synthetic faults**. Review or edit the suite first. Mutation testing requires the exact baseline to pass that suite; a baseline failure or inconclusive result stops the review. Choose up to eight independent mutations across four operators:
+
+- Hide a visible activity (make the transition silent without changing firing conditions).
+- Rename a visible activity to a fresh synthetic label.
+- Remove one transition and its incident arcs (never remove the last transition).
+- Increase one input-arc weight by one, within the supported weight limit.
+
+Selection is deterministic: round-robin by enabled operator, then sorted target identifiers. Each mutation is applied to a fresh copy of the original submitted PNML; saved models are not edited. The report gives the available and selected mutation counts and each recipe, resulting model SHA-256, failed scenario IDs and unknown scenario IDs.
+
+A fault is **detected** if any acceptance case fails, **survived** if all cases pass, or **inconclusive** otherwise. The detection-fraction interval uses all selected mutations as the denominator: detected / selected to (detected + inconclusive) / selected. This is not corrected for semantically equivalent faults and is not an estimate of real-world failure probability. No denominator is invented when no applicable mutations exist.
+
+For surviving mutations, the completed-visible-language checker attempts an exact comparison with the original model. If it finds an added or removed trace, OWG proposes an additional exact completed-trace scenario with the reference model's expected result. Long truncated witnesses and unsupported labels are not used as executable scenarios. Review the proposal and explicitly add it to the suite editor; it is never applied automatically. A completed-language-equivalent mutation can still change prefix behavior, deadlock, timing or other properties. An inconclusive comparison is not an equivalence proof.
+
+The owner-only `POST /v1/event-logs/petri-mutation-review` endpoint accepts `application/octet-stream`: four unsigned big-endian bytes giving the UTF-8 JSON settings byte count, that many JSON bytes, then the reference PNML bytes. JSON is `{"suite": <acceptance suite>, "settings": {"max_mutants": 4, "operators": ["hide_activity", "rename_activity"]}}`; settings can omit either key to use its default. The JSON frame is limited to 256 KiB + 4 KiB and PNML to 2 MiB. Each of at most eight mutations uses existing bounded marking exploration, acceptance and completed-language comparison budgets. Results are non-retained and downloadable as digest-pinned JSON. Mutation testing makes no real business changes, executes no agents and does not certify independently authored business policy.
+
+### Review a model release against pinned criteria
+
+Open **Review a model release against pinned criteria** in the structural and behavioral validation panel. The model just replayed is the baseline. Upload a candidate and explicitly copy the current acceptance suite and policy rules, or edit the proposed specification. For example:
+
+```json
+{
+  "format": "openworkgraph.petri_release_spec.v1",
+  "suite": {
+    "format": "openworkgraph.petri_acceptance_suite.v1",
+    "cases": [
+      {"id": "approved", "trace": ["Register", "Check", "Pay"], "expect": {"completed": true}}
+    ]
+  },
+  "rules": [{"template": "precedence", "a": "Check", "b": "Pay"}],
+  "criteria": {
+    "language": "equivalent",
+    "require_baseline_acceptance": true,
+    "require_candidate_termination": false,
+    "require_candidate_one_safe": false,
+    "require_rule_activation": true,
+    "mutation": {"min_detected_basis_points": 7500, "min_mutants": 4,
+                 "settings": {"max_mutants": 4}}
+  }
+}
+```
+
+**Freeze model release specification** validates and normalizes the inputs and adds the exact baseline and candidate SHA-256 digests. Pinning does not run exploration or assert approval. Download the frozen specification to reproduce the review later. Editing the proposed specification, changing the candidate file, or replaying a different baseline invalidates the dashboard freeze. The copied suite and rules are independent of their source editors; copying them again is an explicit change.
+
+**Review frozen release** recomputes the checks from the submitted model bytes; it refuses either model if its digest does not match. Candidate soundness and the acceptance suite must pass. Baseline acceptance is required by default; set it to false when deliberately changing requirements (not compatible with a mutation adequacy gate). Language criteria can be `equivalent` (default), `preserve_baseline`, `no_new_traces` or `not_required`. Guaranteed termination and one-safeness are optional. Every supplied untimed policy rule and the joint suite must hold on completed candidate traces; by default each individual rule must also have an activated satisfying trace, not merely vacuous satisfaction. An empty policy array means no policy gate, not proven policy compliance.
+
+The optional mutation criterion uses the baseline acceptance suite, and a selected-mutant minimum of 1–8 and threshold of 0–10,000 basis points. It passes only when the minimum sample is met and the observed detection lower bound reaches the threshold; if the upper bound is below the threshold it fails, otherwise it is inconclusive. This is a synthetic test adequacy gate, not a statistical real-world risk estimate.
+
+The report is **blocked** when any required gate fails, **inconclusive** when no gate fails but at least one is unknown, and **model criteria met** only when every required gate passes. The report contains the normalized specification, gate results and independently recomputed component reports. SHA-256 binds the specification and report using compact sorted-key JSON with ASCII escapes (the report digest excludes its own digest field). It is not a signature, an external attestation or execution approval.
+
+Offline CLI with the normal repository dependencies:
+
+```sh
+python -m server.event_log_petri_release pin --baseline before.pnml --candidate after.pnml --spec proposal.json > pin.json
+# Extract the "spec" object from pin.json to frozen.json; preserve the original models.
+python -m server.event_log_petri_release review --baseline before.pnml --candidate after.pnml --spec frozen.json > review.json
+```
+
+Review exit codes: 0 criteria met, 1 blocked, 2 invalid input (including changed model hashes), 3 inconclusive. The owner-only, non-retained API is `POST /v1/event-logs/petri-release/pin` or `/review` with `application/octet-stream`: four unsigned big-endian bytes giving the UTF-8 JSON specification length, those bytes, four unsigned big-endian bytes giving the baseline PNML length, those PNML bytes, and the nonempty candidate PNML bytes. The specification is limited to 384 KiB; each model to 2 MiB. Existing component work limits and the optional eight-mutation maximum apply. Reports include model labels and declared criteria; share them deliberately. No real business work or agents are executed, and a model release report cannot authorize deployment or verify real-world outcomes.
+
+### Process trees (PTML) from PM4Py and ProM
+
+The file picker also accepts a **process tree** in PTML, as `pm4py.write_ptml` and ProM's Inductive
+Miner save it. The tree is converted to its workflow net with the same block construction as the
+discovered-model PNML export, then replayed, aligned or saved as a reference net like any PNML
+file. `POST /v1/event-logs/ptml-to-pnml` takes the PTML file as the body (dashboard session only,
+at most 2 MB, nothing stored). It returns the `pnml`, the tree's `name`, place and transition
+counts and the activity labels.
+
+Supported nodes:
+
+- `manualTask` (an activity) and `automaticTask` (a silent step);
+- `sequence`, `xor` and `and`;
+- `or` (inclusive choice): execute any nonempty subset of branches, with parallel interleaving of their activities;
+- `interleaved`: execute every child exactly once, in any order, with no overlap between whole child blocks;
+- `xorLoop` with two children (PM4Py: do, redo) or three (ProM: do, redo, exit). The exit runs
+  once after the loop.
+
+Other operators (such as `def`), a node with two parents, cycles, unconnected nodes,
+unknown references and XML with a DOCTYPE or entity declaration are refused with a message.
+Nothing is approximated by the converter. PTML requires an ASCII-compatible XML encoding (such as UTF-8) and both parsers are bounded to 250 nesting levels.
+
+A tree can also be pasted as PM4Py prints it (`print(tree)`), for example
+`->( 'Register', X( 'Check', tau ), *( 'Fix', tau ), 'Close' )`. Its notation:
+
+- `->` is a sequence, `X` a choice, `+` parallel and `*` a loop (two or three children);
+- `tau` is a silent step;
+- labels are single-quoted. A label ends at the quote followed by a comma or a closing bracket,
+  so quotes inside a label are kept.
+
+`O` denotes inclusive choice and `<>` denotes interleaving. For example, `O( 'Pay', 'Ship' )` accepts either alone or both in either order, whereas `<>( ->( 'A', 'B' ), ->( 'C', 'D' ) )` accepts only the two whole-block orders. The compiled nets use linear-size branch selection/lock constructions. Exact net semantics do not make the downstream bounded token-replay heuristic complete: highly branching nets can exceed its silent-state budget; review alignments and their limits before interpreting apparent deviations. The dashboard field is
+**Or paste a PM4Py process tree**. Its endpoint is `POST /v1/event-logs/process-tree-to-pnml`
+with `{"notation": "…"}` (dashboard session only, at most 200,000 characters, nesting at most 250
+levels). The response has the same shape as `ptml-to-pnml`.
+
 ## Temporal profile
 
 **Temporal profile** (as in PM4Py and ProM) learns the usual time between every ordered pair of
@@ -3288,6 +3863,15 @@ far too long, or suspiciously little time, overall between two points.
   were slower or faster) and the cases with most unusual timings, each with its strongest one.
 - The profile is learned from the same cases it checks, so a few extreme cases widen it; read the
   results as timings to review, not errors. The case filter applies.
+
+Set **Baseline cutoff (UTC)** to check later cases against an earlier period.
+OWG learns from cases whose last recorded event is before the cutoff, then checks
+cases whose first recorded event is at or after it. It counts cases spanning the
+cutoff separately and excludes them from both periods. The result shows how many
+later cases have a checked pair and how many later pair occurrences lack a usable
+baseline. Both periods use the active case filters and case notion. An optional
+`baseline_cutoff` query parameter accepts a timezone-qualified ISO timestamp
+on both the summary and the case review endpoints.
 
 **Browse all deviating cases** opens the complete set of flagged cases. **Inspect cases** on
 a pair limits the review to that pair. Either review can show slower or faster deviations and
@@ -3322,8 +3906,11 @@ A numeric condition with `includes_non_numeric` also matches unusable numbers.
    - the latest non-empty value of every event attribute recorded on the case at or before the
      decision event (`event.*`).
 
-   Values recorded after the decision are never used. Case attributes carry no time, so they may
-   have been set later; the result says so.
+   Use **Timed event attributes only** to exclude untimed case attributes.
+   This setting keeps event values recorded at or before the decision. The
+   combined setting also uses case attributes, which can have been set later.
+   Pass `include_case_attributes=false` to the decision-rules endpoint for
+   the event-only mode.
 3. **Rules.** A CART decision tree (Gini impurity, depth 1–4, default 3) is learned on about 70% of
    the cases and scored on the rest.
    - The split is by a hash of the case id, so it is repeatable and keeps each case on one side.
@@ -3331,6 +3918,11 @@ A numeric condition with `includes_non_numeric` also matches unusable numbers.
      are split on their 30 most common values.
    - Each leaf is a rule. It shows its conditions, the usual next activity, its confidence and the
      number of training occurrences.
+   - **Held-out results by branch** lists recorded and predicted occurrences,
+     correct predictions, precision, and recall. Precision is undefined without
+     predictions for that branch. Recall is undefined without recorded holdout
+     occurrences. **Held-out branch mix-ups** shows which recorded branches were
+     predicted as another branch and how often.
 
 The result also gives:
 - the held-out accuracy, next to the accuracy of always predicting the most common branch;
@@ -3357,8 +3949,53 @@ through `get_process_decision_rules` (see PROCESS_INTELLIGENCE_FOR_AGENTS.md).
 
 ### Excel event-log export
 
-Dashboard owners can download a saved log as an Excel workbook (`GET /v1/event-logs/{log_id}/events.xlsx`). The workbook preserves case IDs, activities, timestamps, and resources as literal text cells, with a frozen header and filter. It is a CSV-equivalent view rather than an OCEL relationship export.
+Dashboard owners can download a saved log as an Excel workbook (`GET /v1/event-logs/{log_id}/events.xlsx`). The workbook preserves case IDs, activities, timestamps, and resources as literal text cells, with a frozen header and filter. It is a CSV-equivalent view rather than an OCEL relationship export. A worksheet holds at most 1,048,575 events, so a larger log continues on further worksheets ("Events 2", "Events 3", ...), each with the header row, up to 16 worksheets (about 16.7 million events). To read it back, import the first worksheet and append the others.
+
+### Parquet event-log export
+
+**Apache Parquet (typed columns)** in the export menu downloads the same rows as a Parquet file
+(`GET /v1/event-logs/{log_id}/events.parquet`, dashboard session only), for DuckDB, pandas or
+PM4Py, Spark, Power BI and cloud warehouses. Columns:
+
+- `case_id` and `activity`: strings;
+- `timestamp`: a UTC-adjusted timestamp with microsecond precision, not text;
+- `resource`: a string, null where the event has none.
+
+The CSV export is streamed to a temporary file and converted by DuckDB, so large logs are not held
+in memory; both temporary files are removed after the download. The `X-OWG-Rows` header counts
+events. The workspace's Parquet import reads the file back to the same events.
 
 ### Rework and loop case evidence
 
-The local rework report offers explicit case-evidence links for repeated activities and exact closed activity loops. Selectors respect the active case cohort and retain literal event order; timestamp ties do not establish business order.
+The local rework report shows the total number of repeated activities and recorded loop patterns, with an adjustable display limit of 20, 50 or 100. JSON and CSV downloads contain the displayed results and the JSON includes the selected cohort and analysis settings. The report offers explicit case-evidence links for repeated activities and exact closed activity loops. Selectors respect the active case cohort and retain literal event order; timestamp ties do not establish business order.
+
+### Keeping hidden-activity selections intact
+
+The hide-activities picker includes all currently hidden labels, even when they
+fall outside the initial 2,000 frequent activities. Search original labels and
+page through matches to add other activities to the picker without changing
+the current selection. The dashboard checks that
+the saved hidden set has not changed since it loaded. If another view changed
+it, reload before saving; the stale selection is not applied.
+
+### Reusing activity groupings across logs
+
+Under **Group activities**, download a saved mapping as JSON. In another log,
+open **Import activity mapping**, choose that file, and preview the matching
+event counts and exact activity labels missing from the destination. Load the
+mapping into the draft, review it, and save it. Saving does not apply the
+mapping; apply it separately when ready. The file contains the mapping definition,
+including activity names, but no events.
+
+The dashboard-session endpoint `POST /v1/event-logs/{log_id}/activity-mappings/template/preview`
+accepts `{ "format": "openworkgraph.activity-mapping.v1", "mapping": { ... } }`.
+It validates and previews the definition against original event labels without
+changing the log or its saved mappings.
+
+### Exact activities in compliance rules
+
+Activity A and B accept an exact label in place of the suggested activity. Use
+**Find labels** to search the current case notion, then add and check the rule.
+The checked definition is also used for violation evidence and saved signals.
+Adding or removing a queued rule clears the previous check; run it again to
+review violations or save a signal.
