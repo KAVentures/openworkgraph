@@ -45,6 +45,7 @@ def _safe_examples(examples, names, before, after):
     chosen = []
     chars = 0
     longest = max(len(p) for i in before + after for p in i.phrases)
+    phrase_work = sum(len(p) for i in before + after for p in i.phrases)
     ids = set()
     for example in examples:
         if example.get("split") != "train" or example.get("labels") is None:
@@ -61,7 +62,7 @@ def _safe_examples(examples, names, before, after):
             raise mining.CommunicationsError("reviewed training evidence contains invalid or retired labels; review it first")
         ids.add(eid)
         chars += len(text)
-        if chars > MAX_CHARACTERS or chars * longest * 2 > MAX_WORK:
+        if chars > MAX_CHARACTERS or chars * longest * 2 + (len(chosen) + 1) * phrase_work > MAX_WORK:
             raise mining.CommunicationsError("preview exceeds its work budget; no partial report is available")
         chosen.append(example)
     if not chosen:

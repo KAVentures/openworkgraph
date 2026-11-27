@@ -169,8 +169,8 @@
           body.replaceChildren(el('p',m.messages+' labelled training messages · '+m.changed_decisions+' changed decisions · '+m.newly_correct+' newly correct · '+m.newly_not_correct+' no longer correct.'),
             el('p','Strict complete-message accuracy: '+pct(m.baseline_strict_accuracy)+' → '+pct(m.candidate_strict_accuracy)+
               '. Ambiguous '+m.baseline_ambiguous+' → '+m.candidate_ambiguous+'; unclassified '+m.baseline_unclassified+' → '+m.candidate_unclassified+'.'),
-            table(['Intent','Positive support','Current F1','Proposed F1','Current recall','Proposed recall','Current coverage','Proposed coverage'],
-              m.per_intent.map(x=>[x.intent,x.baseline.positive_support,pct(x.baseline.f1),pct(x.candidate.f1),pct(x.baseline.recall),pct(x.candidate.recall),pct(x.baseline.decision_coverage),pct(x.candidate.decision_coverage)])),
+            table(['Intent','Positive support','Negative support','Current F1','Proposed F1','Current precision','Proposed precision','Current recall','Proposed recall','Current coverage','Proposed coverage'],
+              m.per_intent.map(x=>[x.intent,x.baseline.positive_support,x.baseline.negative_support,pct(x.baseline.f1),pct(x.candidate.f1),pct(x.baseline.precision),pct(x.candidate.precision),pct(x.baseline.recall),pct(x.candidate.recall),pct(x.baseline.decision_coverage),pct(x.candidate.decision_coverage)])),
             table(['Current primary result','Proposed primary result','Messages'],m.primary_transitions.map(x=>[x.baseline,x.candidate,x.messages])),
             table(['Current correctness','Proposed correctness','Messages'],m.correctness_transitions.map(x=>[x.baseline,x.candidate,x.messages])));
         };

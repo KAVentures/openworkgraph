@@ -240,7 +240,8 @@ async def apply_taxonomy_preview(request: Request):
         raise HTTPException(422, "explicit confirmation and preview digest required")
     _require_dashboard(request)
     try:
-        return _no_store(change.apply(load_taxonomy, _save_taxonomy, body["taxonomy"], body["preview_sha256"]))
+        result = await run_in_threadpool(change.apply, load_taxonomy, _save_taxonomy, body["taxonomy"], body["preview_sha256"])
+        return _no_store(result)
     except mining.CommunicationsError as exc:
         raise HTTPException(422, str(exc)) from None
     except review.ReviewError as exc:
