@@ -115,7 +115,7 @@ thead th{background:#e8eeea}th:first-child{width:36%}code{overflow-wrap:anywhere
         ["Complete paired episodes",complete],["Canonical scorer invoked",str(value["canonical_scorer_invoked"] is True)],
         ["Independent outcome verification","Not established"],["Rollout authorization","Not granted"]])
     html='<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'+\
-        '<meta http-equiv="Content-Security-Policy" content="default-src \\'none\\'; style-src \\'unsafe-inline\\'; base-uri \\'none\\'; form-action \\'none\\'">'+\
+        '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; style-src \'unsafe-inline\'; base-uri \'none\'; form-action \'none\'">'+\
         '<title>OWG pilot decision evidence</title><style>'+css+'</style></head><body><main>'+\
         '<h1>Prospective pilot decision evidence</h1><p>Private minimized review artifact. An exact declared sample, not a deployment decision.</p>'+\
         '<section><h2>Decision threshold overview</h2>'+headline+'</section>'+\
