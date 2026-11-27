@@ -4,7 +4,7 @@ Open **Event-time object state check** in the object-centric map, or open
 **Object binding continuity** from the workspace. Both use the selected
 retained OCEL log even if it has no supplied object-to-object assertions.
 In the map, select a result status to page matching events and open an event
-to review its bounded object witnesses. Changing the check clears earlier
+to page all its retained object witnesses. Changing the check clears earlier
 results; a changed log requires rerunning the check.
 
 Enter an exact activity, object type, attribute name and expected retained
@@ -33,7 +33,9 @@ no_linked_object separately instead of vacuous success.
 The result contains exact event and distinct event-object counts over the
 retained selection, and a status-filterable evidence table. Each event
 includes all object outcome counts and up to 20 literal object witnesses,
-with an explicit truncation flag. Pagination is chronological with event
+with an explicit truncation flag. The separate witness endpoint pages the
+complete retained set for a reviewed event using literal object-ID cursors.
+Pagination of events is chronological with event
 ID as deterministic tie-breaker, not an inferred temporal order. Later pages
 require the retained append revision; append invalidates an older revision.
 Rerun after changing filters. The report does not establish historical
@@ -59,6 +61,13 @@ Limits: 200,000 selected events, 1,000,000 distinct selected event-object
 links, 2,000,000 selected history rows, 1–100 events per page.
 An exceeded work bound refuses the analysis instead of presenting sampled
 counts as exact. No new persistent state, model change or provider calls.
+
+For full object evidence, POST the same check settings to
+`/v1/event-logs/{log_id}/object-state-check/witnesses` with the reviewed
+`event_id` and `expected_revision`. Use `next_after` as `after` to request
+another page. A result status filter, if supplied, must include the event;
+the endpoint refuses stale revisions and unrelated events. Witness requests
+recompute the same bounded check and can therefore take time on large logs.
 
 The test fixture covers exact-time updates, conflicts and later resolution,
 missing attributes and objects, duplicate qualifier associations, all/any
