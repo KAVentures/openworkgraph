@@ -208,3 +208,29 @@ def test_cli_exclusive_outputs_and_complete_score(tmp_path):
                        "--reviewer-a", str(reviews), "--reviewer-b", str(reviews),
                        "--predictions", str(predictions), "--output", str(output)]) == 0
     assert json.loads(output.read_text())["sessions"] == 1
+
+
+def test_real_formatter_contract_detail_is_removed_without_reprojecting():
+    from shared.evidence import rich_evidence_row
+    source = case()
+    source["presented_evidence"] = [rich_evidence_row(e) for e in source["presented_evidence"]]
+    plan, first, second, _ = pilot.make_plan([source], "holdout", "c" * 64)
+    standard, full = sorted([first[0], second[0]], key=lambda p: len(p["presented_evidence"]))
+    assert full["presented_evidence"][-1]["interaction_detail"]["context_only"] is True
+    assert standard["presented_evidence"] == full["presented_evidence"][:4]
+    assert plan["cohort_sha256"] == pilot.digest([source])
+
+
+def test_undefined_support_is_visible_in_both_arms():
+    a, b = dict.fromkeys(pilot.METRICS, .3), dict.fromkeys(pilot.METRICS, .8)
+    missing = dict(a, pair_precision=None)
+    def row(family, baseline, enhanced):
+        return {"family_id": family, "standard": {"metrics": baseline},
+                "detailed_on_standard": {"metrics": enhanced}}
+    result = pilot.family_summary([row("f1", a, b), row("f1", missing, b)])["pair_precision"]
+    assert result["paired_sessions"] == 1
+    assert result["sessions_excluded_from_pair"] == 1
+    assert result["undefined_standard_sessions"] == 1
+    assert result["undefined_detailed_sessions"] == 0
+    assert result["paired_family_macro_standard"] == .3
+    assert result["paired_family_macro_detailed"] == .8

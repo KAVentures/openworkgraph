@@ -98,7 +98,10 @@ known coverage. Undefined metrics are null, with support counts, not perfect
 scores. Compare per-session values and equal-weight family deltas, with
 improved/regressed/tied sessions; higher contamination is worse. These are
 descriptive summaries, not confidence intervals or significance tests.
-Record any undefined or lost support in both arms. The full-detail diagnostic
+Absolute paired-family scores and the number of undefined or excluded sessions
+are reported for each metric. Input hashes identify the exact two annotation files,
+predictions and adjudication values used for scoring; they are not signatures.
+The full-detail diagnostic
 also reports the number of pointer events assigned, not their coordinates.
 
 Before claiming benefit, validate cohort independence, label provenance,
