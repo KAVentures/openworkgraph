@@ -118,3 +118,80 @@ def test_roster_strictness_and_cli_private_exclusive_outputs(tmp_path):
     with pytest.raises(ValueError):cohort._load(inp)
     inp.write_text('{"a":NaN}')
     with pytest.raises(ValueError):cohort._load(inp)
+
+
+def paired(n=3):
+    truth=[{"episode_id":f"e{i}","correct_resources":["resource"],
+            "correct_agent_runs":[],"real_observed_work":False} for i in range(n)]
+    plan=cohort.freeze([{**row,"truth_sha256":cohort.digest(t)}
+                        for row,t in zip(roster(n),truth)],confirmed=True)
+    runs={}
+    for arm in cohort.ARMS:
+        runs[arm]=[{"episode_id":row["episode_id"],"model_id":row["model_id"],
+                    "source_state_id":row["source_state_id"],"recorded_model_completion":True,
+                    "independent_review":{"reviewer_id":"reviewer","selected_resources":["resource"],
+                        "selected_agent_runs":[],"clarification_questions":0,"wrong_assumptions":0,
+                        "continuation_success":arm=="goal","consequential_wrong_action":False}}
+                   for row in plan["episodes"]]
+    return plan,truth,runs
+
+
+def score(plan,truth,runs,dispositions=()):
+    return cohort.score(plan,truth,runs,list(dispositions),
+                        expected_plan_sha256=plan["plan_sha256"],confirmed=True)
+
+
+def test_scoring_reuses_existing_canonical_report_and_pins_runs():
+    from evals.product_value import report
+    plan,truth,runs=paired()
+    result=score(plan,truth,runs)
+    assert result["canonical_report"]==report(truth,*(runs[a] for a in cohort.ARMS))
+    assert result["canonical_scorer_invoked"] and not result["decision_withheld_for_incomplete_coverage"]
+    assert result["run_sha256"]["goal"]==cohort.digest(runs["goal"])
+    assert result["coverage"]["complete_paired_episodes"]==3
+    assert result["canonical_report"]["status"]=="pilot_only"
+    assert result["score_sha256"]==cohort.digest({k:v for k,v in result.items() if k!="score_sha256"})
+
+
+def test_incomplete_pilot_never_calls_canonical_scorer(monkeypatch):
+    from evals import product_value
+    plan,truth,runs=paired()
+    runs["goal"].pop()
+    def forbidden(*args):
+        pytest.fail("partial cohort must not invoke canonical scorer")
+    monkeypatch.setattr(product_value,"report",forbidden)
+    result=score(plan,truth,runs,[{"episode_id":"e2","arm":"goal","status":"withdrawn"}])
+    assert result["canonical_report"] is None
+    assert result["decision_withheld_for_incomplete_coverage"]
+    assert result["coverage"]["enrolled"]==3 and result["coverage"]["complete_paired_episodes"]==2
+
+
+@pytest.mark.parametrize("kind",["truth_subset","truth_mutation","run_model","run_source",
+                                 "not_completed","no_review","duplicate_disposition","unplanned_run"])
+def test_scoring_rejects_mismatched_review_material(kind):
+    plan,truth,runs=paired();dispositions=[]
+    if kind=="truth_subset":truth.pop()
+    elif kind=="truth_mutation":truth[0]["correct_resources"]=[]
+    elif kind=="run_model":runs["goal"][0]["model_id"]="another"
+    elif kind=="run_source":runs["goal"][0]["source_state_id"]="another"
+    elif kind=="not_completed":runs["goal"][0]["recorded_model_completion"]=False
+    elif kind=="no_review":runs["goal"][0].pop("independent_review")
+    elif kind=="duplicate_disposition":dispositions=[{"episode_id":"e0","arm":"goal","status":"withdrawn"}]
+    else:runs["goal"][0]["episode_id"]="e99"
+    with pytest.raises(ValueError):score(plan,truth,runs,dispositions)
+
+
+def test_score_cli_jsonl(tmp_path):
+    plan,truth,runs=paired()
+    p=tmp_path/"plan.json";p.write_text(json.dumps(plan))
+    d=tmp_path/"missing.json";d.write_text("[]")
+    e=tmp_path/"episodes.jsonl";e.write_text("\n".join(map(json.dumps,truth)))
+    o=tmp_path/"score.json"
+    args=["score","--plan",str(p),"--plan-sha256",plan["plan_sha256"],"--episodes",str(e),
+          "--dispositions",str(d),"--out",str(o),"--confirm"]
+    for arm,rows in runs.items():
+        f=tmp_path/(arm+".jsonl");f.write_text("\n".join(map(json.dumps,rows)))
+        args.extend(["--"+arm,str(f)])
+    assert cohort.main(args)==0
+    assert cohort._load(o)==score(plan,truth,runs)
+    with pytest.raises(SystemExit):cohort.main(args)
