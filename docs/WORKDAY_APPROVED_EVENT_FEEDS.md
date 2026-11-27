@@ -27,7 +27,7 @@ A run requests the control count, the event report twice and the control count a
 
 The four requests share the existing page, byte, time and row budgets. This is intentionally bounded, non-paginated RaaS; reduce the window when limits are exceeded. No missing population is silently accepted. Matching results do not establish transactional snapshot completeness or historical change coverage.
 
-The common retained-feed engine atomically appends events and advances the checkpoint, deduplicating overlapping event IDs. Case, event and resource IDs are profile-scoped HMAC pseudonyms; raw identifiers and passwords are not stored in retained event rows. The existing recurring jobs and governed snapshot publication use the shared provider contract. Native private crosswalks, reviewed in-place rotation and live provider acceptance remain outstanding.
+The common retained-feed engine atomically appends events and advances the checkpoint, deduplicating overlapping event IDs. Case, event and resource IDs are profile-scoped HMAC pseudonyms; raw identifiers and passwords are not stored in retained event rows. The existing recurring jobs and governed snapshot publication use the shared provider contract. [Private native crosswalk](GATEWAY_PRIVATE_CROSSWALKS.md) accepts exact curated report case strings. Reviewed in-place rotation and live provider acceptance remain outstanding.
 
 ## Tests and limitations
 
