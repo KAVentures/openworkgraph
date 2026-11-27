@@ -3444,8 +3444,9 @@
             const editor=document.createElement('textarea');editor.maxLength=2000;editor.rows=3;editor.value=n.text;
             editor.setAttribute('aria-label','Edit note text for case '+n.case_id);
             const saveEdit=button('Save note','secondary'),cancel=button('Cancel editing','secondary');
+            const originalActions=Array.from(actions.childNodes);
             editing=true;body.replaceChildren(editor);actions.replaceChildren(saveEdit,cancel);editor.focus();
-            cancel.onclick=()=>{editing=false;body.textContent=n.text;actions.replaceChildren(edit,del);if(pendingRefresh){pendingRefresh=false;restart();}};
+            cancel.onclick=()=>{if(writing||!current())return;editing=false;body.textContent=n.text;actions.replaceChildren(...originalActions);if(pendingRefresh){pendingRefresh=false;restart();}else edit.focus();};
             saveEdit.onclick=async()=>{
               if(writing||!current())return;
               if(!editor.value.trim()){msg.textContent='Write something in the note.';return;}
