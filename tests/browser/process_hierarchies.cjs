@@ -59,6 +59,11 @@ const path=require('node:path');
   await page.locator('#hierarchyPortfolioView').selectOption('overlaps');
   await page.locator('#hierarchyPortfolioLoad').click();
   await page.locator('#hierarchyPortfolioOutput').getByRole('cell',{name:'2/5',exact:true}).waitFor();
+  await page.locator('#hierarchyPortfolioOutput').getByRole('button',{name:'Compare exact membership'}).click();
+  await page.locator('#hierarchyPortfolioOutput').getByText('5 matching rows; showing 5 at offset 0.',{exact:true}).waitFor();
+  await page.locator('#hierarchyPortfolioFilter').selectOption('shared');
+  await page.locator('#hierarchyPortfolioLoad').click();
+  await page.locator('#hierarchyPortfolioOutput').getByText('2 matching rows; showing 2 at offset 0.',{exact:true}).waitFor();
   // Current child changes never silently replace the historical title or digest.
   await api('/v1/human/processes/'+b.workflow_id,{title:'Child B latest',process_model:b.process_model,expected_revision:1,user_confirmed:true,organization_sharing_confirmed:true});
   // Old portfolio export must refuse a changed reference basis.

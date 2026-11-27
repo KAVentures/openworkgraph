@@ -19,13 +19,15 @@
     const portfolioOutput=el('div');portfolioOutput.id='hierarchyPortfolioOutput';
     const portfolioView=el('select');portfolioView.id='hierarchyPortfolioView';
     options(portfolioView,[['processes','Process coverage and reuse'],['maps','Map readiness'],['occurrences','Exact occurrence paths'],
-      ['overlaps','Overlapping map pairs'],['categories','Category coverage'],['capabilities','Capability coverage']]);
+      ['overlaps','Overlapping map pairs'],['membership','Compare exact map membership'],['categories','Category coverage'],['capabilities','Capability coverage']]);
     const portfolioFilter=el('select');portfolioFilter.id='hierarchyPortfolioFilter';
     const portfolioFocus=input('hierarchyPortfolioFocus');portfolioFocus.maxLength=80;
+    const leftRoot=input('hierarchyPortfolioLeftRoot'),rightRoot=input('hierarchyPortfolioRightRoot');leftRoot.maxLength=rightRoot.maxLength=80;
+    const pairFields=el('div');pairFields.hidden=true;pairFields.append(label('Left map root identity',leftRoot),label('Right map root identity',rightRoot));
     const filters={processes:[['all','All processes'],['unmapped','Active with no map occurrence'],['reused','Reused across maps'],['multiple_pins','Multiple exact pins'],['needs_review','References needing review'],['archived','Archived'],['unavailable','Unavailable referenced']],
       maps:[['all','All maps'],['needs_review','References needing review'],['archived','Archived roots']],
       occurrences:[['all','All occurrences'],['needs_review','References needing review'],['multiple_pins','Process has multiple exact pins']],
-      overlaps:[['all','All overlapping pairs']],categories:[['all','All categories']],capabilities:[['all','All capabilities']]};
+      overlaps:[['all','All overlapping pairs']],membership:[['all','All union members'],['shared','Shared identities'],['left_only','Only in left map'],['right_only','Only in right map'],['different_pins','Shared identities with different exact pin sets']],categories:[['all','All categories']],capabilities:[['all','All capabilities']]};
     options(portfolioFilter,filters.processes);
     let portfolioSerial=0,portfolioResult=null;
     function clearPortfolio(message=''){
@@ -40,10 +42,11 @@
     }
     function portfolioQuery(offset=0,pin=null){
       return {view:portfolioView.value,filter:portfolioFilter.value,focus_workflow_id:portfolioFocus.value.trim()||null,offset,limit:25,
+        ...(portfolioView.value==='membership'?{left_root:leftRoot.value.trim()||null,right_root:rightRoot.value.trim()||null}:{}),
         ...(pin?{expected_fingerprint:pin}:{})};
     }
     function inspectProcess(id){
-      portfolioView.value='occurrences';options(portfolioFilter,filters.occurrences);portfolioFocus.value=id;
+      portfolioView.value='occurrences';options(portfolioFilter,filters.occurrences);portfolioFocus.value=id;pairFields.hidden=true;
       clearPortfolio();work(ok=>loadPortfolio(ok));
     }
     async function loadPortfolio(ok,offset=0,pin=null){
@@ -72,8 +75,14 @@
         p.rows.map(r=>[r.title+' · r'+r.revision+(r.root_archived?' · archived':''),r.category+' / '+r.capability,r.occurrences,r.unique_processes,r.needs_review_occurrences,openRoot(r.root_workflow_id)]));
       else if(p.view==='occurrences')table=portfolioTable(['Root / exact ancestry','Pinned process','Revision','Reference state','Independent review','Map'],
         p.rows.map(r=>[r.workflow_path.join(' / '),r.title?r.title+' · '+r.workflow_id:r.workflow_id,r.revision,r.reference_state,r.model_review,openRoot(r.root_workflow_id)]));
-      else if(p.view==='overlaps')table=portfolioTable(['Left map','Right map','Shared processes','Union','Jaccard','Same membership'],
-        p.rows.map(r=>[openRoot(r.left_root),openRoot(r.right_root),r.shared_process_count,r.union_process_count,r.jaccard_fraction,r.same_declared_membership?'Yes':'No']));
+      else if(p.view==='overlaps')table=portfolioTable(['Left map','Right map','Shared processes','Union','Jaccard','Same membership','Evidence'],
+        p.rows.map(r=>[openRoot(r.left_root),openRoot(r.right_root),r.shared_process_count,r.union_process_count,r.jaccard_fraction,r.same_declared_membership?'Yes':'No',
+          button('Compare exact membership',()=>{portfolioView.value='membership';options(portfolioFilter,filters.membership);
+            portfolioFocus.value='';pairFields.hidden=false;leftRoot.value=r.left_root;rightRoot.value=r.right_root;
+            clearPortfolio();work(live=>loadPortfolio(live,0,value.fingerprint));})]));
+      else if(p.view==='membership')table=portfolioTable(['Process identity','Membership','Left occurrences / pins','Right occurrences / pins','Different exact pins','Evidence'],
+        p.rows.map(r=>[r.workflow_id,r.membership,r.left_occurrences+' / '+r.left_pins.map(x=>'r'+x.revision).join(', '),
+          r.right_occurrences+' / '+r.right_pins.map(x=>'r'+x.revision).join(', '),r.different_exact_pin_sets?'Yes':'No',inspect(r.workflow_id)]));
       else table=portfolioTable(['Exact declared label','Maps','Unique processes','Occurrences','Maps needing review'],
         p.rows.map(r=>[r.label||'(blank)',r.map_count,r.unique_processes,r.occurrences,r.maps_needing_review]));
       portfolioOutput.append(table);
@@ -91,12 +100,13 @@
       }),'hierarchyPortfolioExport');
       portfolioOutput.append(prev,next,download,el('p',value.interpretation),el('p','Exact scan digest '+value.fingerprint));
     }
-    portfolioView.onchange=()=>{options(portfolioFilter,filters[portfolioView.value]);clearPortfolio('View changed; load a new page.');};
+    portfolioView.onchange=()=>{options(portfolioFilter,filters[portfolioView.value]);pairFields.hidden=portfolioView.value!=='membership';clearPortfolio('View changed; load a new page.');};
+    leftRoot.oninput=rightRoot.oninput=()=>clearPortfolio('Map pair changed; load a new page.');
     portfolioFilter.onchange=()=>clearPortfolio('Filter changed; load a new page.');
     portfolioFocus.oninput=()=>clearPortfolio('Focus changed; load a new page.');
     portfolioPanel.append(el('summary','Organization repository intelligence'),
       el('p','Inspect all saved maps and catalog metadata in one bounded tenant snapshot. No case evidence, benefits or execution graph is inferred.'),
-      label('Portfolio view',portfolioView),label('Portfolio filter',portfolioFilter),label('Optional exact workflow identity',portfolioFocus),
+      label('Portfolio view',portfolioView),label('Portfolio filter',portfolioFilter),label('Optional exact workflow identity',portfolioFocus),pairFields,
       button('Review organization repository portfolio',()=>work(ok=>loadPortfolio(ok)),'hierarchyPortfolioLoad'),portfolioStatus,portfolioOutput);
     inventory.append(portfolioPanel);
 
@@ -110,7 +120,7 @@
       catch(error){if(!current(e))return;if([401,403].includes(error.status)){clear();onDenied();return;}message(error.message||'Repository request failed.');mapNote.textContent=error.message||'Repository request failed.';}
       finally{if(current(e)){busy=false;if(form)form.disabled=false;}}
     }
-    function clear(){clearPortfolio();portfolioFocus.value='';portfolioView.value='processes';options(portfolioFilter,filters.processes);portfolioPanel.open=false;epoch++;selected=view=draft=null;dirty=busy=false;choices=[];choiceAfter=mapAfter='';mapPage=[];names.clear();host.replaceChildren();mapList.replaceChildren();mapNote.textContent='';filter.value='';mapsNext.disabled=true;form=status=null;}
+    function clear(){clearPortfolio();portfolioFocus.value='';portfolioView.value='processes';options(portfolioFilter,filters.processes);leftRoot.value=rightRoot.value='';pairFields.hidden=true;portfolioPanel.open=false;epoch++;selected=view=draft=null;dirty=busy=false;choices=[];choiceAfter=mapAfter='';mapPage=[];names.clear();host.replaceChildren();mapList.replaceChildren();mapNote.textContent='';filter.value='';mapsNext.disabled=true;form=status=null;}
     function select(data){clearPortfolio();epoch++;busy=false;selected=data;view=draft=null;dirty=false;choices=[];choiceAfter='';names.clear();host.replaceChildren();form=status=null;
       const h=el('h3','Repository hierarchy for this root process');status=el('p');status.id='hierarchyStatus';status.setAttribute('role','status');
       host.append(h,el('p','Repository grouping is separate from the selected activity graph. Existing BPMN, PDD and agent-project exports include that flat design only. Use the separate map manifest to retain hierarchy references; it grants no child review or execution authority.'),

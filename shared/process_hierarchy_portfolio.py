@@ -22,6 +22,7 @@ VIEWS={
     "maps":{"all","needs_review","archived"},
     "occurrences":{"all","needs_review","multiple_pins"},
     "overlaps":{"all"},
+    "membership":{"all","shared","left_only","right_only","different_pins"},
     "categories":{"all"},
     "capabilities":{"all"},
 }
@@ -29,9 +30,11 @@ VIEWS={
 
 class Query(BaseModel):
     model_config=ConfigDict(extra="forbid",strict=True)
-    view: Literal["processes","maps","occurrences","overlaps","categories","capabilities"]="processes"
+    view: Literal["processes","maps","occurrences","overlaps","membership","categories","capabilities"]="processes"
     filter: str=Field(default="all",max_length=40)
     focus_workflow_id: ID|None=None
+    left_root: ID|None=None
+    right_root: ID|None=None
     offset: Annotated[int,Field(ge=0,le=MAX_OCCURRENCES)]=0
     limit: Annotated[int,Field(ge=1,le=MAX_PAGE)]=25
     expected_fingerprint: str|None=Field(default=None,pattern=r"^[a-f0-9]{64}$")
@@ -170,6 +173,34 @@ def build(organization_id,catalog,maps,resolutions):
             "summary":summary,"data":data,"complete_bounded_declared_scan":True}
 
 
+def membership(data,left,right):
+    roots={r["root_workflow_id"] for r in data["maps"]}
+    if left==right or left not in roots or right not in roots:
+        raise ValueError("select two distinct saved repository map roots")
+    left_rows=defaultdict(list)
+    right_rows=defaultdict(list)
+    for row in data["occurrences"]:
+        if row["root_workflow_id"]==left:
+            left_rows[row["workflow_id"]].append(row)
+        elif row["root_workflow_id"]==right:
+            right_rows[row["workflow_id"]].append(row)
+    result=[]
+    for wid in sorted(left_rows.keys()|right_rows.keys()):
+        l,r=left_rows.get(wid,[]),right_rows.get(wid,[])
+        def pins(rows):
+            counts=Counter((x["revision"],x["content_sha256"]) for x in rows)
+            return [{"revision":rev,"content_sha256":digest,"occurrences":count}
+                    for (rev,digest),count in sorted(counts.items())]
+        lp,rp=pins(l),pins(r)
+        lkeys={(x["revision"],x["content_sha256"]) for x in lp}
+        rkeys={(x["revision"],x["content_sha256"]) for x in rp}
+        status="shared" if l and r else "left_only" if l else "right_only"
+        result.append({"workflow_id":wid,"membership":status,"left_occurrences":len(l),"right_occurrences":len(r),
+                       "left_pins":lp,"right_pins":rp,"different_exact_pin_sets":status=="shared" and lkeys!=rkeys,
+                       "left_paths":[x["workflow_path"] for x in l],"right_paths":[x["workflow_path"] for x in r]})
+    return result
+
+
 def page(portfolio,query):
     if query.filter not in VIEWS[query.view]:
         raise ValueError("unsupported filter for the selected portfolio view")
@@ -179,6 +210,14 @@ def page(portfolio,query):
         raise ValueError("repository portfolio or source basis changed; refresh the complete scan")
     focus=query.focus_workflow_id
     data=portfolio["data"]
+    if query.view=="membership":
+        if query.left_root is None or query.right_root is None:
+            raise ValueError("select both saved repository map roots")
+        membership_rows=membership(data,query.left_root,query.right_root)
+    elif query.left_root is not None or query.right_root is not None:
+        raise ValueError("map pair is only supported for membership comparison")
+    else:
+        membership_rows=[]
     if focus and not any(r["workflow_id"]==focus for r in data["processes"]):
         raise ValueError("selected workflow is not part of this repository portfolio")
     pin_conflicts={r["workflow_id"] for r in data["processes"] if r["multiple_pins"]}
@@ -186,7 +225,7 @@ def page(portfolio,query):
     def include(row):
         view,f=query.view,query.filter
         if focus:
-            if view=="processes" and row["workflow_id"]!=focus:return False
+            if view in {"processes","membership"} and row["workflow_id"]!=focus:return False
             if view=="occurrences" and row["workflow_id"]!=focus:return False
             if view=="maps" and row["root_workflow_id"] not in focus_roots:return False
             if view=="overlaps" and not {row["left_root"],row["right_root"]}<=focus_roots:return False
@@ -201,11 +240,14 @@ def page(portfolio,query):
             return row["root_archived"] if f=="archived" else row["needs_review_occurrences"]>0
         if view=="occurrences":
             return row["needs_review"] if f=="needs_review" else row["workflow_id"] in pin_conflicts
+        if view=="membership":
+            return row["different_exact_pin_sets"] if f=="different_pins" else row["membership"]==f
         return False
-    rows=[r for r in data[query.view] if include(r)]
+    rows=[r for r in (membership_rows if query.view=="membership" else data[query.view]) if include(r)]
     selected=rows[query.offset:query.offset+query.limit]
     return {k:v for k,v in portfolio.items() if k!="data"}|{
         "page":{"view":query.view,"filter":query.filter,"focus_workflow_id":focus,
+                "left_root":query.left_root,"right_root":query.right_root,
                 "offset":query.offset,"limit":query.limit,"matching_rows":len(rows),
                 "next_offset":query.offset+len(selected) if selected and query.offset+len(selected)<len(rows) else None,
                 "rows":selected},

@@ -54,6 +54,12 @@ def test_real_catalog_coverage_reuse_and_mixed_revisions(store):
     overlap=report(store,view="overlaps")["page"]["rows"][0]
     assert overlap["shared_process_count"]==1 and overlap["union_process_count"]==4
     assert overlap["jaccard_fraction"]=="1/4"
+    member=report(store,view="membership",left_root=wa,right_root=wb,filter="different_pins")["page"]["rows"]
+    assert len(member)==1 and member[0]["workflow_id"]==wc
+    assert member[0]["left_occurrences"]==2 and member[0]["right_occurrences"]==1
+    assert member[0]["left_pins"][0]["revision"]==1 and member[0]["right_pins"][0]["revision"]==2
+    assert len(member[0]["left_paths"])==2
+    assert {x["workflow_id"] for x in report(store,view="membership",left_root=wa,right_root=wb,filter="left_only")["page"]["rows"]}=={wa,wd}
     categories=report(store,view="categories")["page"]["rows"]
     assert {x["label"]:x["unique_processes"] for x in categories}=={"Customer service":3,"Finance":2}
     capability=report(store,view="capabilities")["page"]["rows"][0]
@@ -200,3 +206,34 @@ def test_invalid_filter_and_unknown_focus_refused(store):
     process(store)
     with pytest.raises(Error,match="unsupported filter"):report(store,view="overlaps",filter="unmapped")
     with pytest.raises(Error,match="not part"):report(store,focus_workflow_id="unavailable")
+
+
+def test_real_authenticated_portfolio_routes_and_strict_body(tmp_path):
+    from fastapi.testclient import TestClient
+    from test_process_collaboration import app
+    h=lambda who:{"Authorization":"Bearer "+who}
+    base="/v1/human/process-hierarchies/portfolio"
+    with TestClient(app(tmp_path)) as client:
+        assert client.post(base,json={}).status_code==401
+        assert client.post(base,json={},headers=h("admin")).status_code==401
+        assert client.post(base,json={},headers=h("no-process")).status_code==403
+        created=client.post("/v1/human/processes",json=write().model_dump(),headers=h("alice"))
+        assert created.status_code==200,created.text
+        root=created.json()["process"];wid=root["workflow_id"]
+        saved=client.post("/v1/human/processes/"+wid+"/hierarchy",
+                          json=save_body(hierarchy(root)).model_dump(),headers=h("alice"))
+        assert saved.status_code==200,saved.text
+        result=client.post(base,json={"view":"maps"},headers=h("reader"))
+        assert result.status_code==200,result.text
+        assert result.headers["cache-control"]=="no-store"
+        assert result.json()["summary"]["saved_maps"]==1
+        assert client.post(base+"/export",json={},headers=h("reader")).status_code==422
+        exported=client.post(base+"/export",json={"view":"maps","expected_fingerprint":result.json()["fingerprint"]},headers=h("reader"))
+        assert exported.status_code==200,exported.text
+        assert "attachment" in exported.headers["content-disposition"]
+        assert exported.json()["page"]==result.json()["page"]
+        foreign=client.post(base,json={},headers=h("foreign"))
+        assert foreign.status_code==200 and foreign.json()["summary"]["saved_maps"]==0
+        assert client.post(base,json={"view":"membership","left_root":wid,"right_root":wid},headers=h("reader")).status_code==409
+        assert client.post(base,content=b'{"view":"maps","view":"processes"}',headers={**h("reader"),"Content-Type":"application/json"}).status_code==422
+        assert client.post(base,content=b'x'*4097,headers={**h("reader"),"Content-Type":"application/json"}).status_code==413

@@ -7,7 +7,7 @@ saved map declarations in one authorized database read snapshot. Historical
 map artifacts remain immutable and are inspected through the existing history
 flow; unsaved drafts are not included.
 
-## Six complementary views
+## Seven complementary views
 
 - **Process coverage and reuse:** distinguish active catalog processes with
   no occurrence from those without their own root map. Count distinct map
@@ -25,13 +25,18 @@ flow; unsaved drafts are not included.
   exact Jaccard fraction and whether membership is identical. A repeated node
   never inflates set intersection. This is not a duplicate-case or dependency
   analysis. Identical membership does not prove identical hierarchy.
+- **Exact map membership comparison:** select two saved map roots, even if
+  disjoint. Inspect every union identity as shared, left-only or right-only,
+  exact revision/digest sets and counts, and each map's ancestry paths. Filter
+  shared identities whose exact pin sets differ. Overlap rows open this view
+  against the same portfolio fingerprint; changed evidence refuses the drill-down.
 - **Category coverage:** exact declared category groups, map counts, distinct
   identity union, occurrences and map readiness. Blank labels are retained.
 - **Capability coverage:** equivalent exact-label coverage by capability.
 
 Filters are evaluated over the full accepted scan, not the loaded page.
 An optional exact workflow ID focuses process/occurrence views on that ID,
-maps on containing roots, overlaps on pairs both containing it, and taxonomy
+maps on containing roots, overlaps on pairs both containing it, membership on the selected identity within the pair, and taxonomy
 on groups containing those roots. A catalog process without occurrences has
 an empty occurrence result. Titles shown for available pinned references
 come from those exact versions. A current title is shown only when a current
@@ -82,10 +87,12 @@ Strict JSON up to 4 KiB. Request example:
 
 For later pages and export supply expected_fingerprint from the exact
 review; exports require it even at offset zero. Views are processes, maps,
-occurrences, overlaps, categories and capabilities. Allowed process filters
+occurrences, overlaps, membership, categories and capabilities. Allowed process filters
 are all, unmapped, reused, multiple_pins, needs_review, archived and
 unavailable; map filters all, needs_review, archived; occurrence filters
-all, needs_review, multiple_pins. Other views accept all only.
+all, needs_review, multiple_pins. Membership requires left_root and right_root
+and accepts all, shared, left_only, right_only, different_pins. Other views
+accept all only. Map root pair fields are refused outside membership.
 
 The portfolio does not infer a global executable process hierarchy,
 dependency graph, responsibility assignment, case membership, cost, savings
