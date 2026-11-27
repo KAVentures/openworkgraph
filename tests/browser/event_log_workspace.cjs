@@ -508,6 +508,33 @@ const path=require('node:path');
 
    await page.locator('#owgEventLogSimLoad').click();
    await page.locator('#owgEventLogSimRun').waitFor();
+   // Multi-SLA review uses the same bounded original runs for all deadlines.
+   const servicePanel=page.locator('#owgServiceLevelReview');
+   await servicePanel.locator('summary').first().click();
+   await page.locator('#owgServiceReviewLoad').click();
+   await page.waitForFunction(()=>document.querySelector('#owgServiceReviewLog').options.length>1);
+   await page.locator('#owgServiceReviewLog').selectOption({index:1});
+   await page.locator('#owgServiceReviewGrid').fill(JSON.stringify({
+     format:'openworkgraph.simulation-capacity-grid.v1',baseline:{cases:100,seed:17,distribution:'fixed'},
+     designs:[{label:'Two reviewers',activities:{Check:{resources:2}}}],arrival_rates_per_hour:[.01,.02],
+     replications:2,target:{cycle_time_minutes:240,minimum_completion_share:.9}}));
+   await page.locator('#owgServiceReviewPrepare').click();
+   assert.equal(JSON.parse(await page.locator('#owgServiceReviewPrepared').inputValue()).body.service_review.targets.length,2);
+   await page.locator('#owgServiceReviewShares').fill('50,80,95');
+   assert(await page.locator('#owgServiceReviewRun').isDisabled());
+   await page.locator('#owgServiceReviewPrepare').click();
+   const [serviceResponse]=await Promise.all([page.waitForResponse(r=>r.url().includes('/simulation/capacity-grid')&&r.request().method()==='POST'),
+     page.locator('#owgServiceReviewRun').click()]);
+   assert.equal(serviceResponse.status(),200,await serviceResponse.text());
+   const serviceReport=await serviceResponse.json();
+   assert.equal(serviceReport.simulated_cases,800);
+   assert.equal(serviceReport.service_review.cells.length,4);
+   await page.locator('#owgServiceReviewOutput').getByRole('heading',{name:'Inverse deadline review (all arrivals)'}).waitFor();
+   const [serviceDownload]=await Promise.all([page.waitForEvent('download'),page.locator('#owgServiceReviewJson').click()]);
+   assert.deepEqual(JSON.parse(await fs.readFile(await serviceDownload.path(),'utf8')),serviceReport);
+   const [serviceCsv]=await Promise.all([page.waitForEvent('download'),page.locator('#owgServiceReviewCsv').click()]);
+   assert.match(await fs.readFile(await serviceCsv.path(),'utf8'),/required_count,lower_share,upper_share,status/);
+   await servicePanel.locator('summary').first().click();
    // R14 shared-calibration portfolio: several staffing levels are tested
    // against one static local calibration, not independently refitted logs.
    await page.locator('#owgEventLogSimPortfolio').waitFor();

@@ -154,11 +154,14 @@
         const parsed=JSON.parse(await f.text());if(n!==generation||!panel.isConnected)return;
         const grid=parsed.inputs||parsed;
         if(!grid||grid.format!=='openworkgraph.simulation-capacity-grid.v1')throw Error('Choose a supported capacity-grid input or report.');
+        const s=grid.service_review;
+        if(s&&(!Array.isArray(s.targets)||s.targets.length<1||s.targets.length>8||
+          s.targets.some(t=>!t||typeof t.label!=='string'||typeof t.cycle_time_minutes!=='number'||typeof t.minimum_completion_share!=='number')||
+          !Array.isArray(s.inverse_completion_shares)||s.inverse_completion_shares.length<1||s.inverse_completion_shares.length>6||
+          s.inverse_completion_shares.some(v=>typeof v!=='number')))throw Error('Invalid imported service settings.');
         if(!confirm('Replace temporary grid assumptions with the selected file? Its source log is not selected automatically.'))return;
         config.value=JSON.stringify(Object.fromEntries(Object.entries(grid).filter(([k])=>k!=='service_review')),null,2);
-        if(grid.service_review){
-          const s=grid.service_review;
-          if(!Array.isArray(s.targets)||s.targets.length<1||s.targets.length>8||!Array.isArray(s.inverse_completion_shares))throw Error('Invalid imported service settings.');
+        if(s){
           targets.replaceChildren();targetRows.length=0;
           for(const t of s.targets)addTarget(t.label,String(t.cycle_time_minutes),String(t.minimum_completion_share*100));
           shares.value=s.inverse_completion_shares.map(x=>x*100).join(',');
