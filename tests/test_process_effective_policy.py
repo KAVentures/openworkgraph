@@ -76,7 +76,7 @@ def test_gaps_ambiguity_and_missing_required_family():
               [family(),family("finance")])
     r=ep.timeline(RECORD,p)
     assert r["coverage_days"]=={"resolved_under_declared_assumptions":0,"incomplete":29,"ambiguous":2}
-    assert r["family_coverage"][0]["coverage_days"]["gap"]==13
+    assert r["family_coverage"][0]["coverage_days"]["gap"]==14
     assert r["family_coverage"][1]["coverage_days"]["gap"]==31
     assert date_review(p,"2024-01-10")["status"]=="ambiguous"
     assert date_review(p,"2024-01-10")["clarification"] is None
@@ -243,3 +243,12 @@ def test_real_http_dashboard_session_read_only_and_exact_saved_revision(monkeypa
         assert not review.json()["ledger_changed"]
         body["expected_timeline_sha256"]="b"*64
         assert client.post("/date"+query,json=body,headers=owner).status_code==409
+
+
+def test_leap_day_and_open_ended_revision():
+    p=payload([version("old","2024-02-01","2024-02-29"),
+               version("new","2024-02-29")],start="2024-02-28",end="2024-03-02")
+    r=ep.timeline(RECORD,p)
+    assert r["window_days"]==3
+    assert [s["days"] for s in r["segments"]]==[1,2]
+    assert date_review(p,"2024-02-29")["selected_segment"]["selected_version_ids"]==["new"]
