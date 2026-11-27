@@ -116,7 +116,7 @@ def _plan(c,spec):
             "total_exclusions_after_apply":len(existing|added),"retained_integrity_state":audit_state,
             "eligible":eligible,"will_disable_feed":True,"retained_dataset_modified":False,
             "provider_reads_performed":False,"source_erasure_performed":False,
-            "remote_publications_withdrawn":False,"source_identifiers_persisted":False}
+            "remote_publications_withdrawn":False,"new_raw_source_identifiers_persisted":False}
     digest=rest._digest({"review":result,"private_profile_sha256":rest._digest(p),
                          "requested_keys":sorted(requested)})
     return p,existing|added,{**result,"plan_sha256":digest}
