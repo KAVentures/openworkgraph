@@ -36,6 +36,7 @@ from . import event_log_query as query
 from . import event_log_workspace as workspace
 from .event_log_domain_packs_operations import OPERATIONS_PACKS
 from .event_log_domain_packs_returns import RETURNS_REFUNDS_1_0_0
+from .event_log_domain_packs_regulated_services import REGULATED_SERVICE_PACKS
 from .event_log_domain_packs_claims import INSURANCE_CLAIMS_1_0_0
 from .event_log_domain_packs_service_governance import SERVICE_GOVERNANCE_PACKS
 from .event_log_domain_packs_business_support import BUSINESS_SUPPORT_PACKS
@@ -763,6 +764,7 @@ EMPLOYEE_ONBOARDING_1_0_0: dict[str, Any] = {
 
 PACKS: dict[str, dict[str, dict[str, Any]]] = {**OPERATIONS_PACKS,
                                               **OBJECT_OPERATIONS_PACKS,
+                                              **REGULATED_SERVICE_PACKS,
                                               "returns_refunds": {"1.0.0": RETURNS_REFUNDS_1_0_0},
                                               "order_to_cash": {"1.0.0": ORDER_TO_CASH_1_0_0},
                                               "procure_to_pay": {"1.0.0": PROCURE_TO_PAY_1_0_0},
