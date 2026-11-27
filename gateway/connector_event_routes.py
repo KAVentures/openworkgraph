@@ -88,6 +88,18 @@ def install(app,jobs,admin):
         principal=owner(authorization,True)
         return await reply(reviewed.preview,organization_id,await parse(request,Plan,maximum=MAX_REQUEST),principal)
 
+    @router.post(base+"/{organization_id}/case-conformance-catalog")
+    async def case_conformance_catalog(organization_id:str,request:Request,authorization:str|None=Header(default=None)):
+        from .connector_linked_conformance import Catalog,catalog
+        principal=owner(authorization,True)
+        return await reply(catalog,reviewed,organization_id,await parse(request,Catalog,maximum=MAX_REQUEST+4096),principal)
+
+    @router.post(base+"/{organization_id}/case-conformance-review")
+    async def case_conformance_review(organization_id:str,request:Request,authorization:str|None=Header(default=None)):
+        from .connector_linked_conformance import Review,review
+        principal=owner(authorization,True)
+        return await reply(review,reviewed,organization_id,await parse(request,Review,maximum=MAX_REQUEST+65536),principal)
+
     @router.post(base+"/{organization_id}/case-export")
     async def case_export(organization_id:str,request:Request,authorization:str|None=Header(default=None)):
         principal=owner(authorization,True)
