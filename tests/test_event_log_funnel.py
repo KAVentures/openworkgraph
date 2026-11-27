@@ -127,7 +127,34 @@ with TestClient(app) as client:
     result = client.get(url, headers=owner)
     assert result.status_code == 200, result.text
     assert result.json()['evidence']['cases'][0]['case_id'] == 'c1'
+    paged = url + '&evidence_page=true'
+    assert client.get(paged).status_code in (401, 403)
+    assert len(client.get(paged, headers=owner).json()['evidence']['revision']) == 64
 '''
     env = {**os.environ, 'WORKFLOW_OBSERVER_DATA': str(tmp_path / 'data'),
            'WORKFLOW_OBSERVER_AUTH_DIR': str(tmp_path / 'auth')}
     subprocess.run([sys.executable, '-c', code], env=env, check=True, timeout=60)
+
+
+def test_paged_evidence_covers_all_cases_and_refuses_changed_list():
+    rows = ['case,activity,time']
+    for i in range(105):
+        rows.extend([f'c{i:03},A,2024-01-01T00:00:00Z', f'c{i:03},B,2024-01-01T01:00:00Z'])
+    log = workspace.import_log(BytesIO('\n'.join(rows).encode()), name='pages', source_format='csv', mapping=MAPPING)['log_id']
+    args = {'evidence_step': 2, 'evidence_page': True}
+    first = fn.funnel(log, ['A', 'B'], **args)['evidence']
+    second = fn.funnel(log, ['A', 'B'], **args, evidence_after=first['next_after'],
+                       evidence_revision=first['revision'])['evidence']
+    third = fn.funnel(log, ['A', 'B'], **args, evidence_after=second['next_after'],
+                      evidence_revision=first['revision'])['evidence']
+    assert [len(page['cases']) for page in (first, second, third)] == [50, 50, 5]
+    assert [case['case_id'] for page in (first, second, third) for case in page['cases']] == [f'c{i:03}' for i in range(105)]
+    assert third['next_after'] is None and first['total'] == second['total'] == third['total'] == 105
+    with pytest.raises(EventLogWorkspaceError, match='revision'):
+        fn.funnel(log, ['A', 'B'], **args, evidence_after=first['next_after'])
+    with pytest.raises(EventLogWorkspaceError, match='changed'):
+        fn.funnel(log, ['A', 'B'], **args, within_hours=2, evidence_after=first['next_after'], evidence_revision=first['revision'])
+    workspace.append_log(log, BytesIO(b'case,activity,time\nnew,A,2024-01-02T00:00:00Z\nnew,B,2024-01-02T01:00:00Z\n'),
+                         source_format='csv', mapping=MAPPING)
+    with pytest.raises(EventLogWorkspaceError, match='changed'):
+        fn.funnel(log, ['A', 'B'], **args, evidence_after=first['next_after'], evidence_revision=first['revision'])

@@ -66,12 +66,12 @@ const path=require('node:path');
   const tags=review.locator('#owgClusterTagging');await tags.locator('summary').click();
   await tags.locator('#owgClusterTagName').fill('cluster review');
   await tags.locator('#owgClusterTagNote').fill('reviewed path');
-  const [preview]=await Promise.all([page.waitForResponse(r=>r.url().endsWith('/case-tags/preview')),
+  const [preview]=await Promise.all([page.waitForResponse(r=>r.url().endsWith('/trace-clusters/tag/preview')),
     tags.getByRole('button',{name:'Preview cluster tag'}).click()]);
   const previewRequest=preview.request().postDataJSON();
-  assert.equal(previewRequest.cohort.all_of[0].activity,'Open');
-  assert.equal(previewRequest.cohort.all_of[0].started_from,'2024-01-05T00:00:00Z');
-  assert.ok(previewRequest.cohort.all_of[1].variants.length>0);
+  assert.equal(previewRequest.cohort.activity,'Open');
+  assert.equal(previewRequest.cohort.started_from,'2024-01-05T00:00:00Z');
+  assert.equal(previewRequest.cluster_key,scoped.cluster_key);
   await tags.locator('#owgClusterTagStatus').filter({hasText:'2 matching cases. 0 already have this tag.'}).waitFor();
   // A concurrent tag change invalidates the reviewed selection instead of overwriting its note.
   await page.evaluate(async caseId=>{
@@ -86,10 +86,10 @@ const path=require('node:path');
   await tags.locator('#owgClusterTagStatus').filter({hasText:'1 already have this tag.'}).waitFor();
   await tags.getByText('other review',{exact:true}).waitFor();
   let releaseTag,tagStarted;const heldTag=new Promise(resolve=>{releaseTag=resolve;}),startedTag=new Promise(resolve=>{tagStarted=resolve;});
-  await page.route('**/case-tags',async route=>{const response=await route.fetch();tagStarted();await heldTag;await route.fulfill({response});},{times:1});
+  await page.route('**/trace-clusters/tag',async route=>{const response=await route.fetch();tagStarted();await heldTag;await route.fulfill({response});},{times:1});
   await tags.getByRole('button',{name:'Apply cluster tag'}).click();await startedTag;
   assert(await tags.locator('#owgClusterTagName').isDisabled());assert(await tags.locator('#owgClusterTagNote').isDisabled());
-  const savedTag=page.waitForResponse(r=>r.url().endsWith('/case-tags')&&r.request().method()==='POST');releaseTag();await savedTag;
+  const savedTag=page.waitForResponse(r=>r.url().endsWith('/trace-clusters/tag')&&r.request().method()==='POST');releaseTag();await savedTag;
   await page.locator('#owgClusterStatus').filter({hasText:'Tagged 2 cases “cluster review”.'}).waitFor();
   assert.equal(await out.textContent(),'');assert.equal(await review.textContent(),'');
   const tagged=await page.evaluate(async()=>{
@@ -98,12 +98,21 @@ const path=require('node:path');
   });
   assert.deepEqual(tagged.map(item=>item.case_id).sort(),scoped.cases.map(item=>item.case_id).sort());
   assert(tagged.every(item=>item.note==='reviewed path'));
-  // If a cluster is too large to represent as a bounded variant cohort, do not offer partial tagging.
+  // Clusters that cannot be represented as a variant cohort remain fully taggable.
   await page.route('**/trace-clusters',async route=>{const response=await route.fetch(),body=await response.json();
     body.clusters[0].cohort=null;await route.fulfill({response,json:body});},{times:1});
   await page.locator('#owgClusterRun').click();await out.getByRole('button',{name:'Inspect cases in cluster 1'}).click();
   await review.locator('#owgClusterTagging summary').click();
-  await review.getByText(/too many or too-long variant paths/).waitFor();
+  await review.locator('#owgClusterTagName').fill('large path set');
+  await review.getByRole('button',{name:'Preview cluster tag'}).click();
+  await review.locator('#owgClusterTagStatus').filter({hasText:'2 matching cases.'}).waitFor();
+  assert(await review.getByRole('button',{name:'Apply cluster tag'}).isEnabled());
+  // The case-count safety limit refuses tagging instead of applying a partial cluster.
+  await page.route('**/trace-clusters',async route=>{const response=await route.fetch(),body=await response.json();
+    body.clusters[0].cases=100001;await route.fulfill({response,json:body});},{times:1});
+  await page.locator('#owgClusterRun').click();await out.getByRole('button',{name:'Inspect cases in cluster 1'}).click();
+  await review.locator('#owgClusterTagging summary').click();
+  await review.getByText(/limited to 100,000 cases/).waitFor();
   assert.equal(await review.getByRole('button',{name:'Apply cluster tag'}).count(),0);
   await page.locator('#owgClusterK').selectOption('3');assert.equal(await out.textContent(),'');assert.equal(await review.textContent(),'');
   assert(await box.getByRole('button',{name:'Download cluster report JSON'}).isDisabled());
