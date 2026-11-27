@@ -2,20 +2,13 @@
 from io import BytesIO,StringIO
 import csv
 import json
-from datetime import timezone
 import re
 from shared.connector_bundle_import import inspect,MAPPING
-from shared.connector_event_snapshot import digest,utc
 from . import event_log_workspace as ws
 from . import event_log_source_identity as identity
 from .enterprise_rest_feed import FeedError
 
 MAX_RECEIPTS=100
-SCHEMA="""CREATE TABLE IF NOT EXISTS connector_bundle_import_receipts (
- log_id VARCHAR NOT NULL, revision INTEGER NOT NULL,
- bundle_sha256 VARCHAR NOT NULL, definition VARCHAR NOT NULL,
- PRIMARY KEY(log_id,revision), UNIQUE(log_id,bundle_sha256)
-);"""
 
 
 def _inspect(raw):
@@ -45,11 +38,11 @@ def receipts(c,log_id):
 
 
 def metadata(c,log_id,current_count):
-    history=receipts(c,log_id)
-    if not history:return None
-    last=history[-1]
-    return {"revision":last["revision"],"receipt_count":len(history),
-            "initial_bundle_sha256":history[0]["canonical_bundle_sha256"],
+    row=c.execute("SELECT count(*),arg_min(bundle_sha256,revision),arg_max(definition,revision) FROM connector_bundle_import_receipts WHERE log_id=?",[log_id]).fetchone()
+    if not row[0]:return None
+    last=json.loads(row[2])
+    return {"revision":last["revision"],"receipt_count":row[0],
+            "initial_bundle_sha256":row[1],
             "latest_bundle_sha256":last["canonical_bundle_sha256"],
             "events_after_last_verified_import":last["retained_event_count"],
             "current_event_count_matches_last_receipt":current_count==last["retained_event_count"],
@@ -62,7 +55,9 @@ def _history_check(c,log_id,report):
     history=receipts(c,log_id)
     if not history:raise FeedError("target_is_not_a_verified_bundle_log",422)
     latest=history[-1]
-    if log["events"]!=latest["retained_event_count"]:
+    batches=c.execute("SELECT count(*) FROM log_appends WHERE log_id=?",[log_id]).fetchone()[0]
+    if (log["events"]!=latest["retained_event_count"] or log["objects"]!=latest["retained_case_count"]
+            or batches!=len(history)-1):
         raise FeedError("target_log_changed_outside_verified_import")
     # Bind exact source namespaces, provider profile pins and label mode.
     # A rotated profile or newly linked case scope requires a new log.
@@ -82,6 +77,8 @@ def preview(raw,target=None):
                 result.update(expected_target_revision=history[-1]["revision"],
                               target_event_count=log["events"],
                               bundle_already_imported=any(r["canonical_bundle_sha256"]==report["canonical_bundle_sha256"] for r in history))
+            except ws.EventLogWorkspaceError:
+                raise FeedError("invalid_bundle_target",422) from None
             finally:c.close()
     return result
 
@@ -110,8 +107,10 @@ def _verify_retained(c,log_id,bundle):
         c.execute("DROP TABLE IF EXISTS connector_bundle_expected")
 
 
-def retain(raw,*,file_sha256,canonical_bundle_sha256,target=None,expected_revision=0,name=None,
+def retain(raw,*,file_sha256,canonical_bundle_sha256,request_id,target=None,expected_revision=0,name=None,
            confirm_retention=False,confirm_origin_review=False):
+    if not isinstance(request_id,str) or not re.fullmatch(r"[a-f0-9]{32}",request_id):
+        raise FeedError("invalid_bundle_import_request_id",422)
     if confirm_retention is not True or confirm_origin_review is not True:
         raise FeedError("explicit_bundle_retention_and_origin_review_required",403)
     bundle,report=_inspect(raw)
@@ -126,6 +125,16 @@ def retain(raw,*,file_sha256,canonical_bundle_sha256,target=None,expected_revisi
     with ws._LOCK:
         c=ws._connect()
         try:
+            row=c.execute("SELECT definition FROM connector_bundle_import_receipts WHERE request_id=?",[request_id]).fetchone()
+            if row:
+                previous=json.loads(row[0])
+                if (previous["file_sha256"]!=file_sha256 or previous["canonical_bundle_sha256"]!=canonical_bundle_sha256
+                    or previous["target_log_id"]!=target or previous["revision"]!=expected_revision+1
+                    or previous["requested_name"]!=name):
+                    raise FeedError("bundle_import_request_identity_conflict")
+                log=ws._check_log(c,previous["log_id"])
+                _verify_retained(c,previous["log_id"],bundle)
+                return {"log":log,"receipt":previous,"replayed_receipt":True}
             if target:
                 log,history=_history_check(c,target,report)
                 if history[-1]["revision"]!=expected_revision:
@@ -151,11 +160,12 @@ def retain(raw,*,file_sha256,canonical_bundle_sha256,target=None,expected_revisi
             if target is None and (actual[0]!=bundle.event_count or actual[1]!=report["source_local_case_count"]):
                 raise FeedError("retained_projection_count_failure")
             entry={**report,"log_id":log_id,"revision":expected_revision+1,
+                   "request_id":request_id,"target_log_id":target,"requested_name":name,
                    "events_added":actual[0]-before,"duplicates_skipped":bundle.event_count-(actual[0]-before),
                    "retained_event_count":actual[0],"retained_case_count":actual[1],
                    "local_copy_not_revocable_by_gateway":True}
-            c.execute("INSERT INTO connector_bundle_import_receipts VALUES (?,?,?,?)",
-                      [log_id,entry["revision"],canonical_bundle_sha256,json.dumps(entry,separators=(",",":"))])
+            c.execute("INSERT INTO connector_bundle_import_receipts VALUES (?,?,?,?,?)",
+                      [log_id,entry["revision"],canonical_bundle_sha256,request_id,json.dumps(entry,separators=(",",":"))])
             made.append(entry)
         try:
             if target:
@@ -167,6 +177,16 @@ def retain(raw,*,file_sha256,canonical_bundle_sha256,target=None,expected_revisi
                                      _transaction_hook=record)["log_id"]
         except FeedError:raise
         except (ws.EventLogWorkspaceError,ValueError):
+            # The existing workspace writes auxiliary quality metadata after
+            # COMMIT. The atomic receipt is the source of truth if that fails.
+            c=ws._connect()
+            try:
+                row=c.execute("SELECT definition FROM connector_bundle_import_receipts WHERE request_id=?",[request_id]).fetchone()
+                if row:
+                    entry=json.loads(row[0])
+                    return {"log":ws._check_log(c,entry["log_id"]),"receipt":entry,
+                            "replayed_receipt":True,"auxiliary_workspace_result_incomplete":True}
+            finally:c.close()
             raise FeedError("bundle_retention_failed_no_partial_import",422) from None
         c=ws._connect()
         try:return {"log":ws._check_log(c,log_id),"receipt":made[0],"replayed_receipt":False}
