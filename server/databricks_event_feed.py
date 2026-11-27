@@ -16,7 +16,7 @@ from . import enterprise_rest_feed as rest
 CATALOG = "OWG_DATABRICKS_CATALOG"
 ALIAS = re.compile(r"[a-z][a-z0-9_]{0,39}\Z")
 IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,127}\Z")
-HOST = re.compile(r"[a-z0-9][a-z0-9-]{0,100}\.(?:cloud\.databricks\.com|azuredatabricks\.net|gcp\.databricks\.com)\Z")
+HOST = re.compile(r"[a-z0-9][a-z0-9-]{0,100}\.(?:cloud\.databricks\.com|(?:[0-9]{1,6}\.)?azuredatabricks\.net|gcp\.databricks\.com)\Z")
 STATEMENT_ID = re.compile(r"[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}\Z")
 LABEL = re.compile(r"[A-Za-z0-9][A-Za-z0-9 ._:/-]{0,119}\Z")
 BASE = "/api/2.0/sql/statements"
@@ -140,7 +140,7 @@ def create(value):
         raise rest.FeedError("invalid_databricks_profile", 422) from None
     require(spec.confirm_configuration and spec.confirm_source_read and spec.confirm_metadata_retention,
             "explicit_databricks_read_and_retention_required", 403)
-    require(spec.name.strip() and all(32 <= ord(c) != 127 and not 0xD800 <= ord(c) <= 0xDFFF
+    require(spec.name.strip() and all(ord(c) >= 32 and ord(c) != 127 and not 0xD800 <= ord(c) <= 0xDFFF
                                      for c in spec.name), "invalid_profile_name", 422)
     now = rest._now()
     since = rest._stamp(spec.initial_since)
