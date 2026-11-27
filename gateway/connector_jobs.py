@@ -345,9 +345,10 @@ class Jobs:
             raise JobError("worker_profile_pin_mismatch",403)
 
     def inspect_worker(self,token,spec:Claim):
-        # Non-dispatching inspection: no lease, job revision or history mutation.
+        # Serialize with token rotation and profile rebinding; no lease,
+        # job revision or history mutation.
         org,job,digest=self._identity(token)
-        with self.db.connect() as c:
+        with self._tx(org) as c:
             self._reauth(c,org,job,digest)
             j=self._get(c,org,job)
             self._verify_pin(j,spec)
@@ -362,7 +363,7 @@ class Jobs:
             now=self.clock()
             previous=j.get("worker_readiness")
             # A bounded latest-only receipt; no event history or source data.
-            # Coalesce repeated unchanged heartbeats. Changes are observations,
+            # Coalesce all reports within 30 seconds. Changes are observations,
             # never lease cancellation or execution authorization.
             if previous is None or now-previous["observed_at"]>=30:
                 j["worker_readiness"]={"code":spec.code,"observed_at":now,
