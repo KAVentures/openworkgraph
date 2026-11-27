@@ -1398,7 +1398,7 @@ const path=require('node:path');
    await page.locator('#owgObjectRuleResults').getByText('1 of 2 object rules have violations.',{exact:true}).waitFor();
    const ruleText=await page.locator('#owgObjectRuleResults').textContent();
    assert.match(ruleText,/every Ship event of order objects comes after Pick item of each related item1 event–object pairs0/);
-   assert.match(ruleText,/p \(2 linked\)/);
+   assert.match(ruleText,/event "p" \(2 linked\)/);
    // Object process model: discover per-type lifecycles and arcs, expect one item per Place order, and check.
    const [modelFound]=await Promise.all([page.waitForResponse(r=>r.url().endsWith('/object-process-model/discovery')),page.locator('#owgObjectModelDiscover').click()]);
    assert.equal(modelFound.status(),200,await modelFound.text());
