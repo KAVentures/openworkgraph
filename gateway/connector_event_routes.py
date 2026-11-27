@@ -112,6 +112,54 @@ def install(app,jobs,admin):
             "X-OWG-Conformance-SHA256":data["conformance_sha256"],
             "Content-Disposition":'attachment; filename="owg-linked-conformance-exceptions.csv"'})
 
+    from .connector_exception_triage import Queues, Save as QueueSave, Page as QueuePage, Change as QueueChange, Delete as QueueDelete
+    queues=Queues(reviewed)
+    queue_start,queue_stop=retention_hooks(queues)
+    extend_lifespan(app,startup=queue_start,shutdown=queue_stop)
+    app.state.connector_exception_queues=queues
+
+    @router.get(base+"/{organization_id}/exception-queues")
+    async def exception_queues(organization_id:str,authorization:str|None=Header(default=None)):
+        owner(authorization)
+        return await reply(queues.inventory,organization_id)
+
+    @router.post(base+"/{organization_id}/exception-queues")
+    async def save_exception_queue(organization_id:str,request:Request,authorization:str|None=Header(default=None)):
+        principal=owner(authorization,True)
+        return await reply(queues.save,organization_id,await parse(request,QueueSave,maximum=MAX_REQUEST+65536),principal)
+
+    @router.post(base+"/{organization_id}/exception-queues/{queue_id}/page")
+    async def exception_queue_page(organization_id:str,queue_id:str,request:Request,authorization:str|None=Header(default=None)):
+        owner(authorization)
+        return await reply(queues.page,organization_id,queue_id,await parse(request,QueuePage))
+
+    @router.post(base+"/{organization_id}/exception-queues/{queue_id}/change")
+    async def change_exception_queue(organization_id:str,queue_id:str,request:Request,authorization:str|None=Header(default=None)):
+        principal=owner(authorization,True)
+        return await reply(queues.change,organization_id,queue_id,await parse(request,QueueChange,maximum=32768),principal)
+
+    @router.post(base+"/{organization_id}/exception-queues/{queue_id}/export")
+    async def export_exception_queue(organization_id:str,queue_id:str,request:Request,authorization:str|None=Header(default=None)):
+        from .connector_exception_triage import Export,disposition_csv
+        import json
+        principal=owner(authorization,True)
+        result=await reply(queues.export,organization_id,queue_id,await parse(request,Export),principal)
+        data=json.loads(result.body)
+        return Response(disposition_csv(data),media_type="text/csv",headers={
+            "Cache-Control":"no-store","X-Content-Type-Options":"nosniff",
+            "X-OWG-Disposition-SHA256":data["export_sha256"],
+            "Content-Disposition":'attachment; filename="owg-evidence-dispositions.csv"'})
+
+    @router.post(base+"/{organization_id}/exception-queues/{queue_id}/delete")
+    async def delete_exception_queue(organization_id:str,queue_id:str,request:Request,authorization:str|None=Header(default=None)):
+        principal=owner(authorization,True)
+        return await reply(queues.delete,organization_id,queue_id,await parse(request,QueueDelete),principal)
+
+    @router.get("/admin/connector-exception-triage",include_in_schema=False)
+    def exception_page():
+        from .html_pages import render_page
+        return render_page("connector_exception_triage.html")
+
     @router.post(base+"/{organization_id}/case-export")
     async def case_export(organization_id:str,request:Request,authorization:str|None=Header(default=None)):
         principal=owner(authorization,True)
