@@ -9,6 +9,11 @@ const path=require('node:path');
   const scratch=await fs.mkdtemp(path.join(tmpdir(),'owg-enterprise-connectors-'));
   const base='http://127.0.0.1:8787',endpoint='https://customer.example.com/events';
   const env={...process.env,OWG_BROWSER_TEST_DIR:scratch,OWG_REST_ALLOWED_ENDPOINTS:JSON.stringify([endpoint]),OWG_REST_TOKEN_BROWSER:'browser-fixture-only'};
+  const sourcePath=path.join(await fs.realpath(scratch),'source.sqlite');
+  const sqlSeed=spawnSync(process.env.OWG_BROWSER_PYTHON||'python',['-c',
+    'import sqlite3,sys,time; c=sqlite3.connect(sys.argv[1]); c.execute("CREATE TABLE events (eid TEXT NOT NULL,cid TEXT NOT NULL,label TEXT NOT NULL,happened INTEGER NOT NULL,changed INTEGER NOT NULL) STRICT"); t=int(time.time()*1000000)-12*3600*1000000; c.execute("INSERT INTO events VALUES (?,?,?,?,?)",("private-event","private-case","Approve",t,t)); c.commit(); c.close()',sourcePath],{encoding:'utf8'});
+  assert.equal(sqlSeed.status,0,sqlSeed.stderr);
+  env.OWG_SQL_SOURCE_CATALOG=JSON.stringify({browser_sql:{engine:'sqlite',path:sourcePath,relation:'events',mapping:{event_id:'eid',case_id:'cid',activity:'label',event_time:'happened',change_time:'changed'}}});
   const seeded=spawnSync(process.env.OWG_BROWSER_PYTHON||'python',['-c',
     'from server import connector_oauth as o; o._save({"version":1,"connections":{"conn_aaaaaaaaaaaaaaaa":{"provider":"google","host":"","scopes":[o.GOOGLE_AUDIT_SCOPE],"client_id":"test-client","refresh_token":"synthetic-browser-only","connected_at":"2026-01-01T00:00:00Z"}}})'],
     {env:{...env,WORKFLOW_OBSERVER_DATA:path.join(scratch,'data'),WORKFLOW_OBSERVER_AUTH_DIR:path.join(scratch,'auth'),WORKFLOW_OBSERVER_CONFIG:path.join(scratch,'config.json')},encoding:'utf8'});
@@ -80,6 +85,30 @@ const path=require('node:path');
     const googleReport=JSON.parse(await fs.readFile(await googleDownload.path(),'utf8'));
     assert.equal(googleReport.profiles.find(p=>p.provider==='google').provider_live_health,'unknown');
     assert.ok(!JSON.stringify(googleReport).includes('C012abc34'));
+    await page.getByRole('button',{name:'Remove configuration'}).click();
+    await page.locator('#profiles').getByText('No configured REST feeds.').waitFor();
+    // Native SQL configuration and actual local retained snapshot.
+    await page.locator('summary').filter({hasText:'Create native SQL event feed'}).click();
+    await page.locator('#sqlName').fill('SQL browser fixture');
+    await page.locator('#sqlSource').selectOption('browser_sql');
+    assert.match(await page.locator('#sqlSourceReview').textContent(),/utc_epoch_microseconds/);
+    await page.locator('#sqlSince').fill(new Date(Date.now()-86400000).toISOString());
+    await page.locator('#sqlConfirm').check();await page.locator('#sqlRetention').check();
+    await page.locator('#sqlCreateButton').click();
+    await page.locator('#restStatus').filter({hasText:'SQL profile saved. No source was read.'}).waitFor();
+    await page.getByRole('heading',{name:'SQL browser fixture'}).waitFor();
+    assert.ok(await page.getByRole('button',{name:'Run next window'}).isDisabled());
+    await page.getByLabel('Authorize one bounded read-only SQL snapshot from the exact approved source.').check();
+    await page.getByLabel('Authorize retention of the selected mapped events locally.').check();
+    await page.getByRole('button',{name:'Run next window'}).click();
+    await page.locator('#restStatus').filter({hasText:'Window committed: 1 added, 0 duplicates skipped.'}).waitFor();
+    await page.getByRole('heading',{name:'SQL browser fixture'}).waitFor();
+    const [sqlDownload]=await Promise.all([page.waitForEvent('download'),page.locator('#download').click()]);
+    const sqlReport=JSON.parse(await fs.readFile(await sqlDownload.path(),'utf8'));
+    const sqlProfile=sqlReport.profiles.find(p=>p.provider==='sql');
+    assert.equal(sqlProfile.retained_event_count,1);
+    assert.equal(sqlProfile.counts.schema_pin_observed,true);
+    assert.ok(!JSON.stringify(sqlReport).includes(sourcePath));
     await page.getByRole('button',{name:'Remove configuration'}).click();
     await page.locator('#profiles').getByText('No configured REST feeds.').waitFor();
     await page.addScriptTag({content:await fs.readFile(require.resolve('axe-core/axe.min.js'),'utf8')});
