@@ -211,6 +211,8 @@ def _connect():
     history.init(conn)
     from . import enterprise_ingestion_coverage as coverage
     coverage.init(conn)
+    from . import enterprise_ingestion_service_levels as sla
+    sla.init(conn)
     return conn
 
 
@@ -356,6 +358,8 @@ def delete(profile_id,revision):
                 history.erase(c,profile_id)
                 from . import enterprise_ingestion_coverage as coverage
                 coverage.erase(c,profile_id)
+                from . import enterprise_ingestion_service_levels as sla
+                sla.erase(c,profile_id)
                 c.execute("DELETE FROM enterprise_rest_profiles WHERE profile_id=?",[profile_id])
                 c.execute("COMMIT")
             except Exception:
@@ -376,6 +380,8 @@ def forget_dataset(conn,log_id):
             history.erase(conn,p["profile_id"])
             from . import enterprise_ingestion_coverage as coverage
             coverage.erase(conn,p["profile_id"])
+            from . import enterprise_ingestion_service_levels as sla
+            sla.erase(conn,p["profile_id"])
             p.pop("integrity_hold",None)
             p.pop("excluded_case_keys",None)
             p.pop("historical_active",None)
