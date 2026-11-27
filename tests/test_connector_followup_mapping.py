@@ -106,3 +106,42 @@ def test_source_candidate_window_and_mode_boundaries():
     assert not compatible_sources(a,{**b,"job_id":"a"},completed,now)
     assert not compatible_sources(a,{**b,"provider":"sql"},completed,now)
     assert not compatible_sources(a,{**b,"activity_mode":"labels"},completed,now)
+
+
+def test_feasibility_live_guidance_and_fixed_source_case_choices(comparison):
+    from gateway.connector_followup_mapping import FeasibilityRequest
+    f,d,p,i,value,_=comparison
+    base=input_for(value)
+    g=guidance(f,d,p,base)
+    workbench=MappingWorkbench(f.queues)
+    def check(**kw):
+        spec=FeasibilityRequest.model_validate({**base,"expected_guidance_sha256":g["guidance_sha256"],**kw})
+        return workbench.check_feasibility("customer",d["queue_id"],p["packet_id"],spec,"owner")
+    initial=check()
+    assert initial["source_feasibility"]["feasible"]
+    assert initial["case_feasibility"] is None
+    all_fixed=check(fixed_sources=value["jobs"],fixed_cases=value["cases"])
+    assert all_fixed["source_feasibility"]["feasible"]
+    assert all_fixed["case_feasibility"]["feasible"]
+    assert all_fixed["case_feasibility"]["allowed"]=={x["before"]:[x["after"]] for x in value["cases"]}
+    assert not all_fixed["identity_inferred"] and not all_fixed["execution_authorized"]
+    with pytest.raises(JobError,match="mapping_choices_outside_candidate_graph"):
+        check(fixed_cases=value["cases"])
+    with pytest.raises(JobError,match="mapping_guidance_changed"):
+        check(expected_guidance_sha256="0"*64)
+
+
+def test_matching_deficit_does_not_infer_identity():
+    from gateway.connector_followup_mapping import feasibility
+    guidance={"source_candidates":[{"before":"a","candidates":["x","y"]},
+                                   {"before":"b","candidates":["y"]}],
+              "baseline_cases":[{"linked_case_id":"1","basis":"operator_assertion","source_multiplicities":{"a":1,"b":1}},
+                                {"linked_case_id":"2","basis":"operator_assertion","source_multiplicities":{"a":1,"b":1}}],
+              "subsequent_cases":[{"linked_case_id":"z","basis":"operator_assertion","source_multiplicities":{"x":1,"y":1}}]}
+    assert feasibility(guidance,{}, {})["source_feasibility"]["allowed"]=={"a":["x"],"b":["y"]}
+    result=feasibility(guidance,{"a":"x","b":"y"},{})
+    assert result["source_feasibility"]["feasible"]
+    assert not result["case_feasibility"]["feasible"]
+    assert result["case_feasibility"]["hall_witness"]["deficit"]==1
+    assert not result["identity_inferred"]
+    assert not result["execution_authorized"]
