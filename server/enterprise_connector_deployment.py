@@ -103,6 +103,25 @@ def finish_pending(path):
         os.close(fd)
 
 
+def explicit_recording():
+    """Dedicated service mode: no fallback to recording on absent/corrupt state."""
+    from shared.capture_control import state_path
+    try:
+        path=state_path()
+        fd=os.open(path,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK)
+        with os.fdopen(fd,"rb") as stream:
+            info=os.fstat(stream.fileno())
+            if not stat.S_ISREG(info.st_mode) or info.st_uid!=os.getuid() or info.st_mode&0o022 or not 1<=info.st_size<=1024*1024:
+                return False
+            raw=stream.read(1024*1024+1)
+        if len(raw)>1024*1024:
+            return False
+        state=json.loads(raw,object_pairs_hook=_pairs)
+        return isinstance(state,dict) and state.get("version")==1 and state.get("state")=="recording"
+    except (ValueError,TypeError,OSError,AttributeError,RecursionError):
+        return False
+
+
 def preflight(worker,*,remote=False):
     from . import enterprise_rest_feed as rest
     from . import event_log_workspace as ws
@@ -166,7 +185,7 @@ def preflight(worker,*,remote=False):
             "local_schedule_conflict" if conflict else "no_enabled_local_schedule_observed")
     except Exception:
         add("schedule","blocked","local_scheduler_state_unavailable")
-    recording=scheduler._recording()
+    recording=worker.recording()
     add("recording","passed" if recording else "blocked","recording_enabled" if recording else "local_recording_paused")
     contacted=False
     if remote:
@@ -188,6 +207,7 @@ def preflight(worker,*,remote=False):
     else:
         add("gateway","not_checked","remote_inspection_not_requested")
     return {"format":"openworkgraph.connector-deployment-preflight.v1",
+            "strict_recording_state_required":worker.require_explicit_recording,
             "checks":checks,"ready_for_review":not any(x["state"]=="blocked" for x in checks),
             "gateway_inspection_requested":remote,"gateway_contact_attempted":contacted,
             "provider_contacted":False,"lease_claimed":False,"events_read":False,
