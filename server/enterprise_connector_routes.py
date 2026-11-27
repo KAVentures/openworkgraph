@@ -414,3 +414,25 @@ async def service_level_ack(request:Request):
     require(request)
     body=await _json_body(request,"Alert acknowledgement",strict=True,limit=1024)
     return await call(request,sla.acknowledge,body)
+
+
+@router.get("/v1/enterprise-connectors/catchup")
+async def catchup_inventory(request:Request):
+    from . import enterprise_reviewed_catchup as catchup
+    return await call(request,catchup.inventory)
+
+
+@router.post("/v1/enterprise-connectors/catchup/preview")
+async def catchup_preview(request:Request):
+    from . import enterprise_reviewed_catchup as catchup
+    require(request)
+    body=await _json_body(request,"Reviewed advancing connector windows",strict=True,limit=8192)
+    return await call(request,catchup.preview,body)
+
+
+@router.post("/v1/enterprise-connectors/catchup/execute")
+async def catchup_execute(request:Request):
+    from . import enterprise_reviewed_catchup as catchup
+    require(request)
+    body=await _json_body(request,"Execute one reviewed advancing window",strict=True,limit=4096)
+    return await call(request,catchup.execute,body)
