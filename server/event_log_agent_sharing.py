@@ -902,14 +902,20 @@ def data_quality(log_id: str) -> dict[str, Any]:
                        "exported is unknown; check rejected rows and shared timestamps before trusting orderings.")}
 
 
-def _fitting_activities(log_id: str, case_type: str | None) -> dict[str, Any]:
+def _fitting_activities(log_id: str, case_type: str | None,
+                        case_filter: dict[str, Any] | None = None) -> dict[str, Any]:
     """The largest activity share (by events, most frequent first) whose activities fit in a discovered model.
     Agents cannot choose a share, so a log with more activities than a model holds would otherwise refuse every
     model-based answer. The share and the activities left out are reported with each answer."""
     from . import event_log_model_discovery as discovery
     limit = discovery.MAX_MODEL_NODES - 2 - AGENT_MODEL_NODE_HEADROOM
 
+    from . import event_log_cohorts as cohorts
+    chosen = cohorts.parse_cohort(case_filter) if case_filter else None
+
     def run(conn):
+        if chosen:
+            cohorts.restrict(conn, chosen, log_id)
         return {"counts": [n for (n,) in conn.execute(
             "SELECT count(*) FROM ce GROUP BY activity ORDER BY 1 DESC").fetchall()]}
     counts = workspace._query(log_id, case_type, run)["counts"]
@@ -922,23 +928,38 @@ def _fitting_activities(log_id: str, case_type: str | None) -> dict[str, Any]:
 AGENT_MODEL_NODE_HEADROOM = 8   # room for decisions and loops beside the activities themselves
 
 
-def footprints(log_id: str, case_type: str | None = None, noise: float = 0.2) -> dict[str, Any]:
+def _model_case_filter(log_id: str, case_type: str | None, case_filter: Any) -> dict[str, Any] | None:
+    if case_filter is None:
+        return None
+    if not isinstance(case_filter, dict) or not case_filter:
+        raise EventLogWorkspaceError("case_filter must be a non-empty object of case-filter keys")
+    if workspace.summary(log_id, case_type, case_filter)["cases"] < AGENT_MIN_FILTERED_CASES:
+        raise EventLogWorkspaceError(f"fewer than {AGENT_MIN_FILTERED_CASES} cases match this filter; widen it")
+    return case_filter
+
+
+def footprints(log_id: str, case_type: str | None = None, noise: float = 0.2,
+               case_filter: dict[str, Any] | None = None) -> dict[str, Any]:
     """Log and discovered-model footprint matrices and where they disagree (aggregates level)."""
     require(log_id, "aggregates")
     from . import event_log_footprints as fp
-    fit = _fitting_activities(log_id, case_type)
-    result = fp.footprints(log_id, case_type, noise=max(0.0, min(float(noise), 0.95)), activities=fit["share"])
+    chosen = _model_case_filter(log_id, case_type, case_filter)
+    fit = _fitting_activities(log_id, case_type, chosen)
+    result = fp.footprints(log_id, case_type, noise=max(0.0, min(float(noise), 0.95)), activities=fit["share"],
+                           cohort=chosen)
     keep = ("case_notion", "cases", "activities", "settings", "conformance", "start_activities", "end_activities",
             "differences", "differences_total", "matrix", "legend", "method", "caveat")
     return {"format": FORMAT, "log_id": log_id, "model_activities": fit, **{k: result[k] for k in keep if k in result}}
 
 
-def model_quality(log_id: str, case_type: str | None = None, levels: str | None = None) -> dict[str, Any]:
+def model_quality(log_id: str, case_type: str | None = None, levels: str | None = None,
+                  case_filter: dict[str, Any] | None = None) -> dict[str, Any]:
     """Fitness, precision, generalization and simplicity of the discovered net by noise level (aggregates)."""
     require(log_id, "aggregates")
     from . import event_log_model_quality as mq
-    fit = _fitting_activities(log_id, case_type)
-    result = mq.model_quality(log_id, case_type, levels=levels, activities=fit["share"])
+    chosen = _model_case_filter(log_id, case_type, case_filter)
+    fit = _fitting_activities(log_id, case_type, chosen)
+    result = mq.model_quality(log_id, case_type, levels=levels, activities=fit["share"], cohort=chosen)
     keep = ("case_notion", "cases", "cases_excluded", "variants", "levels", "levels_skipped", "best_f_score_noise",
             "definitions", "method", "caveat")
     return {"format": FORMAT, "log_id": log_id, "model_activities": fit, **{k: result[k] for k in keep if k in result}}
@@ -1058,15 +1079,17 @@ def process_model(log_id: str, case_type: str | None = None, noise: float = 0.2,
             "observed_path_is_policy": False, "execution_authorized": False}
 
 
-def model_deviations(log_id: str, case_type: str | None = None, noise: float = 0.2) -> dict[str, Any]:
+def model_deviations(log_id: str, case_type: str | None = None, noise: float = 0.2,
+                     case_filter: dict[str, Any] | None = None) -> dict[str, Any]:
     """Optimal alignments of the log on its discovered net: which steps are extra or skipped (aggregates)."""
     require(log_id, "aggregates")
     from . import event_log_alignments as al
     from . import event_log_pnml as pnml
     noise = max(0.0, min(float(noise), 0.95))
-    fit = _fitting_activities(log_id, case_type)
-    xml, meta = pnml.discovered_pnml(log_id, case_type, noise=noise, activities=fit["share"])
-    result = al.alignments(log_id, xml.encode(), case_type)
+    chosen = _model_case_filter(log_id, case_type, case_filter)
+    fit = _fitting_activities(log_id, case_type, chosen)
+    xml, meta = pnml.discovered_pnml(log_id, case_type, noise=noise, activities=fit["share"], cohort=chosen)
+    result = al.alignments(log_id, xml.encode(), case_type, cohort=chosen)
     keep = ("case_notion", "cases", "cases_excluded", "variants", "fitness", "by_month", "deviation_cost", "log_moves",
             "model_moves", "activities_not_in_net", "non_fitting_variants", "non_fitting_variants_total",
             "unaligned", "method", "caveat")
