@@ -152,6 +152,22 @@ p{overflow-wrap:anywhere;max-width:94ch}.profile{border:1px solid var(--border);
 <p><label><input id="sapRetention" type="checkbox" required> I approve retention of the selected pseudonymous PO case events.</label></p>
 <p><label><input id="sapTransient" type="checkbox"> I separately approve transient read of unrelated PO references in material and invoice headers during each selected date window.</label></p>
 <button id="sapCreateButton" type="submit" disabled>Save SAP profile</button></form></details>
+<details><summary>Create native Dynamics 365 / Dataverse audit feed</summary>
+<p>Choose a deployment-approved Dataverse environment and application user. Select audited tables and operation codes. Only audit metadata is retained, not changed field values or CRM record contents.</p>
+<form id="dvCreate"><div class="grid">
+<label>Profile name<input id="dvName" required maxlength="100"></label>
+<label>Approved Dataverse source<select id="dvSource" required></select></label>
+<label>First history timestamp (ISO UTC)<input id="dvSince" required placeholder="2026-11-01T00:00:00Z"></label>
+<label>Window (hours)<input id="dvWindow" type="number" min="1" max="168" value="24" required></label>
+<label>Overlap (minutes)<input id="dvOverlap" type="number" min="0" max="1440" value="60" required></label>
+<label>Reporting lag (minutes)<input id="dvLag" type="number" min="0" max="1440" value="15" required></label>
+<label>Maximum page size<input id="dvPage" type="number" min="1" max="500" value="200" required></label></div>
+<div id="dvReview"></div><fieldset><legend>Audit operations</legend><div id="dvOperations"></div></fieldset><div id="dvTables"></div>
+<p><label><input id="dvConfirm" type="checkbox" required> I reviewed the exact environment, deployment definition, selected tables and record scopes.</label></p>
+<p><label><input id="dvIdentity" type="checkbox" required> I authorize application authentication and organization/user identity checks.</label></p>
+<p><label><input id="dvRetention" type="checkbox" required> I approve retention of audit operation/action codes, timestamps and pseudonymous record and actor identities.</label></p>
+<p><label><input id="dvAll" type="checkbox"> I separately authorize reads of all visible audited records for selected tables with no exact record restriction.</label></p>
+<button id="dvCreateButton" type="submit" disabled>Save Dataverse profile</button></form></details>
 <p id="restStatus" role="status"></p><div id="profiles"></div></section>
 <section><h2>Other configured adapters</h2><p>Use the main dashboard's Privacy → Business system sign-in and Evidence panels for the existing provider-specific consent and configuration workflows. CLI-only adapters remain outside this local inventory.</p><a href="/">Open the main dashboard</a></section>
 </main></body></html>
