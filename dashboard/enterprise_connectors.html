@@ -112,6 +112,25 @@ p{overflow-wrap:anywhere;max-width:94ch}.profile{border:1px solid var(--border);
 <p><label><input id="sfIdentity" type="checkbox" required> I approve transient identity metadata readback to verify the integration user and organization.</label></p>
 <p><label><input id="sfAll" type="checkbox"> I separately authorize reads across all visible records for any selected object without a record-ID restriction.</label></p>
 <button id="sfCreateButton" type="submit" disabled>Save Salesforce profile</button></form></details>
+<details><summary>Create native ServiceNow operations feed</summary>
+<p>Choose exact tables, tracked field names, optional creation events and record IDs. The integration account must be configured for UTC. Source reads use fixed Table API projections; field values, descriptions, usernames and approval decisions are not retained. The stricter repeat-read option checks whether the same projected records are returned twice within one bounded window.</p>
+<form id="snCreate"><div class="grid">
+<label>Profile name<input id="snName" required maxlength="100"></label>
+<label>ServiceNow OAuth connection<select id="snConnection" required></select></label>
+<label>Exact instance host<input id="snHost" required maxlength="253" placeholder="customer.service-now.com"></label>
+<label>First history window (whole-second ISO UTC)<input id="snSince" required placeholder="2026-11-01T00:00:00Z"></label>
+<label>Window (hours)<input id="snWindow" type="number" min="1" max="168" value="24" required></label>
+<label>Overlap (minutes)<input id="snOverlap" type="number" min="0" max="1440" value="60" required></label>
+<label>Reporting lag (minutes)<input id="snLag" type="number" min="0" max="1440" value="15" required></label>
+<label>Requested page size<input id="snPage" type="number" min="1" max="500" value="200" required></label></div>
+<div id="snSelections"></div>
+<p><label><input id="snRepeat" type="checkbox" checked> Require a matching repeat read for every selected stream (uses additional page budget).</label></p>
+<p><label><input id="snConfirm" type="checkbox" required> I reviewed this exact stored sign-in, instance, tables, fields and record scopes.</label></p>
+<p><label><input id="snUTC" type="checkbox" required> I verified that this integration account uses UTC for Table API query boundaries.</label></p>
+<p><label><input id="snAudit" type="checkbox"> I approve retention of selected audit field-change labels and pseudonymous identities.</label></p>
+<p><label><input id="snCreation" type="checkbox"> I separately approve retention of record-creation events for selected tables.</label></p>
+<p><label><input id="snAll" type="checkbox"> I separately approve unrestricted visible records for any selected table without a record-ID restriction.</label></p>
+<button id="snCreateButton" type="submit" disabled>Save ServiceNow profile</button></form></details>
 <p id="restStatus" role="status"></p><div id="profiles"></div></section>
 <section><h2>Other configured adapters</h2><p>Use the main dashboard's Privacy → Business system sign-in and Evidence panels for the existing provider-specific consent and configuration workflows. CLI-only adapters remain outside this local inventory.</p><a href="/">Open the main dashboard</a></section>
 </main></body></html>
