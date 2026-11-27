@@ -117,8 +117,10 @@ def _moves(graph, states, budget):
 
 
 def compare(baseline: bytes, candidate: bytes) -> dict:
-    a = _graph(baseline)
-    b = _graph(candidate)
+    return _compare_graphs(_graph(baseline), _graph(candidate))
+
+
+def _compare_graphs(a, b):
     budget = _Budget()
     pairs = []
     parents = []
