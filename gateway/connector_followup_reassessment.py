@@ -5,12 +5,14 @@ live. Case and coded-selector correspondence is explicitly human asserted.
 A successful sample comparison is never verified corrective action.
 """
 from datetime import datetime
-from typing import Literal
+from collections import Counter
+import re
 from pydantic import Field,StrictBool,StrictInt,model_validator
 from shared.connector_event_snapshot import Strict,DIGEST,digest
 from .connector_jobs import JOB,JobError
 from .connector_exception_followups import Followups,require
 from .connector_linked_conformance import Review,_review
+from .connector_case_review import group_key
 
 FORMAT="openworkgraph.followup-reassessment.v1"
 MAX_RECEIPTS=10
@@ -61,6 +63,7 @@ def validate_rules(before,after,mapping,old_manifests,new_manifests,required):
     new={r.rule_id:r.model_dump() for r in after.rules}
     require(set(new)==required and required<=set(old),"reassessment_rule_population_changed",422)
     approvals=set()
+    forward={};reverse={}
     for rid in sorted(required):
         a,b=old[rid],new[rid]
         require(all(a[k]==b[k] for k in ("kind","minimum","maximum")),
@@ -75,6 +78,13 @@ def validate_rules(before,after,mapping,old_manifests,new_manifests,required):
             require(mode==new_manifests[y["job_id"]]["activity_mode"],"reassessment_activity_mode_changed",422)
             if mode=="labels":
                 require(x["activity"]==y["activity"],"reassessment_activity_label_changed",422)
+            else:
+                require(re.fullmatch(r"A_[a-f0-9]{64}",y["activity"]) is not None,
+                        "reassessment_invalid_activity_code",422)
+            left=(x["job_id"],x["activity"]);right=(y["job_id"],y["activity"])
+            require(forward.get(left,right)==right and reverse.get(right,left)==left,
+                    "reassessment_inconsistent_selector_mapping",422)
+            forward[left]=right;reverse[right]=left
             # Codes are scoped pseudonyms and are not assumed comparable.
             # The operator explicitly asserts semantic correspondence.
             approvals.add((y["job_id"],y["activity"]))
@@ -99,6 +109,8 @@ class Reassessments(Followups):
         require(bool(p["history"]) and p["history"][0]["state"]=="completed_unverified",
                 "followup_completion_history_missing")
         completed=p["history"][0]["at"]
+        require(spec.baseline.expected_conformance_sha256 in (None,d["conformance_sha256"]),
+                "reassessment_baseline_conformance_changed")
         baseline=spec.baseline.model_copy(update={"expected_conformance_sha256":d["conformance_sha256"]})
         require(baseline.expected_review_sha256==d["review_sha256"],"reassessment_baseline_review_changed")
         require(sorted((x.model_dump() for x in baseline.snapshots),key=lambda x:x["job_id"])==d["pins"],
@@ -113,6 +125,7 @@ class Reassessments(Followups):
                 "reassessment_exact_distinct_source_mapping_required",422)
         for a,b in mapping.items():
             require(old[a]["provider"]==new[b]["provider"],"reassessment_provider_changed",422)
+            require(old[a]["activity_mode"]==new[b]["activity_mode"],"reassessment_activity_mode_changed",422)
             require(stamp(new[b]["since"])>=max(stamp(old[a]["until"]),completed)
                     and stamp(new[b]["until"])<=self.jobs.clock(),
                     "reassessment_requires_completed_post_followup_window",422)
@@ -121,6 +134,19 @@ class Reassessments(Followups):
         cases={x.before:x.after for x in spec.cases}
         require(set(cases)=={x["linked_case_id"] for x in p["items"]},
                 "reassessment_case_population_changed",422)
+        # Equal reviewed group shape does not establish identity, but prevents
+        # comparing an exception in a multi-source case with a partial case.
+        def shapes(spec,loaded):
+            return {digest({"scope_sha256":loaded[4],"members":group_key(g)}):
+                    (Counter(job for job,_ in group_key(g)),g.basis) for g in spec.groups}
+        original_shapes=shapes(baseline,old_loaded)
+        later_shapes=shapes(spec.subsequent,new_loaded)
+        for a,b in cases.items():
+            require(a in original_shapes and b in later_shapes,"reassessment_later_case_or_rule_missing",422)
+            before_shape,basis=original_shapes[a]
+            after_shape,after_basis=later_shapes[b]
+            require(Counter({mapping[k]:v for k,v in before_shape.items()})==after_shape and basis==after_basis,
+                    "reassessment_case_source_population_changed",422)
         before=_review(reviewed,org,baseline,principal,worklist=False,_conn=c,_all_groups=True)
         after=_review(reviewed,org,spec.subsequent,principal,worklist=False,_conn=c,_all_groups=True,
                       _approved_selectors=approved)
@@ -156,6 +182,9 @@ class Reassessments(Followups):
                 "source_completeness_verified":False,"causal_effect_verified":False,
                 "execution_authorized":False,
                 "interpretation":"Later selected evidence only; a satisfied observation does not establish correction or causation."}
+        result["comparison_content_sha256"]=digest({k:result[k] for k in ("packet_id",
+            "baseline_conformance_sha256","subsequent_conformance_sha256",
+            "comparison_assumptions_sha256","rows")})
         return {**result,"reassessment_sha256":digest(result)}
 
     def compare(self,org,queue,packet,spec,principal):
@@ -175,9 +204,12 @@ class Reassessments(Followups):
                     "reassessment_review_changed")
             receipts=p.get("reassessment_receipts",[])
             require(len(receipts)<MAX_RECEIPTS,"reassessment_receipt_limit")
+            require(not any(x.get("comparison_content_sha256")==result["comparison_content_sha256"] for x in receipts),
+                    "reassessment_already_recorded")
             # Only a digest and time survive in the old queue. No new-source
             # outcomes, pins, labels or case IDs are persisted here.
             receipt={"reassessment_sha256":result["reassessment_sha256"],
+                     "comparison_content_sha256":result["comparison_content_sha256"],
                      "recorded_at":self.jobs.clock(),"source_remediation_verified":False}
             p["reassessment_receipts"]=[receipt,*receipts]
             p["revision"]+=1
