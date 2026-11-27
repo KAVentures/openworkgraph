@@ -122,7 +122,7 @@ def catalog_public():
 
 
 def token(src):
-    raw=os.environ.get(src["credential_env"],"")
+    raw=rest.resolve_secret(src["credential_env"])
     if not 8<=len(raw)<=4096 or any(ord(c)<33 or ord(c)>126 for c in raw):
         raise rest.FeedError("sap_credential_unavailable")
     if src["auth_type"]=="basic":
