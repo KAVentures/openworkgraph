@@ -36,6 +36,7 @@ def test_export_is_deterministic_safe_and_runs_synthetic_shadow_suite(tmp_path):
         assert len(zipfile.namelist())==len(set(zipfile.namelist()))
         assert {'run_queue.py','test_run_queue.py','release-manifest.json','verify_release.py','check_runtime.py'} <= set(zipfile.namelist())
         assert {'owg_model/process_model.py','review_facts.py','route_candidates.py'} <= set(zipfile.namelist())
+        assert {'review_bindings.py','test_binding_rehearsal.py'} <= set(zipfile.namelist())
         assert 'send_report.py' in zipfile.namelist()
         assert 'stop.py' in zipfile.namelist()
         assert 'owg_report_signing.py' in zipfile.namelist()
@@ -81,7 +82,7 @@ else: raise AssertionError('tampered model accepted')
 '''
     run=subprocess.run([sys.executable,'-c',code],cwd=tmp_path,capture_output=True,text=True,timeout=20)
     assert run.returncode==0,run.stderr
-    run=subprocess.run([sys.executable,'-m','unittest','-v','test_execution','test_evaluation','test_run_queue'],cwd=tmp_path,
+    run=subprocess.run([sys.executable,'-m','unittest','-v','test_execution','test_evaluation','test_run_queue','test_binding_rehearsal'],cwd=tmp_path,
                        capture_output=True,text=True,timeout=30)
     assert run.returncode==0,run.stdout+run.stderr
 

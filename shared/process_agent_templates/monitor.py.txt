@@ -13,7 +13,7 @@ from pathlib import Path
 import re
 
 from execute import ImplementationError, _pairs, _constant, digest, load_object, reference
-from runtime import validate_spec
+from runtime import validate_spec, check_plan
 
 MAX_BYTES = 8 * 1024 * 1024
 MAX_RECORDS = 10000
@@ -144,6 +144,26 @@ def report(spec, records, deployment_name):
     started = previous = _stamp(first.get('at'))
     steps, pending, ended, blocked = [], None, None, False
     attempts = 0
+    dependency_pin=spec.get('dependency_build_basis_sha256')
+    dependency_required='dependency_build_basis_sha256' in spec
+    if dependency_required and (not isinstance(dependency_pin,str) or not re.fullmatch(r'[a-f0-9]{64}',dependency_pin)
+                                or not spec.get('organization_catalog_reference')):
+        _fail()
+    dependency_checks=0;dependency_initial=False;dependency_completion=False
+    precondition_attempts=set();expected_actions=[];expected_preconditions=set()
+    if dependency_required:
+        route=first.get('dependency_route_activity_ids')
+        declared=first.get('dependency_precondition_attempts')
+        try:
+            check_plan({'revision':spec['revision'],'content_sha256':spec['content_sha256'],
+                'activity_ids':route},spec)
+        except (ValueError,TypeError,KeyError):
+            _fail()
+        expected_actions=[node for node in route if node in nodes]
+        if (not isinstance(declared,list) or any(type(i) is not int or not 1<=i<=len(expected_actions) for i in declared)
+            or declared!=sorted(set(declared))):
+            _fail()
+        expected_preconditions=set(declared)
     for index, row in enumerate(records[1:], 1):
         if (not isinstance(row, dict) or not isinstance(row.get('phase'), str)
                 or row['phase'] not in _PHASES or row['phase'] == 'started' or ended):
@@ -218,6 +238,48 @@ def report(spec, records, deployment_name):
                     _fail()
                 preconditions_seen.add(attempts+1)
             elif (attempts+1 in declared_preconditions)!=(attempts+1 in preconditions_seen):
+                _fail()
+        if dependency_required and phase=='catalog_checked':
+            purpose=row.get('dependency_check_purpose');attempt=row.get('dependency_check_attempt')
+            number=row.get('dependency_check_number')
+            current=row.get('current_independent_design_review')
+            if (row.get('dependency_build_basis_sha256')!=dependency_pin or type(number) is not int
+                or number!=dependency_checks+1 or not isinstance(purpose,str)
+                or purpose not in {'initial','refresh','precondition','action','completion'}
+                or type(current) is not bool or dependency_completion or pending):
+                _fail()
+            if purpose in {'precondition','action'}:
+                if type(attempt) is not int or attempt!=attempts+1 or blocked or not dependency_initial:
+                    _fail()
+            elif attempt is not None:
+                _fail()
+            if purpose=='initial':
+                if dependency_checks or index!=1:
+                    _fail()
+                dependency_initial=current
+            elif not dependency_checks:
+                _fail()
+            if purpose=='completion':
+                dependency_completion=True
+            dependency_checks=number
+        if dependency_required and phase in {'precondition_pending','attempt_pending'}:
+            purpose='precondition' if phase=='precondition_pending' else 'action'
+            prior=records[index-1]
+            if (not dependency_initial or dependency_completion or blocked or pending
+                or prior.get('phase')!='catalog_checked'
+                or prior.get('current_independent_design_review') is not True
+                or prior.get('dependency_check_purpose')!=purpose
+                or type(row.get('attempt')) is not int or row['attempt']!=attempts+1
+                or prior.get('dependency_check_attempt')!=row['attempt']):
+                _fail()
+            if purpose=='precondition':
+                if (row['attempt'] in precondition_attempts or row['attempt'] not in expected_preconditions
+                    or not isinstance(row.get('activity_id'),str) or row['activity_id'] not in nodes
+                    or row['attempt']>len(expected_actions) or row['activity_id']!=expected_actions[row['attempt']-1]):
+                    _fail()
+                precondition_attempts.add(row['attempt'])
+            elif (row['attempt']>len(expected_actions) or row.get('activity_id')!=expected_actions[row['attempt']-1]
+                  or (row['attempt'] in expected_preconditions and row['attempt'] not in precondition_attempts)):
                 _fail()
         if phase == 'operator_stop_observed':
             if (row.get('future_tool_attempts_stopped') is not True
@@ -348,6 +410,9 @@ def report(spec, records, deployment_name):
                 if expected_order and (not initial_checked or not completion_checked or not checkpoint_ready
                     or checkpoint_kind!='completion'):
                     _fail()
+            if dependency_required and succeeded and (not dependency_initial or not dependency_completion
+                    or attempts!=len(expected_actions) or precondition_attempts!=expected_preconditions):
+                _fail()
             if (row['all_tool_results_matched'] and (pending or any(s['status'] != 'completed' for s in steps))
                     or succeeded and (blocked or not row['all_tool_results_matched'])):
                 _fail()

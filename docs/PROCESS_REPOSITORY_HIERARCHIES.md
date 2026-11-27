@@ -155,3 +155,27 @@ export. Normal existing reviews retain their status without reapproval.
 
 
 For a separate consumer-to-prerequisite contract and global declared change-impact view, see [Process dependencies](PROCESS_DEPENDENCIES.md). Hierarchy groupings remain independent views and do not supply dependency edges.
+
+
+## Exact saved map revision comparison
+
+Open a saved revision as candidate and select a distinct baseline revision.
+The portal loads the exact baseline digest and compares both immutable
+declarations. The POST base + /compare request takes baseline and candidate
+objects with revision and expected_content_sha256. The root and both map
+artifacts are checked in one authorized read snapshot; a missing, corrupt
+or mismatched revision refuses the complete report. Counts-only audit must
+succeed before the response is returned. JSON download repeats the
+authorized comparison. No unsaved edits are included.
+
+Occurrences align by exact workflow-ID ancestry path rather than editor
+node ID, which can be reused. The report includes added/removed paths,
+changed pins, editor IDs reused on different paths, metadata changes and
+changes in per-process occurrence counts. Removed and added paths of the
+same workflow are possible relocation groups, not verified moves, even
+when only one unmatched path exists on each side. Moving a parent changes
+its descendants' ancestry paths. Live child model fields and reviews are
+not queried, so deleting a child does not alter these historical declaration
+comparisons. This is a descriptive map diff, not a dependency graph,
+execution plan or value rollup. Full native and browser acceptance remain
+required.

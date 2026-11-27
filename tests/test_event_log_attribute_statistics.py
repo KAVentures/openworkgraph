@@ -154,7 +154,7 @@ def test_statistic_can_feed_typed_arithmetic_and_saved_analyses(log, statistic, 
 
 @pytest.mark.parametrize("bad", [
     {"statistic": "p95"}, {"missing_policy": "assume_zero"},
-    {"unit": "USD\x00"}, {"attribute": 'amount" OR 1=1 --'},
+    {"unit": "USD\x00"}, {"attribute": "amount\x01name"},
     {"attribute": ""}, {"statistic": None}, {"sql": "DROP TABLE events"},
 ])
 def test_invalid_contract_refused_before_query(monkeypatch, bad):

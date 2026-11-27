@@ -20,6 +20,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from . import event_log_simulation_priorities as priority_classes
 from . import event_log_simulation_routing as routing_model
 from . import event_log_simulation_uncertainty as uncertainty
+from . import event_log_simulation_variability as variability
 from . import event_log_workspace as workspace
 from .event_log_workspace import EventLogWorkspaceError
 
@@ -375,7 +376,8 @@ def _measure_pattern(conn, zone: str) -> dict[str, Any]:
 
 def calibrate(log_id: str, case_type: str | None = None, max_paths: int = 10,
               pattern_zones: tuple[str, ...] = (), until: datetime | None = None,
-              routing: str = "paths", routing_context: Any = None) -> dict[str, Any]:
+              routing: str = "paths", routing_context: Any = None,
+              measure_variability: bool = False) -> dict[str, Any]:
     """Measure arrival rate, routing, activity times and resources from the log.
 
     ``routing_context`` (transitions only) also measures history- or case-attribute-specific routing.
@@ -427,6 +429,14 @@ def calibrate(log_id: str, case_type: str | None = None, max_paths: int = 10,
                   FROM ce JOIN simulation_selected USING(case_id)
                   WINDOW w AS (PARTITION BY case_id ORDER BY ts, event_id))
             GROUP BY activity ORDER BY count(*) DESC LIMIT {MAX_ACTIVITIES}""").fetchall()
+        dispersion = {}
+        if measure_variability:
+            gap_rows = conn.execute("""SELECT activity, count(gap), avg(gap), stddev_samp(gap)
+                FROM (SELECT activity, date_diff('second', lag(ts) OVER w, ts) AS gap
+                      FROM ce JOIN simulation_selected USING(case_id)
+                      WINDOW w AS (PARTITION BY case_id ORDER BY ts, event_id))
+                GROUP BY activity""").fetchall()
+            dispersion = {a: variability.describe(n, m, sd) for a, n, m, sd in gap_rows}
         measured = {zone: _measure_pattern(conn, zone) for zone in pattern_zones}
         return {
             **({"measured_arrival_patterns": measured} if measured else {}),
@@ -449,6 +459,7 @@ def calibrate(log_id: str, case_type: str | None = None, max_paths: int = 10,
                                "time_source": "median observed gap" if g is not None else "first activity; no gap"}
                            for a, g, n, r, m in rows},
             "distribution": "exponential",
+            **({"service_time_variability": dispersion} if measure_variability else {}),
         }
     return workspace._query(log_id, case_type, run)
 
@@ -526,8 +537,14 @@ def parse_scenario(spec: Any, base: dict[str, Any]) -> dict[str, Any]:
     if len(params) > MAX_ACTIVITIES:
         raise EventLogWorkspaceError(f"at most {MAX_ACTIVITIES} distinct activities")
     distribution = spec.get("distribution", base.get("distribution", "exponential"))
-    if distribution not in ("exponential", "fixed"):
-        raise EventLogWorkspaceError("distribution must be exponential or fixed")
+    if distribution not in ("exponential", "fixed", variability.DISTRIBUTION):
+        raise EventLogWorkspaceError("distribution must be exponential, fixed or measured_gamma")
+    if distribution == variability.DISTRIBUTION:
+        if "service_time_variability" not in base:
+            raise EventLogWorkspaceError("measured_gamma requires a dispersion-enabled calibration")
+        for name, param in params.items():
+            param["service_time_model"] = base["service_time_variability"].get(
+                name, variability.describe(0, None, None))
     cases = int(_number(spec.get("cases", 2000), 10, MAX_CASES, "cases"))
     seed = int(_number(spec.get("seed", 1), 0, 2 ** 31, "seed"))
     label = spec.get("label") if isinstance(spec.get("label"), str) else ""
@@ -653,6 +670,8 @@ def simulate(model: dict[str, Any], samples: list[float] | None = None) -> dict[
 
     def service(activity: str) -> float:
         mean = params[activity]["minutes"] * 60
+        if model["distribution"] == variability.DISTRIBUTION:
+            return variability.service_time(mean, params[activity]["service_time_model"], rng_service)
         return mean if fixed or mean == 0 else rng_service.expovariate(1 / mean)
 
     calendar = model.get("calendar")
@@ -1023,12 +1042,18 @@ def what_if(log_id: str, scenario: Any, case_type: str | None = None) -> dict[st
     route_kind = scenario.get("routing", "paths") if isinstance(scenario, dict) else "paths"
     if route_kind not in routing_model.ROUTINGS:
         raise EventLogWorkspaceError("routing must be paths or transitions")
+    measured_gamma = isinstance(scenario, dict) and scenario.get("distribution") == variability.DISTRIBUTION
+    if measured_gamma and uncertainty_spec is not None:
+        raise EventLogWorkspaceError("measured_gamma cannot yet be combined with exponential-based estimation uncertainty")
     base = calibrate(log_id, case_type, pattern_zones=zones, routing=route_kind,
-                     routing_context=scenario.get("routing_context") if isinstance(scenario, dict) else None)
+                     routing_context=scenario.get("routing_context") if isinstance(scenario, dict) else None,
+                     **({"measure_variability": True} if measured_gamma else {}))
     if not base["paths"]:
         raise EventLogWorkspaceError("no complete case paths fit the simulation limits; inspect calibration coverage")
     baseline_spec = {"cases": scenario.get("cases", 2000) if isinstance(scenario, dict) else 2000,
                      "seed": scenario.get("seed", 1) if isinstance(scenario, dict) else 1}
+    if measured_gamma:
+        baseline_spec["distribution"] = variability.DISTRIBUTION
     if isinstance(scenario, dict) and "activity_time_basis" in scenario:
         baseline_spec["activity_time_basis"] = scenario["activity_time_basis"]   # both runs measure times alike
     if route_kind != "paths":
@@ -1064,7 +1089,7 @@ def what_if(log_id: str, scenario: Any, case_type: str | None = None) -> dict[st
     return {
         "log": base["log"], "case_notion": base["case_notion"],
         "calibration": {k: base[k] for k in ("arrivals_per_hour", "paths", "paths_cover_cases_share", "activities",
-            "observed_cases", "calibrated_cases", "excluded_case_reasons", "limits", "arrival_rate_basis", "routing")
+            "observed_cases", "calibrated_cases", "excluded_case_reasons", "limits", "arrival_rate_basis", "routing", "service_time_variability")
             if k in base},
         "scenario": {"label": scenario_model["label"], "arrivals_per_hour": scenario_model["arrivals_per_hour"],
                      "routing": scenario_model["routing"],
@@ -1079,6 +1104,8 @@ def what_if(log_id: str, scenario: Any, case_type: str | None = None) -> dict[st
                      "priorities": scenario_model["priorities"],
                      "arrival_pattern": scenario_model["arrival_pattern"].describe() if scenario_model["arrival_pattern"] else None},
         "baseline": baseline,
+        **({"baseline_service_time_models": {a: p["service_time_model"] for a, p in baseline_model["activities"].items()}}
+           if measured_gamma else {}),
         "baseline_calendar": baseline_model["calendar"].describe() if baseline_model["calendar"] else None,
         "baseline_arrival_pattern": baseline_model["arrival_pattern"].describe() if baseline_model["arrival_pattern"] else None,
         "baseline_arrivals_per_hour": baseline_model["arrivals_per_hour"],
@@ -1087,7 +1114,7 @@ def what_if(log_id: str, scenario: Any, case_type: str | None = None) -> dict[st
         "median_cycle_time_change_seconds": (s - b) if b is not None and s is not None else None,
         "arrivals_and_routing_share_random_numbers": True,
         **({"uncertainty": spread} if spread else {}),
-        "assumptions": _with_priorities(scenario_model, _time_basis(_assumptions(baseline_model, scenario_model), scenario_model) + (POOL_ASSUMPTIONS if scenario_model["pools"] else []) + (ARRIVAL_PATTERN_ASSUMPTIONS if _uses_pattern(scenario) else []) + (["No arrival rate could be measured; the user's explicit rate is assumed for both baseline and scenario."] if assumed_arrivals else []) + (uncertainty.ASSUMPTIONS if spread else []) + (([routing_model.CONTEXT_ASSUMPTIONS[base["transitions"]["context"]["kind"]]] + routing_model.ASSUMPTIONS[1:]) if (base.get("transitions") or {}).get("context") else routing_model.ASSUMPTIONS if route_kind == "transitions" else []) ),
+        "assumptions": ([variability.ASSUMPTION] if measured_gamma else []) + _with_priorities(scenario_model, _time_basis(_assumptions(baseline_model, scenario_model), scenario_model) + (POOL_ASSUMPTIONS if scenario_model["pools"] else []) + (ARRIVAL_PATTERN_ASSUMPTIONS if _uses_pattern(scenario) else []) + (["No arrival rate could be measured; the user's explicit rate is assumed for both baseline and scenario."] if assumed_arrivals else []) + (uncertainty.ASSUMPTIONS if spread else []) + (([routing_model.CONTEXT_ASSUMPTIONS[base["transitions"]["context"]["kind"]]] + routing_model.ASSUMPTIONS[1:]) if (base.get("transitions") or {}).get("context") else routing_model.ASSUMPTIONS if route_kind == "transitions" else []) ),
         "simulated_not_observed": True,
         "forecast_or_guarantee": False,
         "execution_authorized": False,
@@ -1155,7 +1182,9 @@ def validate(log_id: str, spec: Any, case_type: str | None = None) -> dict[str, 
     training, spanning, holdout, first, last, p50, p90, mean, log_end = observed["counts"]
     if holdout < 10 or training < 10:
         raise EventLogWorkspaceError("validation needs at least 10 cases finished before the cutoff and 10 started after it")
-    base = calibrate(log_id, case_type, until=cutoff, routing=route_kind)
+    measured_gamma = spec.get("distribution") == variability.DISTRIBUTION
+    base = calibrate(log_id, case_type, until=cutoff, routing=route_kind,
+                     **({"measure_variability": True} if measured_gamma else {}))
     if not base["paths"]:
         raise EventLogWorkspaceError("no cases finished before the cutoff fit the simulation limits")
     model = parse_scenario({k: spec[k] for k in ("cases", "seed", "distribution", "calendar", "arrival_pattern",
@@ -1199,8 +1228,11 @@ def validate(log_id: str, spec: Any, case_type: str | None = None) -> dict[str, 
         **({"simulated_routes": {"cases_simulated": simulated["cases_simulated"],
                                  "stopped_at_path_limit": stopped, "path_event_limit": MAX_PATH_LENGTH,
                                  "stopped_routes_in_comparison": stopped > 0}} if stepwise else {}),
+        **({"service_time_variability": base["service_time_variability"],
+            "service_time_models": {a: p["service_time_model"] for a, p in model["activities"].items()}}
+           if measured_gamma else {}),
         "activity_time_basis": model["activity_time_basis"], "routing": model["routing"],
-        "assumptions": VALIDATION_ASSUMPTIONS + _time_basis(list(ASSUMPTIONS) if model["calendar"] is None else
+        "assumptions": ([variability.ASSUMPTION] if measured_gamma else []) + VALIDATION_ASSUMPTIONS + _time_basis(list(ASSUMPTIONS) if model["calendar"] is None else
                         [a for a in ASSUMPTIONS if not a.startswith("Resources work around the clock")] + CALENDAR_ASSUMPTIONS,
                                                             model)
                        + (ARRIVAL_PATTERN_ASSUMPTIONS if model["arrival_pattern"] is not None else [])
