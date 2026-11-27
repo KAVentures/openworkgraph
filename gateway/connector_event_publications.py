@@ -50,6 +50,7 @@ class Remove(Strict):
 
 class Pin(Strict):
     job_id: str=Field(pattern=JOB)
+    grant_id: str=Field(pattern=r"^cep_[a-f0-9]{32}$")
     manifest_sha256: str=Field(pattern=DIGEST)
     publication_revision: StrictInt=Field(ge=1)
 
@@ -163,7 +164,9 @@ class Publications:
                 if existing!=payload:
                     raise JobError("conflicting_snapshot_replay")
                 return {**self._public(d,existing),"replayed":True}
-            self.q(c,"UPDATE connector_event_publications SET payload=? WHERE organization_id=? AND job_id=?",payload,org,job)
+            changed=self.q(c,"UPDATE connector_event_publications SET payload=? WHERE organization_id=? AND job_id=? AND grant_id=? AND expires_at>?",payload,org,job,d["grant_id"],self.jobs.clock())
+            if changed.rowcount!=1:
+                raise JobError("publication_grant_expired_or_invalidated",403)
             self.jobs._audit(c,j,job,"event_publication.uploaded",{"event_count":spec.snapshot.manifest.event_count,"grant_id":d["grant_id"]})
             return {**self._public(d,payload),"replayed":False}
 
@@ -189,7 +192,7 @@ class Publications:
                 j=self.jobs._get(c,org,pin.job_id)
                 d,payload=self._row(c,org,pin.job_id)
                 if (not d or payload is None or d["manifest_sha256"]!=pin.manifest_sha256
-                        or d["revision"]!=pin.publication_revision):
+                        or d["revision"]!=pin.publication_revision or d["grant_id"]!=pin.grant_id):
                     raise JobError("snapshot_missing_or_changed")
                 snap=Snapshot.model_validate_json(payload)
                 if manifest_digest(snap.manifest)!=pin.manifest_sha256:
