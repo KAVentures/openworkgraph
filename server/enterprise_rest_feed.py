@@ -411,7 +411,24 @@ def _check(p):
             c.close()
 
 
-def _begin(profile_id,revision,now):
+def _next_window(p,now):
+    start=_stamp(p["checkpoint"] or p["config"]["initial_since"])
+    provider=p.get("provider","rest")
+    adapter=_adapter(provider)
+    if provider=="google":
+        now=adapter.review_cutoff(p,now,start)
+    elif adapter is not None and provider!="sql":
+        now=adapter.cutoff(p,now,start)
+    if now<start:
+        raise FeedError("clock_before_checkpoint")
+    until=min(now,start+timedelta(hours=p["config"]["window_hours"]))
+    since=start-timedelta(minutes=p["config"]["overlap_minutes"]) if p["checkpoint"] else start
+    if until<=start:
+        raise FeedError("no_new_checkpoint_window")
+    return since,until
+
+
+def _begin(profile_id,revision,now,*,_review_guard=None):
     with workspace._LOCK:
         c=_connect()
         try:
@@ -429,20 +446,10 @@ def _begin(profile_id,revision,now):
             _check_binding(p)
             if p["log_id"]:
                 workspace._check_log(c,p["log_id"])
-            start=_stamp(p["checkpoint"] or p["config"]["initial_since"])
-            attempted_at=now
-            provider=p.get("provider","rest")
-            adapter=_adapter(provider)
-            if provider=="google":
-                now=adapter.review_cutoff(p,now,start)
-            elif adapter is not None and provider!="sql":
-                now=adapter.cutoff(p,now,start)
-            if now<start:
-                raise FeedError("clock_before_checkpoint")
-            until=min(now,start+timedelta(hours=p["config"]["window_hours"]))
-            since=start-timedelta(minutes=p["config"]["overlap_minutes"]) if p["checkpoint"] else start
-            if until<=start:
-                raise FeedError("no_new_checkpoint_window")
+            since,until=_next_window(p,now)
+            if _review_guard is not None:
+                _review_guard(c,p,since,until)
+            attempted_at=_now() if _review_guard is not None else now
             from . import enterprise_ingestion_run_history as history
             previous_run_id=p["run_id"]
             p.update(run_id=secrets.token_hex(16),lease_until=time.time()+LEASE_SECONDS,
@@ -699,12 +706,12 @@ def _extract_window(p,since,until,client_factory):
     return adapter.extract(p,since,until,client_factory)
 
 
-def run(profile_id,revision,*,confirm_reads,confirm_retention,client_factory=httpx.Client,now=None):
+def run(profile_id,revision,*,confirm_reads,confirm_retention,client_factory=httpx.Client,now=None,_review_guard=None):
     if confirm_reads is not True or confirm_retention is not True:
         raise FeedError("explicit_source_read_and_retention_required",403)
     if type(revision) is not int:
         raise FeedError("exact_revision_required",422)
-    p,since,until=_begin(profile_id,revision,now or _now())
+    p,since,until=_begin(profile_id,revision,now or _now(),_review_guard=_review_guard)
     try:
         rows,counts=_extract_window(p,since,until,client_factory)
         return _retain(p,rows,counts,until)
