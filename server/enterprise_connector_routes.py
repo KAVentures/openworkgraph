@@ -10,6 +10,7 @@ from . import google_workspace_audit as google
 from . import slack_native_feed as slack
 from . import salesforce_history_feed as sf
 from . import servicenow_operations_feed as sn
+from . import sap_procurement_feed as sap
 from . import enterprise_sql_feed as sql
 from . import enterprise_connector_operations as operations
 from .event_log_routes import _json_body
@@ -74,6 +75,18 @@ async def sql_create(request:Request):
     require(request)
     body=await _json_body(request,"SQL feed configuration",strict=True,limit=4096)
     return await call(request,sql.create,body)
+
+
+@router.get("/v1/enterprise-connectors/sap/catalog")
+async def sap_catalog(request:Request):
+    return await call(request,sap.catalog_public)
+
+
+@router.post("/v1/enterprise-connectors/sap")
+async def sap_create(request:Request):
+    require(request)
+    body=await _json_body(request,"SAP procurement profile",strict=True,limit=16384)
+    return await call(request,sap.create,body)
 
 
 @router.post("/v1/enterprise-connectors/servicenow")

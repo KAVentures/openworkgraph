@@ -45,9 +45,9 @@
     $('inventory').replaceChildren();$('profiles').replaceChildren();$('status').textContent='Reading local operational evidence…';
     try{
       const h=threshold();
-      const [r,feeds,grants,sql]=await Promise.all([api(base+'?freshness_hours='+h),api(base+'/rest'),api('/v1/connector-oauth').catch(()=>({connections:[]})),api(base+'/sql/catalog').catch(()=>({sources:[],unavailable:true}))]);
+      const [r,feeds,grants,sql,sap]=await Promise.all([api(base+'?freshness_hours='+h),api(base+'/rest'),api('/v1/connector-oauth').catch(()=>({connections:[]})),api(base+'/sql/catalog').catch(()=>({sources:[],unavailable:true})),api(base+'/sap/catalog').catch(()=>({sources:[],unavailable:true}))]);
       if(turn!==generation)return;
-      latest=r;render(r);renderProfiles(feeds,r);renderGoogleGrants(grants);renderSfGrants(grants);renderSnGrants(grants);renderSqlCatalog(sql);$('download').disabled=false;
+      latest=r;render(r);renderProfiles(feeds,r);renderGoogleGrants(grants);renderSfGrants(grants);renderSnGrants(grants);renderSqlCatalog(sql);renderSapCatalog(sap);$('download').disabled=false;
       $('status').textContent='Local inventory refreshed. No provider reads performed.';
     }catch(error){if(turn===generation)$('status').textContent=error.message;}
     finally{if(turn===generation)$('refresh').disabled=busy;}
@@ -106,6 +106,32 @@
     selected.box.onchange=()=>{fields.disabled=ids.disabled=created.box.disabled=!selected.box.checked;};
     fieldset.append(selected.node,fl,il,created.node);$('snSelections').append(fieldset);
   }
+  let sapSources=[];
+  const sapStreams=[['sapPO','purchase_orders'],['sapMovement','material_movements'],['sapInvoice','supplier_invoices']];
+  function renderSapCatalog(catalog){
+    sapSources=catalog.sources||[];
+    const select=$('sapSource'),previous=select.value;
+    select.replaceChildren();
+    for(const source of sapSources){
+      const o=el('option',source.source_alias+' · SAP client '+source.sap_client);
+      o.value=source.source_alias;o.disabled=!source.credential_available;select.append(o);
+    }
+    const available=sapSources.filter(s=>s.credential_available);
+    if(available.some(s=>s.source_alias===previous))select.value=previous;
+    else if(available.length)select.value=available[0].source_alias;
+    select.disabled=!available.length||busy;
+    $('sapConfirm').checked=false;renderSapReview(catalog.unavailable);
+  }
+  function renderSapReview(unavailable=false){
+    const src=sapSources.find(s=>s.source_alias===$('sapSource').value&&s.credential_available);
+    const review=$('sapReview');review.replaceChildren();
+    $('sapCreateButton').disabled=busy||!src;
+    $('sapConfirm').checked=false;
+    for(const [id,stream] of sapStreams){const enabled=!!src&&src.streams.includes(stream);$(id).disabled=!enabled;if(!enabled)$(id).checked=false;}
+    if(!src){review.append(el('p',unavailable?'SAP catalog unavailable.':'No configured SAP source with available credential.'));return;}
+    review.append(table(['Reviewed source','Value'],[['Service root',src.service_root],['SAP client',src.sap_client],['Deployment definition SHA-256',src.source_sha256],['Metadata-pinned streams',src.streams.join(', ')]]));
+  }
+  $('sapSource').onchange=()=>renderSapReview();
   let sqlSources=[];
   function renderSqlCatalog(catalog){
     sqlSources=catalog.sources||[];
@@ -135,7 +161,7 @@
   }
   $('sqlSource').onchange=()=>{$('sqlConfirm').checked=false;renderSqlReview();};
   async function action(fn){
-    if(busy)return;busy=true;$('createButton').disabled=true;$('googleCreateButton').disabled=true;$('sqlCreateButton').disabled=true;$('sfCreateButton').disabled=true;$('snCreateButton').disabled=true;$('refresh').disabled=true;
+    if(busy)return;busy=true;$('createButton').disabled=true;$('googleCreateButton').disabled=true;$('sqlCreateButton').disabled=true;$('sfCreateButton').disabled=true;$('snCreateButton').disabled=true;$('sapCreateButton').disabled=true;$('refresh').disabled=true;
     const root=$('profiles');root.querySelectorAll('button').forEach(b=>b.disabled=true);
     try{const r=await fn();$('restStatus').textContent=r;}
     catch(error){$('restStatus').textContent=error.message;}
@@ -146,8 +172,8 @@
     for(const p of feeds.profiles){
       const card=el('article');card.className='profile';card.append(el('h3',p.config.name),
         el('p',p.profile_id+' · revision '+p.revision+' · '+p.status),
-        table(['Configuration','Value'],[...(p.provider==='google'?[['Provider','Google Workspace audit'],['Application',p.config.application],['Customer',p.config.customer_id],['User scope',p.config.user_key],['Case notion',p.config.case_basis],['Reporting lag (minutes)',p.config.ingestion_lag_minutes]]:p.provider==='servicenow'?[['Provider','ServiceNow operations'],['Instance',p.config.instance_host],['Reviewed table/field/record scope',JSON.stringify(p.config.selections)],['Require repeat read',p.config.verify_repeat],['Reporting lag (minutes)',p.config.ingestion_lag_minutes]]:p.provider==='salesforce'?[['Provider','Salesforce field history'],['Instance',p.config.instance_host],['Organization',p.config.organization_id],['User',p.config.user_id],['Reviewed object/field/record scope',JSON.stringify(p.config.selections)],['Reporting lag (minutes)',p.config.ingestion_lag_minutes]]:p.provider==='slack'?[['Provider','Slack native'],['Mode',p.config.mode],['Enterprise',p.config.enterprise_id],['Workspace',p.config.team_id],['Channel',p.config.channel_id],['Case notion',p.config.case_basis],['Audit action filters',p.config.actions.join(', ')||'All'],['Audit actor filter',p.config.actor_id],['Reporting lag (minutes)',p.config.ingestion_lag_minutes]]:p.provider==='sql'?[['Provider','Native SQL'],['Source alias',p.config.source_alias],['Engine',p.config.engine],['Reviewed source definition',p.config.source_sha256],['Retained schema pin',p.source_schema_sha256||'No successful snapshot yet']]:[['Fixed endpoint',p.config.endpoint]]),['Credential binding available',p.credential_binding_available],['Change window (hours)',p.config.window_hours],['Overlap (minutes)',p.config.overlap_minutes],['Last attempt',p.last_attempt_at],['Last successful retention',p.last_success_at],['Checkpoint',p.checkpoint],['Retained log',p.log_id],['Last result',p.last_result?JSON.stringify(p.last_result):null]]));
-      const read=check(p.provider==='google'?'Authorize one bounded Google audit read for the exact customer, application and user scope.':p.provider==='servicenow'?'Authorize one bounded read of the exact approved ServiceNow scope.':p.provider==='salesforce'?'Authorize one bounded read of the exact approved Salesforce history scope.':p.provider==='slack'?'Authorize one bounded read from the exact selected Slack scope.':p.provider==='sql'?'Authorize one bounded read-only SQL snapshot from the exact approved source.':'Authorize one bounded read from the exact configured endpoint.');
+        table(['Configuration','Value'],[...(p.provider==='google'?[['Provider','Google Workspace audit'],['Application',p.config.application],['Customer',p.config.customer_id],['User scope',p.config.user_key],['Case notion',p.config.case_basis],['Reporting lag (minutes)',p.config.ingestion_lag_minutes]]:p.provider==='sap'?[['Provider','SAP procurement day evidence'],['Approved source',p.config.source_alias],['Definition SHA-256',p.config.source_sha256],['Selected purchase orders',p.config.purchase_orders.join(', ')],['Streams',p.config.streams.join(', ')],['Completed-day lag',p.config.lag_days],['Time precision','Day only; midnight is a storage convention']]:p.provider==='servicenow'?[['Provider','ServiceNow operations'],['Instance',p.config.instance_host],['Reviewed table/field/record scope',JSON.stringify(p.config.selections)],['Require repeat read',p.config.verify_repeat],['Reporting lag (minutes)',p.config.ingestion_lag_minutes]]:p.provider==='salesforce'?[['Provider','Salesforce field history'],['Instance',p.config.instance_host],['Organization',p.config.organization_id],['User',p.config.user_id],['Reviewed object/field/record scope',JSON.stringify(p.config.selections)],['Reporting lag (minutes)',p.config.ingestion_lag_minutes]]:p.provider==='slack'?[['Provider','Slack native'],['Mode',p.config.mode],['Enterprise',p.config.enterprise_id],['Workspace',p.config.team_id],['Channel',p.config.channel_id],['Case notion',p.config.case_basis],['Audit action filters',p.config.actions.join(', ')||'All'],['Audit actor filter',p.config.actor_id],['Reporting lag (minutes)',p.config.ingestion_lag_minutes]]:p.provider==='sql'?[['Provider','Native SQL'],['Source alias',p.config.source_alias],['Engine',p.config.engine],['Reviewed source definition',p.config.source_sha256],['Retained schema pin',p.source_schema_sha256||'No successful snapshot yet']]:[['Fixed endpoint',p.config.endpoint]]),['Credential binding available',p.credential_binding_available],['Change window (hours)',p.config.window_hours],['Overlap (minutes)',p.config.overlap_minutes],['Last attempt',p.last_attempt_at],['Last successful retention',p.last_success_at],['Checkpoint',p.checkpoint],['Retained log',p.log_id],['Last result',p.last_result?JSON.stringify(p.last_result):null]]));
+      const read=check(p.provider==='google'?'Authorize one bounded Google audit read for the exact customer, application and user scope.':p.provider==='sap'?'Authorize one bounded SAP business-date read for the approved source and selected purchase orders.':p.provider==='servicenow'?'Authorize one bounded read of the exact approved ServiceNow scope.':p.provider==='salesforce'?'Authorize one bounded read of the exact approved Salesforce history scope.':p.provider==='slack'?'Authorize one bounded read from the exact selected Slack scope.':p.provider==='sql'?'Authorize one bounded read-only SQL snapshot from the exact approved source.':'Authorize one bounded read from the exact configured endpoint.');
       const retain=check('Authorize retention of the selected mapped events locally.');
       const run=button('Run next window',()=>action(async()=>{
         if(!read.box.checked||!retain.box.checked)throw Error('Confirm both read and retention.');
@@ -273,6 +299,20 @@
         confirm_creation_retention:$('snCreation').checked,confirm_unrestricted_records:$('snAll').checked});
       for(const id of ['snConfirm','snUTC','snAudit','snCreation','snAll'])$(id).checked=false;
       return 'ServiceNow profile saved. No source was read.';
+    });
+  };
+  $('sapCreate').onsubmit=event=>{
+    event.preventDefault();
+    action(async()=>{
+      const src=sapSources.find(s=>s.source_alias===$('sapSource').value&&s.credential_available);
+      if(!src)throw Error('Choose an approved SAP source.');
+      const streams=sapStreams.filter(([id])=>$(id).checked&&!$(id).disabled).map(([,stream])=>stream);
+      if(!streams.length)throw Error('Choose at least one approved stream.');
+      await api(base+'/sap',{name:$('sapName').value,source_alias:src.source_alias,source_sha256:src.source_sha256,purchase_orders:$('sapOrders').value.split(',').map(x=>x.trim()).filter(Boolean),streams,
+        initial_since:$('sapSince').value+'T00:00:00Z',window_days:Number($('sapWindow').value),overlap_days:Number($('sapOverlap').value),lag_days:Number($('sapLag').value),page_size:Number($('sapPage').value),
+        confirm_configuration:$('sapConfirm').checked,confirm_day_precision:$('sapPrecision').checked,confirm_retention:$('sapRetention').checked,confirm_transient_unselected_references:$('sapTransient').checked});
+      for(const id of ['sapConfirm','sapPrecision','sapRetention','sapTransient'])$(id).checked=false;
+      return 'SAP profile saved. No source was read.';
     });
   };
   $('refresh').onclick=load;

@@ -61,7 +61,7 @@ class Strict(BaseModel):
 class Create(Strict):
     organization_id: str=Field(pattern=ID)
     name: str=Field(min_length=1,max_length=100)
-    provider: Literal["rest","google","sql","slack","salesforce","servicenow"]
+    provider: Literal["rest","google","sql","slack","salesforce","servicenow","sap"]
     profile_id: str=Field(pattern=PROFILE)
     profile_revision: StrictInt=Field(ge=1,le=1_000_000)
     profile_sha256: str=Field(pattern=DIGEST)

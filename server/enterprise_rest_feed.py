@@ -152,6 +152,9 @@ def _key(p, domain, value):
 
 
 def _check_binding(p):
+    if p.get("provider") == "sap":
+        from . import sap_procurement_feed as sap
+        return sap.check_binding(p)
     if p.get("provider") == "servicenow":
         from . import servicenow_operations_feed as sn
         return sn.check_binding(p)
@@ -357,6 +360,9 @@ def _begin(profile_id,revision,now):
             if p.get("provider")=="servicenow":
                 from . import servicenow_operations_feed as sn
                 now=sn.cutoff(p,now,start)
+            if p.get("provider")=="sap":
+                from . import sap_procurement_feed as sap
+                now=sap.cutoff(p,now,start)
             if now<start:
                 raise FeedError("clock_before_checkpoint")
             until=min(now,start+timedelta(hours=p["config"]["window_hours"]))
@@ -519,7 +525,7 @@ def _retain(p,rows,counts,until):
                 added=result["added_events"]
                 duplicates=result["duplicate_events_skipped"]
             else:
-                result=workspace.import_log(source,name={"google":"Google Workspace audit ","sql":"Enterprise SQL ","slack":"Slack activity ","salesforce":"Salesforce field history ","servicenow":"ServiceNow operations "}.get(p.get("provider"),"Enterprise REST ")+p["profile_id"],source_format="csv",
+                result=workspace.import_log(source,name={"google":"Google Workspace audit ","sql":"Enterprise SQL ","slack":"Slack activity ","salesforce":"Salesforce field history ","servicenow":"ServiceNow operations ","sap":"SAP procurement day evidence "}.get(p.get("provider"),"Enterprise REST ")+p["profile_id"],source_format="csv",
                                             mapping=mapping,_transaction_hook=checkpoint)
                 added=result["events"]
                 duplicates=0
@@ -567,7 +573,10 @@ def run(profile_id,revision,*,confirm_reads,confirm_retention,client_factory=htt
         raise FeedError("exact_revision_required",422)
     p,since,until=_begin(profile_id,revision,now or _now())
     try:
-        if p.get("provider")=="servicenow":
+        if p.get("provider")=="sap":
+            from . import sap_procurement_feed as sap
+            rows,counts=sap.extract(p,since,until,client_factory)
+        elif p.get("provider")=="servicenow":
             from . import servicenow_operations_feed as sn
             rows,counts=sn.extract(p,since,until,client_factory)
         elif p.get("provider")=="salesforce":
@@ -618,6 +627,7 @@ def run_scheduled(profile_id,revision):
         if error.code in {"unknown_rest_profile","rest_profile_disabled","profile_changed_or_disabled",
                            "credential_changed_reconfigure_required","rest_run_invalidated",
                            "endpoint_not_deployment_allowlisted","google_grant_unavailable","google_grant_scope_mismatch","google_reconnect_required",
+                           "sap_source_definition_changed","sap_credential_unavailable","sap_metadata_changed_requires_review",
                            "servicenow_grant_unavailable","servicenow_grant_scope_mismatch","servicenow_reconnect_required",
                            "salesforce_grant_unavailable","salesforce_grant_scope_mismatch","salesforce_reconnect_required","salesforce_principal_mismatch",
                            "slack_credential_unavailable","slack_enterprise_mismatch","slack_workspace_mismatch","slack_channel_scope_not_verified","slack_principal_changed_during_read",
