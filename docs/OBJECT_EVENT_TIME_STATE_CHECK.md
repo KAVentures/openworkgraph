@@ -105,6 +105,41 @@ be read, updated with `expected_revision`, or deleted with an
 only check settings; result filters, page offsets, results and source event
 data are not stored in them.
 
+## Analyze one exact object
+
+Use **Find an object ID** to search or browse objects linked to the selected
+activity, type, date window, optional event, and exact qualifier. Search is
+literal and case-sensitive. Results are ordered by ID, and subsequent pages
+are pinned to the append revision. Unlinked objects do not appear in this
+scoped lookup; an exact ID can also be entered directly.
+
+Optionally enter an exact object ID for the selected object type before running
+the check. Only events of the stored activity linked to that object (and the
+exact qualifier, if set) are included. The event bound applies after this
+selection. The check evaluates that object alone, so results do not describe
+other objects linked to the same events. The event-ID lookup honors this object
+scope, and an optional exact event ID and date window further restrict it.
+
+The object ID is temporary, excluded from saved and transferred definitions,
+and included in scoped CSV metadata. All downstream evidence, timelines and
+distributions use the reviewed revision and the same object scope.
+
+## Analyze one exact event
+
+Use **Find an event ID** to browse or search exact IDs for the stored activity
+and date window. Search is case-sensitive and literal; pages are ordered by ID
+and pinned to the log revision. A changed log requires restarting the lookup.
+Each result includes the event timestamp, and selecting it fills the scope field.
+
+Optionally enter an exact event ID before running the check. The activity,
+UTC date window, and exact ID jointly define the analysis scope, and the event
+limit applies after this selection. This differs from the result event-ID
+filter, which narrows already analyzed results and does not bypass analysis
+limits. A scoped event still uses its complete linked-object evidence and
+retained history. The scope follows the reviewed revision into timelines,
+distributions, witnesses, and CSV metadata. It is temporary and is neither
+saved nor included in transferred check definitions.
+
 ## Review recorded values at events
 
 **Recorded values at events** groups the selected event-object links by their
@@ -113,6 +148,16 @@ from unknowns. Missing history, future-only history, and conflicting values are
 separate unknown categories; events with no linked object add no links. Counts
 are links, not distinct objects. The reviewed revision and current date,
 status, and event-ID filters apply to the table and complete CSV export.
+
+Select **Inspect value group** to find events with at least one object in that
+group. Other linked objects remain in each event's evidence and object CSV,
+so reviewers retain the full event context. The event's result status is still
+computed from all selected linked objects. The temporary group filter combines
+with the event and date filters, applies to timelines and exports, and is not
+saved in check definitions. Clear it explicitly to return to all events.
+Distribution counts under a group filter include all links of the matching
+events, including links outside that group. CSV metadata records the group
+filter and distinguishes an empty exact value from no value.
 
 The distribution refuses more than 1,000 groups or any recorded value longer
 than 4,096 characters, rather than silently truncating. The CSV includes the
