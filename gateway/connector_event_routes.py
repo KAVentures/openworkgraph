@@ -88,6 +88,12 @@ def install(app,jobs,admin):
         principal=owner(authorization,True)
         return await reply(reviewed.preview,organization_id,await parse(request,Plan,maximum=MAX_REQUEST),principal)
 
+    @router.post(base+"/{organization_id}/case-temporal-review")
+    async def case_temporal_review(organization_id:str,request:Request,authorization:str|None=Header(default=None)):
+        from .connector_temporal_review import Alignment,temporal_review
+        principal=owner(authorization,True)
+        return await reply(temporal_review,reviewed,organization_id,await parse(request,Alignment,maximum=MAX_REQUEST),principal)
+
     @router.post(base+"/{organization_id}/case-export")
     async def case_export(organization_id:str,request:Request,authorization:str|None=Header(default=None)):
         principal=owner(authorization,True)
