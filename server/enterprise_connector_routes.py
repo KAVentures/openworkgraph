@@ -277,3 +277,12 @@ async def tuning_apply(request:Request):
     require(request)
     body=await _json_body(request,"Reviewed connector tuning apply",strict=True,limit=16384)
     return await call(request,tuning.apply,body)
+
+
+@router.get("/v1/enterprise-connectors/run-history")
+async def ingestion_run_history(request:Request,profile_id:str|None=None,
+                                days:int=Query(default=30,ge=1,le=90),
+                                limit:int=Query(default=200,ge=1,le=1000),
+                                state:str|None=None):
+    from . import enterprise_ingestion_run_history as history
+    return await call(request,history.history,profile_id=profile_id,days=days,limit=limit,state=state)

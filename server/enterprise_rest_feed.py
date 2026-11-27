@@ -207,6 +207,8 @@ def _check_binding(p):
 def _connect():
     conn=workspace._connect()
     conn.execute(SCHEMA)
+    from . import enterprise_ingestion_run_history as history
+    history.init(conn)
     return conn
 
 
@@ -312,9 +314,17 @@ def change(profile_id,revision,enabled):
                 if p["status"]=="dataset_deleted":
                     raise FeedError("retained_dataset_deleted_create_new_profile")
                 _check_binding(p)
-            p.update(revision=revision+1,enabled=enabled,run_id=None,lease_until=0,
-                     status="ready" if enabled else ("dataset_deleted" if p["status"]=="dataset_deleted" else "disabled"))
-            _put(c,p)
+            from . import enterprise_ingestion_run_history as history
+            c.execute("BEGIN")
+            try:
+                history.invalidate(c,p,"profile_revision_changed")
+                p.update(revision=revision+1,enabled=enabled,run_id=None,lease_until=0,
+                         status="ready" if enabled else ("dataset_deleted" if p["status"]=="dataset_deleted" else "disabled"))
+                _put(c,p)
+                c.execute("COMMIT")
+            except Exception:
+                c.execute("ROLLBACK")
+                raise
             return _public(p,time.time())
         finally:
             c.close()
@@ -329,7 +339,15 @@ def delete(profile_id,revision):
             p=_get(c,profile_id)
             if p["revision"]!=revision:
                 raise FeedError("profile_changed")
-            c.execute("DELETE FROM enterprise_rest_profiles WHERE profile_id=?",[profile_id])
+            from . import enterprise_ingestion_run_history as history
+            c.execute("BEGIN")
+            try:
+                history.erase(c,profile_id)
+                c.execute("DELETE FROM enterprise_rest_profiles WHERE profile_id=?",[profile_id])
+                c.execute("COMMIT")
+            except Exception:
+                c.execute("ROLLBACK")
+                raise
             return {"deleted":True,"retained_log_id":p["log_id"],"retained_log_deleted":False}
         finally:
             c.close()
@@ -341,6 +359,8 @@ def forget_dataset(conn,log_id):
     for (definition,) in conn.execute("SELECT definition FROM enterprise_rest_profiles").fetchall():
         p=json.loads(definition)
         if p["log_id"]==log_id:
+            from . import enterprise_ingestion_run_history as history
+            history.erase(conn,p["profile_id"])
             p.update(enabled=False,status="dataset_deleted",revision=p["revision"]+1,run_id=None,lease_until=0,
                      log_id=None,checkpoint=None,last_result=None,last_success_at=None,
                      source_schema_sha256=None)
@@ -394,9 +414,18 @@ def _begin(profile_id,revision,now):
             since=start-timedelta(minutes=p["config"]["overlap_minutes"]) if p["checkpoint"] else start
             if until<=start:
                 raise FeedError("no_new_checkpoint_window")
+            from . import enterprise_ingestion_run_history as history
+            previous_run_id=p["run_id"]
             p.update(run_id=secrets.token_hex(16),lease_until=time.time()+LEASE_SECONDS,
                      status="running",last_attempt_at=_iso(attempted_at))
-            _put(c,p)
+            c.execute("BEGIN")
+            try:
+                _put(c,p)
+                history.start(c,p,_iso(since),_iso(until),previous_run_id=previous_run_id)
+                c.execute("COMMIT")
+            except Exception:
+                c.execute("ROLLBACK")
+                raise
             return p,since,until
         finally:
             c.close()
@@ -540,6 +569,9 @@ def _retain(p,rows,counts,until):
                 raise FeedError("slack_principal_pin_missing")
             saved["slack_principal_pin"]=principal_pin
         _put(conn,saved)
+        from . import enterprise_ingestion_run_history as history
+        history.finish(conn,p["profile_id"],p["run_id"],"succeeded",
+                       checkpoint=saved["checkpoint"],counts=saved["last_result"])
     with workspace._LOCK:
         _check(p)
         if rows:
@@ -557,7 +589,13 @@ def _retain(p,rows,counts,until):
         else:
             c=_connect()
             try:
-                checkpoint(c,p["log_id"])
+                c.execute("BEGIN")
+                try:
+                    checkpoint(c,p["log_id"])
+                    c.execute("COMMIT")
+                except Exception:
+                    c.execute("ROLLBACK")
+                    raise
             finally:
                 c.close()
             added=duplicates=0
@@ -586,7 +624,16 @@ def _fail(p,error):
             live.update(status="failed",run_id=None,lease_until=0,
                         retry_not_before=max(live["retry_not_before"],time.time()+error.retry_after) if error.retry_after else live["retry_not_before"],
                         last_result={"outcome":"failed","error":error.code})
-            _put(c,live)
+            from . import enterprise_ingestion_run_history as history
+            c.execute("BEGIN")
+            try:
+                _put(c,live)
+                history.finish(c,p["profile_id"],p["run_id"],"failed",error=error.code,
+                               retry_not_before=live["retry_not_before"])
+                c.execute("COMMIT")
+            except Exception:
+                c.execute("ROLLBACK")
+                raise
         finally:
             c.close()
 
