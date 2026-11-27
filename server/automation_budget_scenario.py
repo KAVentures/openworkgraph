@@ -169,7 +169,7 @@ def _solve(value):
     cap = _money(spec.budget_limit)
     n = len(ids)
     priorities = [c.priority for c in choices]
-    review=frontier.Frontier(ids,cap,spec.frontier_review.priority_targets) if spec.frontier_review is not None else None
+    review=frontier.Frontier(ids,cap,spec.frontier_review.priority_targets,spec.frontier_review.budget_checkpoints) if spec.frontier_review is not None else None
 
     def packet(mask, total, points):
         return {"selected_idea_ids":[ids[j] for j in range(n) if mask & (1 << j)],

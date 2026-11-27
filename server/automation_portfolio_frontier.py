@@ -2,24 +2,34 @@
 from collections import Counter
 from decimal import Decimal
 from threading import BoundedSemaphore
-from pydantic import BaseModel, ConfigDict, Field
+from typing import Annotated
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictFloat
+
+Money=Annotated[StrictInt|StrictFloat,Field(ge=0,le=10**12)]
 
 GUARD=BoundedSemaphore(1)
 
 class FrontierSpec(BaseModel):
     model_config=ConfigDict(extra="forbid",strict=True)
     priority_targets: list[int]=Field(min_length=1,max_length=12)
+    budget_checkpoints: list[Money]=Field(default_factory=list,max_length=12)
 
 def check(spec):
     targets=spec.priority_targets
     if any(not 0<=p<=1800 for p in targets) or len(set(targets))!=len(targets):
         raise ValueError("choose distinct integer priority targets from 0 to 1800")
+    if len({Decimal(str(x)) for x in spec.budget_checkpoints})!=len(spec.budget_checkpoints):
+        raise ValueError("budget checkpoints must be distinct")
 
 class Frontier:
-    def __init__(self,ids,cap,targets):
+    def __init__(self,ids,cap,targets,checkpoints=()):
         self.ids=ids
         self.cap=cap
         self.targets=sorted(targets)
+        self.checkpoints=sorted(Decimal(str(x)) for x in checkpoints)
+        self.min_in=[None]*len(ids)
+        self.min_out=[None]*len(ids)
+        self.structural_membership=[0]*len(ids)
         self.by_points={}
         self.feasible=0
         self.structural_count=0
@@ -51,6 +61,12 @@ class Frontier:
         self.structural_count+=1
         if self.better(row,self.by_points.get(points)):
             self.by_points[points]=row
+        for i in range(len(self.ids)):
+            included=bool(mask&(1<<i))
+            if included:self.structural_membership[i]+=1
+            side=self.min_in if included else self.min_out
+            prev=side[i]
+            if prev is None or cost<prev[1] or cost==prev[1] and self.better(row,prev):side[i]=row
         if cost>self.cap:return
         self.feasible+=1
         self.counts[mask.bit_count()]+=1
@@ -100,6 +116,16 @@ class Frontier:
             row=min(eligible,key=lambda r:(r[1],-r[2],r[0].bit_count(),self.key(r)[-1])) if eligible else None
             targets.append({"minimum_priority_points":points,"possible_under_structural_constraints":row is not None,
                             "least_cost_portfolio":self.packet(row)})
+        checkpoints=[]
+        for cap in self.checkpoints:
+            # Cost strictly increases along the nondominated frontier.
+            row=next((r for r in reversed(frontier) if r[1]<=cap),None)
+            nxt=next((r for r in frontier if r[1]>cap),None)
+            checkpoints.append({"budget_limit":self.money(cap),"best_portfolio":self.packet(row),
+                                "unused_budget":self.money(cap-row[1]) if row is not None else None,
+                                "priority_delta_vs_current_budget":row[2]-self.best[2] if row is not None and self.best is not None else None,
+                                "next_priority_breakpoint":self.packet(nxt),
+                                "additional_budget_to_next_breakpoint":self.money(nxt[1]-cap) if nxt is not None else None})
         sensitivity=[]
         for i,ident in enumerate(self.ids):
             inc,exc=self.inside[i],self.outside[i]
@@ -107,14 +133,18 @@ class Frontier:
                 return {"best_portfolio":self.packet(row),
                         "priority_loss_vs_optimum":self.best[2]-row[2] if row is not None and self.best is not None else None,
                         "budget_delta_vs_ranked_optimum":self.money(row[1]-self.best[1]) if row is not None and self.best is not None else None}
-            sensitivity.append({"idea_id":ident,"feasible_subsets_including":self.membership_counts[i],
+            sensitivity.append({"idea_id":ident,"structural_subsets_including":self.structural_membership[i],
+                                "structural_subsets_excluding":self.structural_count-self.structural_membership[i],
+                                "least_cost_portfolio_including":self.packet(self.min_in[i]),
+                                "least_cost_portfolio_excluding":self.packet(self.min_out[i]),
+                                "feasible_subsets_including":self.membership_counts[i],
                                 "feasible_subsets_excluding":self.feasible-self.membership_counts[i],
                                 "forced_in":side(inc),"forced_out":side(exc),
                                 "membership_among_max_priority_portfolios":("no_feasible_portfolio" if self.best is None else
                                     "all" if self.optimum_all&(1<<i) else "some" if self.optimum_any&(1<<i) else "none")})
         return {"format":"openworkgraph.portfolio-budget-frontier.v1","structurally_feasible_subsets":self.structural_count,
                 "current_budget_feasible_subsets":self.feasible,"frontier_complete":True,
-                "frontier":[self.packet(r) for r in frontier],"priority_targets":targets,"candidate_sensitivity":sensitivity,
+                "frontier":[self.packet(r) for r in frontier],"priority_targets":targets,"budget_checkpoints":checkpoints,"candidate_sensitivity":sensitivity,
                 "feasible_subset_counts_by_size":[{"selected_count":k,"count":v} for k,v in sorted(self.counts.items())],
                 "maximum_priority_at_current_budget":self.optimum_points,
                 "maximum_priority_portfolios":self.optimum_count,

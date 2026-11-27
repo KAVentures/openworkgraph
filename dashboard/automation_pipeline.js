@@ -771,9 +771,10 @@
         const controls=el('div',null,'row');controls.append(labelled('Currency',currency),labelled('Budget basis',basis),labelled('Budget limit',limit),labelled('Maximum selected ideas',max));
         const frontierOn=el('input');frontierOn.type='checkbox';frontierOn.id='owgBudgetFrontier';
         const targets=el('input');targets.type='text';targets.id='owgBudgetFrontierTargets';targets.value='50,100,200';targets.maxLength=80;targets.disabled=true;
+        const checkpoints=el('input');checkpoints.type='text';checkpoints.id='owgBudgetFrontierCheckpoints';checkpoints.maxLength=200;checkpoints.disabled=true;checkpoints.placeholder='Optional: 10000,50000,100000';
         const frontierControls=el('div');frontierControls.append(labelled('Include exact budget frontier and candidate sensitivity',frontierOn),
-          labelled('Priority targets (0–1800, comma separated)',targets));
-        frontierOn.onchange=()=>{targets.disabled=!frontierOn.checked;invalidate();};targets.oninput=()=>invalidate();
+          labelled('Priority targets (0–1800, comma separated)',targets),labelled('Optional budget checkpoints, comma separated',checkpoints));
+        frontierOn.onchange=()=>{targets.disabled=checkpoints.disabled=!frontierOn.checked;invalidate();};targets.oninput=checkpoints.oninput=()=>invalidate();
         const options=el('div'),out=el('div'),status=el('p');status.setAttribute('role','status');
         const run=button('Evaluate exact portfolio combinations','secondary'),download=button('Download scenario report','secondary');download.disabled=true;
         let attempt=0,report=null;const controlsById=new Map();
@@ -816,7 +817,11 @@
             if(values.length>12||values.some(x=>!/^\d{1,4}$/.test(x)||Number(x)>1800)||new Set(values.map(Number)).size!==values.length){
               status.textContent='Enter one to twelve distinct integer targets from 0 to 1800.';return;
             }
-            frontierReview={priority_targets:values.map(Number)};
+            const budgets=checkpoints.value.trim()?checkpoints.value.split(',').map(x=>x.trim()):[];
+            if(budgets.length>12||budgets.some(x=>!/^\d+(?:\.\d+)?$/.test(x)||!Number.isFinite(Number(x))||Number(x)>1e12)||new Set(budgets.map(Number)).size!==budgets.length){
+              status.textContent='Enter up to twelve distinct nonnegative budget checkpoints.';return;
+            }
+            frontierReview={priority_targets:values.map(Number),budget_checkpoints:budgets.map(Number)};
           }
           run.disabled=true;status.textContent='Evaluating all bounded candidate subsets…';
           try{
@@ -842,6 +847,10 @@
                 el('p',f.maximum_priority_portfolios+' portfolios tie for maximum priority within current budget (before cost/count/ID tie-breaks).'),
                 grid(['Target points','Minimum budget ('+data.currency+')','Extra budget required','Representative portfolio'],
                   f.priority_targets.map(x=>[x.minimum_priority_points,x.least_cost_portfolio?.budget_used,x.least_cost_portfolio?.additional_budget_required,names(x.least_cost_portfolio)])));
+              if(f.budget_checkpoints.length)host.append(el('h4','Budget checkpoint sensitivity'),
+                grid(['Budget','Best priority','Used budget','Unused budget','Priority delta vs current budget','Extra to next breakpoint','Best portfolio'],
+                  f.budget_checkpoints.map(x=>[x.budget_limit,x.best_portfolio?.priority_points,x.best_portfolio?.budget_used,x.unused_budget,
+                    x.priority_delta_vs_current_budget,x.additional_budget_to_next_breakpoint,names(x.best_portfolio)])));
               const view=el('div'),prev=button('Previous frontier page','secondary'),next=button('Next frontier page','secondary');let offset=0;
               const page=()=>{view.replaceChildren(el('p',(offset+1)+'–'+Math.min(offset+30,f.frontier.length)+' of '+f.frontier.length+' frontier points.'),
                 grid(['Priority points','Minimum cost','Within budget','Representative portfolio'],f.frontier.slice(offset,offset+30).map(x=>[x.priority_points,x.budget_used,x.within_current_budget?'Yes':'No',names(x)])));
@@ -856,7 +865,10 @@
               for(const x of f.candidate_sensitivity)details.append(el('h5',titles.get(x.idea_id)||x.idea_id),
                 grid(['Constraint','Points','Budget used','Budget delta vs ranked optimum','Selected opportunities'],
                   [['Required',x.forced_in.best_portfolio?.priority_points,x.forced_in.best_portfolio?.budget_used,x.forced_in.budget_delta_vs_ranked_optimum,names(x.forced_in.best_portfolio)],
-                   ['Excluded',x.forced_out.best_portfolio?.priority_points,x.forced_out.best_portfolio?.budget_used,x.forced_out.budget_delta_vs_ranked_optimum,names(x.forced_out.best_portfolio)]]));
+                   ['Excluded',x.forced_out.best_portfolio?.priority_points,x.forced_out.best_portfolio?.budget_used,x.forced_out.budget_delta_vs_ranked_optimum,names(x.forced_out.best_portfolio)]]),
+                grid(['Structural constraint (any budget)','Feasible subsets','Minimum cost','Extra budget required','Least-cost portfolio'],
+                  [['Required',x.structural_subsets_including,x.least_cost_portfolio_including?.budget_used,x.least_cost_portfolio_including?.additional_budget_required,names(x.least_cost_portfolio_including)],
+                   ['Excluded',x.structural_subsets_excluding,x.least_cost_portfolio_excluding?.budget_used,x.least_cost_portfolio_excluding?.additional_budget_required,names(x.least_cost_portfolio_excluding)]]));
               host.append(details,grid(['Selected count','Feasible subsets'],f.feasible_subset_counts_by_size.map(x=>[x.selected_count,x.count])),el('p',f.interpretation,'muted'));out.append(host);
             }
             const details=el('details');details.append(el('summary','Best feasible alternative by selected count'),...data.best_by_selected_count.map(show));out.append(details);
