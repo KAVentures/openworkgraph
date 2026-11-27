@@ -597,6 +597,104 @@
       return 'BigQuery profile saved. No source was read.';
     });
   };
+  // Independent human-only review workspace. A change to any input invalidates
+  // the displayed plan and requires a fresh server preview.
+  let tuningGeneration=0,tuningBusy=false,tuningTargets=[],tuningPlan=null;
+  const tuningLabels={window_hours:'Window (hours)',overlap_minutes:'Overlap (minutes)',
+    ingestion_lag_minutes:'Reporting lag (minutes)',page_size:'Page size',lag_days:'Completed-day lag (days)'};
+  function tuningInvalidate(){
+    tuningGeneration++;tuningPlan=null;$('tuningPlan').replaceChildren();
+    $('tuningPreview').disabled=tuningBusy||!tuningTargets.some(t=>t.selected.checked);
+  }
+  function tuningRender(data){
+    tuningTargets=[];const cards=[];
+    for(const p of data.profiles){
+      const card=el('article');card.className='profile';
+      const selected=check('Select '+p.name+' ('+p.provider+', revision '+p.revision+')');
+      selected.box.disabled=p.unreconciled_run||p.status==='dataset_deleted';
+      card.append(selected.node,el('p',p.profile_id+' · '+p.status+' · checkpoint '+fmt(p.checkpoint)));
+      if(p.unreconciled_run)card.append(el('p','Reconcile the current local run before tuning.'));
+      const fields=el('div');fields.className='grid';const inputs={};
+      for(const [name,rules] of Object.entries(p.fields)){
+        const label=el('label',tuningLabels[name]||name),input=el('input');
+        input.type='number';input.min=String(rules.min);input.max=String(rules.max);
+        input.step=String(rules.step);input.value=p.values[name]==null?'':String(p.values[name]);
+        input.disabled=true;input.oninput=tuningInvalidate;label.append(input);fields.append(label);inputs[name]=input;
+      }
+      selected.box.onchange=()=>{for(const input of Object.values(inputs))input.disabled=!selected.box.checked;tuningInvalidate();};
+      tuningTargets.push({profile:p,selected:selected.box,inputs});card.append(fields);cards.push(card);
+    }
+    $('tuningProfiles').replaceChildren(...cards.length?cards:[el('p','No retained feed profiles configured.')]);
+    $('tuningHistory').replaceChildren(el('h3','Recent reviewed tuning receipts'),
+      table(['Applied at','Receipt','Feeds changed','Reauthorization required'],data.receipts.map(r=>
+        [r.applied_at,r.receipt_id,r.target_count,r.requires_separate_schedule_and_gateway_reauthorization])));
+    tuningInvalidate();
+  }
+  function tuningSelection(){
+    const out=[];
+    for(const t of tuningTargets.filter(t=>t.selected.checked)){
+      const row={profile_id:t.profile.profile_id,revision:t.profile.revision};
+      for(const [name,input] of Object.entries(t.inputs)){
+        if(input.value===''||!input.checkValidity()||!Number.isInteger(Number(input.value)))throw Error('Use valid integer values for '+t.profile.name+'.');
+        if(Number(input.value)!==t.profile.values[name])row[name]=Number(input.value);
+      }
+      if(Object.keys(row).length===2)throw Error('Change at least one field for each selected feed.');
+      out.push(row);
+    }
+    if(!out.length)throw Error('Select at least one feed.');
+    return {targets:out};
+  }
+  function tuningLock(value){
+    tuningBusy=value;$('tuningRefresh').disabled=value;$('tuningPreview').disabled=value||!tuningTargets.some(t=>t.selected.checked);
+    $('tuningProfiles').querySelectorAll('input').forEach(input=>{
+      if(value){input.dataset.tuningWasDisabled=String(input.disabled);input.disabled=true;}
+      else if(input.dataset.tuningWasDisabled!==undefined){input.disabled=input.dataset.tuningWasDisabled==='true';delete input.dataset.tuningWasDisabled;}
+    });
+  }
+  async function tuningLoad(){
+    if(tuningBusy)return;tuningInvalidate();tuningLock(true);
+    try{const data=await api(base+'/tuning');tuningLock(false);tuningRender(data);$('tuningStatus').textContent='Local tuning workspace loaded. No provider reads.';}
+    catch(error){$('tuningStatus').textContent=error.message;}
+    finally{if(tuningBusy)tuningLock(false);}
+  }
+  $('tuningRefresh').onclick=tuningLoad;
+  $('tuningPreview').onclick=async()=>{
+    if(tuningBusy)return;tuningInvalidate();const turn=tuningGeneration;
+    try{
+      const payload=tuningSelection();tuningLock(true);
+      const plan=await api(base+'/tuning/preview',payload);
+      if(turn!==tuningGeneration)return;
+      tuningPlan={payload,plan};
+      const root=$('tuningPlan');
+      const rows=plan.targets.flatMap(p=>Object.keys(p.after).filter(k=>p.before[k]!==p.after[k]).map(k=>
+        [p.name,p.provider,p.revision,p.next_revision,tuningLabels[k]||k,p.before[k],p.after[k],p.checkpoint,p.retained_events]));
+      root.replaceChildren(el('h3','Exact proposed changes'),table(['Feed','Provider','Old revision','New revision','Setting','Before','After','Checkpoint preserved','Retained events'],rows),
+        table(['Feed','Current next window (illustrative)','Proposed next window (illustrative)','Status'],plan.targets.map(p=>[p.name,
+          p.before_next_window.since+' → '+fmt(p.before_next_window.until),
+          p.after_next_window.since+' → '+fmt(p.after_next_window.until),p.after_next_window.status])),
+        el('p','Plan SHA-256: '+plan.plan_sha256),el('p','No source scope, retained dataset or checkpoint changes. Existing published copies remain. Recurring local and Gateway authorization must be reviewed again.'));
+      const exact=check('I reviewed these exact operational settings and accept the new revisions.');
+      const dispatch=check('I understand existing schedule and Gateway job pins will be stale; I will separately reauthorize them.');
+      const workers=check('I stopped or reconciled local and Gateway workers and their pending receipts.');
+      const apply=button('Apply all reviewed changes',async()=>{
+        if(tuningBusy||!tuningPlan||tuningPlan.plan!==plan||![exact,dispatch,workers].every(x=>x.box.checked))return;
+        tuningLock(true);apply.disabled=true;
+        try{
+          const result=await api(base+'/tuning/apply',{...payload,plan_sha256:plan.plan_sha256,
+            confirm_exact_changes:true,confirm_dispatch_reauthorization:true,confirm_workers_reconciled:true});
+          tuningLock(false);await tuningLoad();
+          $('tuningStatus').textContent=result.replayed?'Prior receipt confirmed; no changes reapplied.':
+            result.target_count+' feeds updated atomically. Checkpoints and retained data preserved. Reauthorize dispatch separately.';
+          if(!busy)await load();
+        }catch(error){$('tuningStatus').textContent=error.message;tuningInvalidate();}
+        finally{if(tuningBusy)tuningLock(false);}
+      },true);
+      for(const x of [exact,dispatch,workers])x.box.onchange=()=>apply.disabled=tuningBusy||!tuningPlan||![exact,dispatch,workers].every(v=>v.box.checked);
+      root.append(exact.node,dispatch.node,workers.node,apply);
+      $('tuningStatus').textContent='Preview ready. No provider reads or mutations.';
+    }catch(error){$('tuningStatus').textContent=error.message;}
+    finally{tuningLock(false);}
+  };
   $('refresh').onclick=load;
   $('freshness').oninput=()=>{generation++;latest=null;$('download').disabled=true;$('refresh').disabled=busy;$('inventory').replaceChildren();$('profiles').replaceChildren();$('status').textContent='Threshold changed. Refresh local inventory.';};
   $('download').onclick=async()=>{
