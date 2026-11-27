@@ -213,15 +213,15 @@ def projection(p,selection,item,since,until):
 
 
 class Reader:
-    def __init__(self,p,client):
-        self.p=p;self.src=source(p["config"]);self.client=client
+    def __init__(self,p,client,*,credential_check=rest._check):
+        self.p=p;self.src=source(p["config"]);self.client=client;self.credential_check=credential_check
         self.deadline=time.monotonic()+rest.MAX_SECONDS;self.pages=0;self.bytes=0
 
     def post(self,path,payload):
         if self.pages>=rest.MAX_PAGES:
             raise rest.FeedError("provider_page_budget_exceeded")
         self.pages+=1
-        secret=rest._check(self.p)
+        secret=self.credential_check(self.p)
         body=payload if path!=IDENTITY else {"tokenKey":secret}
         remaining=self.deadline-time.monotonic()
         if remaining<=0:
