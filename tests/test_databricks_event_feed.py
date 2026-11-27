@@ -183,3 +183,19 @@ def test_bad_deployment_catalog(field, value, setup, monkeypatch):
     monkeypatch.setenv(dbx.CATALOG, json.dumps({"primary": setup}))
     with pytest.raises(rest.FeedError, match="invalid_databricks_deployment_catalog"):
         dbx.catalog()
+
+
+def test_actual_retained_native_case_crosswalk():
+    from server import enterprise_connector_crosswalk as crosswalk
+    from server import enterprise_connector_snapshot as snapshot
+    p = dbx.create(config())
+    retained = run(p, make_rows(p))[0]
+    start = rest._stamp(p["config"]["initial_since"])
+    snap = snapshot.prepare(p["profile_id"], rest._iso(start), rest._iso(start + timedelta(days=1)))
+    mapping = crosswalk.Input.model_validate({"rows":[{"native_case_id":"private-case","business_key":"reviewed-order-1"}],
+        "basis":"reviewed_business_record","confirm_reviewed_mapping":True,"confirm_match_tag_disclosure":True})
+    art = crosswalk.prepare(snap,mapping,job_id="cj_"+"1"*32,grant_id="cep_"+"2"*32,
+        publication_revision=1,batch_id="3"*32,domain="purchase_order",secret=bytes(range(32)))
+    assert len(art.rows)==1 and art.rows[0].case_id in {e.case_id for e in snap.events}
+    assert "private-case" not in art.model_dump_json()
+    assert "reviewed-order-1" not in art.model_dump_json()
