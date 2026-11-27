@@ -201,8 +201,8 @@ def project(p,selection,item,since,until):
 
 
 class Reader:
-    def __init__(self,p,client):
-        self.p=p;self.src=source(p["config"]);self.client=client
+    def __init__(self,p,client,*,credential_check=rest._check):
+        self.p=p;self.src=source(p["config"]);self.client=client;self.credential_check=credential_check
         self.root=self.src["origin"]+PATH;self.deadline=time.monotonic()+rest.MAX_SECONDS
         self.pages=0;self.bytes=0;self.access=None;self.token_until=0
 
@@ -210,7 +210,7 @@ class Reader:
         if self.pages>=rest.MAX_PAGES:
             raise rest.FeedError("provider_page_budget_exceeded")
         self.pages+=1
-        rest._check(self.p)
+        self.credential_check(self.p)
         left=self.deadline-time.monotonic()
         if left<=0:
             raise rest.FeedError("read_time_budget_exceeded")
@@ -244,7 +244,7 @@ class Reader:
     def authenticate(self):
         if self.access and self.token_until>time.monotonic()+10:
             return
-        value=rest._check(self.p)
+        value=self.credential_check(self.p)
         body=self.request("POST","https://login.microsoftonline.com/"+self.src["tenant_id"]+"/oauth2/v2.0/token",
                           form={"grant_type":"client_credentials","client_id":self.src["client_id"],
                                 "client_secret":value,"scope":self.src["origin"]+"/.default"},
