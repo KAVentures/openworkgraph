@@ -481,6 +481,18 @@
         const url=isParquet(chosen.name)?'/v1/event-logs/parquet-to-csv':isJsonLines(chosen.name)?'/v1/event-logs/jsonl-to-csv':database?'/v1/event-logs/sqlite-to-csv'+(sheet?'?table='+encodeURIComponent(sheet):''):'/v1/event-logs/xlsx-to-csv'+(sheet?'?sheet='+encodeURIComponent(sheet):'');
         const r=await (await api(url,{method:'POST',body:chosen,headers:{'Content-Type':'application/octet-stream'}})).json();
         if(!current())return;
+        if(r.ocel){
+          // Preserve object-centric data and ignore conversion results for a superseded selection.
+          status('Reading the OCEL 2.0 database '+chosen.name+'…');
+          const o=await (await api('/v1/event-logs/ocel-sqlite-to-json',{method:'POST',body:chosen,headers:{'Content-Type':'application/octet-stream'}})).json();
+          if(!current())return;
+          const transfer=new DataTransfer();transfer.items.add(new File([o.document],chosen.name.replace(/\.(sqlite3?|db)$/i,'')+'.jsonocel',{type:'application/json'}));
+          file.files=transfer.files;const converted=file.files[0];format.value='ocel';clearWorkbook();
+          const read=readColumns();const readSequence=columnReadSequence;await read;
+          if(columnReadSequence!==readSequence||file.files?.[0]!==converted||format.value!=='ocel')return;
+          status('Read an OCEL 2.0 database: '+Number(o.events).toLocaleString()+' events and '+Number(o.objects).toLocaleString()+' objects.'+(o.times_without_offset_read_as_utc?' '+Number(o.times_without_offset_read_as_utc).toLocaleString()+' times without an offset are read as UTC.':'')+(o.events_without_time?' '+Number(o.events_without_time).toLocaleString()+' events without a time are left out.':''));
+          return;
+        }
         const transfer=new DataTransfer();transfer.items.add(new File([r.csv],chosen.name.replace(/\.(xlsx|sqlite3?|db|jsonl|ndjson|parquet)$/i,'')+(database?'-'+r.sheet:'')+'.csv',{type:'text/csv'}));
         file.files=transfer.files;expectedFile=file.files[0];format.value='csv';delimiter.value=',';encoding.value='utf-8';
         stagedSheet=r.sheet;

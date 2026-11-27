@@ -508,6 +508,28 @@ async def convert_process_tree_notation(request: Request):
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
+@router.post("/v1/event-logs/ocel-sqlite-to-json")
+async def convert_ocel_sqlite_event_log(request: Request):
+    """Read an OCEL 2.0 SQLite database as an OCEL 2.0 JSON document for the ordinary OCEL import. Not stored."""
+    from . import event_log_sqlite as sqlite_import
+    _require_dashboard(request)
+    with tempfile.SpooledTemporaryFile(max_size=8 << 20, dir=str(DATA_DIR)) as spool:
+        size = 0
+        async for chunk in request.stream():
+            size += len(chunk)
+            if size > SQLITE_MAX_BYTES:
+                raise HTTPException(413, "the database is larger than the supported limit")
+            spool.write(chunk)
+        spool.seek(0)
+        try:
+            result = await run_in_threadpool(sqlite_import.to_ocel_json, spool, folder=DATA_DIR)
+        except sqlite_import.SqliteError as exc:
+            raise HTTPException(422, str(exc)) from None
+    # Conversion can outlive the dashboard session; do not release revoked data.
+    _require_dashboard(request)
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
 @router.post("/v1/event-logs/mapping-matches")
 async def event_log_mapping_matches(request: Request):
     """Earlier CSV column mappings that fit a file header (by column names only). Nothing is stored."""

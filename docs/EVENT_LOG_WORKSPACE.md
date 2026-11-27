@@ -253,6 +253,21 @@ are offered, not views, virtual tables or SQLite's own tables, and each is read 
 most 256 MB. NULL becomes an empty cell and binary values are left empty and counted. SQLite stores
 no time zone, so the import asks which offset times without one use.
 
+### OCEL 2.0 SQLite databases
+
+A SQLite file that holds the OCEL 2.0 tables (`event`, `object`, `event_object`, `object_object`,
+`event_map_type`, `object_map_type`) is recognised when it is chosen and imported as an
+object-centric log, keeping its object types, qualified event-object links, object-to-object
+relationships and timed object attributes, instead of being read as one table.
+`POST /v1/event-logs/ocel-sqlite-to-json` turns it into an OCEL 2.0 JSON document that the ordinary
+OCEL import then reads; `sqlite-to-csv` reports `"ocel": true` for such files. Event times come from
+the `event_<Type>` tables and attributes from their other columns; an object's rows in
+`object_<Type>` give its attribute values at `ocel_time` (only the `ocel_changed_field` column for a
+change row). Times without an offset, as some tools write them, are read as UTC and counted
+(`times_without_offset_read_as_utc`); events without a time are left out and counted. The same
+read-only, untrusted-schema handling and limits as other SQLite files apply, plus at most 5,000,000
+rows in all. Nothing is stored.
+
 ### JSON Lines files
 
 A `.jsonl` or `.ndjson` file (one JSON object per line, as APIs and log shippers write) is converted
