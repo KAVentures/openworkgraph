@@ -3969,6 +3969,10 @@ events. The workspace's Parquet import reads the file back to the same events.
 
 The local rework report shows the total number of repeated activities and recorded loop patterns, with an adjustable display limit of 20, 50 or 100. JSON and CSV downloads contain the displayed results and the JSON includes the selected cohort and analysis settings. The report offers explicit case-evidence links for repeated activities and exact closed activity loops. Selectors respect the active case cohort and retain literal event order; timestamp ties do not establish business order.
 
+### Exact completion labels in prediction
+
+Under **Next activity in open cases** and **Predict open cases**, add each activity that marks a completed case separately. Labels are matched exactly, so commas and leading or trailing spaces are part of the activity name. Remove a label to revise the selection; predictions and monitoring results are cleared until rerun. Prediction snapshots retain the selection they were created with.
+
 ### Keeping hidden-activity selections intact
 
 The hide-activities picker includes all currently hidden labels, even when they
