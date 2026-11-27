@@ -3797,7 +3797,7 @@
     f.required.append(field('Exact activity B',exactRequired));
     f.via.append(field('Exact linking activity',exactVia));
     box.appendChild(el('div','Object type choices include all retained types, including types with no events. Activity suggestions are limited to the displayed object graph. Exact entries override them and use stored event labels, before any activity mapping or hidden-activity filter.','muted'));
-    if(types.length<2&&graph.log&&(graph.log.object_relationships||['ocel','ocelxml'].includes(graph.log.source_format)))template.value='supplied_object_cardinality';
+    if((graph.object_types||[]).length<2&&(allTypes.length>1||graph.log&&(graph.log.object_relationships||['ocel','ocelxml'].includes(graph.log.source_format))))template.value='supplied_object_cardinality';
     const sync=()=>{
       const t=template.value,supplied=t==='supplied_object_cardinality';
       show(f.activity,!['object_cardinality','supplied_object_cardinality'].includes(t));show(f.related,t!=='event_cardinality');show(f.required,t==='synchronization');show(f.via,t==='object_cardinality');
