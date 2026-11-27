@@ -110,6 +110,24 @@ async def object_state_check_timeline(request: Request, log_id: str):
     return await run_in_threadpool(_respond, state.timeline, log_id, spec)
 
 
+@router.post("/v1/event-logs/{log_id}/object-state-check/objects/search")
+async def object_state_check_object_lookup(request: Request, log_id: str):
+    from . import event_log_object_state_objects as objects
+    _require_dashboard(request)
+    spec = await _json_body(request, "object state object lookup", strict=True, limit=16384)
+    _require_dashboard(request)
+    return await run_in_threadpool(_respond, objects.search, log_id, spec)
+
+
+@router.post("/v1/event-logs/{log_id}/object-state-check/events/search")
+async def object_state_check_event_lookup(request: Request, log_id: str):
+    from . import event_log_object_state_events as events
+    _require_dashboard(request)
+    spec = await _json_body(request, "object state event lookup", strict=True, limit=16384)
+    _require_dashboard(request)
+    return await run_in_threadpool(_respond, events.search, log_id, spec)
+
+
 @router.post("/v1/event-logs/{log_id}/object-state-check/labels")
 async def object_state_check_labels(request: Request, log_id: str):
     from . import event_log_object_state_labels as labels
