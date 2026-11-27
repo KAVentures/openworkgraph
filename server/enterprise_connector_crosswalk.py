@@ -74,7 +74,7 @@ def native_case(p,row):
             raise ValueError("native_type is not used for REST or SQL")
         value=rest._text(value,200)
         return rest._key(p,"case",value)
-    if provider in ("databricks","snowflake","netsuite","workday"):
+    if provider in ("databricks","snowflake","netsuite","workday","bigquery"):
         # These adapters retain the exact approved view/report case string.
         # No numeric coercion, trimming, case folding or type inference.
         if kind is not None:
