@@ -8810,11 +8810,22 @@
   function funnelSection(activityNames,inspection){
     const box=section('Milestone funnel');box.id='owgFunnel';
     box.appendChild(el('div','Choose activities in order to see how many cases reach each one after the previous ones, how long that takes, and what the cases that stopped did last. Other activities may happen in between.','muted'));
+    box.appendChild(el('div','Suggestions show up to 500 frequent activities. An exact label overrides its suggestion and is matched literally.','muted'));
     const options=[['','(choose an activity)'],...activityNames.slice(0,500).map(a=>[a,a])];
     const steps=el('div',null,'row');steps.style.alignItems='end';steps.id='owgFunnelSteps';
     const pickers=[];
-    const addStep=()=>{if(pickers.length>=8)return;const n=pickers.length+1;const pick=select('owgFunnelStep'+n,options);
-      if(activityNames[n-1])pick.value=activityNames[n-1];pickers.push(pick);steps.appendChild(field('Step '+n,pick));more.disabled=pickers.length>=8;};
+    const addStep=()=>{
+      if(pickers.length>=8)return;
+      const n=pickers.length+1,pick=select('owgFunnelStep'+n,options);
+      const exact=input('owgFunnelExact'+n,'text','Exact activity label (optional)');exact.maxLength=400;
+      const lookup=activityLabelLookup(exact,{id:part=>'owgFunnelStep'+n+part,subject:'funnel step '+n+' activity'});
+      exact.addEventListener('input',()=>{lookup.reset();exact.dispatchEvent(new Event('change',{bubbles:true}));});
+      pick.addEventListener('change',()=>{exact.value='';lookup.reset();});
+      if(activityNames[n-1])pick.value=activityNames[n-1];
+      pickers.push({pick,exact});
+      const group=el('div');group.append(field('Step '+n,pick),field('Exact step '+n+' activity',exact),lookup.wrap);
+      steps.appendChild(group);more.disabled=pickers.length>=8;
+    };
     const more=button('Add step','secondary');more.id='owgFunnelAdd';more.onclick=()=>{addStep();invalidate();};
     const windowPick=select('owgFunnelWindow',[['','No time limit'],['24','Within 24 hours of the previous step'],['168','Within 7 days'],['720','Within 30 days']]);
     const evidenceStep=select('owgFunnelEvidenceStep',[['','No case evidence'],...Array.from({length:8},(_,i)=>[String(i+1),'Step '+(i+1)])]);
@@ -8835,15 +8846,16 @@
     box.append(steps,row,statusLine,out,exports.node);
     // A changed step, window or evidence choice no longer matches the downloaded funnel.
     const stale=()=>{lastFunnel=null;exports.enable(false);};
-    steps.addEventListener('change',stale);row.addEventListener('change',stale);
+    steps.addEventListener('change',stale);steps.addEventListener('input',stale);row.addEventListener('change',stale);
     for(let i=0;i<3;i++)addStep();
     let revision=0;
     const invalidate=()=>{revision++;out.replaceChildren();run.disabled=false;statusLine.textContent='Settings changed; show the funnel again.';};
-    steps.addEventListener('change',invalidate);row.addEventListener('change',invalidate);
+    steps.addEventListener('change',invalidate);steps.addEventListener('input',invalidate);row.addEventListener('change',invalidate);
     const pct=x=>x===null||x===undefined?'—':Math.round(x*1000)/10+'%';
     const hrs=x=>x===null||x===undefined?'—':(x<48?(Math.round(x*10)/10)+' h':(Math.round(x/24*10)/10)+' d');
     run.onclick=async()=>{
-      const chosen=pickers.map(p=>p.value).filter(Boolean);
+      const chosen=pickers.map(({pick,exact})=>exact.value||pick.value).filter(Boolean);
+      if(chosen.some(value=>Array.from(value).length>200)){statusLine.textContent='Activity labels must have at most 200 characters.';out.replaceChildren();return;}
       if(chosen.length<2){statusLine.textContent='Choose at least two steps.';out.replaceChildren();return;}
       if(evidenceStep.value&&(Number(evidenceStep.value)>chosen.length||(evidenceStep.value==='1'&&evidenceStatus.value==='dropped'))){statusLine.textContent='Choose a valid evidence step; drop-off requires step 2 or later.';out.replaceChildren();return;}
       const generation=state.generation;run.disabled=true;statusLine.textContent='Following cases…';out.replaceChildren();stale();
