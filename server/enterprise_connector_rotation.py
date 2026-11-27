@@ -142,6 +142,9 @@ def metadata(p):
         elif provider=="hubspot":
             from . import hubspot_history_feed as hs
             ref=hs.source(cfg)["credential_env"]
+        elif provider=="bigquery":
+            from . import bigquery_event_feed as bq
+            ref=bq.source(cfg)["credential_env"]
         elif provider=="oracle_fusion":
             from . import oracle_fusion_procurement_feed as oracle
             ref=oracle.source(cfg)["credential_env"]

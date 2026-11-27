@@ -271,6 +271,20 @@ p{overflow-wrap:anywhere;max-width:94ch}.profile{border:1px solid var(--border);
 <p><label><input id="oraSnapshot" type="checkbox" required> I understand that mutable dates are observations, not complete status or approval history.</label></p>
 <p><label><input id="oraRetention" type="checkbox" required> I approve retention of selected timestamp observations and pseudonymous case identities.</label></p>
 <button id="oraCreateButton" type="submit" disabled>Save Oracle Fusion profile</button></form></details>
+<details><summary>Create native BigQuery approved warehouse event feed</summary>
+<p>Choose a deployment-approved BigQuery event view. Only reviewed labels, exact timestamps and pseudonymous identities are retained; queries may incur warehouse charges within the displayed per-query byte cap.</p>
+<form id="bqCreate"><div class="grid">
+<label>Profile name<input id="bqName" required maxlength="100"></label>
+<label>Approved BigQuery view<select id="bqSource" required></select></label>
+<label>First history timestamp (ISO UTC)<input id="bqSince" required placeholder="2026-11-01T00:00:00Z"></label>
+<label>Window (hours)<input id="bqWindow" type="number" min="1" max="168" value="24" required></label>
+<label>Overlap (minutes)<input id="bqOverlap" type="number" min="0" max="1440" value="60" required></label>
+<label>Reporting lag (minutes)<input id="bqLag" type="number" min="0" max="1440" value="15" required></label><label>Result page size<input id="bqPage" type="number" min="1" max="1000" value="500" required></label></div>
+<div id="bqReview"></div>
+<p><label><input id="bqConfirm" type="checkbox" required> I reviewed this exact approved view, billing project, location, query byte cap and activity mapping.</label></p>
+<p><label><input id="bqRead" type="checkbox" required> I approve bounded service-account authentication, billable read queries and result pagination.</label></p>
+<p><label><input id="bqRetention" type="checkbox" required> I approve retention of reviewed activity labels, timestamps and pseudonymous identities.</label></p>
+<button id="bqCreateButton" type="submit" disabled>Save BigQuery profile</button></form></details>
 <p id="restStatus" role="status"></p><div id="profiles"></div></section>
 <section><h2>Other configured adapters</h2><p>Use the main dashboard's Privacy → Business system sign-in and Evidence panels for the existing provider-specific consent and configuration workflows. CLI-only adapters remain outside this local inventory.</p><a href="/">Open the main dashboard</a></section>
 </main></body></html>

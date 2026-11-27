@@ -18,6 +18,7 @@ from . import snowflake_event_feed as snow
 from . import netsuite_event_feed as ns
 from . import workday_raas_feed as wd
 from . import oracle_fusion_procurement_feed as oracle
+from . import bigquery_event_feed as bq
 from . import enterprise_sql_feed as sql
 from . import enterprise_connector_operations as operations
 from .event_log_routes import _json_body
@@ -82,6 +83,18 @@ async def sql_create(request:Request):
     require(request)
     body=await _json_body(request,"SQL feed configuration",strict=True,limit=4096)
     return await call(request,sql.create,body)
+
+
+@router.get("/v1/enterprise-connectors/bigquery/catalog")
+async def bigquery_catalog(request:Request):
+    return await call(request,bq.catalog_public)
+
+
+@router.post("/v1/enterprise-connectors/bigquery")
+async def bigquery_create(request:Request):
+    require(request)
+    body=await _json_body(request,"BigQuery approved view profile",strict=True,limit=4096)
+    return await call(request,bq.create,body)
 
 
 @router.get("/v1/enterprise-connectors/oracle_fusion/catalog")

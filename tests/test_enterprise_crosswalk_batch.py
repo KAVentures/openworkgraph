@@ -21,7 +21,7 @@ KEY="private-reviewed-order"
 BATCH="a"*32
 
 
-@pytest.mark.parametrize("provider",["databricks","snowflake","netsuite","workday"])
+@pytest.mark.parametrize("provider",["databricks","snowflake","netsuite","workday","bigquery"])
 def test_curated_case_domains(provider):
     p={"key":"ab"*32,"provider":provider,"config":{}}
     row=local.InputRow(native_case_id="Case:001",business_key=KEY)

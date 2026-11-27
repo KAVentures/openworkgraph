@@ -8,13 +8,13 @@ replacement. None of these declarations assert live provider acceptance.
 from typing import Literal, get_args
 
 Provider = Literal["rest", "google", "sql", "slack", "salesforce",
-                   "servicenow", "sap", "dataverse", "hubspot", "databricks", "snowflake", "netsuite", "workday", "oracle_fusion"]
+                   "servicenow", "sap", "dataverse", "hubspot", "databricks", "snowflake", "netsuite", "workday", "oracle_fusion", "bigquery"]
 PROVIDERS = frozenset(get_args(Provider))
 CROSSWALK_PROVIDERS = frozenset({"rest", "sql", "salesforce", "servicenow",
                                  "sap", "dataverse", "hubspot", "databricks", "snowflake",
-                                 "netsuite", "workday", "oracle_fusion"})
+                                 "netsuite", "workday", "oracle_fusion", "bigquery"})
 ROTATION_PROVIDERS = frozenset({"dataverse", "hubspot"})
-FILE_SECRET_PROVIDERS = frozenset({"rest", "sql", "slack", "sap", "dataverse", "hubspot", "databricks", "snowflake", "netsuite", "workday", "oracle_fusion"})
+FILE_SECRET_PROVIDERS = frozenset({"rest", "sql", "slack", "sap", "dataverse", "hubspot", "databricks", "snowflake", "netsuite", "workday", "oracle_fusion", "bigquery"})
 
 # Fixed reviewed dispatch registry; never import a module name supplied by
 # a stored profile or request. REST is the common runtime itself.
@@ -32,6 +32,7 @@ NATIVE_ADAPTERS = {
     "netsuite": "netsuite_event_feed",
     "workday": "workday_raas_feed",
     "oracle_fusion": "oracle_fusion_procurement_feed",
+    "bigquery": "bigquery_event_feed",
 }
 
 def capabilities(provider):
