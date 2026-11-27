@@ -77,6 +77,18 @@ class Change(Strict):
     confirm_ambiguous_recovery: StrictBool=False
 
 
+class Rebind(Strict):
+    expected_revision: StrictInt=Field(ge=1)
+    profile_id: str=Field(pattern=PROFILE)
+    old_profile_revision: StrictInt=Field(ge=1,le=1_000_000)
+    old_profile_sha256: str=Field(pattern=DIGEST)
+    new_profile_revision: StrictInt=Field(ge=1,le=1_000_000)
+    new_profile_sha256: str=Field(pattern=DIGEST)
+    confirm_same_source: StrictBool
+    confirm_workers_reconciled: StrictBool
+    confirm_dispatch_and_receipts: StrictBool
+
+
 class Claim(Strict):
     profile_id: str=Field(pattern=PROFILE)
     profile_revision: StrictInt=Field(ge=1,le=1_000_000)
@@ -268,6 +280,39 @@ class Jobs:
             j["last_completion"]=None
             self._put(c,j);self._audit(c,j,principal,"worker_rotated",{"revision":j["revision"]})
             return {"job":self._public(j),"worker_token":token,"shown_once":True}
+
+    def rebind(self,org,job,spec:Rebind,principal):
+        """Reauthorize a newer revision of the same local source profile."""
+        if not (spec.confirm_same_source and spec.confirm_workers_reconciled and spec.confirm_dispatch_and_receipts):
+            raise JobError("explicit_profile_rebind_and_reconciliation_required",403)
+        with self._tx(org) as c:
+            j=self._get(c,org,job)
+            self._expire(c,j,self.clock())
+            if j["revision"]!=spec.expected_revision or j["enabled"] or j["lease"]:
+                raise JobError("pause_job_before_rebinding")
+            if (j["profile_id"],j["profile_revision"],j["profile_sha256"])!=(spec.profile_id,spec.old_profile_revision,spec.old_profile_sha256):
+                raise JobError("old_profile_pin_changed")
+            if spec.new_profile_revision<=spec.old_profile_revision or spec.new_profile_sha256==spec.old_profile_sha256:
+                raise JobError("strictly_newer_profile_pin_required",422)
+            # Old publications and saved reviews may still disclose the prior
+            # revision. Require explicit deletion or expiry before rebinding.
+            if self._sql(c,"SELECT 1 FROM connector_event_publications WHERE organization_id=? AND job_id=? AND expires_at>?",
+                         org,job,self.clock()).fetchone():
+                raise JobError("delete_prior_publication_before_rebind")
+            token=issue_token("owg_connector_worker")
+            self._sql(c,"UPDATE connector_jobs SET worker_token_hash=? WHERE organization_id=? AND job_id=?",
+                      token_hash(token),org,job)
+            j.update(profile_revision=spec.new_profile_revision,profile_sha256=spec.new_profile_sha256,
+                     revision=j["revision"]+1,last_completion=None,paused_reason="operator_paused",
+                     consecutive_failures=0)
+            # Preserve last receipt/success and provider retry deadline.
+            self._history(c,j,"profile_rebound",{"revision":j["revision"],"old_profile_revision":spec.old_profile_revision,
+                          "new_profile_revision":spec.new_profile_revision})
+            self._put(c,j)
+            self._audit(c,j,principal,"profile_rebound",{"revision":j["revision"],
+                       "old_profile_revision":spec.old_profile_revision,"new_profile_revision":spec.new_profile_revision})
+            return {"job":self._public(j),"worker_token":token,"shown_once":True,
+                    "source_identity_independently_verified":False}
 
     def _identity(self,token):
         if not isinstance(token,str) or not token.startswith("owg_connector_worker_") or len(token)>180:
