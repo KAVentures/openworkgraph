@@ -99,7 +99,8 @@ jobs:
             tests/test_enterprise_connector_integration.py \
             tests/test_connector_bundle_import.py \
             tests/test_connector_portable_linkage.py \
-            tests/test_connector_quality_verified_import.py
+            tests/test_connector_quality_verified_import.py \
+            tests/test_connector_quality_verifier_pure.py
       - name: Install isolated Chromium runtime
         if: success() || failure()
         run: |
@@ -153,7 +154,7 @@ jobs:
       - name: Verify published bundle roundtrip and atomic local import
         env:
           OWG_PROCESS_TEST_DATABASE_URL: postgresql://owg_test:synthetic-ci-password@127.0.0.1:5432/owg_test
-        run: python -m pytest -q --tb=short tests/test_connector_bundle_import.py tests/test_connector_event_publications.py tests/test_connector_case_review.py tests/test_connector_portable_linkage.py tests/test_connector_quality_verified_import.py
+        run: python -m pytest -q --tb=short tests/test_connector_bundle_import.py tests/test_connector_event_publications.py tests/test_connector_case_review.py tests/test_connector_portable_linkage.py tests/test_connector_quality_verified_import.py tests/test_connector_quality_verifier_pure.py
       - name: Install isolated Chromium runtime
         if: success() || failure()
         run: |
