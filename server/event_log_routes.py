@@ -2204,12 +2204,12 @@ def event_log_variants(request: Request, log_id: str, case_type: str | None = Qu
 
 @router.get("/v1/event-logs/{log_id}/variants.csv")
 def event_log_variants_csv(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
-                           cohort: dict[str, Any] = Depends(_case_filter)):
+                           exact_paths: bool = Query(default=False), cohort: dict[str, Any] = Depends(_case_filter)):
     """Every variant as spreadsheet-safe CSV: path, cases, share, running share, durations. Not stored."""
     from . import event_log_variant_export as export
     _require_dashboard(request)
     try:
-        text, meta = export.variants_csv(log_id, case_type, cohort=cohort)
+        text, meta = export.variants_csv(log_id, case_type, cohort=cohort, exact_paths=exact_paths)
     except workspace.EventLogWorkspaceError as exc:
         raise HTTPException(422, str(exc)) from None
     return Response(text, media_type="text/csv; charset=utf-8", headers={
