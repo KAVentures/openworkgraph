@@ -1,0 +1,221 @@
+"""Synthetic holdout workflow tests. No real provider or business action."""
+import asyncio
+from copy import deepcopy
+import json
+from pathlib import Path
+import stat
+import os
+import subprocess
+import sys
+from tempfile import TemporaryDirectory
+from types import SimpleNamespace
+import unittest
+from unittest.mock import patch
+
+from execute import ImplementationError,digest
+from heldout import (CAPTURE,freeze_suite,validate_frozen,validate_challenge,
+                     capture_planner,evaluate_frozen,private_write,strict_load,write_freeze)
+from test_evaluation import evaluation_fixture
+
+
+def fixture():
+    spec,holdout,results=evaluation_fixture()
+    # Third category, distinct synthetic case, same accepted route.
+    extra=deepcopy(holdout["cases"][0])
+    extra.update(id="case_3",category="exception")
+    extra["input"]["synthetic_holdout_marker"]="distinct-exception-input"
+    holdout["cases"].append(extra)
+    results["results"].append({"case_id":"case_3","plan":deepcopy(results["results"][0]["plan"])})
+    results["suite_sha256"]=digest(holdout)
+    development=deepcopy(holdout)
+    for i,c in enumerate(development["cases"]):
+        c["input"]["synthetic_development_marker"]=str(i)
+    policy={"min_cases_by_category":{"normal":1,"exception":1,"missing_facts":1},
+            "min_match_bps_by_category":{"normal":10000,"exception":10000,"missing_facts":10000},
+            "min_overall_match_bps":10000,"max_critical_failures":0,"max_regressions":0,
+            "require_baseline":True}
+    return spec,development,holdout,results,policy
+
+
+def capture(freeze,results):
+    aliases={v:k for k,v in freeze["aliases"].items()}
+    return {"format":CAPTURE,"challenge_sha256":freeze["challenge_sha256"],
+            "results":[{"challenge_case_id":aliases[r["case_id"]],"plan":deepcopy(r["plan"])}
+                       for r in results["results"]]}
+
+
+class HeldoutAcceptance(unittest.TestCase):
+    def setUp(self):
+        self.spec,self.dev,self.test,self.results,self.policy=fixture()
+        self.freeze,self.challenge=freeze_suite(self.spec,self.dev,self.test,self.policy)
+        self.good=capture(self.freeze,self.results)
+
+    def score(self,candidate=None,baseline=None,**kwargs):
+        a=self.good if candidate is None else candidate
+        b=self.good if baseline is None else baseline
+        return evaluate_frozen(self.spec,self.dev,self.test,self.freeze,self.challenge,a,
+                  freeze_sha256=kwargs.pop("freeze_sha256",digest(self.freeze)),
+                  candidate_sha256=kwargs.pop("candidate_sha256",digest(a)),
+                  baseline=b,baseline_sha256=kwargs.pop("baseline_sha256",digest(b)),**kwargs)
+
+    def test_challenge_excludes_expected_answers_categories_and_original_ids(self):
+        self.assertEqual(len(self.challenge["cases"]),3)
+        self.assertEqual(set(self.challenge),{"format","process_reference","spec_sha256","challenge_id","cases"})
+        for row in self.challenge["cases"]:
+            self.assertEqual(set(row),{"challenge_case_id","input"})
+            self.assertRegex(row["challenge_case_id"],r"^challenge_[a-f0-9]{32}$")
+        self.assertEqual(validate_challenge(self.spec,self.challenge,digest(self.challenge)),self.challenge["cases"])
+        again,_=freeze_suite(self.spec,self.dev,self.test,self.policy)
+        self.assertNotEqual(again["challenge_id"],self.freeze["challenge_id"])
+        self.assertFalse(set(again["aliases"])&set(self.freeze["aliases"]))
+
+    def test_exact_overlap_duplicate_cases_and_inadequate_category_coverage(self):
+        overlapping=deepcopy(self.dev)
+        overlapping["cases"][0]["input"]=deepcopy(self.test["cases"][0]["input"])
+        duplicate=deepcopy(self.dev)
+        duplicate["cases"][1]["input"]=deepcopy(duplicate["cases"][0]["input"])
+        for dev in (overlapping,duplicate):
+            with self.assertRaises(ImplementationError):
+                freeze_suite(self.spec,dev,self.test,self.policy)
+        missing=deepcopy(self.test);missing["cases"].pop()
+        with self.assertRaises(ImplementationError):
+            freeze_suite(self.spec,self.dev,missing,self.policy)
+        for change in ({"max_regressions":True},{"min_overall_match_bps":10001},
+                       {"min_cases_by_category":{"normal":1}},
+                       {"require_baseline":False,"max_regressions":1}):
+            with self.assertRaises(ImplementationError):
+                freeze_suite(self.spec,self.dev,self.test,{**self.policy,**change})
+
+    def test_frozen_policy_and_exact_challenge_cannot_change(self):
+        for changed in ("policy","holdout","aliases","challenge"):
+            f,c,h=deepcopy(self.freeze),deepcopy(self.challenge),deepcopy(self.test)
+            if changed=="policy":f["policy"]["min_overall_match_bps"]=0
+            elif changed=="holdout":h["cases"][0]["input"]["new"]="value"
+            elif changed=="aliases":f["aliases"][next(iter(f["aliases"]))]="case_2"
+            else:c["cases"][0]["input"]["new"]="value"
+            with self.assertRaises(ImplementationError):
+                validate_frozen(self.spec,self.dev,h,f,c,freeze_sha256=digest(self.freeze))
+        # Even with a new attacker-computed freeze pin, the stored challenge
+        # must reconstruct from the unchanged private suite.
+        f=deepcopy(self.freeze);f["aliases"][next(iter(f["aliases"]))]="missing"
+        with self.assertRaises(ImplementationError):
+            validate_frozen(self.spec,self.dev,self.test,f,self.challenge,freeze_sha256=digest(f))
+
+    def test_passing_report_deterministic_minimized_and_not_authority(self):
+        r=self.score()
+        self.assertTrue(r["selected_acceptance_gates_pass"])
+        self.assertEqual(r["overall"]["matches"],3)
+        self.assertEqual(r["regression_gate"]["regressions"],0)
+        self.assertTrue(r["identical_capture_documents"])
+        self.assertEqual(r,self.score())
+        self.assertEqual(r["acceptance_sha256"],digest({k:v for k,v in r.items() if k!="acceptance_sha256"}))
+        for key in ("capture_blinding_verified","independent_ground_truth_verified",
+                    "business_outcomes_verified","execution_authorized","business_tools_called"):
+            self.assertIs(r[key],False)
+        for secret in ("PRIVATE_MISSING_FACTS","PRIVATE_QUESTION","distinct-exception-input",
+                       "synthetic_development_marker","SYNTHETIC_PRIVATE_RECORD"):
+            self.assertNotIn(secret,json.dumps(r))
+
+    def test_aggregate_improvement_cannot_hide_regressed_or_critical_case(self):
+        bad=deepcopy(self.good)
+        aliases={v:k for k,v in self.freeze["aliases"].items()}
+        by_id={r["challenge_case_id"]:r for r in bad["results"]}
+        by_id[aliases["case_2"]]["plan"]=deepcopy(by_id[aliases["case_1"]]["plan"])
+        r=self.score(bad)
+        self.assertFalse(r["selected_acceptance_gates_pass"])
+        self.assertEqual(r["overall"]["matches"],2)
+        self.assertEqual(r["critical_gate"]["failures"],1)
+        self.assertEqual(r["regression_gate"]["regressions"],1)
+        self.assertFalse(r["categories"]["missing_facts"]["pass"])
+
+    def test_malformed_plan_is_failed_case_not_dropped(self):
+        bad=deepcopy(self.good);bad["results"][0]["plan"]={"nonsense":"PRIVATE_BAD_PLAN"}
+        r=self.score(bad)
+        self.assertEqual(r["overall"]["cases"],3)
+        self.assertEqual(r["overall"]["matches"],2)
+        self.assertIn("invalid_or_stale_plan",[row["reason"] for row in r["cases"]])
+        self.assertNotIn("PRIVATE_BAD_PLAN",json.dumps(r))
+
+    def test_pin_scope_and_population_fences(self):
+        for kind in ("missing","duplicate","unknown","wrong_challenge"):
+            bad=deepcopy(self.good)
+            if kind=="missing":bad["results"].pop()
+            elif kind=="duplicate":bad["results"][1]["challenge_case_id"]=bad["results"][0]["challenge_case_id"]
+            elif kind=="unknown":bad["results"][0]["challenge_case_id"]="challenge_"+"a"*32
+            else:bad["challenge_sha256"]="f"*64
+            with self.assertRaises(ImplementationError):self.score(bad)
+        with self.assertRaises(ImplementationError):self.score(candidate_sha256="f"*64)
+        with self.assertRaises(ImplementationError):self.score(freeze_sha256="f"*64)
+        with self.assertRaises(ImplementationError):
+            evaluate_frozen(self.spec,self.dev,self.test,self.freeze,self.challenge,self.good,
+                            freeze_sha256=digest(self.freeze),candidate_sha256=digest(self.good))
+
+    def test_challenge_only_model_capture_never_receives_private_expectations(self):
+        inputs=[];plan=self.results["results"][0]["plan"]
+        async def fake(case,*,model,spec):
+            inputs.append(case)
+            self.assertEqual(model,"fixture-model")
+            return {"plan":plan}
+        with patch.dict(sys.modules,{"agent":SimpleNamespace(propose=fake)}):
+            result=asyncio.run(capture_planner(self.spec,self.challenge,
+                       challenge_sha256=digest(self.challenge),model="fixture-model"))
+        self.assertEqual(inputs,[r["input"] for r in self.challenge["cases"]])
+        self.assertEqual(result["format"],CAPTURE)
+        self.assertEqual(len(result["results"]),3)
+        self.assertEqual(set(result),{"format","challenge_sha256","results"})
+
+    def test_capture_rejects_answer_key_and_changed_pin_before_model(self):
+        challenge=deepcopy(self.challenge)
+        challenge["cases"][0]["expected"]={}
+        with patch.dict(sys.modules,{"agent":SimpleNamespace(propose=lambda *a,**k:self.fail("model called"))}):
+            for value,pin in ((challenge,digest(challenge)),(self.challenge,"a"*64)):
+                with self.assertRaises(ImplementationError):
+                    asyncio.run(capture_planner(self.spec,value,challenge_sha256=pin,model="fixture-model"))
+
+    def test_private_artifacts_strict_json_and_no_overwrite(self):
+        with TemporaryDirectory() as directory:
+            root=Path(directory);target=root/"trial"
+            write_freeze(target,self.freeze,self.challenge)
+            self.assertEqual(strict_load(target/"private-freeze.json"),self.freeze)
+            self.assertEqual(strict_load(target/"challenge.json"),self.challenge)
+            if os.name=="posix":
+                self.assertEqual(stat.S_IMODE(target.stat().st_mode),0o700)
+                self.assertEqual(stat.S_IMODE((target/"challenge.json").stat().st_mode),0o600)
+            with self.assertRaises(FileExistsError):write_freeze(target,self.freeze,self.challenge)
+            with self.assertRaises(FileExistsError):private_write(target/"challenge.json",{})
+            for raw in (b'{"x":1,"x":2}',b'{"x":NaN}',b'[]',b'\\xff'):
+                p=root/"bad.json";p.write_bytes(raw)
+                with self.assertRaises(ImplementationError):strict_load(p)
+
+    def test_cli_frozen_roundtrip_and_refusal_without_consent(self):
+        with TemporaryDirectory() as directory:
+            root=Path(directory)
+            for name in ("heldout.py","evaluate.py","execute.py","runtime.py",
+                         "process_source_state.py","process_rule_conditions.py"):
+                (root/name).write_bytes((Path(__file__).parent/name).read_bytes())
+            for name,v in (("workflow.spec.json",self.spec),("development.json",self.dev),
+                           ("holdout.json",self.test),("policy.json",self.policy)):
+                (root/name).write_text(json.dumps(v),encoding="utf-8")
+            cmd=[sys.executable,"heldout.py","freeze","--development","development.json",
+                 "--holdout","holdout.json","--policy","policy.json","--output","trial"]
+            def run(args):return subprocess.run(args,cwd=root,capture_output=True,text=True,timeout=20)
+            self.assertEqual(run(cmd).returncode,2)
+            result=run(cmd+["--confirm-retain-sensitive-challenge"])
+            self.assertEqual(result.returncode,0,result.stderr)
+            pins=json.loads(result.stdout);freeze=strict_load(root/"trial/private-freeze.json")
+            good=capture(freeze,self.results)
+            private_write(root/"capture.json",good)
+            score=[sys.executable,"heldout.py","score","--development","development.json",
+                   "--holdout","holdout.json","--freeze","trial/private-freeze.json",
+                   "--challenge","trial/challenge.json","--freeze-sha256",pins["freeze_sha256"],
+                   "--candidate","capture.json","--candidate-sha256",digest(good),
+                   "--baseline","capture.json","--baseline-sha256",digest(good),"--output","report.json",
+                   "--confirm-reviewed-evaluation"]
+            result=run(score)
+            self.assertEqual(result.returncode,0,result.stderr)
+            self.assertTrue(strict_load(root/"report.json")["selected_acceptance_gates_pass"])
+            self.assertEqual(run(score).returncode,2)
+
+
+if __name__=="__main__":
+    unittest.main()
