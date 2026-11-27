@@ -229,6 +229,7 @@ def _put(conn,p):
 def _public(p,now):
     out={k:p[k] for k in ("profile_id","revision","enabled","created_at","status","log_id",
                            "checkpoint","last_success_at","last_attempt_at","last_result","retry_not_before")}
+    out["integrity_hold"] = p.get("integrity_hold")
     out["config"] = p["config"]
     out["provider"] = p.get("provider", "rest")
     out["adapter_capabilities"]=capabilities(out["provider"]) if out["provider"] in PROVIDERS else None
@@ -311,6 +312,8 @@ def change(profile_id,revision,enabled):
             if revision!=p["revision"]:
                 raise FeedError("profile_changed")
             if enabled:
+                if p.get("integrity_hold"):
+                    raise FeedError("retained_integrity_hold_requires_reviewed_release")
                 if p["status"]=="dataset_deleted":
                     raise FeedError("retained_dataset_deleted_create_new_profile")
                 _check_binding(p)
@@ -361,6 +364,7 @@ def forget_dataset(conn,log_id):
         if p["log_id"]==log_id:
             from . import enterprise_ingestion_run_history as history
             history.erase(conn,p["profile_id"])
+            p.pop("integrity_hold",None)
             p.update(enabled=False,status="dataset_deleted",revision=p["revision"]+1,run_id=None,lease_until=0,
                      log_id=None,checkpoint=None,last_result=None,last_success_at=None,
                      source_schema_sha256=None)
@@ -369,7 +373,7 @@ def forget_dataset(conn,log_id):
 
 def _guard(conn,p):
     live=_get(conn,p["profile_id"])
-    if (not live["enabled"] or live["revision"]!=p["revision"] or live["run_id"]!=p["run_id"]
+    if (live.get("integrity_hold") or not live["enabled"] or live["revision"]!=p["revision"] or live["run_id"]!=p["run_id"]
             or live["lease_until"]<=time.time() or live["log_id"]!=p["log_id"]):
         raise FeedError("rest_run_invalidated")
     if live["log_id"]:
@@ -391,6 +395,8 @@ def _begin(profile_id,revision,now):
         c=_connect()
         try:
             p=_get(c,profile_id)
+            if p.get("integrity_hold"):
+                raise FeedError("retained_integrity_hold_requires_reviewed_release")
             if p["revision"]!=revision or not p["enabled"]:
                 raise FeedError("profile_changed_or_disabled")
             if p["run_id"] and p["lease_until"]>time.time():
@@ -669,6 +675,8 @@ def schedule_pin(profile_id):
         c=_connect()
         try:
             p=_get(c,profile_id)
+            if p.get("integrity_hold"):
+                raise FeedError("retained_integrity_hold_requires_reviewed_release")
             if not p["enabled"]:
                 raise FeedError("rest_profile_disabled")
             _check_binding(p)
@@ -684,7 +692,7 @@ def run_scheduled(profile_id,revision):
         result=run(profile_id,revision,confirm_reads=True,confirm_retention=True)
         return "succeeded:"+str(result["events_added"])+"_events_added",0.0
     except FeedError as error:
-        if error.code in {"unknown_rest_profile","rest_profile_disabled","profile_changed_or_disabled",
+        if error.code in {"unknown_rest_profile","rest_profile_disabled","retained_integrity_hold_requires_reviewed_release","profile_changed_or_disabled",
                            "credential_changed_reconfigure_required","rest_run_invalidated",
                            "endpoint_not_deployment_allowlisted","invalid_rest_endpoint_credential_catalog","rest_endpoint_credential_pair_not_approved","rest_endpoint_credential_catalog_required",
                            "unknown_enterprise_connector_provider","invalid_connector_secret_catalog","invalid_connector_secret_root",

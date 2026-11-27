@@ -30,7 +30,7 @@ def prepare(profile_id,since,until,*,activity_mode="coded",confirm_labels=False)
         try:
             p=rest._get(c,profile_id)
             public=rest._public(p,rest.time.time())
-            if not p["enabled"] or not p["log_id"] or not p["checkpoint"] or not public["credential_binding_available"]:
+            if p.get("integrity_hold") or not p["enabled"] or not p["log_id"] or not p["checkpoint"] or not public["credential_binding_available"]:
                 raise ValueError("retained enabled profile and current source binding required")
             if p["run_id"]:
                 raise ValueError("finish or reconcile local run before snapshot")
