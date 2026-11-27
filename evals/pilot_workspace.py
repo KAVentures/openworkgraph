@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import argparse
 from contextlib import contextmanager
-import json
 import os
 from pathlib import Path
 import sqlite3
@@ -41,12 +40,16 @@ def _pins(state):
             "expected_ledger_sha256":state["ledger"]["ledger_sha256"],"confirmed":True}
 
 
+def _history_pin(prior,revision,previous_head,operation):
+    return cohort.digest([FORMAT,prior,revision,previous_head,operation])
+
+
 def _initial(plan,schedule,plan_pin,schedule_pin):
     ledger=execution.initialize(plan,schedule,expected_plan_sha256=plan_pin,
                                expected_schedule_sha256=schedule_pin,confirmed=True)
     return _head({"format":FORMAT,"revision":0,"previous_head_sha256":None,
                   "plan":plan,"schedule":schedule,"ledger":ledger,
-                  "batches":[],"withdrawn_episode_ids":[]})
+                  "history_sha256":_history_pin(None,0,None,"initialize"),"batches":[],"withdrawn_episode_ids":[]})
 
 
 def _state_cells(state):
@@ -57,7 +60,7 @@ def _state_cells(state):
 
 def _validate(state):
     cohort.exact(state,("format","revision","previous_head_sha256","plan","schedule",
-                       "ledger","batches","withdrawn_episode_ids","head_sha256"))
+                       "ledger","history_sha256","batches","withdrawn_episode_ids","head_sha256"))
     if (state["format"]!=FORMAT or type(state["revision"]) is not int or
             not 0<=state["revision"]<=MAX_REVISIONS or
             cohort.pin(state["head_sha256"])!=cohort.digest(_body(state))):
@@ -67,6 +70,7 @@ def _validate(state):
             raise ValueError("invalid initial head")
     else:
         cohort.pin(state["previous_head_sha256"])
+    cohort.pin(state["history_sha256"])
     cells,enrolled=_state_cells(state)
     withdrawn=state["withdrawn_episode_ids"]
     if (not isinstance(withdrawn,list) or withdrawn!=sorted(set(withdrawn)) or
@@ -157,20 +161,22 @@ def _load(conn):
     row=conn.execute("SELECT body FROM workspace WHERE id=1").fetchone()
     if row is None or len(row[0].encode("utf-8"))>cohort.MAX_BYTES:
         raise ValueError("missing or oversized workspace")
-    state=json.loads(row[0]);_validate(state)
+    state=cohort._parse(row[0]);_validate(state)
     history=conn.execute("SELECT revision,previous_head,head,operation FROM history ORDER BY revision LIMIT ?",
                          (MAX_REVISIONS+2,)).fetchall()
     if len(history)!=state["revision"]+1:
         raise ValueError("workspace history length mismatch")
-    prior=None
+    prior=None;chain=None
     for i,(revision,prev,head,operation) in enumerate(history):
         if revision!=i or prev!=prior or operation not in (
                 "initialize","append","prepare_batch","retire_batch","withdraw_episode"):
             raise ValueError("invalid workspace history chain")
         if (i==0)!=(operation=="initialize"):
             raise ValueError("invalid initialization record")
+        chain=_history_pin(chain,i,prev,operation)
         prior=cohort.pin(head)
-    if prior!=state["head_sha256"] or history[-1][1]!=state["previous_head_sha256"]:
+    if (prior!=state["head_sha256"] or history[-1][1]!=state["previous_head_sha256"] or
+            chain!=state["history_sha256"]):
         raise ValueError("workspace history head mismatch")
     return state
 
@@ -188,7 +194,8 @@ def _store(conn,state):
 
 
 def _commit(conn,state,body,operation):
-    next_body={**body,"revision":state["revision"]+1,"previous_head_sha256":state["head_sha256"]}
+    next_body={**body,"revision":state["revision"]+1,"previous_head_sha256":state["head_sha256"],
+               "history_sha256":_history_pin(state["history_sha256"],state["revision"]+1,state["head_sha256"],operation)}
     next_state=_head(next_body);_validate(next_state)
     _store(conn,next_state)
     conn.execute("INSERT INTO history VALUES (?,?,?,?)",(next_state["revision"],
@@ -256,7 +263,8 @@ def prepare_batch(path,truth,materials,*,expected_head_sha256,packet_path,key_pa
         row=_inventory(key)
         next_body={**_body(state),"batches":[*state["batches"],row]}
         # Validate before material is written; never allocate overlapping cells.
-        candidate=_head({**next_body,"revision":state["revision"]+1,"previous_head_sha256":state["head_sha256"]})
+        candidate=_head({**next_body,"revision":state["revision"]+1,"previous_head_sha256":state["head_sha256"],
+                         "history_sha256":_history_pin(state["history_sha256"],state["revision"]+1,state["head_sha256"],"prepare_batch")})
         _validate(candidate)
         # Exclusive writes precede commit. If a later write/commit fails,
         # any resulting files are unregistered and must not be distributed.
@@ -311,7 +319,7 @@ def coverage(path,*,expected_head_sha256):
     observations=[]
     for (eid,arm),row in sorted(cells.items()):
         raw=row["state"]
-        disposition=("withdrawn" if eid in state["withdrawn_episode_ids"] else
+        disposition=("withdrawn" if raw=="completed" and eid in state["withdrawn_episode_ids"] else
             ("review_pending" if (eid,arm) in assigned else "review_unavailable") if raw=="completed" else
             "other" if raw=="started" else raw)
         observations.append({"episode_id":eid,"arm":arm,"status":disposition})
@@ -375,7 +383,8 @@ def main(argv=None):
             cmd.add_argument("--head-sha256",required=cmd.prog.split()[-1]!="status")
     args=parser.parse_args(argv)
     try:
-        if args.out.exists():
+        if args.out.exists() or (args.command=="prepare-batch" and args.out.resolve() in
+                (args.packet.resolve(),args.private_key.resolve())) or (args.command=="initialize" and args.out.resolve()==args.db.resolve()):
             raise ValueError("choose a new output file")
         if args.command=="initialize":
             result=initialize(args.db,cohort._load(args.plan),cohort._load(args.schedule),
