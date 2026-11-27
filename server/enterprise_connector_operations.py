@@ -24,7 +24,7 @@ PROVIDERS = (
     ("servicenow","ServiceNow","native_multi_table_audit_creation_and_selected_incident_journal"),
     ("microsoft","Microsoft 365","reviewed_outlook_delta"),
     ("atlassian","Jira","retained_selected_issue_profiles"),
-    ("zendesk","Zendesk","selected_ticket_audit"),
+    ("zendesk","Zendesk","retained_selected_ticket_audit_and_status_history"),
     ("sap","SAP S/4HANA","order_to_cash_and_purchase_order_procurement_day_evidence"),
     ("stripe","Stripe","selected_record_evidence"),
     ("hubspot","HubSpot","native_selected_record_property_history"),
