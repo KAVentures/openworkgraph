@@ -1,6 +1,6 @@
 """Explicit complete-scope portable export under the original organization fence."""
 import json
-from pydantic import Field,StrictBool
+from pydantic import StrictBool
 from shared.connector_bundle_import import MAPPING,MAX_BYTES,FORMAT as BUNDLE_FORMAT
 from shared.connector_portable_linkage import Envelope,FORMAT,reconstruct
 from shared.connector_event_snapshot import digest
