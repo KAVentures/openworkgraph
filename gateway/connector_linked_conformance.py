@@ -1,5 +1,6 @@
 """Exact snapshot-pinned, owner-reviewed linked case conformance diagnostics."""
 from collections import Counter, defaultdict
+from contextlib import nullcontext
 from typing import Literal
 from pydantic import Field,StrictBool,StrictInt,model_validator
 from shared.connector_event_snapshot import Strict,DIGEST,digest
@@ -144,14 +145,14 @@ def worklist(reviewed,org,spec,principal):
     return _review(reviewed,org,spec,principal,worklist=True)
 
 
-def _review(reviewed,org,spec,principal,*,worklist,retain=None):
+def _review(reviewed,org,spec,principal,*,worklist,retain=None,_conn=None,_all_groups=False,_approved_selectors=()):
     if not spec.confirm_conformance_review:
         raise JobError("explicit_conformance_rule_review_required",403)
-    with reviewed.jobs._tx(org) as c:
+    with (reviewed.jobs._tx(org) if _conn is None else nullcontext(_conn)) as c:
         groups,providers,scope,expires,base=_load(reviewed,c,org,spec)
         # Exact selectors must be observed in at least one linked group.
         # A misspelled activity cannot silently pass a forbidden rule.
-        known={(e["job_id"],e["activity"]) for e in _catalog(groups,providers)}
+        known={(e["job_id"],e["activity"]) for e in _catalog(groups,providers)} | set(_approved_selectors)
         ordered=sorted((r.model_dump() for r in spec.rules),key=lambda r:r["rule_id"])
         for rule in ordered:
             for sel in (rule["left"],rule["right"]):
@@ -177,7 +178,7 @@ def _review(reviewed,org,spec,principal,*,worklist,retain=None):
         filtered=[r for r in rows if spec.filter_status=="all" or r["status"]==spec.filter_status]
         if spec.offset>=len(filtered) and spec.offset:
             raise JobError("conformance_page_outside_scope",422)
-        page=filtered[spec.offset:spec.offset+spec.limit]
+        page=rows if _all_groups else filtered[spec.offset:spec.offset+spec.limit]
         summary={"linked_groups":len(rows),"rules":len(ordered),
                  "evaluations":len(rows)*len(ordered),"group_outcomes":counts(rows),
                  "rule_outcomes":counts([check for r in rows for check in r["checks"]])}
@@ -204,7 +205,7 @@ def _review(reviewed,org,spec,principal,*,worklist,retain=None):
                 "conformance_sha256":pin,"expires_at":expires,"rules":ordered,
                 "summary":summary,"rule_summary":summaries,"groups":page,
                 "filter_status":spec.filter_status,"filtered_groups":len(filtered),
-                "offset":spec.offset,"next_offset":spec.offset+len(page) if spec.offset+len(page)<len(filtered) else None,
+                "offset":spec.offset,"next_offset":spec.offset+len(page) if not _all_groups and spec.offset+len(page)<len(filtered) else None,
                 "source_completeness_verified":False,"business_identity_verified":False,
                 "actual_process_compliance_verified":False,"unlinked_cases_included":False,
                 "interpretation":"These are rule outcomes for selected reported evidence only. Missing observations do not prove missing actions. Date-only evidence and timestamp ties cannot establish strict occurrence order. No actual compliance, misconduct, causal relationship or business identity is verified."}
