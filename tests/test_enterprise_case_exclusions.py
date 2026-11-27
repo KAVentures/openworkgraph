@@ -55,7 +55,10 @@ def test_prospective_exclusion_retains_other_cases_and_checkpoint(monkeypatch):
     with monkeypatch.context() as m:
         m.setattr(httpx.Client,"stream",lambda *a,**k:pytest.fail("provider read"))
         m.setattr(rest,"_check_binding",lambda *a:pytest.fail("credential read"))
-        p,receipt=set_exclusions(p,"private-excluded-case")
+        payload=request(p,"private-excluded-case")
+        plan=exclusions.preview(payload)
+        receipt=exclusions.apply(approve(payload,plan))
+    p=current(p)
     assert p["revision"]==before+1 and not p["enabled"]
     assert p["excluded_case_count"]==1 and p["checkpoint"] is None
     assert receipt["source_erasure_performed"] is False
