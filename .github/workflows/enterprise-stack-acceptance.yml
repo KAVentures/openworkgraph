@@ -98,7 +98,8 @@ jobs:
             tests/test_enterprise_connector_deployment.py \
             tests/test_enterprise_connector_integration.py \
             tests/test_connector_bundle_import.py \
-            tests/test_connector_portable_linkage.py
+            tests/test_connector_portable_linkage.py \
+            tests/test_connector_quality_verified_import.py
       - name: Install isolated Chromium runtime
         if: success() || failure()
         run: |
@@ -117,7 +118,7 @@ jobs:
           test ! -e data/gateway/openworkgraph_gateway.db
 
   verified-bundle-import:
-    if: github.event_name == 'pull_request' && (startsWith(github.head_ref, 'feat/enterprise-verified-bundle-import-') || startsWith(github.head_ref, 'feat/enterprise-portable-linked-evidence-'))
+    if: github.event_name == 'pull_request' && (startsWith(github.head_ref, 'feat/enterprise-verified-bundle-import-') || startsWith(github.head_ref, 'feat/enterprise-portable-linked-evidence-') || startsWith(github.head_ref, 'feat/enterprise-quality-verified-import-'))
     runs-on: ubuntu-latest
     timeout-minutes: 25
     services:
@@ -146,13 +147,13 @@ jobs:
         run: python -m pip install -e ".[dev,gateway]"
       - name: Compile exact import and check dashboard JavaScript
         run: |
-          python -m py_compile shared/connector_bundle_import.py shared/connector_case_projection.py shared/connector_portable_linkage.py gateway/connector_portable_linkage.py gateway/connector_case_review.py server/enterprise_connector_bundle_import.py server/enterprise_connector_routes.py server/event_log_workspace.py
+          python -m py_compile shared/connector_publication_quality.py shared/connector_quality_verification.py shared/connector_bundle_import.py shared/connector_case_projection.py shared/connector_portable_linkage.py gateway/connector_portable_linkage.py gateway/connector_case_review.py server/enterprise_connector_bundle_import.py server/enterprise_connector_routes.py server/event_log_workspace.py
           node --check dashboard/enterprise_bundle_import.js
           node --check tests/browser/enterprise_connectors.cjs
       - name: Verify published bundle roundtrip and atomic local import
         env:
           OWG_PROCESS_TEST_DATABASE_URL: postgresql://owg_test:synthetic-ci-password@127.0.0.1:5432/owg_test
-        run: python -m pytest -q --tb=short tests/test_connector_bundle_import.py tests/test_connector_event_publications.py tests/test_connector_case_review.py tests/test_connector_portable_linkage.py
+        run: python -m pytest -q --tb=short tests/test_connector_bundle_import.py tests/test_connector_event_publications.py tests/test_connector_case_review.py tests/test_connector_portable_linkage.py tests/test_connector_quality_verified_import.py
       - name: Install isolated Chromium runtime
         if: success() || failure()
         run: |
