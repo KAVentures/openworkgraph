@@ -94,6 +94,11 @@ const path=require('node:path');
 
    assert.match(await page.locator('#owgEventLogResults').textContent(),/Receive → Check → Approve → Close/);
    await page.locator('#owgQualityResults table').first().waitFor();
+   const [qualityDownload]=await Promise.all([page.waitForEvent('download'),page.locator('#owgQualityOverviewJson').click()]);
+   assert.equal(qualityDownload.suggestedFilename(),'event-log-quality-overview.json');
+   const qualityExport=JSON.parse(await fs.readFile(await qualityDownload.path(),'utf8'));
+   assert.deepEqual(qualityExport,qualityPayload,'download preserves the displayed snapshot, its bounds and digests');
+   assert.doesNotMatch(JSON.stringify(qualityExport),/C99/,'kept rejected row values are excluded');
    const qualityText=await page.locator('#owgQualityResults').textContent();
    assert.match(qualityText,/Import\s*csv\s*274\s*1 \(1 time without a UTC offset\)/);
    assert.match(qualityText,/Case columncase_id/);assert.match(qualityText,/not known to be complete/);
