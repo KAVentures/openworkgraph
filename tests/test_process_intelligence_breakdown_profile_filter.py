@@ -45,3 +45,14 @@ def test_activity_profile_within_one_group():
     assert eu["cases"] == 20 and [a["activity"] for a in eu["comes_after"]] == ["Receive"]
     with pytest.raises(workspace.EventLogWorkspaceError):
         sharing.activity_profile(log_id, "Pay", case_filter={})
+
+
+def test_filtered_profile_preserves_small_cell_suppression():
+    log_id = _log()
+    cohort = {"case_ids": ["c0", "c1", "c2", "c4", "c5", "c7"]}
+    with pytest.raises(workspace.EventLogWorkspaceError, match="fewer than"):
+        sharing.activity_profile(log_id, "Remind", case_filter=cohort)
+    profile = sharing.activity_profile(log_id, "Pay", case_filter=cohort)
+    assert profile["cases"] == 6
+    rare = next(row for row in profile["comes_after"] if row["activity"] == "Remind")
+    assert rare["times"] == 1 and rare["median_hours"] is None

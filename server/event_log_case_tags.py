@@ -137,36 +137,43 @@ def preview(log_id: str, spec: Any) -> dict[str, Any]:
     return workspace._query(log_id, parsed.case_type, run)
 
 
+def _apply_selected(conn, log_id: str, parsed: AddTags, tag: str,
+                    selected: int, already: int, unknown: int) -> dict[str, Any]:
+    """Apply a validated selection held in ct_selected under the workspace lock."""
+    note = parsed.note.strip()
+    if parsed.expected_selection_sha256 is not None:
+        digest, _ = _selection_review(conn, log_id, parsed, tag, unknown)
+        if digest != parsed.expected_selection_sha256:
+            raise workspace.EventLogWorkspaceError("the tag selection or existing notes changed; preview again")
+    if not selected:
+        raise workspace.EventLogWorkspaceError("no cases to tag: none of them is in this log")
+    existing_tags = {r[0] for r in conn.execute("SELECT DISTINCT tag FROM case_tags WHERE log_id = ?", [log_id]).fetchall()}
+    if tag not in existing_tags and len(existing_tags) >= MAX_TAGS_PER_LOG:
+        raise workspace.EventLogWorkspaceError(f"a log keeps at most {MAX_TAGS_PER_LOG} tags; remove one first")
+    total = conn.execute("SELECT count(*) FROM case_tags WHERE log_id = ?", [log_id]).fetchone()[0]
+    if total - already + selected > MAX_TAGGED_ROWS_PER_LOG:
+        raise workspace.EventLogWorkspaceError(f"a log keeps at most {MAX_TAGGED_ROWS_PER_LOG:,} case tags")
+    conn.execute("BEGIN")
+    try:
+        conn.execute("""DELETE FROM case_tags WHERE log_id = ? AND tag = ?
+            AND case_id IN (SELECT case_id FROM ct_selected)""", [log_id, tag])
+        conn.execute("INSERT INTO case_tags SELECT ?, case_id, ?, ?, ? FROM ct_selected",
+                     [log_id, tag, note, datetime.now(timezone.utc).replace(tzinfo=None)])
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+    return {"tagged": selected, "already_tagged": already, "unknown_case_ids": unknown,
+            "tags": _summary(conn, log_id)}
+
+
 def add(log_id: str, spec: Any) -> dict[str, Any]:
     parsed, tag = _validate(AddTags, spec)
     note = parsed.note.strip()
 
     def run(conn):
         selected, already, unknown = _select_cases(conn, log_id, parsed, tag)
-        if parsed.expected_selection_sha256 is not None:
-            digest, _ = _selection_review(conn, log_id, parsed, tag, unknown)
-            if digest != parsed.expected_selection_sha256:
-                raise workspace.EventLogWorkspaceError("the tag selection or existing notes changed; preview again")
-        if not selected:
-            raise workspace.EventLogWorkspaceError("no cases to tag: none of them is in this log")
-        existing_tags = {r[0] for r in conn.execute("SELECT DISTINCT tag FROM case_tags WHERE log_id = ?", [log_id]).fetchall()}
-        if tag not in existing_tags and len(existing_tags) >= MAX_TAGS_PER_LOG:
-            raise workspace.EventLogWorkspaceError(f"a log keeps at most {MAX_TAGS_PER_LOG} tags; remove one first")
-        total = conn.execute("SELECT count(*) FROM case_tags WHERE log_id = ?", [log_id]).fetchone()[0]
-        if total - already + selected > MAX_TAGGED_ROWS_PER_LOG:
-            raise workspace.EventLogWorkspaceError(f"a log keeps at most {MAX_TAGGED_ROWS_PER_LOG:,} case tags")
-        conn.execute("BEGIN")
-        try:
-            conn.execute("""DELETE FROM case_tags WHERE log_id = ? AND tag = ?
-                AND case_id IN (SELECT case_id FROM ct_selected)""", [log_id, tag])
-            conn.execute("INSERT INTO case_tags SELECT ?, case_id, ?, ?, ? FROM ct_selected",
-                         [log_id, tag, note, datetime.now(timezone.utc).replace(tzinfo=None)])
-            conn.execute("COMMIT")
-        except Exception:
-            conn.execute("ROLLBACK")
-            raise
-        return {"tagged": selected, "already_tagged": already, "unknown_case_ids": unknown,
-                "tags": _summary(conn, log_id)}
+        return _apply_selected(conn, log_id, parsed, tag, selected, already, unknown)
 
     result = workspace._query(log_id, parsed.case_type, run)
     return {"format": FORMAT, "tag": tag, "note": note, "tagged": result["tagged"],
