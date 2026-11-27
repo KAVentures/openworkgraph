@@ -1179,13 +1179,15 @@ const path=require('node:path');
    await page.addScriptTag({content:axeSource});
    const arithmeticAxe=await page.evaluate(()=>axe.run(document.querySelector('#owgEventLogAnalysis'),{runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21aa']}}));
    assert.deepEqual(arithmeticAxe.violations,[]);
-   await page.locator('#owgPredictEnds').fill('Close');await page.locator('#owgPredictOutcome').selectOption('duration_over');
+   await page.locator('#owgPredictEnds').fill('Close');await page.locator('#owgPredictAddEnd').click();await page.locator('#owgPredictOutcome').selectOption('duration_over');
    await page.locator('#owgPredictHours').fill('5');await page.locator('#owgPredictRun').click();
    await page.locator('#owgPredictResults').getByText('open cases;').waitFor();
    const predictText=await page.locator('#owgPredictResults').textContent();
    assert.match(predictText,/0 open cases/);assert.match(predictText,/Backtest on \d+ later steps/);assert.match(predictText,/Brier score/);
-   const predictSpec=await page.evaluate(()=>{try{window.__owgEventLogModel.predictionSpec({ends:' , ',outcome:''});return 'accepted';}catch(e){return e.message;}});
+   const predictSpec=await page.evaluate(()=>{try{window.__owgEventLogModel.predictionSpec({ends:[],outcome:''});return 'accepted';}catch(e){return e.message;}});
    assert.equal(predictSpec,'List the activities that end a case.');
+   assert.equal(await page.evaluate(()=>{try{window.__owgEventLogModel.predictionSpec({ends:'Close',outcome:''});return 'accepted';}catch(e){return e.message;}}),'List the activities that end a case.');
+   assert.deepEqual(await page.evaluate(()=>window.__owgEventLogModel.predictionSpec({ends:['Close, archived','  Close  '],outcome:''}).end_activities),['Close, archived','  Close  ']);
    // Censoring-aware estimates: still-open cases are learned from, and the backtest replays the log as of a cutoff.
    await page.locator('#owgPredictOutcome').selectOption('');await page.locator('#owgPredictEstimator').selectOption('survival');
    const [survivalResponse]=await Promise.all([page.waitForResponse(r=>r.url().includes('/predictions')),page.locator('#owgPredictRun').click()]);
@@ -1193,7 +1195,7 @@ const path=require('node:path');
    assert.equal(survivalResponse.status(),200);assert.equal(survivalResult.estimator,'survival');assert.equal(survivalResult.backtest.design,'as_of_replay');
    await page.locator('#owgPredictResults').getByText(/As-of backtest at \d{4}-\d{2}-\d{2}: \d+ cases were in progress/).waitFor();
    if(survivalResult.predictions.length)assert.match(await page.locator('#owgPredictResults').textContent(),/from now|withheld/);
-   assert.equal(await page.evaluate(()=>{try{window.__owgEventLogModel.predictionSpec({ends:'Close',estimator:'magic'});return 'accepted';}catch(e){return e.message;}}),'Choose what to learn from.');
+   assert.equal(await page.evaluate(()=>{try{window.__owgEventLogModel.predictionSpec({ends:['Close'],estimator:'magic'});return 'accepted';}catch(e){return e.message;}}),'Choose what to learn from.');
    await page.locator('#owgPredictEstimator').selectOption('completed_cases');
 
    await page.locator('#owgComplianceTemplate').selectOption('response');
