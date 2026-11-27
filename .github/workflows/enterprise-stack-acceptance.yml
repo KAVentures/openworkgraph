@@ -126,6 +126,7 @@ jobs:
             tests/test_connector_linked_conformance.py \
             tests/test_connector_exception_triage.py \
             tests/test_connector_temporal_review.py \
+            tests/test_enterprise_evidence_journey.py \
             tests/test_enterprise_connector_integration.py
       - name: Install isolated Chromium runtime
         if: success() || failure()
@@ -148,7 +149,7 @@ jobs:
           test ! -e data/gateway/openworkgraph_gateway.db
 
   verified-bundle-import:
-    if: github.event_name == 'pull_request' && (startsWith(github.head_ref, 'feat/enterprise-verified-bundle-import-') || startsWith(github.head_ref, 'feat/enterprise-portable-linked-evidence-') || startsWith(github.head_ref, 'feat/enterprise-quality-verified-import-') || github.head_ref == 'integration/enterprise-connectors-quality-20261127' || github.head_ref == 'integration/enterprise-connectors-process-20261127')
+    if: github.event_name == 'pull_request' && (startsWith(github.head_ref, 'feat/enterprise-verified-bundle-import-') || startsWith(github.head_ref, 'feat/enterprise-portable-linked-evidence-') || startsWith(github.head_ref, 'feat/enterprise-quality-verified-import-') || github.head_ref == 'integration/enterprise-connectors-quality-20261127' || github.head_ref == 'integration/enterprise-connectors-process-20261127' || github.head_ref == 'integration/enterprise-connectors-remediation-20261127')
     runs-on: ubuntu-latest
     timeout-minutes: 25
     services:
@@ -183,15 +184,20 @@ jobs:
       - name: Verify published bundle roundtrip and atomic local import
         env:
           OWG_PROCESS_TEST_DATABASE_URL: postgresql://owg_test:synthetic-ci-password@127.0.0.1:5432/owg_test
-        run: python -m pytest -q --tb=short tests/test_connector_bundle_import.py tests/test_connector_event_publications.py tests/test_connector_case_review.py tests/test_connector_portable_linkage.py tests/test_connector_quality_verified_import.py tests/test_connector_quality_verifier_pure.py tests/test_connector_publication_quality.py
+        run: python -m pytest -q --tb=short tests/test_connector_bundle_import.py tests/test_connector_event_publications.py tests/test_connector_case_review.py tests/test_connector_portable_linkage.py tests/test_connector_quality_verified_import.py tests/test_connector_quality_verifier_pure.py tests/test_connector_publication_quality.py tests/test_enterprise_evidence_journey.py
       - name: Install isolated Chromium runtime
         if: success() || failure()
         run: |
           npm install --prefix "$RUNNER_TEMP/owg-browser" playwright@1.64.1 axe-core@4.10.3
           node "$RUNNER_TEMP/owg-browser/node_modules/playwright/cli.js" install chromium
-      - name: Verify local bundle import and receipt lifecycle
-        if: success() || failure()
-        run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/enterprise_connectors.cjs
-      - name: Verify Gateway portable linked evidence disclosure
-        if: success() || failure()
-        run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/connector_crosswalks.cjs
+      - name: Verify Gateway evidence journey and create synthetic downloads
+        run: |
+          export OWG_BROWSER_EVIDENCE_FIXTURES="$RUNNER_TEMP/owg-synthetic-evidence"
+          NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/connector_crosswalks.cjs
+      - name: Verify local connector and actual Gateway download import
+        run: |
+          export OWG_BROWSER_EVIDENCE_FIXTURES="$RUNNER_TEMP/owg-synthetic-evidence"
+          NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/enterprise_connectors.cjs
+      - name: Remove synthetic handoff files
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/owg-synthetic-evidence"
