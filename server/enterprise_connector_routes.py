@@ -17,6 +17,7 @@ from . import databricks_event_feed as dbx
 from . import snowflake_event_feed as snow
 from . import netsuite_event_feed as ns
 from . import workday_raas_feed as wd
+from . import oracle_fusion_procurement_feed as oracle
 from . import enterprise_sql_feed as sql
 from . import enterprise_connector_operations as operations
 from .event_log_routes import _json_body
@@ -81,6 +82,18 @@ async def sql_create(request:Request):
     require(request)
     body=await _json_body(request,"SQL feed configuration",strict=True,limit=4096)
     return await call(request,sql.create,body)
+
+
+@router.get("/v1/enterprise-connectors/oracle_fusion/catalog")
+async def oracle_fusion_catalog(request:Request):
+    return await call(request,oracle.catalog_public)
+
+
+@router.post("/v1/enterprise-connectors/oracle_fusion")
+async def oracle_fusion_create(request:Request):
+    require(request)
+    body=await _json_body(request,"Oracle Fusion procurement profile",strict=True,limit=8192)
+    return await call(request,oracle.create,body)
 
 
 @router.get("/v1/enterprise-connectors/workday/catalog")
