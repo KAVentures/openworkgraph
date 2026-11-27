@@ -44,6 +44,8 @@ def metadata(c,log_id,current_count):
     return {"revision":last["revision"],"receipt_count":row[0],
             "initial_bundle_sha256":row[1],
             "latest_bundle_sha256":last["canonical_bundle_sha256"],
+            "bundle_kind":last.get("bundle_kind","ordinary"),
+            "review_sha256":last.get("review_sha256"),
             "events_after_last_verified_import":last["retained_event_count"],
             "current_event_count_matches_last_receipt":current_count==last["retained_event_count"],
             "gateway_origin_authenticated":False,"live_grants_verified":False,
@@ -61,6 +63,10 @@ def _history_check(c,log_id,report):
         raise FeedError("target_log_changed_outside_verified_import")
     # Bind exact source namespaces, provider profile pins and label mode.
     # A rotated profile or newly linked case scope requires a new log.
+    if report.get("bundle_kind","ordinary")!=history[0].get("bundle_kind","ordinary"):
+        raise FeedError("bundle_source_scope_changed_new_log_required")
+    if report.get("bundle_kind")=="reviewed_linkage" and report["canonical_bundle_sha256"]!=history[0]["canonical_bundle_sha256"]:
+        raise FeedError("changed_linkage_requires_new_log")
     if _pins(report)!=_pins(history[0]):
         raise FeedError("bundle_source_scope_changed_new_log_required")
     prior_grants={(src["job_id"],src["grant_id"]):src["manifest_sha256"]
@@ -100,7 +106,7 @@ def _verify_retained(c,log_id,bundle):
     try:
         # executemany is bounded by the validated 20,000-event cap.
         c.executemany("INSERT INTO connector_bundle_expected VALUES (?,?,?,?,?)",
-            [(e.source_namespace,e.event_id,"src:"+e.source_namespace+":"+e.case_id,e.activity,e.observed_at)
+            [(e.source_namespace,e.event_id,"src:"+bundle.mapping.get("case_namespace",e.source_namespace)+":"+e.case_id,e.activity,e.observed_at)
              for e in bundle.events])
         mismatch=c.execute("""SELECT 1 FROM connector_bundle_expected x
             LEFT JOIN event_source_keys k ON k.log_id=? AND k.source_namespace=x.ns AND k.source_event_id=x.eid
@@ -114,12 +120,14 @@ def _verify_retained(c,log_id,bundle):
 
 
 def retain(raw,*,file_sha256,canonical_bundle_sha256,request_id,target=None,expected_revision=0,name=None,
-           confirm_retention=False,confirm_origin_review=False):
+           confirm_retention=False,confirm_origin_review=False,confirm_linkage_review=False):
     if not isinstance(request_id,str) or not re.fullmatch(r"[a-f0-9]{32}",request_id):
         raise FeedError("invalid_bundle_import_request_id",422)
     if confirm_retention is not True or confirm_origin_review is not True:
         raise FeedError("explicit_bundle_retention_and_origin_review_required",403)
     bundle,report=_inspect(raw)
+    if report.get("bundle_kind")=="reviewed_linkage" and confirm_linkage_review is not True:
+        raise FeedError("explicit_offline_linkage_review_required",403)
     if report["file_sha256"]!=file_sha256 or report["canonical_bundle_sha256"]!=canonical_bundle_sha256:
         raise FeedError("bundle_review_changed")
     if type(expected_revision) is not int or expected_revision<0 or (target is None)!=(expected_revision==0):
@@ -163,7 +171,7 @@ def retain(raw,*,file_sha256,canonical_bundle_sha256,request_id,target=None,expe
             actual=c.execute("SELECT events,objects,rejected_events FROM logs WHERE log_id=?",[log_id]).fetchone()
             if actual is None or actual[2]!=0 or not before<=actual[0]<=before+bundle.event_count:
                 raise FeedError("retained_projection_count_failure")
-            if target is None and (actual[0]!=bundle.event_count or actual[1]!=report["source_local_case_count"]):
+            if target is None and (actual[0]!=bundle.event_count or actual[1]!=report.get("retained_projection_case_count",report["source_local_case_count"])):
                 raise FeedError("retained_projection_count_failure")
             entry={**report,"log_id":log_id,"revision":expected_revision+1,
                    "request_id":request_id,"target_log_id":target,"requested_name":name,
@@ -175,11 +183,11 @@ def retain(raw,*,file_sha256,canonical_bundle_sha256,request_id,target=None,expe
             made.append(entry)
         try:
             if target:
-                ws.append_log(target,_csv(bundle),source_format="csv",mapping=MAPPING,
+                ws.append_log(target,_csv(bundle),source_format="csv",mapping=bundle.mapping,
                               _transaction_hook=record)
                 log_id=target
             else:
-                log_id=ws.import_log(_csv(bundle),name=name,source_format="csv",mapping=MAPPING,
+                log_id=ws.import_log(_csv(bundle),name=name,source_format="csv",mapping=bundle.mapping,
                                      _transaction_hook=record)["log_id"]
         except FeedError:raise
         except (ws.EventLogWorkspaceError,ValueError):
