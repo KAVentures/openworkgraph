@@ -63,12 +63,14 @@ def worker_lock(directory):
         import fcntl
     except ImportError:
         raise WorkerError("connector_worker_requires_posix_host") from None
-    directory.mkdir(mode=0o700,parents=True,exist_ok=True)
     try:
+        directory.mkdir(mode=0o700,parents=True,exist_ok=True)
         deployment.private_dir(directory)
+        fd=os.open(directory/"worker.lock",os.O_CREAT|os.O_RDWR|os.O_NOFOLLOW|os.O_NONBLOCK,0o600)
     except deployment.DeploymentError as exc:
         raise WorkerError(str(exc)) from None
-    fd=os.open(directory/"worker.lock",os.O_CREAT|os.O_RDWR|os.O_NOFOLLOW,0o600)
+    except OSError:
+        raise WorkerError("worker_outbox_or_lock_unavailable") from None
     try:
         info=os.fstat(fd)
         if not stat.S_ISREG(info.st_mode) or info.st_uid!=os.getuid() or info.st_nlink!=1 or info.st_mode&0o077:
@@ -169,7 +171,10 @@ class Worker:
         self._verify_job(result.get("job"))
         if result.get("accepted") is not True:
             raise WorkerError("completion_not_confirmed")
-        deployment.finish_pending(path)
+        try:
+            deployment.finish_pending(path)
+        except OSError:
+            raise WorkerError("confirmed_receipt_cleanup_failed") from None
         return {"outcome":receipt["outcome"],"code":receipt["code"],"receipt_replayed":result.get("replayed") is True}
 
     def once(self):
