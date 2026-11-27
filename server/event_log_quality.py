@@ -56,11 +56,18 @@ def transform(source_format: str, mapping: dict[str, Any] | None) -> dict[str, A
             "attribute_columns": list(dict.fromkeys(mapping.get("attribute_columns") or [])),
             "delimiter": mapping.get("delimiter") or ",",
         }
+        if (mapping.get("header_row") or 1) > 1:
+            declared["mapping"]["header_row"] = mapping["header_row"]
         if mapping.get("naive_timestamp_offset"):
             # An explicit decision changes what is stored, so it is part of the transform.
             declared["mapping"]["naive_timestamp_offset"] = mapping["naive_timestamp_offset"]
         if mapping.get("timestamp_format"):
             declared["mapping"]["timestamp_format"] = mapping["timestamp_format"]
+        if mapping.get("time_column"):
+            declared["mapping"]["time_column"] = mapping["time_column"]
+        if mapping.get("encoding") not in (None, "", "utf-8"):
+            # Decoding changes the text that is stored, so a non-default encoding is part of the transform.
+            declared["mapping"]["encoding"] = mapping["encoding"]
         identity=workspace.source_identity.settings(mapping)
         if identity:
             declared['mapping']['source_identity']={'format':workspace.source_identity.FORMAT,**vars(identity)}
@@ -69,6 +76,9 @@ def transform(source_format: str, mapping: dict[str, Any] | None) -> dict[str, A
             "xes": "XES concept:name / time:timestamp / org:resource; trace concept:name as case",
             "ocel": "OCEL 2.0 JSON event types, objects and qualified relationships",
             "ocelxml": "OCEL 2.0 XML event types, objects and qualified relationships"}[source_format]}
+        if mapping and mapping.get("naive_timestamp_offset"):
+            # An explicit decision changes what is stored, so it is part of the transform.
+            declared["mapping"]["naive_timestamp_offset"] = mapping["naive_timestamp_offset"]
     return {**declared, "transform_sha256": hashlib.sha256(_canonical(declared).encode()).hexdigest()}
 
 
@@ -205,7 +215,12 @@ def diagnostics(conn, log_id: str, prefix: str | None = None, *,
                  list(to_json([l.object_id, l.qualifier])::VARCHAR
                       ORDER BY l.object_id, l.qualifier)
                       FILTER (WHERE l.object_id IS NOT NULL) AS links
-          FROM qe q LEFT JOIN qlinks l USING (event_id) GROUP BY 1, 2, 3, 4, 5)
+          FROM (SELECT * FROM qe SEMI JOIN (
+                -- Only events sharing activity, time and resource can be duplicates, so the full
+                -- signature is built for those alone (PARTITION BY groups NULLs like GROUP BY).
+                SELECT event_id FROM (SELECT event_id, count(*) OVER (PARTITION BY activity, ts, resource) AS c FROM qe)
+                WHERE c > 1) candidates USING (event_id)) q
+          LEFT JOIN qlinks l USING (event_id) GROUP BY 1, 2, 3, 4, 5)
         GROUP BY activity, ts, resource, attributes, links HAVING count(*) > 1)""").fetchone()[0]
     # A bounded top-N list must disclose omitted keys; otherwise readers may
     # mistake an incomplete list for all available source attributes. The

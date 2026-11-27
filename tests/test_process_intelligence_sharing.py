@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import subprocess
 import sys
@@ -212,8 +213,28 @@ with TestClient(app) as client:
     r = client.get(f"/v1/process-intelligence/{log_id}/overview", headers=agent)
     assert r.status_code == 200 and r.json()["cases"] == 6, r.text
     assert client.get(f"/v1/process-intelligence/{log_id}/case?case_id=c0", headers=agent).status_code == 404
+    cal = json.dumps({"timezone": "UTC", "hours": {"mon": [["09:00", "17:00"]]}})
+    r = client.get(f"/v1/process-intelligence/{log_id}/waiting-times", params={"working_calendar": cal}, headers=agent)
+    assert r.status_code == 200, r.text
+    for bad in ("not json", "[1]"):
+        r = client.get(f"/v1/process-intelligence/{log_id}/waiting-times", params={"working_calendar": bad}, headers=agent)
+        assert r.status_code == 422, r.text
     r = client.get(f"/v1/process-intelligence/{log_id}/root-cause?outcome=rework", headers=agent)
     assert r.status_code == 200, r.text
+    other = client.post("/v1/event-logs/import?format=csv&name=other&case_column=case&activity_column=activity&timestamp_column=time",
+                        content="\n".join(rows).encode(), headers={**owner, "X-OWG-Local-Storage-Confirmed": "true"}).json()["log_id"]
+    unshared_cmp = client.post(f"/v1/process-intelligence/{log_id}/compare-logs", json={"comparison_log_id": other}, headers=agent)
+    unknown_cmp = client.post(f"/v1/process-intelligence/{log_id}/compare-logs",
+                              json={"comparison_log_id": "log_" + "0" * 16}, headers=agent)
+    assert unshared_cmp.status_code == unknown_cmp.status_code == 404 and unshared_cmp.json() == unknown_cmp.json()
+    client.post(f"/v1/event-logs/{other}/agent-share", json={"level": "aggregates"}, headers=owner)
+    r = client.post(f"/v1/process-intelligence/{log_id}/compare-logs", json={"comparison_log_id": other}, headers=agent)
+    assert r.status_code == 200 and r.json()["kpis"]["comparison"]["cases"] == 6, r.text
+    assert client.post(f"/v1/process-intelligence/{log_id}/compare-logs", json={"comparison_log_id": other, "x": 1},
+                       headers=agent).status_code == 422
+    r = client.get(f"/v1/process-intelligence/{log_id}/process-model?noise=0", headers=agent)
+    assert r.status_code == 200 and r.json()["process_tree"].startswith(("->(", "X(", "*(", "+(", "'")), r.text
+    assert client.get(f"/v1/process-intelligence/{log_id}/process-model?activities=0", headers=agent).status_code == 422
     r = client.get(f"/v1/process-intelligence/{log_id}/signals", headers=agent)
     assert r.status_code == 200 and r.json()["signals"] == [], r.text
     r = client.get(f"/v1/process-intelligence/{log_id}/automation-candidates?limit=5", headers=agent)
@@ -270,14 +291,15 @@ async def _listed_tools(tmp_path: Path, enabled: bool) -> set[str]:
             return {tool.name for tool in (await session.list_tools()).tools}
 
 
-PROCESS_TOOLS = {"list_process_logs", "get_process_overview", "get_process_overview_for_cases", "get_process_root_cause",
+PROCESS_TOOLS = {"list_process_logs", "get_process_overview", "get_process_overview_for_cases",
+                 "compare_process_cohorts", "get_process_root_cause",
                  "explain_process_case", "get_slowest_process_cases", "tag_process_cases",
                  "get_process_rework", "get_process_waiting_times", "get_process_drift", "get_stuck_process_cases",
-                 "get_process_automation_candidates", "get_process_signals", "get_process_decision_rules",
+                 "get_process_automation_candidates", "get_process_signals", "preview_process_signal", "get_process_decision_rules",
                  "get_process_temporal_profile", "get_process_heuristics_net",
-                 "get_process_footprints", "get_process_model_quality",
+                 "get_process_footprints", "get_process_model_quality", "compare_process_logs", "get_process_model", "get_process_attributes",
                  "get_process_deviations", "list_process_reference_nets", "get_process_reference_deviations",
-                 "get_process_funnel",
+                 "get_process_funnel", "estimate_process_automation_benefit",
                  "get_process_trace_clusters", "check_process_compliance", "get_process_performance_spectrum",
                  "get_unusual_process_cases",
                  "get_process_due_dates",
@@ -285,7 +307,7 @@ PROCESS_TOOLS = {"list_process_logs", "get_process_overview", "get_process_overv
                  "get_process_next_steps",
                  "predict_open_process_cases", "predict_next_process_activity",
                  "get_process_insights",
-                 "get_process_activity_glossary",
+                 "get_process_activity_glossary", "list_process_filter_sets",
                  "get_process_deviation_causes",
                  "get_process_object_map",
                  "align_process_case",
@@ -302,7 +324,8 @@ PROCESS_TOOLS = {"list_process_logs", "get_process_overview", "get_process_overv
                  "get_process_signal_scorecard",
                  "get_process_breakdown",
                  "find_similar_process_cases",
-                 "get_process_cooccurrence", "get_process_work_in_progress", "get_process_batching"}
+                 "get_process_cooccurrence", "get_process_work_in_progress", "get_process_batching",
+                 "get_process_handovers", "get_process_roles"}
 
 
 def test_mcp_tools_are_listed_only_when_a_log_is_shared(tmp_path):
@@ -311,3 +334,82 @@ def test_mcp_tools_are_listed_only_when_a_log_is_shared(tmp_path):
     assert off == DEFAULT_TOOLS
     on = asyncio.run(_listed_tools(tmp_path, True))
     assert on == DEFAULT_TOOLS | PROCESS_TOOLS
+
+
+def test_compare_logs_needs_both_shared_and_withholds_small_rows():
+    def make(name, rework_every, rare=False):
+        rows = ["case,activity,time,who"]
+        for i in range(20):
+            steps = ["Receive", "Check"] + (["Check"] if i % rework_every == 0 else []) + ["Pay"]
+            if rare and i < 2:
+                steps.insert(1, "Escalate")
+            rows += [f"c{i},{a},2024-03-{1 + i:02d}T{8 + k:02d}:00:00Z,clerk" for k, a in enumerate(steps)]
+        return workspace.import_log(BytesIO("\n".join(rows).encode()), name=name, source_format="csv",
+                                    mapping=MAPPING)["log_id"]
+    before, after = make("before", 2), make("after", 5, rare=True)
+    sharing.set_share(before, "aggregates")
+    with pytest.raises(sharing.NotShared):
+        sharing.compare_logs(before, after)
+    sharing.set_share(after, "aggregates")
+    result = sharing.compare_logs(before, after)
+    assert result["kpis"]["baseline"]["cases"] == result["kpis"]["comparison"]["cases"] == 20
+    assert result["kpis"]["difference"]["repeat_rate"] == -0.3
+    # "Escalate" occurs in 2 cases of one log only: withheld, never named.
+    assert "Escalate" not in str(result) and result["withheld"]["activities"] >= 1
+    variant_rows = result["variants"]["largest_share_differences"]
+    assert all(r["baseline_cases"] == 0 or r["baseline_cases"] >= 5 for r in variant_rows)
+    assert all(r["comparison_cases"] == 0 or r["comparison_cases"] >= 5 for r in variant_rows)
+    assert "'c1'" not in str(result) and "clerk" not in str(result)
+    with pytest.raises(workspace.EventLogWorkspaceError, match="fewer than 5 cases"):
+        sharing.compare_logs(before, after, comparison_filter={"activity": "Escalate"})
+    with pytest.raises(workspace.EventLogWorkspaceError, match="limit"):
+        sharing.compare_logs(before, after, limit=0)
+def test_process_model_returns_the_discovered_draft_without_case_ids():
+    rows = ["case,activity,time,who"]
+    for i in range(12):
+        decision = "Approve" if i % 3 else "Reject"
+        rows += [f"c{i},Receive,2024-03-{1 + i:02d}T08:00:00Z,clerk", f"c{i},{decision},2024-03-{1 + i:02d}T09:00:00Z,ana",
+                 f"c{i},Pay,2024-03-{1 + i:02d}T10:00:00Z,bot"]
+    log = workspace.import_log(BytesIO("\n".join(rows).encode()), name="m", source_format="csv",
+                               mapping=MAPPING)["log_id"]
+    with pytest.raises(sharing.NotShared):
+        sharing.process_model(log)
+    sharing.set_share(log, "aggregates")
+    model = sharing.process_model(log, noise=0)
+    assert model["process_tree"] == "->( 'Receive', X( 'Approve', 'Reject' ), 'Pay' )"
+    labels = [a["label"] for a in model["model"]["activities"] if a["kind"] == "activity"]
+    assert labels == ["Receive", "Approve", "Reject", "Pay"]
+    assert model["quality"]["fitting_case_share"] == 1.0 and model["process_model_sha256"]
+    assert any("8 of 12 cases" in rule["text"] and rule["user_confirmed"] is False
+               for rule in model["model"]["business_rules"])
+    assert model["execution_authorized"] is False and model["observed_path_is_policy"] is False
+    text = str(model)
+    assert "'c1'" not in text and "clerk" not in text and "ana" not in text
+
+
+def test_process_tree_notation_round_trips_and_refuses_unwritable_labels():
+    assert sharing._tree_notation({"op": "loop", "children": [
+        {"op": "and", "children": [{"op": "activity", "activity": "A"}, {"op": "activity", "activity": "B"}]},
+        {"op": "tau"}]}) == "*( +( 'A', 'B' ), tau )"
+    assert sharing._tree_notation({"op": "seq", "children": [{"op": "activity", "activity": "O'Brien"}]}) is None
+
+
+def test_attributes_list_filters_without_rare_values_or_extremes():
+    rows = ["case,activity,time,region,amount,ticket"]
+    for i in range(20):
+        region = "EU" if i < 12 else ("US" if i < 18 else "APAC")
+        rows += [f"c{i},A,2024-03-{1 + i:02d}T08:00:00Z,{region},{10 * i},T{i}A",
+                 f"c{i},B,2024-03-{1 + i:02d}T09:00:00Z,{region},{10 * i},T{i}B"]
+    log = workspace.import_log(BytesIO("\n".join(rows).encode()), name="a", source_format="csv",
+                               mapping={**MAPPING, "resource_column": "", "attribute_columns": ["region", "amount", "ticket"]})["log_id"]
+    with pytest.raises(sharing.NotShared):
+        sharing.attributes(log)
+    sharing.set_share(log, "aggregates")
+    result = sharing.attributes(log)
+    by_name = {a["attribute"]: a for a in result["attributes"]}
+    assert [v["value"] for v in by_name["region"]["top_values"]] == ["EU", "US"]      # APAC (2 cases) withheld
+    assert by_name["region"]["level"] == "case" and by_name["ticket"]["level"] == "event"
+    assert by_name["ticket"]["top_values"] == [] and "T1A" not in str(result)          # identifier-like
+    assert set(by_name["amount"]["numeric"]) == {"p25", "median", "p75", "mean"} and "190" not in str(by_name["amount"])
+    assert result["withheld"]["values"] > 0 and "'c1'" not in str(result)
+

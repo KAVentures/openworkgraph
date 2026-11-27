@@ -121,8 +121,17 @@ def model_quality(log_id: str, case_type: str | None = None, *, levels: Any = No
         rows = data.pop("rows")
         if not rows:
             raise EventLogWorkspaceError("No cases are available to score in this selection")
-        drafts = [(noise, *pnml.discovered_pnml(log_id, data["case_notion"], noise=noise,
-                                               activities=activities, cohort=cohort)) for noise in chosen]
+        drafts, skipped = [], []
+        for noise in chosen:
+            # A low noise level on a large, varied log can discover a draft too big to build. Report that level
+            # and score the others instead of failing the whole comparison.
+            try:
+                drafts.append((noise, *pnml.discovered_pnml(log_id, data["case_notion"], noise=noise,
+                                                            activities=activities, cohort=cohort)))
+            except EventLogWorkspaceError as exc:
+                skipped.append({"noise": noise, "reason": str(exc)})
+        if not drafts:
+            raise EventLogWorkspaceError(skipped[-1]["reason"] if skipped else "No noise level could be scored")
     out = []
     for noise, xml, meta in drafts:
         out.append({"noise": noise, **_score(xml, rows), "process_model_sha256": meta.get("process_model_sha256"),
@@ -137,7 +146,7 @@ def model_quality(log_id: str, case_type: str | None = None, *, levels: Any = No
         "cases": cases, "cases_total": data.get("cases_total"),
         "cases_excluded": max(0, (data.get("cases_total") or cases) - cases),
         "variants": len(rows), "activities_share": float(activities),
-        "levels": out, "best_f_score_noise": best["noise"] if best else None,
+        "levels": out, "levels_skipped": skipped, "best_f_score_noise": best["noise"] if best else None,
         "definitions": {
             "fitness": "token-replay fitness of the recorded cases on the discovered net",
             "precision": "1 - share of escaping edges (steps the net allows next that no case took)",

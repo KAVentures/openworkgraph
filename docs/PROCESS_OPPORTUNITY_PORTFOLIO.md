@@ -61,3 +61,33 @@ decision/version history, portfolio lifecycle, people/team workload, dependency
 graph across opportunities, named allocations, procurement/expense receipts
 and stable scenario/case overlap identities. Those are separate authorized
 deliveries, not implicit approvals created by this preview.
+
+## Optional budget stress review
+
+Enable **Include explicit cost stress scenarios** and enter one to eight
+scenario objects. Each has a distinct short label, approved_multiplier and
+unapproved_multiplier (decimal strings, 0–99.9999), and contingency (fixed
+amount in the selected currency). Example:
+
+```json
+[{"label":"Cost pressure","approved_multiplier":"1.10",
+  "unapproved_multiplier":"1.30","contingency":"100.00"}]
+```
+
+The same authorized preview endpoint accepts optional stress_scenarios.
+Every selected opportunity is resolved and checked using the existing
+transaction; a blocked selection withholds the complete stress review.
+Each estimate is multiplied by its current approval-stage multiplier and
+rounded half up to cents, then summed by stage with the fixed contingency.
+Every scenario reports exact item costs, headroom, the range across tested
+scenarios and ties for worst headroom. No probability is assumed. Holding
+the contingency fixed, binary search finds the greatest uniform multiplier
+on a 0.0001 grid that fits the declared envelope, up to 99.9999. Null means
+even zero exceeds the cap, and a capped result is explicitly flagged.
+This is not a stage-specific optimization or an allocation recommendation.
+The request digest includes scenario assumptions only when opted in; the
+old preview shape and digest are preserved otherwise. Changing selection
+or scenario inputs invalidates pending UI results. The JSON export includes
+the complete selected scenario report. No new financial store, spending
+approval, verified expenditure or benefit is introduced. Full CI and
+browser acceptance remain required.
