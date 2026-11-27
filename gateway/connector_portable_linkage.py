@@ -1,6 +1,6 @@
 """Explicit complete-scope portable export under the original organization fence."""
 import json
-from pydantic import StrictBool
+from pydantic import Field,StrictBool
 from shared.connector_bundle_import import MAPPING,MAX_BYTES,FORMAT as BUNDLE_FORMAT
 from shared.connector_portable_linkage import Envelope,FORMAT,reconstruct
 from shared.connector_event_snapshot import digest
@@ -11,9 +11,13 @@ from .connector_jobs import JobError
 
 class PortableExport(Export):
     confirm_complete_source_disclosure:StrictBool
+    quality_review:dict|None=None
+    confirm_quality_gated_export:StrictBool=False
 
 
 def export_portable(reviewed,org,spec,principal):
+    if (spec.quality_review is not None)!=spec.confirm_quality_gated_export:
+        raise JobError("explicit_portable_quality_review_required",403)
     if not (spec.confirm_link_assertions and spec.confirm_export and spec.confirm_complete_source_disclosure):
         raise JobError("explicit_complete_source_disclosure_required",403)
     with reviewed.jobs._tx(org) as c:
@@ -46,12 +50,21 @@ def export_portable(reviewed,org,spec,principal):
         except ValueError:
             raise JobError("portable_linkage_integrity_failure") from None
         out=envelope.model_dump()
+        if spec.quality_review is not None:
+            from shared.connector_quality_verification import verify_quality
+            try:
+                quality,_=verify_quality(spec.quality_review,envelope.source_bundle,
+                    expected_org=org,expected_pins=[p.model_dump() for p in envelope.pins])
+            except ValueError as exc:
+                raise JobError(str(exc),422) from None
+            out["quality_review"]=quality
         # Bound actual worst-case ASCII JSON encoding, not only row count.
         if len(json.dumps(out,ensure_ascii=True,separators=(",",":")).encode())>MAX_BYTES:
             raise JobError("portable_bundle_exceeds_import_byte_budget",422)
         reviewed._fresh(expires)
         reviewed._audit(c,org,spec,principal,"portable_export",
             {"review_sha256":report["review_sha256"],"complete_source_events":count,
-             "projected_events":len(rows),"excluded_events_disclosed":count-len(rows)})
+             "projected_events":len(rows),"excluded_events_disclosed":count-len(rows),
+             "quality_sha256":out.get("quality_review",{}).get("quality_sha256")})
         reviewed._fresh(expires)
         return out
