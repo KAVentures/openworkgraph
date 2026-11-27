@@ -104,6 +104,7 @@ jobs:
             tests/test_enterprise_case_exclusions.py \
             tests/test_enterprise_connector_history.py \
             tests/test_connector_fleet.py \
+            tests/test_enterprise_integrated_lifecycle.py \
             tests/test_enterprise_routine_reconciliation.py \
             tests/test_enterprise_reviewed_catchup.py \
             tests/test_enterprise_ingestion_service_levels.py \
