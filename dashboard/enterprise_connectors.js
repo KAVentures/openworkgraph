@@ -1238,7 +1238,7 @@
             for(const x of checks){x.box.onchange=()=>apply.disabled=routineBusy||!checks.every(y=>y.box.checked);r.append(x.node);}
             r.append(apply);
           }catch(e){$('routineStatus').textContent=e.message;}
-          finally{routineLock(false);}
+          finally{routineLock(false);$('routineReview').querySelectorAll('input').forEach(n=>n.disabled=false);}
         });
         actions.append(preview);root.append(actions);
       }
