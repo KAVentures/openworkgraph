@@ -98,7 +98,8 @@ def test_portable_template_preview_checks_destination_without_saving():
     assert saved.preview_template(source,exact)['definition']['expected_value']=='line\r\nbreak'
     for invalid in ({**packet,'event_id':'private'}, {**packet,'format':'wrong'},
                     {**packet,'definition':{**packet['definition'],'results':[]}},
-                    {**packet,'definition':{**packet['definition'],'scope_event_id':'private'}}):
+                    {**packet,'definition':{**packet['definition'],'scope_event_id':'private'}},
+                    {**packet,'definition':{**packet['definition'],'scope_object_id':'private'}}):
         with pytest.raises(workspace.EventLogWorkspaceError):saved.preview_template(source,invalid)
 
 
@@ -106,6 +107,7 @@ def test_portable_template_preview_checks_destination_without_saving():
     {'name':'x','definition':{**definition(),'status':'unknown'}},
     {'name':'x','definition':{**definition(),'offset':1}},
     {'name':'x','definition':{**definition(),'scope_event_id':'private'}},
+    {'name':'x','definition':{**definition(),'scope_object_id':'private'}},
     {'name':'x','definition':{**definition(),'extra':1}},
     {'name':'x','definition':{**definition(),'event_qualifier':None,'attribute':''}},
     {'name':'bad\nname','definition':definition()},
