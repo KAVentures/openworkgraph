@@ -31,8 +31,9 @@ EVENT_STATUSES = ("accepted", "deviation", "not_replayed", "unknown")
 
 class Request(ocpm._Strict):
     model: ocpm.Model
-    view: Literal["summary", "components", "events", "objects"] = "summary"
+    view: Literal["summary", "components", "events", "objects", "participants"] = "summary"
     component_id: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
+    event_id: ocpm.Label | None = None
     expected_review_sha256: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
     status: Literal["all", "complete", "unfinished", "deviation", "unknown", "no_events",
                     "accepted", "not_replayed", "terminal_possible", "terminal_not_reachable"] = "all"
@@ -51,11 +52,13 @@ def _parse(value):
         raise _error("Invalid synchronized object replay request") from None
     if req.view != "summary" and not req.expected_review_sha256:
         raise _error("Review the complete population before opening evidence")
-    if req.view in ("events", "objects") and not req.component_id:
+    if req.view in ("events", "objects", "participants") and not req.component_id:
         raise _error("Select an exact reviewed component")
     if req.view in ("summary", "components") and req.component_id is not None:
         raise _error("Component selection is only valid for component evidence")
-    allowed = {"summary": {"all"}, "components": {"all", *STATUSES},
+    if (req.view == "participants") != (req.event_id is not None):
+        raise _error("Select an exact event only for participant evidence")
+    allowed = {"participants": {"all"}, "summary": {"all"}, "components": {"all", *STATUSES},
                "events": {"all", *EVENT_STATUSES},
                "objects": {"all", "terminal_possible", "terminal_not_reachable", "unknown", "no_events"}}
     if req.status not in allowed[req.view] or (req.view == "summary" and req.offset):
@@ -111,7 +114,7 @@ class Lifecycle:
 
     def closure(self, markings, budget):
         seen = set(markings)
-        queue = list(markings)
+        queue = sorted(markings, key=lambda m: tuple(sorted(m)))
         while queue:
             current = queue.pop()
             budget.tick()
@@ -130,7 +133,7 @@ class Lifecycle:
         if label is None:
             return set()
         result = set()
-        for marking in self.closure(markings, budget):
+        for marking in sorted(self.closure(markings, budget), key=lambda m: tuple(sorted(m))):
             for node, following in self.net.moves(marking):
                 budget.tick()
                 if node.kind == "activity" and node.label == label:
@@ -198,7 +201,8 @@ def _event_shape(event, types, arcs, models):
 def _event_row(event, status, issues=(), blocked=()):
     return {"event_id":event.id,"activity":event.activity,"timestamp":_stamp(event.timestamp),
             "linked_modeled_object_count":len(event.objects),"status":status,
-            "issues":list(issues),"blocked_objects":list(blocked)}
+            "issues":list(issues),"blocked_object_count":len(blocked),
+            "blocked_objects":list(blocked)[:20],"blocked_examples_truncated":len(blocked)>20}
 
 
 def _replay_component(ids, events, types, models, arcs, budget):
@@ -356,7 +360,7 @@ def review(log_id, value):
         summary,rows,object_rows = _replay_component(ids,component_events,objects,models,arcs,budget)
         summaries.append(summary)
         if summary["component_id"] == req.component_id:
-            chosen = (rows,object_rows)
+            chosen = (rows,object_rows,component_events)
     summaries.sort(key=lambda r:r["component_id"])
     counts = Counter(r["status"] for r in summaries)
     event_counts = Counter()
@@ -369,10 +373,16 @@ def review(log_id, value):
         by_status[s["status"]]["events"] += s["events"]
     if sum(event_counts.values()) != len(events) or sum(object_counts.values()) != len(objects):
         raise _error("Synchronized replay population accounting failed")
-    if req.view in ("events","objects"):
+    if req.view in ("events","objects","participants"):
         if chosen is None:
             raise _error("Selected component is not in this reviewed population")
-        evidence = chosen[0 if req.view=="events" else 1]
+        if req.view == "participants":
+            event = next((e for e in chosen[2] if e.id == req.event_id), None)
+            if event is None:
+                raise _error("Selected event is not in this reviewed component")
+            evidence = [{"object_id":o,"object_type":objects[o],"status":"participant"} for o in event.objects]
+        else:
+            evidence = chosen[0 if req.view=="events" else 1]
     elif req.view == "components":
         evidence = summaries
     else:
@@ -393,7 +403,7 @@ def review(log_id, value):
             "all_selected_events_accepted":bool(events) and event_counts["accepted"]==len(events),
             "all_selected_components_complete":bool(summaries) and counts["complete"]==len(summaries),
             "page":{"view":req.view,"status":req.status,"component_id":req.component_id,
-                    "total":len(filtered),"offset":req.offset,"rows":page,
+                    "event_id":req.event_id,"total":len(filtered),"offset":req.offset,"rows":page,
                     "next_offset":req.offset+len(page) if req.offset+len(page)<len(filtered) else None},
             "binding_semantics":"atomic_observed_event_over_selected_object_lifecycle_markings",
             "general_ocpn_replay":False,"qualifier_specific_arcs_evaluated":False,
