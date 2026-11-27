@@ -1,10 +1,12 @@
 """Read-only mapping workbench for explicitly reviewed later-sample comparisons."""
 from collections import Counter
-from pydantic import Field,StrictBool,StrictInt
+from pydantic import Field,StrictBool,StrictInt,model_validator
 from shared.connector_event_snapshot import Strict,DIGEST,digest
 from .connector_case_review import Plan
 from .connector_linked_conformance import Review,_review
-from .connector_followup_reassessment import Reassessments,stamp,require
+from .connector_followup_reassessment import Reassessments,stamp,require,JobMap,CaseMap
+from shared.connector_mapping_feasibility import assess
+from .connector_jobs import JobError
 
 FORMAT="openworkgraph.followup-mapping-workbench.v1"
 MAX_ACTIVITIES=200
@@ -23,6 +25,47 @@ class WorkbenchRequest(Strict):
     baseline:Review
     subsequent:Later
     confirm_mapping_inspection:StrictBool
+
+
+class FeasibilityRequest(WorkbenchRequest):
+    expected_guidance_sha256:str=Field(pattern=DIGEST)
+    fixed_sources:list[JobMap]=Field(default_factory=list,max_length=10)
+    fixed_cases:list[CaseMap]=Field(default_factory=list,max_length=50)
+
+    @model_validator(mode="after")
+    def unique_fixed(self):
+        for choices in (self.fixed_sources,self.fixed_cases):
+            if len({x.before for x in choices})!=len(choices) or len({x.after for x in choices})!=len(choices):
+                raise ValueError("fixed choices must be one-to-one")
+        return self
+
+
+def source_graph(guidance):
+    return {row["before"]:row["candidates"] for row in guidance["source_candidates"]}
+
+
+def case_graph(guidance,mapping):
+    rows={}
+    for old in guidance["baseline_cases"]:
+        mapped={mapping[job]:count for job,count in old["source_multiplicities"].items()}
+        rows[old["linked_case_id"]]=[new["linked_case_id"] for new in guidance["subsequent_cases"]
+            if new["basis"]==old["basis"] and new["source_multiplicities"]==mapped]
+    return rows
+
+
+def feasibility(guidance,fixed_sources,fixed_cases):
+    try:
+        sources=assess(source_graph(guidance),fixed_sources)
+        cases=None
+        if sources["feasible"] and len(fixed_sources)==sources["required_count"]:
+            cases=assess(case_graph(guidance,fixed_sources),fixed_cases)
+        elif fixed_cases:
+            raise ValueError("fixed cases require a complete feasible source mapping")
+    except ValueError:
+        raise JobError("mapping_choices_outside_candidate_graph",422) from None
+    return {"source_feasibility":sources,"case_feasibility":cases,
+            "case_feasibility_requires_complete_source_selection":cases is None,
+            "identity_inferred":False,"execution_authorized":False}
 
 
 def public_source(x):
@@ -116,8 +159,26 @@ class MappingWorkbench(Reassessments):
                  "baseline_cases":old_groups,"subsequent_cases":new_groups,"rules":rules,
                  "activity_catalogs":catalogs,"identity_inferred":False,
                  "execution_authorized":False,"source_remediation_verified":False}
+            out["source_feasibility"]=assess(source_graph(out))
             out["guidance_sha256"]=digest(out)
             reviewed._audit(c,org,spec.subsequent,principal,"followup_mapping_inspected",
                 {"guidance_sha256":out["guidance_sha256"],"candidate_groups":len(new_groups)})
             reviewed._fresh(expires)
             return out
+
+
+    def check_feasibility(self,org,queue,packet,spec,principal):
+        # Re-read live pins and independently recompute the original review.
+        # The result is a planning check, not an approval or durable mapping.
+        base=WorkbenchRequest.model_validate(spec.model_dump(exclude={
+            "expected_guidance_sha256","fixed_sources","fixed_cases"}))
+        guidance=self.guidance(org,queue,packet,base,principal)
+        require(guidance["guidance_sha256"]==spec.expected_guidance_sha256,
+                "mapping_guidance_changed")
+        result=feasibility(guidance,{x.before:x.after for x in spec.fixed_sources},
+                           {x.before:x.after for x in spec.fixed_cases})
+        out={"format":"openworkgraph.followup-mapping-feasibility.v1",
+             "guidance_sha256":guidance["guidance_sha256"],
+             "expires_at":guidance["expires_at"],**result}
+        self.queues.reviewed._fresh(out["expires_at"])
+        return {**out,"feasibility_sha256":digest(out)}
