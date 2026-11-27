@@ -373,6 +373,109 @@ async def convert_sqlite_event_log(request: Request, table: str | None = Query(d
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
+@router.post("/v1/event-logs/petri-soundness")
+async def event_log_petri_soundness(request: Request):
+    """Bounded structural and behavioral validation of one explicitly marked ordinary PNML net."""
+    from . import event_log_petri_soundness as soundness
+    from . import event_log_petri_replay as replay
+    _require_dashboard(request)
+    data = bytearray()
+    async for chunk in request.stream():
+        if len(data) + len(chunk) > replay.MAX_BYTES:
+            raise HTTPException(413, "the Petri net file is larger than 2 MB")
+        data.extend(chunk)
+    try:
+        result = await run_in_threadpool(soundness.analyze, bytes(data))
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+@router.post("/v1/event-logs/petri-policy-review")
+async def event_log_petri_policy_review(request: Request):
+    """Check one or two PNML models against a declared untimed policy suite.
+
+    Binary framing: u32 rules length, UTF-8 JSON rules, u32 baseline length,
+    baseline bytes, optional candidate bytes. No source or report is retained.
+    """
+    from . import event_log_petri_policy as policy
+    from . import event_log_petri_replay as replay
+    _require_dashboard(request)
+    if request.headers.get("content-type", "").split(";")[0].strip().lower() != "application/octet-stream":
+        raise HTTPException(415, "send framed model and rule bytes")
+    data = bytearray()
+    async for chunk in request.stream():
+        if len(data) + len(chunk) > 8 + policy.MAX_RULE_BYTES + 2 * replay.MAX_BYTES:
+            raise HTTPException(413, "model policy review payload is too large")
+        data.extend(chunk)
+    if len(data) < 8:
+        raise HTTPException(422, "missing rule or model length")
+    n = int.from_bytes(data[:4], "big")
+    if n > policy.MAX_RULE_BYTES:
+        raise HTTPException(413, "rule specification is too large")
+    if n < 1 or len(data) < 8 + n:
+        raise HTTPException(422, "invalid rule framing")
+    m = int.from_bytes(data[4+n:8+n], "big")
+    offset = 8 + n
+    if m > replay.MAX_BYTES or len(data) - offset - m > replay.MAX_BYTES:
+        raise HTTPException(413, "each model must be at most 2 MB")
+    if m < 1 or len(data) < offset + m:
+        raise HTTPException(422, "invalid baseline framing")
+
+    def pairs(items):
+        result = {}
+        for key, value in items:
+            if key in result:
+                raise ValueError("Repeated JSON key")
+            result[key] = value
+        return result
+
+    def constant(_):
+        raise ValueError("Non-finite JSON value")
+
+    try:
+        spec = json.loads(bytes(data[4:4+n]).decode("utf-8"), object_pairs_hook=pairs, parse_constant=constant)
+    except (ValueError, UnicodeError, RecursionError):
+        raise HTTPException(422, "rules must be strict UTF-8 JSON") from None
+    try:
+        result = await run_in_threadpool(policy.review, bytes(data[offset:offset+m]), spec,
+                                         bytes(data[offset+m:]) or None)
+    except (workspace.EventLogWorkspaceError, UnicodeError) as exc:
+        raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+@router.post("/v1/event-logs/petri-language-comparison")
+async def event_log_petri_language_comparison(request: Request):
+    """Compare two exact PNML byte streams, with no storage or external execution.
+
+    Binary body: four-byte unsigned big-endian baseline length, baseline bytes,
+    then candidate bytes. Each model is independently limited to 2 MB.
+    """
+    from . import event_log_petri_language as language
+    from . import event_log_petri_replay as replay
+    _require_dashboard(request)
+    if request.headers.get("content-type", "").split(";")[0].strip().lower() != "application/octet-stream":
+        raise HTTPException(415, "send two framed PNML byte streams")
+    data = bytearray()
+    async for chunk in request.stream():
+        if len(data) + len(chunk) > 4 + 2 * replay.MAX_BYTES:
+            raise HTTPException(413, "the model pair is too large")
+        data.extend(chunk)
+    if len(data) < 4:
+        raise HTTPException(422, "missing baseline length")
+    size = int.from_bytes(data[:4], "big")
+    if size > replay.MAX_BYTES or len(data) - 4 - size > replay.MAX_BYTES:
+        raise HTTPException(413, "each model must be at most 2 MB")
+    if size < 1 or size >= len(data) - 4:
+        raise HTTPException(422, "both models must be nonempty")
+    try:
+        result = await run_in_threadpool(language.compare, bytes(data[4:4+size]), bytes(data[4+size:]))
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
 @router.post("/v1/event-logs/ptml-to-pnml")
 async def convert_ptml_process_tree(request: Request):
     """Convert a PTML process tree (ProM, PM4Py) to a PNML workflow net for replay. Nothing is stored."""
@@ -456,7 +559,8 @@ async def convert_parquet_event_log(request: Request):
 
 @router.post("/v1/event-logs/timestamp-formats")
 async def detect_timestamp_formats(request: Request, column: str = Query(min_length=1, max_length=200),
-                                   delimiter: str = Query(default=",", max_length=1)):
+                                   delimiter: str = Query(default=",", max_length=1),
+                                   time_column: str = Query(default="", max_length=200)):
     """Which known timestamp formats read every value of one column, from the start of a CSV file (body,
     at most 256 KB). Nothing is stored."""
     from . import event_log_timestamp_formats as formats
@@ -465,7 +569,8 @@ async def detect_timestamp_formats(request: Request, column: str = Query(min_len
     if len(body) > 256 * 1024:
         raise HTTPException(413, "send at most the first 256 KB of the file")
     try:
-        samples = formats.sample_column(body.decode("utf-8", errors="replace"), "\t" if delimiter == "t" else delimiter, column)
+        samples = formats.sample_column(body.decode("utf-8", errors="replace"), "\t" if delimiter == "t" else delimiter, column,
+                                        time_column=time_column)
         result = await run_in_threadpool(formats.detect, samples)
     except formats.TimestampFormatError as exc:
         raise HTTPException(422, str(exc)) from None
@@ -525,6 +630,7 @@ async def preview_event_log_import(
     naive_timestamp_offset: str = Query(default="", max_length=6),
     timestamp_format: str = Query(default="", max_length=64),
     encoding: str = Query(default="", pattern="^(|utf-8|windows-1252|utf-16)$"),
+    time_column: str = Query(default="", max_length=200),
     identity: dict = Depends(_source_identity_mapping),
 ):
     _require_dashboard(request)
@@ -540,7 +646,8 @@ async def preview_event_log_import(
                "attribute_columns": attribute_column[:64], "delimiter": "\t" if delimiter == "t" else delimiter,
                **({"header_row": header_row} if header_row > 1 else {}),
                "keep_rejected": keep_rejected, "naive_timestamp_offset": naive_timestamp_offset,
-               "timestamp_format": timestamp_format, **({"encoding": encoding} if encoding else {}), **identity}
+               "timestamp_format": timestamp_format, **({"encoding": encoding} if encoding else {}),
+               **({"time_column": time_column} if time_column else {}), **identity}
     return await run_in_threadpool(_respond, preview.preview_csv, bytes(body), mapping, partial=partial)
 
 
@@ -560,6 +667,7 @@ async def import_event_log(
     naive_timestamp_offset: str = Query(default="", max_length=6),
     timestamp_format: str = Query(default="", max_length=64),
     encoding: str = Query(default="", pattern="^(|utf-8|windows-1252|utf-16)$"),
+    time_column: str = Query(default="", max_length=200),
     identity: dict = Depends(_source_identity_mapping),
 ):
     _require_dashboard(request)
@@ -582,7 +690,8 @@ async def import_event_log(
                    **({"keep_rejected": True} if keep_rejected else {}),
                    **({"naive_timestamp_offset": naive_timestamp_offset} if naive_timestamp_offset else {}),
                    **({"timestamp_format": timestamp_format} if timestamp_format else {}),
-                   **({"encoding": encoding} if encoding else {})}
+                   **({"encoding": encoding} if encoding else {}),
+                   **({"time_column": time_column} if time_column else {})}
         mapping.update(identity)
         return _respond(workspace.import_log, spool, name=name, source_format=format, mapping=mapping)
 
@@ -602,6 +711,7 @@ async def append_event_log(
     naive_timestamp_offset: str = Query(default="", max_length=6),
     timestamp_format: str = Query(default="", max_length=64),
     encoding: str = Query(default="", pattern="^(|utf-8|windows-1252|utf-16)$"),
+    time_column: str = Query(default="", max_length=200),
     identity: dict = Depends(_source_identity_mapping),
 ):
     _require_dashboard(request)
@@ -623,7 +733,8 @@ async def append_event_log(
                    **({"keep_rejected": True} if keep_rejected else {}),
                    **({"naive_timestamp_offset": naive_timestamp_offset} if naive_timestamp_offset else {}),
                    **({"timestamp_format": timestamp_format} if timestamp_format else {}),
-                   **({"encoding": encoding} if encoding else {})}
+                   **({"encoding": encoding} if encoding else {}),
+                   **({"time_column": time_column} if time_column else {})}
         mapping.update(identity)
         try:
             result = await run_in_threadpool(workspace.append_log, log_id, spool, source_format=format, mapping=mapping)
@@ -1357,6 +1468,28 @@ def event_log_automation_candidates(request: Request, log_id: str, case_type: st
     return _respond(automation.candidates, log_id, case_type, limit=limit, cohort=cohort)
 
 
+@router.post("/v1/event-logs/{log_id}/automation-estimate")
+async def event_log_automation_estimate(request: Request, log_id: str,
+                                        case_type: str | None = Query(default=None, max_length=200),
+                                        cohort: dict[str, Any] = Depends(_case_filter)):
+    """Hours-per-week ranges for the automation candidates from the owner's stated assumptions.
+
+    Body: {"handling_minutes": [low, high], "automatable_share"?: {...}, "hourly_cost"?: number, "limit"?: 1-50}."""
+    from . import event_log_automation_estimate as estimate
+    _require_dashboard(request)
+    spec = await _json_body(request, "automation estimate", strict=True, limit=8192)
+    allowed = {"handling_minutes", "automatable_share", "hourly_cost", "limit"}
+    if not isinstance(spec, dict) or "handling_minutes" not in spec or set(spec) - allowed:
+        raise HTTPException(422, "Send handling_minutes with optional automatable_share, hourly_cost and limit")
+    limit = spec.get("limit", 15)
+    if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 50:
+        raise HTTPException(422, "limit must be 1 to 50")
+    return await run_in_threadpool(_respond, estimate.estimate, log_id, case_type,
+                                   handling_minutes=spec["handling_minutes"],
+                                   automatable_share=spec.get("automatable_share"),
+                                   hourly_cost=spec.get("hourly_cost"), limit=limit, cohort=cohort)
+
+
 @router.get("/v1/event-logs/{log_id}/decision-points")
 def event_log_decision_points(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
                               cohort: dict[str, Any] = Depends(_case_filter)):
@@ -1633,13 +1766,17 @@ def event_log_funnel(request: Request, log_id: str, step: list[str] = Query(defa
                      within_hours: float | None = Query(default=None, gt=0),
                      evidence_step: int | None = Query(default=None, ge=1, le=8),
                      evidence_status: str = Query(default="reached", pattern="^(reached|dropped)$"),
+                     evidence_page: bool = Query(default=False),
+                     evidence_after: str | None = Query(default=None, min_length=1, max_length=200),
+                     evidence_revision: str | None = Query(default=None, min_length=64, max_length=64),
                      case_type: str | None = Query(default=None, max_length=200),
                      cohort: dict = Depends(_case_filter)):
     """How many cases reach each chosen step in order, the time between steps and where the rest stopped."""
     from . import event_log_funnel as funnel
     _require_dashboard(request)
     return _respond(funnel.funnel, log_id, step, case_type, within_hours=within_hours, cohort=cohort,
-                    evidence_step=evidence_step, evidence_status=evidence_status)
+                    evidence_step=evidence_step, evidence_status=evidence_status, evidence_page=evidence_page,
+                    evidence_after=evidence_after, evidence_revision=evidence_revision)
 
 
 @router.get("/v1/event-logs/{log_id}/unusual-cases")
@@ -1760,26 +1897,28 @@ def event_log_case_alignment(request: Request, log_id: str, case_id: str = Query
 @router.get("/v1/event-logs/{log_id}/model-change")
 def event_log_model_change(request: Request, log_id: str, split: str | None = Query(default=None, max_length=64),
                            noise: float = Query(default=0.2, ge=0, lt=1),
+                           activities: float = Query(default=1.0, gt=0, le=1),
                            case_type: str | None = Query(default=None, max_length=200),
                            cohort: dict = Depends(_case_filter)):
     """How the discovered model differs before and after a date: orderings, activities and cross-fit."""
     from . import event_log_model_change as change
     _require_dashboard(request)
     return _respond(change.model_change, log_id, case_type, split=split, noise=noise, cohort=cohort,
-                    include_case_evidence=True)
+                    include_case_evidence=True, activities=activities)
 
 
 @router.get("/v1/event-logs/{log_id}/model-comparison")
 def event_log_model_comparison(request: Request, log_id: str, group_a: str = Query(min_length=3, max_length=400),
                                group_b: str = Query(min_length=3, max_length=400),
                                noise: float = Query(default=0.2, ge=0, lt=1),
+                               activities: float = Query(default=1.0, gt=0, le=1),
                                case_type: str | None = Query(default=None, max_length=200),
                                cohort: dict = Depends(_case_filter)):
     """The discovered models of two groups of cases (case attribute values) compared."""
     from . import event_log_model_change as change
     _require_dashboard(request)
     return _respond(change.model_comparison, log_id, group_a, group_b, case_type, noise=noise, cohort=cohort,
-                    include_case_evidence=True)
+                    include_case_evidence=True, activities=activities)
 
 
 @router.get("/v1/event-logs/{log_id}/story")
@@ -3254,6 +3393,24 @@ async def event_log_trace_cluster_cases(request: Request, log_id: str):
     return await run_in_threadpool(_respond, trace_clusters.cluster_cases, log_id, spec)
 
 
+@router.post("/v1/event-logs/{log_id}/trace-clusters/tag/preview")
+async def event_log_preview_trace_cluster_tag(request: Request, log_id: str):
+    _require_dashboard(request)
+    spec = await _json_body(request, "trace cluster tag preview", strict=True, limit=32768)
+    response = await run_in_threadpool(_respond, trace_clusters.cluster_tag_preview, log_id, spec)
+    _require_dashboard(request)
+    return response
+
+
+@router.post("/v1/event-logs/{log_id}/trace-clusters/tag")
+async def event_log_apply_trace_cluster_tag(request: Request, log_id: str):
+    _require_dashboard(request)
+    spec = await _json_body(request, "trace cluster tag", strict=True, limit=32768)
+    response = await run_in_threadpool(_respond, trace_clusters.cluster_tag_apply, log_id, spec)
+    _require_dashboard(request)
+    return response
+
+
 @router.post("/v1/event-logs/{log_id}/trace-clusters/cases.csv")
 async def event_log_trace_cluster_cases_csv(request: Request, log_id: str):
     _require_dashboard(request)
@@ -3432,6 +3589,17 @@ async def event_log_simulation_capacity(request: Request, log_id: str,
     _require_dashboard(request)
     spec = await _json_body(request, "capacity grid", strict=True, limit=65536)
     result = await run_in_threadpool(_respond, simulation_capacity.run_grid, log_id, spec, case_type)
+    _require_dashboard(request)
+    return result
+
+
+@router.post("/v1/event-logs/{log_id}/simulation/temporal-sensitivity")
+async def event_log_simulation_temporal_sensitivity(request: Request, log_id: str,
+                                          case_type: str | None = Query(default=None, max_length=200)):
+    from . import event_log_simulation_temporal as temporal
+    _require_dashboard(request)
+    spec = await _json_body(request, "temporal validation settings", strict=True, limit=16384)
+    result = await run_in_threadpool(_respond, temporal.review, log_id, spec, case_type)
     _require_dashboard(request)
     return result
 
@@ -3657,6 +3825,16 @@ def event_log_hidden_activities(request: Request, log_id: str):
     return _respond(hidden_activities.hidden, log_id)
 
 
+@router.post("/v1/event-logs/{log_id}/hidden-activities/search")
+async def event_log_search_hidden_activity_choices(request: Request, log_id: str):
+    from . import event_log_hidden_activities as hidden_activities
+    _require_dashboard(request)
+    spec = await _json_body(request, "original activity search", strict=True, limit=4096)
+    response = await run_in_threadpool(_respond, hidden_activities.search_original_activities, log_id, spec)
+    _require_dashboard(request)
+    return response
+
+
 @router.post("/v1/event-logs/{log_id}/hidden-activities")
 async def event_log_set_hidden_activities(request: Request, log_id: str):
     """Body ``{"activities": [...]}`` replaces the hidden list; an empty list shows every activity."""
@@ -3665,6 +3843,8 @@ async def event_log_set_hidden_activities(request: Request, log_id: str):
     spec = await _json_body(request, "hidden activities", strict=True, limit=131072)
     try:
         result = await run_in_threadpool(hidden_activities.set_hidden, log_id, spec)
+    except hidden_activities.HiddenActivitiesConflict as exc:
+        raise HTTPException(409, str(exc)) from None
     except workspace.EventLogWorkspaceError as exc:
         raise HTTPException(422, str(exc)) from None
     return JSONResponse(result, headers={"Cache-Control": "no-store"})

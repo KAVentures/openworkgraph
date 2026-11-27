@@ -471,6 +471,74 @@
         searchButton,prev,next,message,list,detailHost,pinsLabel,compareButton,clearPins,compareHost);
       prev.disabled=next.disabled=true;
     }
+    const reliabilityButton=button('Review step reliability','secondary');
+    reliabilityButton.id='owgMonitorStepReliability';arow.appendChild(reliabilityButton);
+    reliabilityButton.onclick=()=>{
+      const dep=pick.value;if(!dep)return;
+      const generation=++evidenceGeneration,root=el('div');evidenceHost.replaceChildren(root);
+      const active=()=>root.isConnected&&pick.value===dep&&generation===evidenceGeneration;
+      const start=input('owgStepReliabilityStart','date'),end=input('owgStepReliabilityEnd','date');
+      const spec=input('owgStepReliabilitySpec','text','Exact reported specification SHA-256');spec.maxLength=64;
+      const unknown=input('owgStepReliabilityUnknown','checkbox');
+      const run=button('Review retained step population','secondary'),message=el('p',null,'muted'),out=el('div');
+      message.setAttribute('role','status');
+      let turn=0,basis=null;
+      function clear(){turn++;basis=null;out.replaceChildren();run.disabled=false;message.textContent='Review the selected inputs.';}
+      for(const c of [start,end,spec,unknown])c.addEventListener('input',clear);
+      unknown.onchange=()=>{spec.disabled=unknown.checked;clear();};
+      const endpoint='/v1/automation-monitoring/deployments/'+encodeURIComponent(dep)+'/step-reliability';
+      async function load(offset=0,step=null,runFilter='all'){
+        const t=++turn,current=()=>active()&&t===turn,previous=basis;
+        if(!previous)return;
+        run.disabled=true;out.replaceChildren();message.textContent='Reviewing exact retained run and step evidence…';
+        try{
+          const r=await api(endpoint,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
+            ...previous.settings,offset,limit:30,...(step!==null?{step_id:step,run_filter:runFilter}:{}),
+            ...(previous.pin?{expected_population_sha256:previous.pin}:{})})});
+          if(!current())return;
+          if(previous.pin&&r.population_sha256!==previous.pin)throw Error('Unexpected evidence population.');
+          basis={...previous,pin:r.population_sha256};
+          message.textContent=r.matching_runs+' retained runs · '+r.matching_steps+' steps · '+r.distinct_step_ids+' step IDs · '+r.runs_without_reported_steps+' runs with no reported steps.';
+          const p=r.page,parts=[el('p','Population SHA-256: '+r.population_sha256,'muted'),el('p',r.runs_with_reported_issue_step+' runs with a reported issue step.')];
+          if(p.kind==='step_groups'){
+            const grid=table(['Step ID','Label count','Runs containing step','Occurrences','Failed runs','Handoff runs','Issue share among containing runs','First issue runs','Repeated runs','Mixed-status runs','Evidence'],
+              p.rows.map(x=>[x.step_id,x.distinct_reported_activity_labels,x.runs_with_step,x.occurrences,x.runs_with_status.failed,
+                x.runs_with_status.handed_to_human,pct(x.reported_issue_share_among_runs_with_step),x.runs_where_first_reported_issue_is_step,x.runs_with_repeated_step_id,x.runs_with_mixed_statuses,'']));
+            p.rows.forEach((x,i)=>{const b=button('Review runs','secondary');b.onclick=()=>load(0,x.step_id);grid.querySelector('tbody').rows[i].cells[10].appendChild(b);});
+            parts.push(grid);
+          }else{
+            const back=button('Return to step groups','secondary');back.onclick=()=>load(0,null);
+            const filter=el('select');filter.id='owgStepReliabilityRunFilter';
+            setOptions(filter,[['all','All containing runs'],['issue','Failed or handed off'],['failed','Failed occurrence'],
+              ['handoff','Human handoff'],['first_issue','First reported issue'],['mixed_status','Mixed reported statuses']]);
+            filter.value=p.run_filter;filter.onchange=()=>load(0,step,filter.value);
+            parts.push(back,el('h4','Exact step ID: '+step),field('Filter matching runs',filter),
+              el('p',r.selected_step.runs_with_failed_and_completed_occurrences+' runs contain both failed and completed occurrences.'));
+            for(const row of p.rows){const detail=el('details');detail.append(el('summary',row.reference.run_id+' · '+row.run_status+' · '+row.started_at),
+                el('p','Exact report SHA-256 '+row.reference.run_sha256),
+                table(['Sequence','Activity','Reported status','UTC'],row.matching_step_occurrences.map(x=>[x.seq,x.activity,x.status,x.at])));parts.push(detail);}
+          }
+          const prev=button('Previous evidence page','secondary'),next=button('Next evidence page','secondary');
+          prev.disabled=p.offset===0;next.disabled=p.next_offset===null;
+          prev.onclick=()=>load(Math.max(0,p.offset-30),step,runFilter);next.onclick=()=>load(p.next_offset,step,runFilter);
+          const download=button('Download current review page JSON','secondary');download.onclick=()=>{
+            if(!current())return;
+            const url=URL.createObjectURL(new Blob([JSON.stringify(r,null,2)],{type:'application/json'}));
+            const a=el('a');a.href=url;a.download='owg-step-reliability.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
+          };
+          out.replaceChildren(...parts,el('p',p.matching+' matching entries · offset '+p.offset),prev,next,download,...r.interpretation.map(x=>el('p',x,'muted')));
+        }catch(error){if(current()){basis=null;message.textContent=error.message;}}
+        finally{if(current())run.disabled=false;}
+      }
+      run.onclick=()=>{
+        clear();
+        if(!start.value||!end.value||(!unknown.checked&&!/^[a-f0-9]{64}$/.test(spec.value))){message.textContent='Choose UTC dates and an exact reported hash, or explicitly select missing attribution.';return;}
+        basis={settings:{start_date:start.value,end_date:end.value,reported_spec_sha256:unknown.checked?null:spec.value},pin:null};load();
+      };
+      root.append(el('h3','Version-scoped retained step reliability'),el('p','Compare reported issue frequency and repeated steps within one exact declared hash. Unknown attribution may mix versions. This is not a live runtime check.','muted'),
+        field('UTC start date',start),field('UTC end date (exclusive)',end),field('Reported specification SHA-256',spec),
+        field('Explicitly review runs without a reported specification',unknown),run,message,out);
+    };
     function openRolloutReview(){
       const root=el('div');rolloutHost.replaceChildren(root);const active=()=>root.isConnected;
       if(deployments.length<2){root.append(el('p','Retain at least two deployments with distinct version claims first.','note'));return;}
