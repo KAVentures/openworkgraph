@@ -150,6 +150,12 @@ def inventory(freshness_hours=24,*,now=None):
             flags.append("scheduler_not_running")
         if kind=="enterprise_rest_feed" and any(j["profile_revision"]!=revision for j in target_jobs):
             flags.append("schedule_profile_revision_mismatch")
+        if details and details.get("historical_intent_expired"):
+            flags.append("historical_intent_requires_reconciliation")
+        elif details and details.get("historical_intent_active"):
+            flags.append("historical_window_in_progress")
+        if details and details.get("latest_historical_outcome") in ("failed","uncertain"):
+            flags.append("historical_last_outcome_requires_review")
         if last is None:
             flags.append("no_retained_success_timestamp")
         elif age is None:
@@ -167,7 +173,11 @@ def inventory(freshness_hours=24,*,now=None):
     for p in rest_inventory.get("profiles",[]):
         row(p.get("provider","rest"),"enterprise_rest_feed",p["profile_id"],p["log_id"],p["status"],p["last_success_at"],
             p["checkpoint"],p["revision"],p["credential_binding_available"],
-            details=({"schema_pin_observed":bool(p.get("source_schema_sha256"))} if p.get("provider")=="sql" else None))
+            details={**({"schema_pin_observed":bool(p.get("source_schema_sha256"))} if p.get("provider")=="sql" else {}),
+                     "historical_intent_active":bool(p.get("historical_active")),
+                     "historical_intent_expired":bool((p.get("historical_active") or {}).get("lease_expired")),
+                     "historical_receipts_observed":len(p.get("historical_receipts",[])),
+                     "latest_historical_outcome":(p.get("historical_receipts") or [{}])[0].get("outcome")})
     for p in jira:
         target=_id(p.get("profile_id"),r"jira_[a-f0-9]{24}")
         if not target:
