@@ -302,8 +302,10 @@ Report-style exports often put a title or an export date above the column names.
 holds the column names with `header_row=` (1 to 50) on the import, append and preview routes; the
 lines above it are skipped and the setting is part of the import's recorded transform. A first line
 `sep=;` (Excel's delimiter hint) is skipped automatically and its delimiter is used. Timestamp format
-detection finds the column names below such lines by itself. The dashboard skips a `sep=` line when it
-reads the columns; choosing a header row in the dashboard is not available yet.
+detection finds the column names below such lines by itself. In the dashboard, **Column names on line** is
+found when you choose the file: the first line that splits into at least two columns, followed by a
+line that splits the same way (title rows and a `sep=` line are skipped). Change it if the guess is
+wrong.
 
 ### Excel workbooks
 

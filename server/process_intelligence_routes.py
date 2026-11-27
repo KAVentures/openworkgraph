@@ -517,17 +517,38 @@ async def agent_due_dates(request: Request, log_id: str, due_activity: str = Que
                           due_attribute: str | None = Query(default=None, max_length=200),
                           due_days: float | None = Query(default=None, gt=0),
                           early_days: float | None = Query(default=None, gt=0),
-                          case_type: str | None = Query(default=None, max_length=200)):
+                          case_type: str | None = Query(default=None, max_length=200),
+                          case_filter: str | None = Query(default=None, max_length=8192)):
     _require_agent_access(request)
-    return await _answer(sharing.due_dates, log_id, due_activity, case_type, due_attribute, due_days, early_days)
+    chosen = None
+    if case_filter is not None:
+        import json
+        try:
+            chosen = json.loads(case_filter)
+        except ValueError:
+            raise HTTPException(422, "case_filter must be a JSON object") from None
+        if not isinstance(chosen, dict):
+            raise HTTPException(422, "case_filter must be a JSON object")
+    return await _answer(sharing.due_dates, log_id, due_activity, case_type, due_attribute, due_days, early_days,
+                         chosen)
 
 
 @router.get("/v1/process-intelligence/{log_id}/next-steps")
 async def agent_next_steps(request: Request, log_id: str, step: list[str] = Query(default=[], max_length=500),
                            anchor: str = Query(default="start", max_length=20),
-                           case_type: str | None = Query(default=None, max_length=200)):
+                           case_type: str | None = Query(default=None, max_length=200),
+                           case_filter: str | None = Query(default=None, max_length=8192)):
     _require_agent_access(request)
-    return await _answer(sharing.next_steps, log_id, step, case_type, anchor)
+    chosen = None
+    if case_filter is not None:
+        import json
+        try:
+            chosen = json.loads(case_filter)
+        except ValueError:
+            raise HTTPException(422, "case_filter must be a JSON object") from None
+        if not isinstance(chosen, dict):
+            raise HTTPException(422, "case_filter must be a JSON object")
+    return await _answer(sharing.next_steps, log_id, step, case_type, anchor, chosen)
 
 
 @router.get("/v1/process-intelligence/{log_id}/insights")
@@ -720,9 +741,19 @@ async def agent_preview_signal(request: Request, log_id: str):
 
 @router.get("/v1/process-intelligence/{log_id}/rework")
 async def agent_rework(request: Request, log_id: str, limit: int = Query(default=20, ge=1, le=100),
-                       case_type: str | None = Query(default=None, max_length=200)):
+                       case_type: str | None = Query(default=None, max_length=200),
+                       case_filter: str | None = Query(default=None, max_length=8192)):
     _require_agent_access(request)
-    return await _answer(sharing.rework, log_id, case_type, limit)
+    chosen = None
+    if case_filter is not None:
+        import json
+        try:
+            chosen = json.loads(case_filter)
+        except ValueError:
+            raise HTTPException(422, "case_filter must be a JSON object") from None
+        if not isinstance(chosen, dict):
+            raise HTTPException(422, "case_filter must be a JSON object")
+    return await _answer(sharing.rework, log_id, case_type, limit, chosen)
 
 
 @router.get("/v1/process-intelligence/{log_id}/waiting-times")
@@ -811,9 +842,19 @@ async def agent_work_in_progress(request: Request, log_id: str, bucket: str = Qu
 @router.get("/v1/process-intelligence/{log_id}/batching")
 async def agent_batching(request: Request, log_id: str, gap_seconds: int = Query(default=60, ge=0, le=86_400),
                          min_batch_size: int = Query(default=3, ge=2, le=1000), by_resource: bool = True,
-                         case_type: str | None = Query(default=None, max_length=200)):
+                         case_type: str | None = Query(default=None, max_length=200),
+                         case_filter: str | None = Query(default=None, max_length=8192)):
     _require_agent_access(request)
-    return await _answer(sharing.batching, log_id, case_type, gap_seconds, min_batch_size, by_resource)
+    chosen = None
+    if case_filter is not None:
+        import json
+        try:
+            chosen = json.loads(case_filter)
+        except ValueError:
+            raise HTTPException(422, "case_filter must be a JSON object") from None
+        if not isinstance(chosen, dict):
+            raise HTTPException(422, "case_filter must be a JSON object")
+    return await _answer(sharing.batching, log_id, case_type, gap_seconds, min_batch_size, by_resource, chosen)
 
 
 @router.get("/v1/process-intelligence/{log_id}/handovers")

@@ -835,12 +835,14 @@ def register_process_intelligence_tools(mcp: Any, runtime_module: Any) -> None:
     @mcp.tool(annotations=_READ_ONLY)
     def get_process_due_dates(log_id: str, activity: str, due_attribute: str | None = None,
                               due_days: float | None = None, early_days: float | None = None,
-                              case_type: str | None = None) -> dict[str, Any]:
+                              case_type: str | None = None,
+                              case_filter: dict[str, Any] | None = None) -> dict[str, Any]:
         """Due-date adherence in a shared log: whether `activity` (e.g. a payment or shipment) happened by each
         case's due date, taken from a case or event attribute (`due_attribute`) or a fixed number of days after
         the case started (`due_days`); give exactly one. Returns on-time, early (with `early_days`), late and
         still-open (overdue or not yet due) counts, days late, and a trend by due month. Case IDs of the latest
-        late cases only for logs shared at the cases level. Says how often deadlines were met, not why.
+        late cases only for logs shared at the cases level. Says how often deadlines were met, not why. Optional
+        case_filter (see openworkgraph://process-case-filter) measures one group of at least 5 cases.
         """
         if not isinstance(activity, str) or not activity:
             raise ToolError("activity must name an activity")
@@ -849,26 +851,38 @@ def register_process_intelligence_tools(mcp: Any, runtime_module: Any) -> None:
         for name, value in (("due_days", due_days), ("early_days", early_days)):
             if value is not None and (isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0):
                 raise ToolError(f"{name} must be a positive number of days")
-        return _get("get_process_due_dates", f"/v1/process-intelligence/{_log(log_id)}/due-dates",
-                    {"due_activity": activity, "due_attribute": due_attribute, "due_days": due_days,
-                     "early_days": early_days, "case_type": case_type})
+        params: dict[str, Any] = {"due_activity": activity, "due_attribute": due_attribute, "due_days": due_days,
+                                  "early_days": early_days, "case_type": case_type}
+        if case_filter is not None:
+            if not isinstance(case_filter, dict) or not case_filter:
+                raise ToolError("case_filter must be a non-empty object")
+            import json as _json
+            params["case_filter"] = _json.dumps(case_filter, separators=(",", ":"))
+        return _get("get_process_due_dates", f"/v1/process-intelligence/{_log(log_id)}/due-dates", params)
 
     @mcp.tool(annotations=_READ_ONLY)
     def get_process_next_steps(log_id: str, steps: list[str] | None = None, anchor: str = "start",
-                               case_type: str | None = None) -> dict[str, Any]:
+                               case_type: str | None = None,
+                               case_filter: dict[str, Any] | None = None) -> dict[str, Any]:
         """Walk a shared log's process one step at a time: after `steps` (empty = the start of the cases), which
         activities come next, in how many cases, the hours from the last step to each (median, p90) and from each
         to the case end, and how many cases end there. anchor="start" means cases that begin with `steps`;
         anchor="anywhere" finds the first place the steps occur one right after another. Call again with a next
-        step appended to go deeper. Order and timing only, not why cases branch. Aggregates only.
+        step appended to go deeper. Order and timing only, not why cases branch. Aggregates only. Optional
+        case_filter walks one group of at least 5 cases.
         """
         steps = steps or []
         if not isinstance(steps, list) or len(steps) > 30 or any(not isinstance(s, str) or not s for s in steps):
             raise ToolError("steps must be up to 30 activity names")
         if anchor not in ("start", "anywhere"):
             raise ToolError("anchor must be start or anywhere")
-        return _get("get_process_next_steps", f"/v1/process-intelligence/{_log(log_id)}/next-steps",
-                    {"step": steps, "anchor": anchor, "case_type": case_type})
+        params: dict[str, Any] = {"step": steps, "anchor": anchor, "case_type": case_type}
+        if case_filter is not None:
+            if not isinstance(case_filter, dict) or not case_filter:
+                raise ToolError("case_filter must be a non-empty object")
+            import json as _json
+            params["case_filter"] = _json.dumps(case_filter, separators=(",", ":"))
+        return _get("get_process_next_steps", f"/v1/process-intelligence/{_log(log_id)}/next-steps", params)
 
     @mcp.tool(annotations=_READ_ONLY)
     def get_process_insights(log_id: str, sla_hours: float | None = None, limit: int = 8,
@@ -1116,16 +1130,23 @@ def register_process_intelligence_tools(mcp: Any, runtime_module: Any) -> None:
         return _get("get_process_signals", f"/v1/process-intelligence/{_log(log_id)}/signals", {})
 
     @mcp.tool(annotations=_READ_ONLY)
-    def get_process_rework(log_id: str, limit: int = 20, case_type: str | None = None) -> dict[str, Any]:
+    def get_process_rework(log_id: str, limit: int = 20, case_type: str | None = None,
+                           case_filter: dict[str, Any] | None = None) -> dict[str, Any]:
         """Rework in a shared log: the share of cases that repeat an activity, which activities are repeated most
         and how often, the most common loop patterns (self-loop, short loop, longer return), and how long cases
         with rework take compared with cases without (median difference with a 95% interval). Association, not
-        cause. Aggregates only.
+        cause. case_filter (the same keys as insight cohorts) narrows the cases; logs above 200,000 cases need one.
+        Aggregates only.
         """
         if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 100:
             raise ToolError("limit must be 1 to 100")
-        return _get("get_process_rework", f"/v1/process-intelligence/{_log(log_id)}/rework",
-                    {"limit": limit, "case_type": case_type})
+        params: dict[str, Any] = {"limit": limit, "case_type": case_type}
+        if case_filter is not None:
+            if not isinstance(case_filter, dict) or not case_filter:
+                raise ToolError("case_filter must be a non-empty object")
+            import json as _json
+            params["case_filter"] = _json.dumps(case_filter, separators=(",", ":"))
+        return _get("get_process_rework", f"/v1/process-intelligence/{_log(log_id)}/rework", params)
 
     @mcp.tool(annotations=_READ_ONLY)
     def get_process_waiting_times(log_id: str, case_type: str | None = None,
@@ -1235,11 +1256,13 @@ def register_process_intelligence_tools(mcp: Any, runtime_module: Any) -> None:
 
     @mcp.tool(annotations=_READ_ONLY)
     def get_process_batching(log_id: str, gap_seconds: int = 60, min_batch_size: int = 3, by_resource: bool = True,
-                             case_type: str | None = None) -> dict[str, Any]:
+                             case_type: str | None = None,
+                             case_filter: dict[str, Any] | None = None) -> dict[str, Any]:
         """Batch processing in a shared log: per activity, the share of events done in batches (events of one
         activity by one resource within gap_seconds, at least min_batch_size of them), batch sizes, whether batches
         are simultaneous or sequential, and how long cases waited before a batched event compared with an unbatched
-        one. Batches are inferred from timestamps; resources are only counted, never named. Aggregates only.
+        one. Batches are inferred from timestamps; resources are only counted, never named. case_filter (the same keys
+        as insight cohorts) limits it to one group of at least 5 cases. Aggregates only.
         """
         if isinstance(gap_seconds, bool) or not isinstance(gap_seconds, int) or not 0 <= gap_seconds <= 86_400:
             raise ToolError("gap_seconds must be 0 to 86400")
@@ -1247,9 +1270,14 @@ def register_process_intelligence_tools(mcp: Any, runtime_module: Any) -> None:
             raise ToolError("min_batch_size must be 2 to 1000")
         if not isinstance(by_resource, bool):
             raise ToolError("by_resource must be true or false")
-        return _get("get_process_batching", f"/v1/process-intelligence/{_log(log_id)}/batching",
-                    {"gap_seconds": gap_seconds, "min_batch_size": min_batch_size,
-                     "by_resource": "true" if by_resource else "false", "case_type": case_type})
+        params: dict[str, Any] = {"gap_seconds": gap_seconds, "min_batch_size": min_batch_size,
+                                  "by_resource": "true" if by_resource else "false", "case_type": case_type}
+        if case_filter is not None:
+            if not isinstance(case_filter, dict) or not case_filter:
+                raise ToolError("case_filter must be a non-empty object")
+            import json as _json
+            params["case_filter"] = _json.dumps(case_filter, separators=(",", ":"))
+        return _get("get_process_batching", f"/v1/process-intelligence/{_log(log_id)}/batching", params)
 
     @mcp.tool(annotations=_READ_ONLY)
     def get_process_handovers(log_id: str, limit: int = 50, case_type: str | None = None,
