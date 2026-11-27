@@ -95,6 +95,12 @@ class Claim(Strict):
     profile_sha256: str=Field(pattern=DIGEST)
 
 
+class Readiness(Claim):
+    code: Literal["ready","local_profile_unavailable","local_profile_changed",
+                  "local_schedule_conflict","local_recording_paused","local_cooldown",
+                  "pending_receipt","pending_intent","invalid_outbox","workspace_unavailable"]
+
+
 class Receipt(Strict):
     lease_id: str=Field(pattern=LEASE)
     job_revision: StrictInt=Field(ge=1,le=1_000_000)
@@ -204,6 +210,9 @@ class Jobs:
         lease=j["lease"]
         result["lease_expires_at"]=lease["expires_at"] if lease else None
         result["state"]="leased" if lease else "paused" if not j["enabled"] else "due" if j["next_due_at"]<=self.clock() else "waiting"
+        readiness=j.get("worker_readiness")
+        result["worker_readiness"]=readiness
+        result["worker_readiness_stale"]=readiness is None or self.clock()-readiness["observed_at"]>120
         result.update(raw_events_received=False,source_credentials_received=False,provider_health_verified=False,
                       worker_receipts_independently_verified=False)
         return result
@@ -278,6 +287,7 @@ class Jobs:
             self._sql(c,"UPDATE connector_jobs SET worker_token_hash=? WHERE organization_id=? AND job_id=?",token_hash(token),org,job)
             j["revision"]+=1
             j["last_completion"]=None
+            j.pop("worker_readiness",None)
             self._put(c,j);self._audit(c,j,principal,"worker_rotated",{"revision":j["revision"]})
             return {"job":self._public(j),"worker_token":token,"shown_once":True}
 
@@ -305,6 +315,7 @@ class Jobs:
             j.update(profile_revision=spec.new_profile_revision,profile_sha256=spec.new_profile_sha256,
                      revision=j["revision"]+1,last_completion=None,paused_reason="operator_paused",
                      consecutive_failures=0)
+            j.pop("worker_readiness",None)
             # Preserve last receipt/success and provider retry deadline.
             self._history(c,j,"profile_rebound",{"revision":j["revision"],"old_profile_revision":spec.old_profile_revision,
                           "new_profile_revision":spec.new_profile_revision})
@@ -328,6 +339,38 @@ class Jobs:
         row=self._sql(c,"SELECT worker_token_hash FROM connector_jobs WHERE organization_id=? AND job_id=?",org,job).fetchone()
         if not row or not hmac.compare_digest(row[0],digest):
             raise JobError("worker_credential_required",401)
+
+    def _verify_pin(self,j,spec):
+        if (spec.profile_id,spec.profile_revision,spec.profile_sha256)!=(j["profile_id"],j["profile_revision"],j["profile_sha256"]):
+            raise JobError("worker_profile_pin_mismatch",403)
+
+    def inspect_worker(self,token,spec:Claim):
+        # Non-dispatching inspection: no lease, job revision or history mutation.
+        org,job,digest=self._identity(token)
+        with self.db.connect() as c:
+            self._reauth(c,org,job,digest)
+            j=self._get(c,org,job)
+            self._verify_pin(j,spec)
+            return {"job":self._public(j),"dispatch_authorized":False,"provider_contacted":False}
+
+    def readiness(self,token,spec:Readiness):
+        org,job,digest=self._identity(token)
+        with self._tx(org) as c:
+            self._reauth(c,org,job,digest)
+            j=self._get(c,org,job)
+            self._verify_pin(j,spec)
+            now=self.clock()
+            previous=j.get("worker_readiness")
+            # A bounded latest-only receipt; no event history or source data.
+            # Coalesce repeated unchanged heartbeats. Changes are observations,
+            # never lease cancellation or execution authorization.
+            if previous is None or now-previous["observed_at"]>=30:
+                j["worker_readiness"]={"code":spec.code,"observed_at":now,
+                                       "profile_revision":spec.profile_revision,
+                                       "independently_verified":False}
+                self._put(c,j)
+            return {"job":self._public(j),"recorded":j.get("worker_readiness"),
+                    "dispatch_authorized":False}
 
     def claim(self,token,spec:Claim):
         org,job,digest=self._identity(token)
