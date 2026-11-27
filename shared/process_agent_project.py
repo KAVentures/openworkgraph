@@ -110,7 +110,7 @@ def build_runtime_project(packet: dict) -> bytes:
     model = ProcessModel.model_validate(spec['process_model'])
     files = {name: (_TEMPLATES / (name + '.txt')).read_text(encoding='utf-8')
              for name in ('agent.py', 'runtime.py', 'test_shadow.py', 'test_agent_sdk.py', 'execute.py', 'test_execution.py', 'monitor.py', 'test_monitor.py', 'send_report.py', 'stop.py', 'configure.py', 'test_configuration.py', 'evaluate.py', 'test_evaluation.py', 'plan_sources.py', 'test_source_planning.py', 'evaluate_sources.py', 'test_source_evaluation.py', 'check_runtime.py', 'review_bindings.py', 'test_binding_rehearsal.py')}
-    for name in ('run_queue.py', 'test_run_queue.py'):
+    for name in ('run_queue.py', 'test_run_queue.py', 'heldout.py', 'test_heldout.py'):
         files[name] = (_TEMPLATES / (name + '.txt')).read_text(encoding='utf-8')
     files['owg_report_signing.py'] = (Path(__file__).parent/'automation_report_signing.py').read_text(encoding='utf-8')
     for name in ('process_source_state.py','process_rule_conditions.py'):
@@ -133,6 +133,11 @@ def build_runtime_project(packet: dict) -> bytes:
         'cases':[{'id':'case_1', 'category':'missing_facts', 'input':{},
                   'expected':{'status':'needs_clarification', 'accepted_routes':[], 'review_confirmed':False}}]
     }, indent=2) + '\n'
+    files['heldout-policy.example.json'] = json.dumps({
+        'min_cases_by_category':{'normal':1,'exception':1,'missing_facts':1},
+        'min_match_bps_by_category':{'normal':10000,'exception':10000,'missing_facts':10000},
+        'min_overall_match_bps':10000,'max_critical_failures':0,'max_regressions':0,
+        'require_baseline':True},indent=2)+'\n'
     files['tool-bindings.example.json'] = json.dumps({
         'format':'openworkgraph.customer-mcp-bindings.v1', 'process_reference':process_reference,
         'enabled':False, 'tool_server_url':None, 'source_api_url':'http://127.0.0.1:8787',
@@ -482,6 +487,21 @@ def build_runtime_project(packet: dict) -> bytes:
         "Exit 0 means all suites ran without failures or skips; 3 means incomplete,\n"
         "1 means failed, and 2 means verification refused. This is not an OS sandbox,\n"
         "independent business-case validation, remote deployment attestation or execution approval.\n"
+    )
+    files['README.md'] += (
+        "\n## Frozen held-out planner acceptance\n\n"
+        "Use disjoint authorized development and holdout shadow suites, a separately reviewed "
+        "policy (see heldout-policy.example.json), and a trusted verified export.\n\n"
+        "```sh\npython heldout.py freeze --development development.json --holdout holdout.json "
+        "--policy heldout-policy.json --output trial --confirm-retain-sensitive-challenge\n```\n\n"
+        "Record the freeze and challenge digests independently before collection. Keep the private "
+        "freeze, original suites and answer keys with the evaluator. Transfer only challenge.json "
+        "to the authorized planner operator; it includes selected sensitive inputs. The capture "
+        "subcommand requires explicit provider disclosure and local retention approvals. "
+        "Run heldout.py capture --help and heldout.py score --help for exact options. "
+        "Score recomputes all cases and checks preregistered category, critical and regression gates. "
+        "Exit 0 = selected gates pass, 3 = fail, 2 = refused. No business actions occur. "
+        "Exact overlap checks cannot establish semantic independence, real blinding or ground truth.\n"
     )
     files['README.md'] += (
         "\n## Rehearse reviewed customer mappings offline\n\n"
