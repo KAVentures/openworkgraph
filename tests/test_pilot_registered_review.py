@@ -150,3 +150,25 @@ def test_corrupt_registration_or_review_history_refused(tmp_path,kind):
             conn.execute("UPDATE workspace SET body=?",(cohort.canonical(state).decode(),))
             conn.execute("UPDATE history SET head=? WHERE revision=?",(state["head_sha256"],state["revision"]))
     with pytest.raises(ValueError):workspace.status(db)
+
+
+def test_new_external_adjudication_can_supersede_review_without_other_mutation(tmp_path):
+    db,v,truth=open_study(tmp_path,2)
+    v=register(db,v)
+    materials=[]
+    for row in v["schedule"]["episodes"]:
+        for arm in row["arm_order"]:
+            v,m=completion(db,v,row["episode_id"],arm,v["ledger"]["revision"]+1)
+            materials.append(m)
+    v,p,k=batch(tmp_path,db,v,truth,materials,"external")
+    incomplete=preview(db,v,truth,[])
+    first=record(db,v,truth,[],incomplete)
+    state=workspace.status(db)
+    assert first["review"]["revision"]==state["revision"]
+    submissions=[bundle(p,k,sheet(p))]
+    complete=preview(db,state,truth,submissions)
+    assert complete["summary"]["full_paired_coverage"]
+    second=record(db,state,truth,submissions,complete,
+                  disposition="collect_more_evidence",reason="external_validation_required")
+    assert second["review"]["score_sha256"]!=first["review"]["score_sha256"]
+    assert registered.status(db,expected_head_sha256=second["head_sha256"])["review_count"]==2
