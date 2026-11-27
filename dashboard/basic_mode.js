@@ -285,6 +285,7 @@
       </div>
       <div class="card" id="pvOAuth">
         <h2>Business system sign-in</h2>
+        <p><a href="/enterprise-connectors">Open enterprise connector operations and customer REST feeds</a></p>
         <div class="muted">Connect a business system with an app you registered in your own tenant. You approve the access at the provider; tokens stay encrypted on this computer and are never shown to AI. Connecting reads nothing by itself: each connector still asks before reading.</div>
         <div class="pv-delete">
           <select id="pvOAuthProvider" aria-label="Provider"><option value="salesforce">Salesforce</option><option value="servicenow">ServiceNow</option><option value="microsoft">Microsoft 365</option><option value="atlassian">Atlassian (Jira)</option><option value="zendesk">Zendesk</option></select>

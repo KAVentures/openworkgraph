@@ -442,3 +442,6 @@ from .sap_o2c_routes import router as sap_o2c_router
 router.include_router(sap_o2c_router)
 from .connector_oauth_routes import router as connector_oauth_router
 router.include_router(connector_oauth_router)
+
+from .enterprise_connector_routes import router as enterprise_connector_router
+router.include_router(enterprise_connector_router)

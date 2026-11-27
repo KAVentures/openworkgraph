@@ -950,6 +950,8 @@ def delete_log(log_id: str, *, only_if_expired_at: datetime | None = None) -> di
                 erase_change_markers(conn, log_id)       # in the deletion's transaction: no orphan markers
                 from .jira_retained_profiles import forget_dataset
                 forget_dataset(conn, log_id)
+                from .enterprise_rest_feed import forget_dataset as forget_rest_dataset
+                forget_rest_dataset(conn, log_id)
                 from .event_log_agent_access import erase as erase_agent_access
                 erase_agent_access(conn, log_id)
                 for table in ("object_relationships", "event_source_keys", "event_source_namespaces", "discovery_snapshots", "log_appends", "log_quality", "quarantine", "quarantine_decisions", "filter_sets", "object_rule_sets",

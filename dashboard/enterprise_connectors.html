@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer"><title>Enterprise connectors · OpenWorkGraph</title>
+<style>
+:root{color-scheme:light dark;--border:light-dark(#a6b1a9,#657970);--panel:light-dark(#fff,#23352a);--bg:light-dark(#f3f6f3,#17251c);--text:light-dark(#203029,#e9efe8);--accent:light-dark(#255e48,#b7ebc6)}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:16px/1.5 system-ui,sans-serif}
+header,main{max-width:1180px;margin:auto;padding:16px}h1{font-size:clamp(1.5rem,3vw,2.1rem)}h2{font-size:1.2rem}a{color:var(--accent)}
+section{background:var(--panel);border:1px solid var(--border);padding:16px;border-radius:10px;margin-bottom:16px;min-width:0}
+label{display:block;font-weight:600;min-width:0}input:not([type=checkbox]),select{display:block;max-width:100%;width:100%;font:inherit;margin:5px 0;padding:8px}
+button{font:inherit;font-weight:600;padding:9px 14px;min-height:42px;border:1px solid var(--accent);border-radius:7px;cursor:pointer}button:disabled{opacity:.65;cursor:default}
+:focus-visible{outline:3px solid #4179ca;outline-offset:3px}.row{display:flex;flex-wrap:wrap;gap:12px;align-items:center;margin-top:12px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,240px),1fr));gap:12px}
+.tablewrap{overflow-x:auto;border:1px solid var(--border);border-radius:6px;max-width:100%}table{width:100%;border-collapse:collapse;min-width:760px}
+th,td{text-align:left;vertical-align:top;padding:8px;border-bottom:1px solid var(--border);overflow-wrap:anywhere;max-width:280px}
+p{overflow-wrap:anywhere;max-width:94ch}.profile{border:1px solid var(--border);padding:12px;border-radius:8px;margin:12px 0}
+[hidden]{display:none!important}
+</style><script src="/enterprise-connectors.js" defer></script></head><body>
+<header><a href="/">Back to OpenWorkGraph</a><h1>Enterprise connector operations</h1><p>Review local grants, retained sources and scheduled ingestion separately. Opening this page does not contact business systems or renew credentials.</p></header>
+<main><section aria-labelledby="healthHeading"><h2 id="healthHeading">Connector inventory and worklist</h2>
+<div class="grid"><label>Flag last success or checkpoint older than (hours)<input id="freshness" type="number" min="1" max="720" step="1" value="24"></label></div>
+<div class="row"><button id="refresh" type="button">Refresh local inventory</button><button id="download" type="button" disabled>Recheck and download inventory JSON</button></div>
+<p role="status" id="status">Open from the authenticated local dashboard.</p><div id="inventory"></div></section>
+<section aria-labelledby="restHeading"><h2 id="restHeading">Customer REST event feeds</h2>
+<p>For a customer API that implements OWG's event-feed contract. Configure its exact HTTPS endpoint in the deployment allowlist and supply its read-only bearer in a named environment variable. Nothing is read until separately confirmed. All source event, case and resource identifiers are pseudonymized; activity labels are retained as entered by the source.</p>
+<details><summary>Create a feed</summary><form id="create">
+<div class="grid"><label>Profile name<input id="name" maxlength="100" required></label>
+<label>Allowlisted fixed HTTPS endpoint<input id="endpoint" type="url" maxlength="500" required placeholder="https://api.example.com/events"></label>
+<label>Credential environment variable<input id="credential" maxlength="64" required placeholder="OWG_REST_TOKEN_EXAMPLE"></label>
+<label>First change-window start (ISO 8601 UTC)<input id="since" required placeholder="2026-11-01T00:00:00Z"></label>
+<label>Event ID field<input id="eventId" value="event_id" required maxlength="80"></label>
+<label>Case ID field<input id="caseId" value="case_id" required maxlength="80"></label>
+<label>Activity label field<input id="activity" value="activity" required maxlength="80"></label>
+<label>Event time field<input id="eventTime" value="event_time" required maxlength="80"></label>
+<label>Change time field<input id="changeTime" value="updated_at" required maxlength="80"></label>
+<label>Optional resource ID field<input id="resource" maxlength="80"></label>
+<label>Advancing window (hours)<input id="window" type="number" min="1" max="168" step="1" value="24" required></label>
+<label>Late-change overlap (minutes)<input id="overlap" type="number" min="0" max="1440" step="1" value="60" required></label>
+<label>Maximum records per page<input id="pageSize" type="number" min="1" max="500" value="200" required></label></div>
+<p><label><input id="confirmConfig" type="checkbox" required> I reviewed the exact endpoint, credential reference, mapping and bounded windows.</label></p>
+<p><label><input id="confirmLabels" type="checkbox" required> I approve retention of the selected source's activity labels in the local log.</label></p>
+<button type="submit" id="createButton">Save feed configuration</button></form></details>
+<p id="restStatus" role="status"></p><div id="profiles"></div></section>
+<section><h2>Other configured adapters</h2><p>Use the main dashboard's Privacy → Business system sign-in and Evidence panels for the existing provider-specific consent and configuration workflows. CLI-only adapters remain outside this local inventory.</p><a href="/">Open the main dashboard</a></section>
+</main></body></html>
