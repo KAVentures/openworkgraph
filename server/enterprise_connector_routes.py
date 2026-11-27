@@ -255,3 +255,25 @@ async def rest_remove(request:Request,profile_id:str):
     if not isinstance(body,dict) or set(body)!={"revision","confirm_remove"} or body["confirm_remove"] is not True:
         raise HTTPException(422,"Exact revision and explicit removal confirmation required")
     return await call(request,rest.delete,profile_id,body["revision"])
+
+
+@router.get("/v1/enterprise-connectors/tuning")
+async def tuning_inventory(request:Request):
+    from . import enterprise_ingestion_tuning as tuning
+    return await call(request,tuning.inventory)
+
+
+@router.post("/v1/enterprise-connectors/tuning/preview")
+async def tuning_preview(request:Request):
+    from . import enterprise_ingestion_tuning as tuning
+    require(request)
+    body=await _json_body(request,"Reviewed connector tuning preview",strict=True,limit=16384)
+    return await call(request,tuning.preview,body)
+
+
+@router.post("/v1/enterprise-connectors/tuning/apply")
+async def tuning_apply(request:Request):
+    from . import enterprise_ingestion_tuning as tuning
+    require(request)
+    body=await _json_body(request,"Reviewed connector tuning apply",strict=True,limit=16384)
+    return await call(request,tuning.apply,body)
