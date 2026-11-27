@@ -118,6 +118,8 @@ class OpenAPIProposalTests(unittest.TestCase):
         with self.assertRaises(ImplementationError):propose(SPEC,doc,ORIGIN,selection("get"))
         doc=fixture();doc["paths"]["/cases/{other}"]={}
         with self.assertRaises(ImplementationError):propose(SPEC,doc,ORIGIN,selection("get"))
+        doc=fixture();doc["paths"]["/cases/me"]={"get":{"operationId":"read_me","responses":response()}}
+        with self.assertRaises(ImplementationError):propose(SPEC,doc,ORIGIN,selection("get"))
         doc=fixture()
         with self.assertRaises(ImplementationError):propose(SPEC,doc,ORIGIN,selection("get","get"))
         for origin in ("http://example.com","https://user:pass@example.com","https://customer.example/api","https://customer.example/"):
