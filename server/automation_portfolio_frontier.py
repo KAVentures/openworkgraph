@@ -7,12 +7,15 @@ from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictFloat
 
 Money=Annotated[StrictInt|StrictFloat,Field(ge=0,le=10**12)]
 
+from . import automation_portfolio_preferences as preferences
+
 GUARD=BoundedSemaphore(1)
 
 class FrontierSpec(BaseModel):
     model_config=ConfigDict(extra="forbid",strict=True)
     priority_targets: list[int]=Field(min_length=1,max_length=12)
     budget_checkpoints: list[Money]=Field(default_factory=list,max_length=12)
+    preference_profiles: list[preferences.Profile]=Field(default_factory=list,max_length=preferences.MAX_PROFILES)
 
 def check(spec):
     targets=spec.priority_targets
@@ -22,7 +25,7 @@ def check(spec):
         raise ValueError("budget checkpoints must be distinct")
 
 class Frontier:
-    def __init__(self,ids,cap,targets,checkpoints=()):
+    def __init__(self,ids,cap,targets,checkpoints=(),profiles=()):
         self.ids=ids
         self.cap=cap
         self.targets=sorted(targets)
@@ -44,6 +47,7 @@ class Frontier:
         self.optimum_max_cost=None
         self.best=None
         self.counts=Counter()
+        self.preference_review=preferences.PreferenceReview(self,profiles) if profiles else None
 
     def key(self,row):
         mask,cost,points=row
@@ -69,6 +73,7 @@ class Frontier:
             if prev is None or cost<prev[1] or cost==prev[1] and self.better(row,prev):side[i]=row
         if cost>self.cap:return
         self.feasible+=1
+        if self.preference_review is not None:self.preference_review.visit(mask,cost,points)
         self.counts[mask.bit_count()]+=1
         if self.better(row,self.best):self.best=row
         for i in range(len(self.ids)):
@@ -151,6 +156,7 @@ class Frontier:
                 "maximum_priority_portfolios_minimum_cost":self.money(self.optimum_min_cost),
                 "maximum_priority_portfolios_maximum_cost":self.money(self.optimum_max_cost),
                 "ranked_optimum":self.packet(self.best),
+                **({"preference_review":self.preference_review.report()} if self.preference_review is not None else {}),
                 "interpretation":"The exact frontier includes all structurally feasible subsets, including costs above the current cap. "
                     "Each point represents one deterministic portfolio; equal-priority/equal-cost alternatives can exist. "
                     "Membership counts and forced inclusion/exclusion use the current budget. Priority points are declared preferences, not financial benefits. "
