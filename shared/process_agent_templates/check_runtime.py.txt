@@ -19,8 +19,8 @@ from verify_release import ReleaseIntegrityError, verify_directory
 
 FORMAT = "openworkgraph.customer-runtime-synthetic-acceptance.v1"
 REQUIRED = ("test_shadow", "test_agent_sdk", "test_execution", "test_monitor",
-            "test_configuration", "test_evaluation", "test_source_planning",
-            "test_source_evaluation")
+            "test_configuration", "test_evaluation", "test_binding_rehearsal", "test_source_planning",
+            "test_source_evaluation", "test_run_queue")
 OPTIONAL = ("test_decisions",)
 TIMEOUT = 120
 _CHILD = """

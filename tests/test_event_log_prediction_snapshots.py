@@ -55,6 +55,9 @@ def test_snapshot_is_scored_after_newer_events_arrive():
     assert bounds["eventual_mae_lower_bound_seconds"] == 0
     assert bounds["eventual_mae_upper_bound_seconds"] is None
     assert first["paired_remaining_time"] is None
+    assert first["paired_remaining_time_population"]["paired_cases"] == 6
+    assert first["proper_remaining_time_scores"]["interval_80"]["finished_cases"] == 0
+    assert first["proper_remaining_time_scores"]["interval_80"]["eventual_mean_interval_score_upper_seconds"] is None
     # Later: four cases close after 10 h (as predicted), one after 40 h, one stays open for 50 h.
     later = START + timedelta(days=30, hours=1)
     newer = [(f"o{i}", "Close", (later + timedelta(hours=10)).isoformat()) for i in range(4)]
@@ -76,6 +79,13 @@ def test_snapshot_is_scored_after_newer_events_arrive():
     assert bounds["eventual_mae_lower_bound_seconds"] == round(70*3600/6, 3)
     assert bounds["eventual_mae_upper_bound_seconds"] is None
     assert r["paired_remaining_time"]["paired_cases"] == 5
+    population = r["paired_remaining_time_population"]
+    assert population["paired_cases"] == 6
+    assert population["paired_case_observation"]["still_open"] == 1
+    proper = r["proper_remaining_time_scores"]["interval_80"]
+    assert proper["finished_late_misses"] == proper["censored_known_late_misses"] == 1
+    assert proper["eventual_mean_interval_score_lower_seconds"] == pytest.approx(70*3600*10/6)
+    assert proper["eventual_mean_interval_score_upper_seconds"] is None
 
 
 def test_outcome_brier_and_validation():

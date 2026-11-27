@@ -186,3 +186,18 @@ def test_mixed_completion_ties_are_membership_unknown_independent_of_event_ids()
     assert a["training_cases"]==1
     assert a["top1"]["membership_sensitive_hit_share_bounds"]=={"lower":.2,"upper":.75}
     assert all(row["case_id"]!="mixed" for row in ar)
+
+
+def test_distribution_validation_uses_full_counters_and_exposes_case_scores(log):
+    result=lm.review(log,packet())
+    first=result["landmarks"][0]
+    validation=first["distribution_validation"]
+    model=validation["estimators"]["model"]
+    assert model["predicted"]==first["top1"]["predicted"]==3
+    assert model["resolved"]==1 and model["abstained"]==1
+    assert model["brier"]["resolved_mean"]==0
+    assert validation["paired_comparisons"]["last_activity_baseline"]["brier"]["paired_population_mean_difference_bounds"]=={"lower":0.,"upper":0.}
+    p=lm.evidence(log,{"settings":packet(),"expected_review_sha256":result["review_sha256"],
+        "cutoff":packet()["cutoffs"][0],"status":"all","offset":0,"limit":10})
+    case=next(r for r in p["cases"] if r["case_id"]=="open")
+    assert case["distribution_scores"]["model"]["actual_probability"]==1

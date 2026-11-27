@@ -1,0 +1,402 @@
+"""Operator-controlled serial execution of an exact prepared queue.
+
+No automatic retries, inferred grants, remote cancellation or outcome claims.
+The queue directory and its state must be retained on trusted local storage.
+"""
+import argparse
+import asyncio
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import stat
+
+from execute import (ImplementationError, _pairs, _constant, digest, reference,
+                     prepare, review_template, validate_intent, execute_approved)
+from monitor import report as project_journal
+
+MAX_JOURNAL = 8 * 1024 * 1024
+HEX = re.compile(r'[0-9a-f]{64}')
+CASE = re.compile(r'case_[0-9]{1,4}')
+
+
+def require(condition, message):
+    if not condition:
+        raise ImplementationError(message)
+
+
+def is_hex(value):
+    return isinstance(value, str) and HEX.fullmatch(value) is not None
+
+
+def directory(path):
+    path = Path(path)
+    require(stat.S_ISDIR(path.lstat().st_mode), 'Expected a real local directory, not a symbolic link')
+    return path
+
+
+def exists(path):
+    return os.path.lexists(str(path))
+
+
+def read_bytes(path, limit):
+    path = Path(path)
+    require(stat.S_ISREG(path.lstat().st_mode), 'Expected a regular local file')
+    flags = os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_NONBLOCK', 0)
+    fd = os.open(path, flags | getattr(os, 'O_BINARY', 0))
+    with os.fdopen(fd, 'rb') as stream:
+        require(stat.S_ISREG(os.fstat(stream.fileno()).st_mode), 'Expected a regular local file')
+        data = stream.read(limit + 1)
+    require(0 < len(data) <= limit, 'Selected local evidence exceeds its size limit or is empty')
+    return data
+
+
+def read_object(path, limit=65536):
+    value = json.loads(read_bytes(path, limit), object_pairs_hook=_pairs, parse_constant=_constant)
+    require(isinstance(value, dict), 'Expected a JSON object')
+    return value
+
+
+def sync_directory(path):
+    if os.name == 'posix':
+        fd = os.open(path, os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0))
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+
+
+def write_once(path, value):
+    data = json.dumps(value, sort_keys=True, separators=(',', ':'), allow_nan=False).encode()
+    require(len(data) <= 65536, 'Queue state exceeds its size limit')
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, 'wb') as stream:
+        stream.write(data)
+        stream.flush()
+        os.fsync(stream.fileno())
+    sync_directory(Path(path).parent)
+
+
+def load_queue(spec, root, pinned_digest):
+    root = directory(root)
+    manifest = read_object(root / 'queue-review.json')
+    require(is_hex(pinned_digest) and digest(manifest) == pinned_digest,
+            'Queue receipt does not match its separately recorded digest')
+    require(manifest.get('format') == 'openworkgraph.prepared-execution-queue.v1'
+            and manifest.get('process_reference') == reference(spec)
+            and manifest.get('spec_sha256') == digest(spec)
+            and manifest.get('execution_authorized') is False
+            and manifest.get('automatic_execution_enabled') is False
+            and manifest.get('declared_cross_case_collisions_detected') is False,
+            'Queue must identify this exact non-authorizing specification')
+    rows = manifest.get('cases')
+    require(isinstance(rows, list) and 1 <= len(rows) <= 20
+            and type(manifest.get('case_count')) is int and manifest['case_count'] == len(rows),
+            'Queue case population is invalid')
+    packets = {}
+    identities, case_hashes = {}, set()
+    for row in rows:
+        require(isinstance(row, dict) and isinstance(row.get('case_id'), str)
+                and CASE.fullmatch(row['case_id']) and row['case_id'] not in packets,
+                'Queue requires unique opaque case IDs')
+        identifier = row['case_id']
+        folder = directory(root / identifier)
+        case, plan, bindings, disabled, review = (
+            read_object(folder / name) for name in ('case.json', 'plan.json', 'bindings.json',
+                'customer-intent.json', 'preparation-review.json'))
+        require(digest(case) == row.get('case_sha256')
+                and digest(plan.get('activity_ids')) == row.get('route_sha256')
+                and digest(bindings) == manifest.get('bindings_sha256')
+                and digest(review) == row.get('preparation_review_sha256')
+                and digest(disabled) == row.get('disabled_intent_sha256'),
+                'Prepared case files differ from the pinned queue receipt')
+        require(review.get('format') == 'openworkgraph.prepared-reviewed-case.v1'
+                and review.get('spec_sha256') == digest(spec)
+                and review.get('suite_sha256') == manifest.get('suite_sha256')
+                and review.get('case_sha256') == digest(case)
+                and review.get('plan_sha256') == digest(plan)
+                and review.get('bindings_sha256') == digest(bindings)
+                and review.get('disabled_intent_sha256') == digest(disabled)
+                and review.get('selected_batch_case_id') == identifier
+                and review.get('selected_route_sha256') == row['route_sha256']
+                and review.get('batch_review_sha256') == manifest.get('batch_review_sha256')
+                and review.get('batch_review_recomputed') is True
+                and review.get('offline_requirements_clear') is True
+                and review.get('execution_authorized') is False,
+                'Preparation receipt is inconsistent with the queue')
+        require(digest(case) not in case_hashes, 'Queue contains duplicate case inputs')
+        case_hashes.add(digest(case))
+        prepared = prepare(spec, plan, case, bindings)
+        require(not prepared['requirements'] and digest(disabled) == digest(
+            review_template(spec, prepared, case, bindings)), 'Prepared case no longer satisfies the runtime contract')
+        mapped = {item['activity_id']: item for item in bindings['bindings']}
+        keys = set()
+        for action in prepared['actions']:
+            if action['operation_kind'] == 'write':
+                contract = mapped[action['activity_id']]['idempotency']
+                if contract['mode'] == 'argument_key':
+                    keys.add(('write_key', digest(action['arguments'][contract['argument']])))
+        keys.update(('outcome_target', digest(item['resource_ref'])) for item in prepared['outcomes'])
+        for key in keys:
+            require(identities.setdefault(key, identifier) == identifier,
+                    'Queue contains shared declared write keys or outcome targets')
+        packets[identifier] = {'case': case, 'plan': plan, 'bindings': bindings, 'prepared': prepared}
+    return root, packets
+
+
+def successful_journal(spec, packet, path, execution_id):
+    data = read_bytes(path, MAX_JOURNAL)
+    require(data.endswith(b'\n'), 'Execution journal has an incomplete trailing record')
+    lines = data.splitlines()
+    require(1 <= len(lines) <= 10000, 'Execution journal exceeds its record limit')
+    records = [json.loads(line, object_pairs_hook=_pairs, parse_constant=_constant) for line in lines]
+    run = project_journal(spec, records, 'Prepared queue')['runs'][0]
+    actions = packet['prepared']['actions']
+    outcomes = packet['prepared']['outcomes']
+    require(run['run_id'] == execution_id and run['status'] == 'succeeded'
+            and run['finished_at'] is not None
+            and [(step['step_id'], step['status']) for step in run['steps']] ==
+                [(action['activity_id'], 'completed') for action in actions],
+            'Journal does not establish the exact declared route completion')
+    attempted = [(row.get('activity_id'), row.get('arguments_sha256')) for row in records
+                 if row.get('phase') == 'attempt_pending']
+    require(attempted == [(action['activity_id'], digest(action['arguments'])) for action in actions],
+            'Journal does not match the exact prepared action arguments')
+    checked = [(row.get('terminal_activity_id'), row.get('expected_operation'), row.get('operation_verified') is True and row.get('source_request_attempted') is True)
+               for row in records if row.get('phase') == 'source_checked']
+    require(checked == [(item['terminal_activity_id'], item['expected_operation'], True) for item in outcomes]
+            and (not outcomes or records[-1].get('all_declared_operations_verified') is True),
+            'Required source operation checks were not reported matched')
+    return hashlib.sha256(data).hexdigest()
+
+
+def inspect_state(spec, root, packets, pin):
+    state = root / 'queue-state'
+    journals = state / 'journals'
+    if exists(state):
+        directory(state)
+        anchor = state / 'queue.json'
+        if exists(anchor):
+            require(read_object(anchor) == {'queue_sha256': pin}, 'Queue state belongs to another receipt')
+        else:
+            require(not any(state.iterdir()), 'Queue state anchor is missing; review the directory')
+        if exists(journals):
+            directory(journals)
+    rows, preceding_complete, claimed_journals = [], True, set()
+    for identifier, packet in packets.items():
+        claim, done = state / (identifier + '.claim.json'), state / (identifier + '.complete.json')
+        status, execution_id, recovered = 'waiting', None, False
+        if exists(claim) or exists(done):
+            status = 'reconciliation_required'
+            try:
+                value = read_object(claim)
+                execution_id = value.get('execution_id')
+                require(is_hex(execution_id) and value == {'queue_sha256': pin, 'case_id': identifier,
+                        'execution_id': execution_id}, 'Invalid queue claim')
+                require(execution_id not in claimed_journals, 'Execution identity is claimed twice')
+                claimed_journals.add(execution_id)
+                if exists(done):
+                    receipt = read_object(done)
+                    expected = {**value, 'journal_sha256': successful_journal(
+                        spec, packet, journals / (execution_id + '.jsonl'), execution_id)}
+                    recovered = digest(receipt) == digest({**expected, 'recovered_from_journal': True})
+                    require(recovered or digest(receipt) == digest(expected), 'Queue completion receipt changed')
+                    status = 'reported_complete' if preceding_complete else 'reconciliation_required'
+            except (ImplementationError, OSError, ValueError, TypeError, KeyError, AttributeError, RecursionError):
+                status = 'reconciliation_required'
+        rows.append({'case_id': identifier, 'status': status,
+                     'execution_id': execution_id if is_hex(execution_id) else None,
+                     'completion_recovered_from_journal': recovered and status == 'reported_complete'})
+        preceding_complete = preceding_complete and status == 'reported_complete'
+    unexpected = 0
+    if exists(journals):
+        for item in journals.iterdir():
+            if item.name == '.owg-stop':
+                continue
+            if item.name not in {key + '.jsonl' for key in claimed_journals}:
+                unexpected += 1
+            require(unexpected <= 100, 'Unexpected queue journal inventory exceeds its limit')
+    return {'format': 'openworkgraph.execution-queue-status.v1', 'queue_sha256': pin,
+            'case_count': len(rows), 'cases': rows,
+            'reported_complete_count': sum(row['status'] == 'reported_complete' for row in rows),
+            'recovered_completion_count': sum(row['completion_recovered_from_journal'] for row in rows),
+            'reconciliation_required': bool(unexpected) or any(row['status'] == 'reconciliation_required' for row in rows),
+            'unclaimed_journal_entry_count': unexpected,
+            'operator_stop_active': exists(journals / '.owg-stop'),
+            'runner_lock_present': exists(state / 'runner.lock'),
+            'automatic_retries': False, 'business_outcomes_verified': False,
+            'agent_causality_verified': False, 'remote_cancellation_verified': False}
+
+
+def authorization_map(document, pin, packets):
+    require(isinstance(document, dict) and set(document) == {'format', 'queue_sha256', 'intents'}
+            and document['format'] == 'openworkgraph.queue-authorizations.v1'
+            and document['queue_sha256'] == pin and isinstance(document['intents'], list)
+            and 1 <= len(document['intents']) <= len(packets),
+            'Supply separately reviewed exact-queue authorizations')
+    found = {}
+    for row in document['intents']:
+        require(isinstance(row, dict) and set(row) == {'case_id', 'intent'}
+                and isinstance(row['case_id'], str) and row['case_id'] in packets
+                and row['case_id'] not in found and isinstance(row['intent'], dict),
+                'Authorizations require unique known queue case IDs')
+        found[row['case_id']] = row['intent']
+    return found
+
+
+def check_execution_credentials(spec, packet):
+    """Refuse a missing local credential before creating a durable case claim."""
+    prepared = packet['prepared']
+    require(not prepared['actions'] or bool(os.environ.get('OWG_EXECUTION_MCP_TOKEN')),
+            'Configure the separate customer tool credential before starting the queue')
+    require(not (prepared['outcomes'] or prepared['source_rules'] or prepared.get('decision_tables'))
+            or bool(os.environ.get('OWG_EXECUTION_SOURCE_READ_TOKEN')),
+            'Configure the separate source-read credential before starting the queue')
+    require(not spec.get('organization_catalog_reference') or bool(os.environ.get('OWG_EXECUTION_CATALOG_READ_TOKEN')),
+            'Configure the separate organization catalog read credential before starting the queue')
+
+
+async def run_approved_queue(spec, root, pin, authorizations, *, max_cases=1, runner=execute_approved):
+    require(type(max_cases) is int and 1 <= max_cases <= 20, 'Select a bound of 1 to 20 cases')
+    root, packets = load_queue(spec, root, pin)
+    intents = authorization_map(authorizations, pin, packets)
+    state = root / 'queue-state'
+    initial = inspect_state(spec, root, packets, pin)
+    require(not initial['reconciliation_required'] and not initial['operator_stop_active']
+            and not initial['runner_lock_present'], 'Queue stopped or requires reconciliation')
+    state.mkdir(mode=0o700, exist_ok=True)
+    directory(state)
+    sync_directory(root)
+    # Exclusive local lock; a crash leaves a visible lock for manual review.
+    lock = state / 'runner.lock'
+    write_once(lock, {'queue_sha256': pin})
+    try:
+        anchor = state / 'queue.json'
+        if not exists(anchor):
+            require(set(state.iterdir()) == {lock}, 'Queue state anchor is missing')
+            write_once(anchor, {'queue_sha256': pin})
+        journals = state / 'journals'
+        journals.mkdir(mode=0o700, exist_ok=True)
+        directory(journals)
+        sync_directory(state)
+        snapshot = inspect_state(spec, root, packets, pin)
+        require(not snapshot['reconciliation_required'] and not snapshot['operator_stop_active'],
+                'Queue stopped or requires reconciliation')
+        pending = [row['case_id'] for row in snapshot['cases'] if row['status'] == 'waiting'][:max_cases]
+        # Validate all proposed starts before the first provider call.
+        for identifier in pending:
+            require(identifier in intents, 'Missing separately reviewed authorization for a selected case')
+            packet, intent = packets[identifier], intents[identifier]
+            validate_intent(spec, packet['prepared'], packet['case'], packet['bindings'], intent)
+            check_execution_credentials(spec, packet)
+            require(not exists(journals / (digest(intent) + '.jsonl')), 'An execution journal already exists; review it')
+        for identifier in pending:
+            packet, intent = packets[identifier], intents[identifier]
+            if exists(journals / '.owg-stop'):
+                break
+            validate_intent(spec, packet['prepared'], packet['case'], packet['bindings'], intent)
+            check_execution_credentials(spec, packet)
+            execution_id = digest(intent)
+            claim = {'queue_sha256': pin, 'case_id': identifier, 'execution_id': execution_id}
+            # Claim before any execution. Even a pre-tool failure requires review.
+            write_once(state / (identifier + '.claim.json'), claim)
+            try:
+                result = await runner(spec, packet['plan'], packet['case'], packet['bindings'], intent,
+                                      journal_directory=journals)
+                require(result.get('execution_id') == execution_id
+                        and result.get('declared_route_checks_satisfied') is True
+                        and result.get('all_tool_results_matched') is True
+                        and not result.get('operator_stopped')
+                        and (not packet['prepared']['outcomes']
+                             or result.get('all_declared_operations_verified') is True),
+                        'Execution reported incomplete or uncertain results')
+                journal_hash = successful_journal(spec, packet, journals / (execution_id + '.jsonl'), execution_id)
+                write_once(state / (identifier + '.complete.json'), {**claim, 'journal_sha256': journal_hash})
+            except Exception:
+                # Never retry or advance past a claimed but incomplete case.
+                break
+    finally:
+        lock.unlink()
+        sync_directory(state)
+    return inspect_state(spec, root, packets, pin)
+
+
+def reconcile_completed_case(spec, root, pin, case_id, journal_sha256):
+    """Record an already complete journal after explicit operator review.
+
+    Never repair or replay a tool attempt. An active or retained crash lock
+    must be investigated separately; this operation cannot prove a process stopped.
+    """
+    require(isinstance(case_id, str) and CASE.fullmatch(case_id) and is_hex(journal_sha256),
+            'Select the exact case and separately reviewed journal byte digest')
+    root, packets = load_queue(spec, root, pin)
+    state = directory(root / 'queue-state')
+    journals = directory(state / 'journals')
+    lock = state / 'runner.lock'
+    write_once(lock, {'queue_sha256': pin})
+    try:
+        snapshot = inspect_state(spec, root, packets, pin)
+        rows = snapshot['cases']
+        require(case_id in packets and not snapshot['unclaimed_journal_entry_count'],
+                'Resolve unclaimed journal evidence before reconciliation')
+        index = list(packets).index(case_id)
+        require(all(row['status'] == 'reported_complete' for row in rows[:index])
+                and rows[index]['status'] == 'reconciliation_required'
+                and all(row['status'] == 'waiting' for row in rows[index+1:]),
+                'Only the first incomplete claimed case can be reconciled')
+        execution_id = rows[index]['execution_id']
+        require(is_hex(execution_id), 'The retained claim is missing or invalid')
+        claim = {'queue_sha256': pin, 'case_id': case_id, 'execution_id': execution_id}
+        require(read_object(state / (case_id + '.claim.json')) == claim,
+                'The retained claim does not match the selected case')
+        target = state / (case_id + '.complete.json')
+        require(not exists(target), 'A completion receipt already exists; do not overwrite evidence')
+        checked = successful_journal(spec, packets[case_id], journals / (execution_id + '.jsonl'), execution_id)
+        require(checked == journal_sha256, 'Journal changed after the selected offline review')
+        write_once(target, {**claim, 'journal_sha256': checked, 'recovered_from_journal': True})
+    finally:
+        lock.unlink()
+        sync_directory(state)
+    return inspect_state(spec, root, packets, pin)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--queue', required=True)
+    parser.add_argument('--queue-sha256', required=True)
+    mode = parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument('--inspect', action='store_true')
+    mode.add_argument('--run-approved', action='store_true')
+    mode.add_argument('--reconcile-completed', action='store_true')
+    parser.add_argument('--authorizations')
+    parser.add_argument('--case-id')
+    parser.add_argument('--journal-sha256')
+    parser.add_argument('--confirm-runner-stopped-and-journal-reviewed', action='store_true')
+    parser.add_argument('--confirm-network', action='store_true')
+    parser.add_argument('--max-cases', type=int, default=1)
+    args = parser.parse_args()
+    spec = read_object(Path(__file__).parent / 'workflow.spec.json', limit=262144)
+    if not args.reconcile_completed and (args.case_id or args.journal_sha256 or args.confirm_runner_stopped_and_journal_reviewed):
+        parser.error('Recovery options require --reconcile-completed')
+    if args.reconcile_completed:
+        require(args.confirm_runner_stopped_and_journal_reviewed and not args.confirm_network and not args.authorizations,
+                'Explicit stopped-runner and journal review confirmation is required; recovery is offline')
+        result = reconcile_completed_case(spec, args.queue, args.queue_sha256, args.case_id, args.journal_sha256)
+    elif args.run_approved:
+        require(args.confirm_network and args.authorizations, 'Explicit network confirmation and separate authorizations are required')
+        result = asyncio.run(run_approved_queue(spec, args.queue, args.queue_sha256,
+                             read_object(args.authorizations, limit=262144), max_cases=args.max_cases))
+    else:
+        require(not args.confirm_network and not args.authorizations, 'Inspection is offline and accepts no authorizations')
+        root, packets = load_queue(spec, args.queue, args.queue_sha256)
+        result = inspect_state(spec, root, packets, args.queue_sha256)
+    print(json.dumps(result, indent=2, allow_nan=False))
+    return 2 if result['reconciliation_required'] or result['operator_stop_active'] or result['runner_lock_present'] else 0
+
+
+if __name__ == '__main__':
+    try:
+        raise SystemExit(main())
+    except (ImplementationError, OSError, ValueError, TypeError, KeyError, AttributeError, RecursionError):
+        raise SystemExit('Queue refused or stopped. Inspect local evidence; do not retry uncertain actions.') from None

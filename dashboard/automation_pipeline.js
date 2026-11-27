@@ -749,6 +749,85 @@
       }catch(e){status.textContent=e.message;}
       finally{portfolioButton.disabled=false;}
     };
+    const budgetScenarioButton=button('Plan a budget-constrained portfolio','secondary');
+    budgetScenarioButton.id='owgPipelineBudgetScenario';
+    const budgetScenarioHost=el('div');budgetScenarioHost.id='owgPipelineBudgetScenarioResult';
+    let budgetGeneration=0;
+    budgetScenarioButton.onclick=async()=>{
+      const n=++budgetGeneration,root=el('div');budgetScenarioHost.replaceChildren(root);
+      const active=()=>n===budgetGeneration&&root.isConnected;
+      root.append(el('p','Loading current portfolio revisions…','muted'));
+      try{
+        const inv=await(await api('/v1/automation-pipeline/budget-scenario/inventory')).json();
+        if(!active())return;
+        const heading=el('h4','Budget-constrained portfolio planner');
+        const description=el('p','Select up to 18 opportunities, assign explicit priority points, and choose a single currency and budget basis. Include unfinished prerequisites; implemented ones do not consume this scenario budget. This is not a delivery plan or approval.','muted');
+        const currency=el('input');currency.type='text';currency.maxLength=3;currency.placeholder='SEK';currency.id='owgBudgetCurrency';
+        const basis=el('select');basis.id='owgBudgetBasis';
+        for(const value of ['estimate','approved_budget']){const opt=el('option',value);opt.value=value;basis.append(opt);}
+        const limit=el('input');limit.type='number';limit.min='0';limit.max='1000000000000';limit.step='any';limit.id='owgBudgetLimit';
+        const max=el('input');max.type='number';max.min='1';max.max='18';max.value='18';max.id='owgBudgetMax';
+        const labelled=(label,node)=>{const wrapper=el('label',label+' ');wrapper.append(node);return wrapper;};
+        const controls=el('div',null,'row');controls.append(labelled('Currency',currency),labelled('Budget basis',basis),labelled('Budget limit',limit),labelled('Maximum selected ideas',max));
+        const options=el('div'),out=el('div'),status=el('p');status.setAttribute('role','status');
+        const run=button('Evaluate exact portfolio combinations','secondary'),download=button('Download scenario report','secondary');download.disabled=true;
+        let attempt=0,report=null;const controlsById=new Map();
+        function invalidate(){attempt++;report=null;download.disabled=true;out.replaceChildren();status.textContent='Review inputs and evaluate again.';run.disabled=false;}
+        for(const control of [currency,basis,limit,max])control.addEventListener('input',invalidate);
+        const query=el('input');query.type='search';query.placeholder='Find opportunity by name or ID';query.setAttribute('aria-label','Find opportunities');
+        function renderChoices(){
+          options.replaceChildren();
+          const term=query.value.toLowerCase();
+          for(const idea of inv.ideas.filter(i=>['idea','assessing','approved','on_hold'].includes(i.state))){
+            if(term&&!(idea.title+' '+idea.idea_id).toLowerCase().includes(term))continue;
+            let entry=controlsById.get(idea.idea_id);
+            if(!entry){
+              const selected=el('input');selected.type='checkbox';selected.setAttribute('aria-label','Select '+idea.title);
+              const priority=el('input');priority.type='number';priority.min='0';priority.max='100';priority.step='1';priority.value='0';priority.disabled=true;
+              priority.setAttribute('aria-label','Priority points for '+idea.title);
+              const required=el('input');required.type='checkbox';required.disabled=true;required.setAttribute('aria-label','Require '+idea.title);
+              selected.onchange=()=>{priority.disabled=required.disabled=!selected.checked;if(!selected.checked)required.checked=false;invalidate();};
+              priority.oninput=invalidate;required.onchange=invalidate;entry={idea,selected,priority,required};controlsById.set(idea.idea_id,entry);
+            }
+            const row=el('fieldset');row.append(el('legend',idea.title),labelled('Include candidate',entry.selected),
+              el('p',idea.idea_id+' · revision '+idea.revision+' · '+idea.state+' · '+(idea.budget?idea.budget.amount+' '+idea.budget.currency+' ('+idea.budget.basis+')':'No budget'),'muted'),
+              labelled('Priority points (0–100)',entry.priority),labelled('Required in every scenario',entry.required));
+            if(idea.depends_on.length)row.append(el('p','Declared prerequisites: '+idea.depends_on.map(id=>inv.ideas.find(i=>i.idea_id===id)?.title||id).join('; '),'muted'));
+            options.append(row);
+          }
+        }
+        query.oninput=renderChoices;renderChoices();
+        download.onclick=()=>{if(!report)return;const url=URL.createObjectURL(new Blob([JSON.stringify(report,null,2)],{type:'application/json'}));const a=el('a');a.href=url;a.download='owg-portfolio-budget-scenario.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);};
+        run.onclick=async()=>{
+          invalidate();const k=attempt;
+          const candidates=[...controlsById.values()].filter(c=>c.selected.checked).map(c=>({idea_id:c.idea.idea_id,revision:c.idea.revision,priority:Number(c.priority.value),required:c.required.checked}));
+          if(!/^[A-Z]{3}$/.test(currency.value)||!limit.value||!max.value||!candidates.length||candidates.length>18||
+            [...controlsById.values()].some(c=>c.selected.checked&&!c.priority.value)){
+            status.textContent='Enter an uppercase currency, budget, selection limit and priorities for 1–18 candidates.';return;
+          }
+          run.disabled=true;status.textContent='Evaluating all bounded candidate subsets…';
+          try{
+            const data=await(await api('/v1/automation-pipeline/budget-scenario',{method:'POST',headers:{'Content-Type':'application/json'},
+              body:JSON.stringify({snapshot_sha256:inv.snapshot_sha256,currency:currency.value,budget_basis:basis.value,budget_limit:Number(limit.value),max_selected:Number(max.value),candidates})})).json();
+            if(!active()||k!==attempt)return;
+            if(data.snapshot_sha256!==inv.snapshot_sha256)throw Error('Unexpected portfolio snapshot.');
+            report=data;download.disabled=false;status.textContent=data.feasible_subsets+' feasible subsets of '+data.subsets_considered+' examined.';
+            const titles=new Map(data.candidates.map(i=>[i.idea_id,i.title]));
+            const show=(row)=>{const item=el('div');item.append(el('strong',row.priority_points+' priority points · '+row.budget_used+' '+data.currency),
+              el('p',row.selected_idea_ids.map(id=>titles.get(id)||id).join('; ')||'No ideas selected'),
+              el('p',row.budget_remaining+' '+data.currency+' remaining; '+row.selected_count+' ideas','muted'));return item;};
+            out.replaceChildren(el('h4',data.status==='feasible'?'Highest-ranked feasible alternatives':'No feasible portfolio under these constraints'),
+              ...data.alternatives.map(show));
+            const details=el('details');details.append(el('summary','Best feasible alternative by selected count'),...data.best_by_selected_count.map(show));out.append(details);
+            for(const candidate of data.candidates.filter(c=>c.blockers.length))out.append(el('p',candidate.title+': '+candidate.blockers.map(b=>b.code+(b.dependency_id?' ('+(titles.get(b.dependency_id)||b.dependency_id)+')':'')).join('; ')));
+            out.append(el('p','Required ideas and unfinished selected prerequisites: '+data.required_closure_ids.map(id=>titles.get(id)||id).join('; ')));
+            out.append(el('p','Priority points are entered by you; no measured or modeled savings are summed. This scenario makes no changes to the portfolio.','muted'));
+          }catch(e){if(active()&&k===attempt)status.textContent=e.message;}
+          finally{if(active()&&k===attempt)run.disabled=false;}
+        };
+        root.replaceChildren(heading,description,controls,query,options,run,download,status,out);
+      }catch(e){if(active())root.replaceChildren(el('p',e.message,'muted'));}
+    };
     const benefitOverlapButton=button('Review overlapping benefit evidence','secondary');
     benefitOverlapButton.id='owgPipelineBenefitOverlap';
     const benefitOverlapHost=el('div');
@@ -914,7 +993,7 @@
       }catch(e){if(generation===refreshGeneration)dependencyScheduleHost.replaceChildren(el('p',e.message,'muted'));}
       finally{dependencyScheduleButton.disabled=false;}
     };
-    card.append(row,resumeSection,auditSection,tools,planningFilters,status,counts,portfolioButton,portfolioHost,benefitOverlapButton,benefitOverlapHost,benefitReadinessButton,benefitReadinessHost,dependencyScheduleButton,dependencyScheduleHost,viewCount,list,comparison,detail);
+    card.append(row,resumeSection,auditSection,tools,planningFilters,status,counts,portfolioButton,portfolioHost,budgetScenarioButton,budgetScenarioHost,benefitOverlapButton,benefitOverlapHost,benefitReadinessButton,benefitReadinessHost,dependencyScheduleButton,dependencyScheduleHost,viewCount,list,comparison,detail);
     panel.appendChild(card);
 
     let latestIdeas=[],refreshGeneration=0,resumeGeneration=0,auditGeneration=0,auditPageIndex=0,auditAbort=null;
@@ -1518,6 +1597,108 @@
             parts.push(list);
             if(c.single_period_each)parts.push(el('div','Only one baseline and one after period: no range of variation yet.','muted'));
           }else if(r.measurements.length)parts.push(el('div','Record at least one baseline and one after period to compare.','muted'));
+          if(idea.state==='implemented'){
+            const launch=button('Review quality, adoption and cost','secondary');
+            launch.id='owgQualityBenefitOpen';
+            const scenarioHost=el('div');scenarioHost.id='owgQualityBenefitResult';
+            let invocation=0;
+            launch.onclick=async()=>{
+              const current=++invocation;scenarioHost.replaceChildren(el('p','Reading retained measurement snapshot…','muted'));
+              const active=()=>current===invocation&&generation===detailGeneration&&scenarioHost.isConnected;
+              const path='/v1/automation-pipeline/'+encodeURIComponent(idea.idea_id)+'/quality-benefit';
+              try{
+                const inv=await(await api(path+'/inventory')).json();
+                if(!active())return;
+                if(inv.idea_revision!==idea.revision)throw Error('Idea changed; reopen it before comparing.');
+                const output=el('div'),message=el('p');message.setAttribute('role','status');
+                const numeric=(label,max,step='any')=>{const i=el('input');i.type='number';i.min='0';i.max=String(max);i.step=step;i.required=true;i.setAttribute('aria-label',label);return i;};
+                const label=(name,node)=>{const l=el('label',name+' ');l.appendChild(node);return l;};
+                const currency=el('input');currency.maxLength=3;currency.placeholder='SEK';currency.setAttribute('aria-label','Currency');
+                const hourly=numeric('Loaded labor cost per hour',1e12),investment=numeric('One-time cost',1e12),
+                  coverage=numeric('Minimum quality coverage percent',100),adoption=numeric('Minimum attempted adoption percent',100),
+                  failure=numeric('Maximum failure-rate increase percentage points',100);
+                const fields=el('div',null,'row');
+                fields.append(label('Currency',currency),label('Loaded labor cost per hour',hourly),label('One-time cost',investment),
+                  label('Minimum quality coverage (%)',coverage),label('Minimum after attempted adoption (%)',adoption),
+                  label('Maximum failure rate increase (percentage points)',failure));
+                const selections=[];
+                const periodHost=el('div');
+                for(const period of inv.measurements){
+                  const group=el('fieldset');group.appendChild(el('legend',period.period+' · '+period.start+' – '+period.end+' · '+period.cases+' cases'));
+                  const include=el('input');include.type='checkbox';
+                  const names=[['eligible_cases','Eligible cases'],['automation_attempted_cases','Cases with automation attempted'],
+                    ['automation_handoff_cases','Attempted cases handed to a human'],['quality_checked_cases','Quality checked cases'],
+                    ['quality_failed_cases','Checked cases failing quality'],['extra_review_hours','Additional review hours'],['nonlabor_cost','Nonlabor operating cost for period']];
+                  const inputs={};const controls=el('div');
+                  for(const [key,title] of names){const isCount=key.endsWith('_cases');const node=numeric(title,isCount?period.cases:1e12,isCount?'1':'any');node.disabled=true;inputs[key]=node;controls.appendChild(label(title,node));}
+                  const basis=el('select');basis.disabled=true;basis.setAttribute('aria-label','Review effort accounting basis');
+                  for(const [v,t] of [['','Choose basis'],['already_in_retained_effort','Review already included in retained effort'],['additional_to_retained_effort','Review effort additional to retained effort']]){
+                    const o=el('option',t);o.value=v;basis.appendChild(o);}
+                  include.onchange=()=>{Object.values(inputs).forEach(n=>n.disabled=!include.checked);basis.disabled=!include.checked;};
+                  group.append(label('Include measurement',include),controls,label('Review effort accounting basis',basis));periodHost.appendChild(group);
+                  selections.push({period,include,inputs,basis});
+                }
+                const run=button('Calculate quality and adoption scenario','secondary'),download=button('Download scenario JSON','secondary');download.disabled=true;
+                let serial=0,result=null;
+                const invalidate=()=>{serial++;result=null;output.replaceChildren();download.disabled=true;run.disabled=false;message.textContent='Inputs changed; calculate again.';};
+                for(const n of [fields,periodHost])n.addEventListener('input',invalidate);
+                for(const n of [fields,periodHost])n.addEventListener('change',invalidate);
+                download.onclick=()=>{if(!active()||!result)return;const url=URL.createObjectURL(new Blob([JSON.stringify(result,null,2)],{type:'application/json'}));const a=el('a');a.href=url;a.download='owg-quality-benefit-scenario.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);};
+                run.onclick=async()=>{
+                  invalidate();const ticket=serial;
+                  const selected=selections.filter(p=>p.include.checked);
+                  const required=[hourly,investment,coverage,adoption,failure,...selected.flatMap(p=>Object.values(p.inputs))];
+                  if(!/^[A-Z]{3}$/.test(currency.value)||required.some(n=>n.value===''||!n.checkValidity())||
+                      selected.some(p=>!p.basis.value)||!selected.some(p=>p.period.period==='baseline')||!selected.some(p=>p.period.period==='after')){
+                    message.textContent='Enter all values explicitly, including zeros, and select both a baseline and after period.';return;
+                  }
+                  const body={snapshot_sha256:inv.snapshot_sha256,currency:currency.value,labor_cost_per_hour:Number(hourly.value),
+                    one_time_cost:Number(investment.value),minimum_quality_coverage:Number(coverage.value)/100,
+                    minimum_after_adoption:Number(adoption.value)/100,maximum_quality_failure_rate_increase:Number(failure.value)/100,
+                    periods:selected.map(p=>({measurement_id:p.period.measurement_id,review_effort_basis:p.basis.value,
+                      ...Object.fromEntries(Object.entries(p.inputs).map(([k,v])=>[k,Number(v.value)]))}))};
+                  run.disabled=true;message.textContent='Calculating against selected measurement snapshot…';
+                  try{
+                    const data=await post(path,body);
+                    if(!active()||ticket!==serial)return;
+                    if(data.snapshot_sha256!==inv.snapshot_sha256||data.idea_id!==idea.idea_id)throw Error('Unexpected measurement snapshot.');
+                    result=data;download.disabled=false;message.textContent=data.all_declared_gates_met?'Entered evidence meets all selected review gates.':'One or more selected review gates are unmet or unknown.';
+                    const pct=v=>v===null?'Unknown':(v*100).toFixed(2)+'%';
+                    const table=el('table'),thead=el('thead'),tr=el('tr');['Metric','Baseline','After'].forEach(x=>tr.appendChild(el('th',x)));thead.appendChild(tr);table.appendChild(thead);
+                    const tbody=el('tbody');for(const [key,name] of [['cases','Cases'],['eligible','Eligible'],['attempts','Attempted'],['handoffs','Handoffs'],['checked','Quality checked'],['failed','Quality failures'],['quality_coverage','Quality coverage'],['quality_failure_rate','Failure among checked'],['attempted_share_of_eligible','Attempted adoption'],['handoff_share_of_attempts','Handoff share'],['non_handoff_share_of_eligible','Non-handoff share of eligible']]){
+                      const row=el('tr');const ratio=['quality_coverage','quality_failure_rate','attempted_share_of_eligible','handoff_share_of_attempts','non_handoff_share_of_eligible'].includes(key);
+                      for(const v of [name,ratio?pct(data.baseline[key]):data.baseline[key],ratio?pct(data.after[key]):data.after[key]])row.appendChild(el('td',String(v)));tbody.appendChild(row);
+                    }table.appendChild(tbody);
+                    const wrap=el('div',null,'table-wrap');wrap.appendChild(table);
+                    const money=data.financial_scenario;output.replaceChildren(el('h5','Pooled period evidence'),wrap,el('h5','Review gates'));
+                    for(const g of data.review_gates)output.appendChild(el('p',g.gate+' · '+g.status+' · observed '+pct(g.observed)+' · threshold '+pct(g.threshold)));
+                    const population=data.whole_population_quality;
+                    if(population){
+                      const range=(lo,hi)=>pct(lo)+' to '+pct(hi);
+                      output.append(el('h5','Whole-population quality bounds'),
+                        el('p','Baseline failure rate: '+range(population.baseline.failure_rate_lower,population.baseline.failure_rate_upper)+'; '+population.baseline.unchecked_cases+' unchecked cases.'),
+                        el('p','After failure rate: '+range(population.after.failure_rate_lower,population.after.failure_rate_upper)+'; '+population.after.unchecked_cases+' unchecked cases.'),
+                        el('p','After minus baseline failure-rate change: '+range(population.failure_rate_change_lower,population.failure_rate_change_upper)+' (percentage points).'),
+                        el('p','Whole-population threshold: '+population.threshold_status.replaceAll('_',' ')+' · maximum increase '+pct(population.maximum_declared_increase)+'. Separate from the checked-case gates above.'),
+                        el('p','After cases both attempted without handoff and passing quality: '+population.after.nonhandoff_and_quality_pass_count_lower+'–'+population.after.nonhandoff_and_quality_pass_count_upper+'; share of eligible '+range(population.after.nonhandoff_and_quality_pass_share_of_eligible_lower,population.after.nonhandoff_and_quality_pass_share_of_eligible_upper)+'. No case-level linkage or autonomous success proven.'),
+                        el('p','Best-case additional checks to establish within threshold: '+(population.minimum_favorable_new_checks_to_establish_within??'not attainable')+'; to establish above threshold under adverse outcomes: '+(population.minimum_adverse_new_checks_to_establish_above??'not attainable')+'.'),
+                        el('p',population.interpretation,'muted'));
+                    }
+                    output.append(el('h5','Conditional cost and effort scenario'),
+                      el('p','Retained effort change at after volume: '+money.retained_effort_change_hours_at_after_volume+' hours/month'),
+                      el('p','Including additional review effort: '+money.effort_change_with_extra_review_hours_at_after_volume+' hours/month'),
+                      el('p','Modeled net value change: '+money.modeled_net_monthly_value_change+' '+data.currency+'/month'),
+                      el('p','Modeled simple payback: '+(money.modeled_simple_payback_months===null?'No positive modeled payback':money.modeled_simple_payback_months+' months')),
+                      el('p',data.interpretation,'muted'));
+                  }catch(e){if(active()&&ticket===serial)message.textContent=e.message;}
+                  finally{if(active()&&ticket===serial)run.disabled=false;}
+                };
+                scenarioHost.replaceChildren(el('h5','Quality and adoption review'),
+                  el('p','Use comparable periods and consistent quality criteria. Enter every count and cost explicitly. Non-handoff does not prove successful completion. Financial arithmetic does not monetize quality.','muted'),fields,periodHost,run,download,message,output);
+              }catch(e){if(active())scenarioHost.replaceChildren(el('p',e.message));}
+            };
+            parts.push(launch,scenarioHost);
+          }
           parts.push(el('p',r.interpretation,'muted'));host.replaceChildren(...parts);
         };
         addMeasure.onclick=async()=>{
@@ -1528,7 +1709,70 @@
         };
         const grid=el('div',null,'row');grid.style.alignItems='end';
         grid.append(field('Period',kind),field('From',start),field('To',end),field('Cases handled',cases),field('Minutes per case',minutes),field('Source',source),field('Reference',ref),addMeasure);
-        value.append(grid,measStatus,host);box.appendChild(value);
+        const effortPanel=el('details');effortPanel.append(el('summary','Derive effort from a retained event log'),
+          el('p','Use a numeric event attribute that records additive work effort. Never use elapsed case time. All cases starting during the selected UTC dates must finish during the period with the exact completion activity; missing or shared effort evidence blocks recording.','muted'));
+        const effortLog=select('owgRetainedEffortLog',[['','Choose retained log']]);
+        const loadLogs=button('Load local logs','secondary');
+        const notion=input('owgRetainedEffortType','text','case');notion.value='case';notion.maxLength=200;
+        const terminal=input('owgRetainedEffortCompletion','text','Exact stored activity');terminal.maxLength=200;
+        const effortActivity=input('owgRetainedEffortActivity','text','Exact stored effort activity');effortActivity.maxLength=200;
+        const attr=input('owgRetainedEffortAttribute','text','Exact event attribute');attr.maxLength=120;
+        const unit=select('owgRetainedEffortUnit',[['seconds','Seconds'],['minutes','Minutes'],['hours','Hours']]);
+        const confirm=input('owgRetainedEffortConsent','checkbox');
+        const effortStatus=el('div',null,'muted');effortStatus.setAttribute('role','status');
+        const effortPreview=button('Preview retained effort','secondary'),effortSave=button('Record reviewed measurement','secondary');
+        effortSave.disabled=true;
+        let effortSnapshot=null,effortTurn=0;
+        const currentEffort=()=>generation===detailGeneration&&effortPanel.isConnected;
+        const clearEffort=()=>{effortTurn++;effortSnapshot=null;effortSave.disabled=true;effortStatus.replaceChildren();};
+        for(const control of [kind,start,end,effortLog,notion,terminal,effortActivity,attr,unit]){
+          control.addEventListener('input',()=>{confirm.checked=false;clearEffort();});
+          control.addEventListener('change',()=>{confirm.checked=false;clearEffort();});
+        }
+        confirm.addEventListener('change',clearEffort);
+        loadLogs.onclick=async()=>{
+          clearEffort();const turn=effortTurn;loadLogs.disabled=true;
+          try{
+            const data=await (await api('/v1/event-logs')).json();
+            if(!currentEffort()||turn!==effortTurn)return;
+            effortLog.replaceChildren(el('option','Choose retained log'));effortLog.options[0].value='';
+            for(const log of data.logs||[]){const opt=el('option',log.name+' · '+log.events+' events');opt.value=log.log_id;effortLog.appendChild(opt);}
+            confirm.checked=false;
+          }catch(e){if(currentEffort()&&turn===effortTurn)effortStatus.textContent=e.message;}
+          finally{loadLogs.disabled=false;}
+        };
+        const effortSpec=()=>({expected_revision:idea.revision,log_id:effortLog.value,case_type:notion.value,
+          period:kind.value,start:start.value,end:end.value,completion_activity:terminal.value,
+          effort_activity:effortActivity.value,effort_attribute:attr.value,unit:unit.value,effort_semantics_confirmed:confirm.checked});
+        const effortBase='/v1/automation-pipeline/'+encodeURIComponent(idea.idea_id)+'/retained-effort';
+        effortPreview.onclick=async()=>{
+          clearEffort();const turn=effortTurn;const spec=effortSpec();
+          if(!spec.effort_semantics_confirmed){effortStatus.textContent='Confirm the attribute measures additive work effort.';return;}
+          effortPreview.disabled=true;effortStatus.textContent='Checking complete retained cohort…';
+          try{
+            const result=await post(effortBase+'/preview',spec);
+            if(!currentEffort()||turn!==effortTurn)return;
+            effortStatus.replaceChildren(el('p',result.counts.started_cases+' started cases; '+result.counts.complete_cases+' complete. '+result.counts.effort_events+' effort-event links.'),
+              el('p',Object.entries(result.counts).map(([key,count])=>key.replaceAll('_',' ')+': '+count).join(' · ')),
+              el('p',result.recordable?result.total_hours+' reported effort hours · '+result.minutes_per_case+' minutes/case':('Blocked: '+result.blockers.join(', '))),
+              el('p','Retained log revision '+result.log_revision+' · '+result.preview_sha256),el('p',result.interpretation));
+            if(result.recordable){effortSnapshot={spec,digest:result.preview_sha256};effortSave.disabled=false;}
+          }catch(e){if(currentEffort()&&turn===effortTurn)effortStatus.textContent=e.message;}
+          finally{effortPreview.disabled=false;}
+        };
+        effortSave.onclick=async()=>{
+          const snap=effortSnapshot;
+          if(!snap||!currentEffort()||JSON.stringify(effortSpec())!==JSON.stringify(snap.spec))return;
+          const turn=++effortTurn;effortSave.disabled=true;effortSnapshot=null;
+          try{const result=await post(effortBase+'/record',{...snap.spec,expected_preview:snap.digest});
+            if(currentEffort()){draw(result);if(turn===effortTurn)effortStatus.textContent='Retained effort measurement recorded. Preview again before another save.';}
+          }catch(e){if(currentEffort()&&turn===effortTurn)effortStatus.textContent=e.message;}
+        };
+        const effortFields=el('div',null,'row');effortFields.append(loadLogs,field('Retained log',effortLog),field('Case type',notion),
+          field('Final completion activity',terminal),field('Effort-bearing activity',effortActivity),field('Numeric event attribute',attr),field('Effort unit',unit));
+        effortPanel.append(effortFields,el('p','Uses the Period, From and To controls above.'),
+          field('I confirm the selected attribute measures additive effort, not elapsed or waiting time',confirm),effortPreview,effortSave,effortStatus);
+        value.append(grid,measStatus,effortPanel,host);box.appendChild(value);
         api('/v1/automation-pipeline/'+encodeURIComponent(idea.idea_id)+'/realized-value').then(r=>r.json()).then(r=>{if(generation===detailGeneration)draw(r);}).catch(e=>{measStatus.textContent=e.message;});
       }
       // These selections are navigation hints only, never an authorization or a source read.

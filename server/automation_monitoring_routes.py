@@ -165,6 +165,16 @@ async def compare_run_evidence(request: Request):
     return await _respond(evidence.compare, spec)
 
 
+@router.post("/v1/automation-monitoring/deployments/{deployment_id}/service-objectives")
+async def service_objective_review(request: Request, deployment_id: str):
+    from . import automation_service_objectives as objectives
+    from .event_log_routes import _json_body
+    _require_dashboard(request)
+    spec = await _json_body(request, "service objective settings", strict=True, limit=16384)
+    _require_dashboard(request)
+    return await _respond(objectives.analyze, deployment_id, spec)
+
+
 @router.get("/v1/automation-monitoring/deployments/{deployment_id}/monitor")
 async def monitor_deployment(request: Request, deployment_id: str, recent_days: int = Query(default=7, ge=1, le=90),
                              baseline_days: int = Query(default=28, ge=1, le=365)):
@@ -264,3 +274,21 @@ async def triage_automation_incident(request: Request, incident_id: str):
     _require_dashboard(request)
     payload = await _json(request, 4096)
     return await run_in_threadpool(_channel_call, incidents.triage, incident_id, payload)
+
+@router.post("/v1/automation-monitoring/incidents/{incident_id}/evidence")
+async def review_incident_run_evidence(request: Request, incident_id: str):
+    from . import automation_incident_evidence as evidence
+    from .event_log_routes import _json_body
+    _require_dashboard(request)
+    spec = await _json_body(request, "incident evidence selection", strict=True, limit=8192)
+    _require_dashboard(request)
+    return await _respond(evidence.review, incident_id, spec)
+
+@router.post("/v1/automation-monitoring/incidents/{incident_id}/evidence/triage")
+async def triage_reviewed_incident(request: Request, incident_id: str):
+    from . import automation_incident_evidence as evidence
+    from .event_log_routes import _json_body
+    _require_dashboard(request)
+    spec = await _json_body(request, "pinned incident evidence decision", strict=True, limit=8192)
+    _require_dashboard(request)
+    return await _respond(evidence.triage_reviewed, incident_id, spec)
