@@ -144,7 +144,7 @@ def worklist(reviewed,org,spec,principal):
     return _review(reviewed,org,spec,principal,worklist=True)
 
 
-def _review(reviewed,org,spec,principal,*,worklist):
+def _review(reviewed,org,spec,principal,*,worklist,retain=None):
     if not spec.confirm_conformance_review:
         raise JobError("explicit_conformance_rule_review_required",403)
     with reviewed.jobs._tx(org) as c:
@@ -182,7 +182,7 @@ def _review(reviewed,org,spec,principal,*,worklist):
                  "evaluations":len(rows)*len(ordered),"group_outcomes":counts(rows),
                  "rule_outcomes":counts([check for r in rows for check in r["checks"]])}
         reviewed._fresh(expires)
-        reviewed._audit(c,org,spec,principal,"conformance_worklist_export" if worklist else "conformance_review",
+        reviewed._audit(c,org,spec,principal,"conformance_triage_review" if retain else "conformance_worklist_export" if worklist else "conformance_review",
                         {"conformance_sha256":pin,"groups":len(rows),"rules":len(ordered),
                          "groups_returned":len(page)})
         reviewed._fresh(expires)
@@ -192,11 +192,14 @@ def _review(reviewed,org,spec,principal,*,worklist):
             exceptions=[{"linked_case_id":r["linked_case_id"],**check}
                         for r in rows for check in r["checks"]
                         if check["status"] in ("not_satisfied","indeterminate")]
-            return {"format":"openworkgraph.linked-conformance-worklist.v1",
+            report={"format":"openworkgraph.linked-conformance-worklist.v1",
                     "review_sha256":base["review_sha256"],"conformance_sha256":pin,
                     "scope_sha256":scope,"expires_at":expires,"summary":summary,
                     "exceptions":exceptions,"exception_count":len(exceptions),
                     "actual_process_compliance_verified":False}
+            if retain is not None:
+                return retain(c,report)
+            return report
         return {"format":FORMAT,"scope_sha256":scope,"review_sha256":base["review_sha256"],
                 "conformance_sha256":pin,"expires_at":expires,"rules":ordered,
                 "summary":summary,"rule_summary":summaries,"groups":page,
