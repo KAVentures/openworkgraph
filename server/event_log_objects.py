@@ -142,7 +142,7 @@ def object_graph(log_id: str) -> dict[str, Any]:
                 })
             relations, relation_status = _relations(conn, [t for t, _, _ in types])
             counts = {t: n for t, n, _ in types}
-            shared = conn.execute("""SELECT activity, list(DISTINCT object_type ORDER BY object_type), count(DISTINCT event_id)
+            shared = conn.execute("""SELECT activity, list(DISTINCT object_type ORDER BY object_type), count(DISTINCT event_id), count(*) OVER ()
                 FROM te GROUP BY activity HAVING count(DISTINCT object_type) > 1 ORDER BY 3 DESC, 1 LIMIT 50""").fetchall()
             type_count = conn.execute("SELECT count(DISTINCT object_type) FROM te").fetchone()[0]
             return {
@@ -157,7 +157,8 @@ def object_graph(log_id: str) -> dict[str, Any]:
                                "max_linked_per_object": top}
                               for a, b, n, links, mean, top in relations if a in counts and b in counts],
                 "activities_touching_several_types": [{"activity": a, "object_types": t, "events": n}
-                                                      for a, t, n in shared],
+                                                      for a, t, n, _ in shared],
+                "shared_activity_count": shared[0][3] if shared else 0,
                 "links_are_shared_events_not_verified_relationships": True,
                 **relation_status,
                 **workspace.DESCRIPTIVE_ONLY,
