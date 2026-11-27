@@ -8,12 +8,12 @@ replacement. None of these declarations assert live provider acceptance.
 from typing import Literal, get_args
 
 Provider = Literal["rest", "google", "sql", "slack", "salesforce",
-                   "servicenow", "sap", "dataverse", "hubspot", "databricks", "snowflake", "netsuite"]
+                   "servicenow", "sap", "dataverse", "hubspot", "databricks", "snowflake", "netsuite", "workday"]
 PROVIDERS = frozenset(get_args(Provider))
 CROSSWALK_PROVIDERS = frozenset({"rest", "sql", "salesforce", "servicenow",
                                  "sap", "dataverse", "hubspot"})
 ROTATION_PROVIDERS = frozenset({"dataverse", "hubspot"})
-FILE_SECRET_PROVIDERS = frozenset({"rest", "sql", "slack", "sap", "dataverse", "hubspot", "databricks", "snowflake", "netsuite"})
+FILE_SECRET_PROVIDERS = frozenset({"rest", "sql", "slack", "sap", "dataverse", "hubspot", "databricks", "snowflake", "netsuite", "workday"})
 
 # Fixed reviewed dispatch registry; never import a module name supplied by
 # a stored profile or request. REST is the common runtime itself.
@@ -29,6 +29,7 @@ NATIVE_ADAPTERS = {
     "databricks": "databricks_event_feed",
     "snowflake": "snowflake_event_feed",
     "netsuite": "netsuite_event_feed",
+    "workday": "workday_raas_feed",
 }
 
 def capabilities(provider):
