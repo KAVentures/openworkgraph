@@ -21,6 +21,19 @@ body{font:16px/1.5 system-ui,sans-serif;max-width:1050px;margin:auto;padding:20p
 <label>Compare the revision shown above against revision <input id="compareOther" type="number" min="1" max="10" step="1"></label>
 <button id="compareRun">Compare revisions</button>
 <div id="compareResult" role="status" aria-live="polite"></div>
+<details id="historyPanel">
+<summary>Review complete revision history and targets</summary>
+<p>Pin a contiguous historical prefix and select the exact measure definitions of an anchor revision. Values are publisher-supplied; revisions are not a calendar series.</p>
+<button id="historyPreview">Load retained revision pins</button>
+<label>Review through revision <select id="historyCutoff" disabled></select></label>
+<label>Anchor revision <select id="historyAnchor" disabled></select></label>
+<div id="historyPins" class="scroll"></div>
+<div id="historyTargets"></div>
+<button id="historyRun" disabled>Review pinned history</button>
+<button id="historyDownload" disabled>Recheck access and download JSON</button>
+<div id="historyStatus" role="status" aria-live="polite"></div>
+<div id="historyResult" class="scroll"></div>
+</details>
 </div>
 </section>
 <section id="portfolioReview" hidden>
@@ -75,7 +88,7 @@ function table(node,doc){
 }
 function clearCaseFile(){pairedCaseFileAttempt++;caseDataset=null;$('pairedCaseFile').value='';$('pairedCasePreview').replaceChildren();$('pairedCaseConfirm').checked=false;sync();}
 function clearFile(){fileAttempt++;snapshot=null;pairedCase=null;$('file').value='';$('preview').replaceChildren();$('confirm').checked=false;clearCaseFile();sync();}
-function clearSelection(){caseUI.clear();viewAttempt++;selected=null;$('revisionCompare').hidden=true;$('compareResult').replaceChildren();$('compareOther').value='';$('table').replaceChildren();$('coverage').replaceChildren();$('viewTitle').textContent='';$('basis').textContent='';$('revision').value='';$('detail').hidden=true;$('access').hidden=true;$('members').replaceChildren();$('renew').value='';$('title').value='';clearFile();}
+function clearSelection(){clearHistory();caseUI.clear();viewAttempt++;selected=null;$('revisionCompare').hidden=true;$('compareResult').replaceChildren();$('compareOther').value='';$('table').replaceChildren();$('coverage').replaceChildren();$('viewTitle').textContent='';$('basis').textContent='';$('revision').value='';$('detail').hidden=true;$('access').hidden=true;$('members').replaceChildren();$('renew').value='';$('title').value='';clearFile();}
 function sync(){
  $('portfolioReview').hidden=!credential;
  $('publisher').hidden=!credential||!canPublish;
@@ -393,6 +406,152 @@ async function reviewPortfolio(download=false){
 }
 $('portfolioRun').onclick=()=>reviewPortfolio(false);
 $('portfolioDownload').onclick=()=>reviewPortfolio(true);
+
+let historyInventory=null,historyTurn=0,historyReport=null;
+function invalidateHistory(){
+ historyTurn++;historyReport=null;$('historyResult').replaceChildren();
+ $('historyDownload').disabled=true;$('historyRun').disabled=!historyInventory;
+ $('historyStatus').textContent='';
+}
+function clearHistory(){
+ historyInventory=null;invalidateHistory();$('historyPanel').open=false;
+ $('historyPreview').disabled=false;
+ for(const id of ['historyCutoff','historyAnchor','historyPins','historyTargets'])$(id).replaceChildren();
+ $('historyCutoff').disabled=$('historyAnchor').disabled=true;
+}
+function historyTable(headers,rows){
+ const t=document.createElement('table'),head=document.createElement('thead'),tr=document.createElement('tr');
+ for(const h of headers){const th=text('th',h);th.scope='col';tr.append(th);}
+ head.append(tr);t.append(head);
+ const body=document.createElement('tbody');
+ for(const values of rows){const row=document.createElement('tr');for(const v of values)row.append(text('td',v==null?'—':String(v)));body.append(row);}
+ t.append(body);return t;
+}
+function historyOptions(id,values,selectedValue){
+ const select=$(id);select.replaceChildren();
+ for(const n of values){const o=text('option',String(n));o.value=String(n);select.append(o);}
+ select.value=String(selectedValue);select.disabled=!values.length;
+}
+function historyTargetFields(){
+ invalidateHistory();
+ const root=$('historyTargets');root.replaceChildren();
+ if(!historyInventory)return;
+ const revision=historyInventory.revisions[Number($('historyAnchor').value)-1];
+ if(!revision)return;
+ root.append(text('h4','Optional declared targets (exact anchor measures)'));
+ for(const column of revision.columns.filter(c=>c.kind==='number')){
+   const row=document.createElement('fieldset');row.dataset.heading=column.heading;
+   row.append(text('legend',[column.heading,column.aggregation,column.value_basis,column.unit].filter(Boolean).join(' · ')));
+   const enabled=document.createElement('input');enabled.type='checkbox';enabled.className='historyEnabled';
+   const enableLabel=text('label','Review this target ');enableLabel.append(enabled);
+   const op=document.createElement('select');op.className='historyOperator';
+   for(const [key,label] of [['at_least','At least'],['at_most','At most'],['between','Inclusive range']]){
+     const option=text('option',label);option.value=key;op.append(option);
+   }
+   const lo=document.createElement('input'),hi=document.createElement('input');
+   for(const el of [lo,hi]){el.type='text';el.inputMode='decimal';el.maxLength=65;el.autocomplete='off';}
+   lo.className='historyLower';hi.className='historyUpper';
+   const opLabel=text('label','Target operator ');opLabel.append(op);
+   const lowLabel=text('label','Threshold / lower endpoint ');lowLabel.append(lo);
+   const highLabel=text('label','Upper endpoint ');highLabel.append(hi);
+   const syncTarget=()=>{op.disabled=lo.disabled=!enabled.checked;hi.disabled=!enabled.checked||op.value!=='between';highLabel.hidden=op.value!=='between';};
+   enabled.onchange=op.onchange=()=>{invalidateHistory();syncTarget();};
+   lo.oninput=hi.oninput=invalidateHistory;syncTarget();
+   row.append(enableLabel,opLabel,lowLabel,highLabel);root.append(row);
+ }
+}
+function historyPrefix(){
+ const cutoff=Number($('historyCutoff').value),old=Number($('historyAnchor').value)||1;
+ historyOptions('historyAnchor',Array.from({length:cutoff},(_,i)=>i+1),Math.min(old,cutoff));
+ const rows=historyInventory.revisions.slice(0,cutoff);
+ $('historyPins').replaceChildren(historyTable(['Revision','Published','Cases','Rows','Exact digest'],
+   rows.map(r=>[r.revision,r.published_at,r.matching_cases,r.matching_rows,r.content_sha256])));
+ historyTargetFields();
+}
+$('historyCutoff').onchange=historyPrefix;
+$('historyAnchor').onchange=historyTargetFields;
+$('historyPreview').onclick=async()=>{
+ if(!selected||!credential)return;
+ const id=selected.view_id,attempt=viewAttempt,identity=epoch;
+ clearHistory();$('historyPanel').open=true;const turn=historyTurn;
+ $('historyPreview').disabled=true;$('historyStatus').textContent='Checking retained revision integrity…';
+ const active=()=>turn===historyTurn&&attempt===viewAttempt&&identity===epoch;
+ try{
+   const result=await api(base+'/'+id+'/history-review');
+   if(!active())return;
+   if(result.view_id!==id||result.revisions.length!==result.latest_revision||result.revisions.length<2||
+      !result.revisions.every((r,i)=>r.revision===i+1&&/^[a-f0-9]{64}$/.test(r.content_sha256)))
+     throw new Error('Unexpected revision inventory.');
+   historyInventory=result;
+   historyOptions('historyCutoff',Array.from({length:result.latest_revision-1},(_,i)=>i+2),result.latest_revision);
+   historyPrefix();$('historyStatus').textContent='Exact pins loaded. Review the prefix and optional targets.';
+ }catch(error){if(active())$('historyStatus').textContent=error.message;}
+ finally{if(attempt===viewAttempt&&identity===epoch)$('historyPreview').disabled=false;}
+};
+function historyPayload(){
+ const cutoff=Number($('historyCutoff').value);
+ const targets=[];
+ for(const row of $('historyTargets').querySelectorAll('fieldset')){
+   if(!row.querySelector('.historyEnabled').checked)continue;
+   const operator=row.querySelector('.historyOperator').value;
+   const threshold=row.querySelector('.historyLower').value.trim();
+   const upper=row.querySelector('.historyUpper').value.trim();
+   const valid=v=>/^-?(0|[1-9][0-9]{0,30})(\.[0-9]{1,30})?$/.test(v);
+   if(!valid(threshold)||(operator==='between'&&!valid(upper)))throw new Error('Enter bounded fixed-point decimal thresholds, without exponents.');
+   targets.push({heading:row.dataset.heading,operator,threshold,...(operator==='between'?{upper}:{})});
+ }
+ return {anchor_revision:Number($('historyAnchor').value),pins:historyInventory.revisions.slice(0,cutoff).map(r=>({
+   revision:r.revision,expected_content_sha256:r.content_sha256})),targets};
+}
+function renderHistory(report){
+ const root=$('historyResult');root.replaceChildren();
+ root.append(text('p','Reviewed revisions 1–'+report.reviewed_through_revision+'; anchor '+report.anchor_revision+
+   '. '+report.newer_revisions_excluded+' newer revisions excluded. Digest '+report.report_sha256),
+   text('p',report.adjacent_comparable_count+' comparable adjacent pairs; '+report.anchor_comparable_count+' compatible anchor entries.'));
+ if(report.conflicting_claimed_basis_pairs.length)root.append(text('p','Conflicting claimed basis: '+report.conflicting_claimed_basis_pairs.map(p=>p.join(' / ')).join('; ')));
+ const reasons=p=>p.refusal_reasons.map(r=>COMPARISON_REASONS[r]||r).join('; ');
+ function pairRows(pairs){
+   return pairs.flatMap(p=>p.comparable?p.changes.map(c=>[p.from_revision,p.to_revision,c.heading+(c.unit?' ('+c.unit+')':''),c.before,c.after,c.change_decimal,'']):
+     [[p.from_revision,p.to_revision,'Withheld',null,null,null,reasons(p)]]);
+ }
+ const headings=['From','To','Measure','Before','After','Change','Refusal'];
+ for(const [label,pairs] of [['Adjacent revision changes',report.adjacent_comparisons],['Anchor revision changes',report.anchor_comparisons]]){
+   const section=document.createElement('details');section.open=label.startsWith('Adjacent');section.append(text('summary',label),historyTable(headings,pairRows(pairs)));root.append(section);
+ }
+ for(const target of report.targets){
+   const t=target.target,c=target.column;
+   root.append(text('h4',c.heading+' · '+c.aggregation+(c.unit?' ('+c.unit+')':'')+' · '+t.operator+' '+t.threshold+(t.upper==null?'':' to '+t.upper)),
+     text('p',target.counts.met+' met, '+target.counts.outside+' outside, '+target.counts.withheld+' withheld. Longest consecutive met revisions: '+target.longest_consecutive_met_revisions),
+     historyTable(['Revision','Published value','Target status','Distance outside target','Refusal'],
+       target.revision_results.map(r=>[r.revision,r.value,r.status,r.distance_to_target_decimal,reasons(r)])),
+     historyTable(['From','To','Target transition'],target.transitions.map(r=>[r.from_revision,r.to_revision,r.status])));
+ }
+ const notes=document.createElement('ul');for(const n of report.interpretation)notes.append(text('li',n));root.append(notes);
+}
+async function runHistory(download){
+ if(!selected||!historyInventory||!credential)return;
+ const id=selected.view_id,attempt=viewAttempt,identity=epoch,turn=++historyTurn;
+ const active=()=>turn===historyTurn&&attempt===viewAttempt&&identity===epoch;
+ historyReport=null;$('historyResult').replaceChildren();$('historyRun').disabled=$('historyDownload').disabled=true;
+ try{
+   const payload=historyPayload();$('historyStatus').textContent='Checking exact revisions and current permissions…';
+   const report=await post(base+'/'+id+'/history-review',payload);
+   if(!active())return;
+   if(report.view_id!==id||report.anchor_revision!==payload.anchor_revision||
+      report.reviewed_through_revision!==payload.pins.length||
+      !/^[a-f0-9]{64}$/.test(report.report_sha256)||
+      !report.revisions.every((r,i)=>r.content_sha256===payload.pins[i]?.expected_content_sha256))throw new Error('Unexpected review basis.');
+   historyReport=report;renderHistory(report);$('historyStatus').textContent='Review complete. No policy or publication was changed.';
+   if(download){
+     const url=URL.createObjectURL(new Blob([JSON.stringify(report,null,2)],{type:'application/json'}));
+     try{const a=document.createElement('a');a.href=url;a.download='owg-analysis-history.json';a.click();}
+     finally{URL.revokeObjectURL(url);}
+   }
+ }catch(error){if(active())$('historyStatus').textContent=error.message;}
+ finally{if(active()){$('historyRun').disabled=!historyInventory;$('historyDownload').disabled=!historyReport;}}
+}
+$('historyRun').onclick=()=>runHistory(false);
+$('historyDownload').onclick=()=>runHistory(true);
 
 $('compareRun').onclick=()=>run(async()=>{
  if(!selected||selected.revision<2)return;
