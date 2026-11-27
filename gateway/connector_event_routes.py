@@ -268,6 +268,26 @@ def install(app,jobs,admin):
 
     # Specific saved-review and exception-queue delete routes must be registered
     # before the generic job/grant deletion pattern.
+    @router.get(base+"/{organization_id}/exception-queues/{queue_id}/followups")
+    async def exception_followups(organization_id:str,queue_id:str,authorization:str|None=Header(default=None)):
+        from .connector_exception_followup import report
+        owner(authorization)
+        return await reply(report,queues,organization_id,queue_id)
+
+    @router.post(base+"/{organization_id}/exception-queues/{queue_id}/followups/change")
+    async def change_exception_followups(organization_id:str,queue_id:str,request:Request,authorization:str|None=Header(default=None)):
+        from .connector_exception_followup import Change,change
+        principal=owner(authorization,True)
+        return await reply(change,queues,organization_id,queue_id,await parse(request,Change,maximum=32768),principal)
+
+    @router.post(base+"/{organization_id}/exception-queues/{queue_id}/followups/export")
+    async def export_exception_followups(organization_id:str,queue_id:str,request:Request,authorization:str|None=Header(default=None)):
+        from .connector_exception_followup import Export,export
+        principal=owner(authorization,True)
+        result=await reply(export,queues,organization_id,queue_id,await parse(request,Export),principal)
+        result.headers["Content-Disposition"]='attachment; filename="owg-evidence-followups.json"'
+        return result
+
     @router.post(base+"/{organization_id}/{job_id}/{grant_id}/delete")
     async def delete(organization_id:str,job_id:str,grant_id:str,request:Request,authorization:str|None=Header(default=None)):
         principal=owner(authorization,True)
