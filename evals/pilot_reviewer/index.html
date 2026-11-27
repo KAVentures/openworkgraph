@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'none'; img-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>OWG private pilot reviewer</title>
+  <link rel="stylesheet" href="reviewer.css">
+  <script src="reviewer.js" defer></script>
+</head>
+<body>
+  <main>
+    <header>
+      <h1>OWG private pilot reviewer</h1>
+      <p>Review approved material locally. This page sends nothing to a server, stores nothing in browser storage, and cannot verify reviewer independence or blinding.</p>
+    </header>
+    <section aria-labelledby="open-heading">
+      <h2 id="open-heading">1. Open a reviewer packet</h2>
+      <label for="packet-file">Approved reviewer or disagreement packet (JSON)</label>
+      <input id="packet-file" type="file" accept=".json,application/json">
+      <p>Do not open private keys, truth files, execution ledgers, or source receipts. Only use material explicitly authorized for you.</p>
+      <div id="notice" role="status" aria-live="polite"></div>
+    </section>
+    <section id="workspace" hidden aria-labelledby="review-heading">
+      <h2 id="review-heading">2. Review assigned entries</h2>
+      <div class="identity">
+        <label for="reviewer">Declared reviewer ID</label>
+        <input id="reviewer" maxlength="128" autocomplete="off" spellcheck="false">
+        <label for="sheet-file">Resume a previously exported review sheet (optional)</label>
+        <input id="sheet-file" type="file" accept=".json,application/json">
+      </div>
+      <p id="coverage" role="status" aria-live="polite"></p>
+      <div class="review-layout">
+        <nav aria-label="Review entry navigation">
+          <label for="filter">Show entries</label>
+          <select id="filter">
+            <option value="all">All</option>
+            <option value="pending">Not saved</option>
+            <option value="saved">Saved</option>
+          </select>
+          <ol id="entry-list"></ol>
+          <div class="buttons">
+            <button type="button" id="page-back">Previous page</button>
+            <button type="button" id="page-next">Next page</button>
+          </div>
+        </nav>
+        <article id="entry" hidden aria-labelledby="entry-heading">
+          <h3 id="entry-heading" tabindex="-1"></h3>
+          <h4>Approved prompt</h4>
+          <pre id="prompt"></pre>
+          <h4>Approved response</h4>
+          <pre id="response"></pre>
+          <section id="disagreement" hidden>
+            <h4>Independent judgments to resolve</h4>
+            <p id="difference"></p>
+            <div class="comparison">
+              <div><h5>First review</h5><pre id="first"></pre></div>
+              <div><h5>Second review</h5><pre id="second"></pre></div>
+            </div>
+          </section>
+          <form id="review-form" novalidate>
+            <label for="selected_resources">Selected resources (JSON array of exact IDs)</label>
+            <textarea id="selected_resources" rows="3" placeholder='["resource-id"]' spellcheck="false"></textarea>
+            <label for="selected_agent_runs">Selected agent runs (JSON array of exact IDs)</label>
+            <textarea id="selected_agent_runs" rows="3" placeholder="[]" spellcheck="false"></textarea>
+            <label for="clarification_questions">Clarification questions (nonnegative integer)</label>
+            <input id="clarification_questions" type="number" min="0" step="1" inputmode="numeric">
+            <label for="wrong_assumptions">Wrong assumptions (nonnegative integer)</label>
+            <input id="wrong_assumptions" type="number" min="0" step="1" inputmode="numeric">
+            <label for="continuation_success">Continuation success</label>
+            <select id="continuation_success"><option value="">Not judged</option><option value="true">Yes</option><option value="false">No</option></select>
+            <label for="consequential_wrong_action">Consequential wrong action</label>
+            <select id="consequential_wrong_action"><option value="">Not judged</option><option value="true">Yes</option><option value="false">No</option></select>
+            <div id="resolution-group" hidden>
+              <label for="resolution_reason">Reason for independent resolution</label>
+              <textarea id="resolution_reason" rows="3"></textarea>
+            </div>
+            <div class="buttons">
+              <button type="submit" id="save">Save judgment</button>
+              <button type="button" id="clear">Remove saved judgment</button>
+              <button type="button" id="next-entry">Next unsaved entry</button>
+            </div>
+          </form>
+          <p id="entry-message" role="status" aria-live="polite"></p>
+        </article>
+      </div>
+    </section>
+    <section id="export-section" hidden aria-labelledby="export-heading">
+      <h2 id="export-heading">3. Export saved judgments</h2>
+      <p>Only saved judgments are exported. Missing entries remain unknown; they are not automatically graded as false. Keep the downloaded sheet in your approved private storage.</p>
+      <div class="buttons">
+        <button type="button" id="export">Export review sheet</button>
+        <button type="button" id="reset">Clear reviewer workspace</button>
+      </div>
+    </section>
+  </main>
+</body>
+</html>
