@@ -46,9 +46,14 @@ def read_document(raw):
         doc=json.loads(raw.decode("utf-8"),object_pairs_hook=_pairs,parse_constant=_constant)
     except (ValueError,UnicodeError,RecursionError):
         raise ImplementationError("invalid_openapi_json") from None
+    return validate_document(doc)
+
+
+def validate_document(doc):
     object_value(doc)
     require(isinstance(doc.get("openapi"),str) and re.fullmatch(r"3\.[01]\.[0-9]+",doc["openapi"]),"unsupported_openapi_version")
     require("jsonSchemaDialect" not in doc,"custom_schema_dialect_unsupported")
+    require("$ref" not in doc,"root_reference_unsupported")
     paths=object_value(doc.get("paths"))
     require(1<=len(paths)<=MAX_PATHS,"openapi_path_budget")
     # Ignore top-level documentation but never follow references or URLs.
@@ -247,12 +252,16 @@ def compile_operation(doc,chosen,path,method):
 
 
 def inventory(doc,chosen):
-    fixed_origin(chosen)
+    validate_document(doc);fixed_origin(chosen)
     rows=[]
     ids={};shapes={};omitted=0
+    fixed_paths={}
     for path in doc["paths"]:
         shape=re.sub(r"\{[^{}]+\}","{}",path)
         shapes[shape]=shapes.get(shape,0)+1
+        try:path_names(path)
+        except ImplementationError:continue
+        fixed_paths[path]=path[1:].split("/")
     for path,item in sorted(doc["paths"].items()):
         if not isinstance(item,dict):continue
         for method in HTTP_METHODS:
@@ -272,6 +281,15 @@ def inventory(doc,chosen):
             rows.append(row)
     require(len(rows)<=MAX_PATHS*len(HTTP_METHODS),"operation_inventory_budget")
     for row in rows:
+        segments=fixed_paths[row["path"]]
+        # A templated argument might resolve to a different documented route
+        # (e.g. /users/me). The runtime cannot enforce exclusion constraints;
+        # do not propose the ambiguous templated contract automatically.
+        if any(PLACEHOLDER.fullmatch(x) for x in segments) and any(
+            other!=row["path"] and len(parts)==len(segments) and all(
+                a==b or PLACEHOLDER.fullmatch(a) or PLACEHOLDER.fullmatch(b)
+                for a,b in zip(segments,parts)) for other,parts in fixed_paths.items()):
+            row.update(status="unsupported",reason="overlapping_templated_route",operation=None)
         if shapes[re.sub(r"\{[^{}]+\}","{}",row["path"])]>1:
             row.update(status="unsupported",reason="ambiguous_template_path",operation=None)
         if row["operation_id"] is not None and ids[row["operation_id"]]>1:
