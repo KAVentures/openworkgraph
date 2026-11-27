@@ -8,7 +8,7 @@ import unittest
 from unittest.mock import patch
 
 from execute import ImplementationError,digest
-from import_openapi import read_document,inventory,propose,approve,main
+from import_openapi import read_document,inventory,propose,approve,compare,main
 
 ORIGIN="https://customer.example"
 SPEC={"workflow_id":"fixture","revision":1,"content_sha256":"a"*64}
@@ -154,6 +154,29 @@ class OpenAPIProposalTests(unittest.TestCase):
             self.assertEqual(ops.request("read_case",{"case_id":"123","query_verbose":True})[2],{"verbose":True})
             with self.assertRaises(ImplementationError):
                 ops.request("read_case",{"case_id":"../private","query_verbose":True})
+
+    @unittest.skipUnless(importlib.util.find_spec("httpx"),"httpx required for actual runtime parity")
+    def test_catalog_upgrade_requires_review_even_if_unchanged(self):
+        doc=fixture();p=propose(SPEC,doc,ORIGIN,selection("get","patch"))
+        old=approve(SPEC,doc,p,p["proposal_sha256"],["read_case","update_case"],
+                    confirm_contracts=True,confirm_writes=True)
+        same=compare(SPEC,old,digest(old),doc)
+        self.assertTrue(same["all_representable_contracts_unchanged"])
+        self.assertTrue(same["fresh_review_required"])
+        self.assertFalse(same["new_disabled_proposal"]["operations"]["reviewed"])
+        changed=deepcopy(doc)
+        changed["components"]["schemas"]["Status"]["type"]="integer"
+        new=compare(SPEC,old,digest(old),changed)
+        self.assertFalse(new["all_representable_contracts_unchanged"])
+        self.assertTrue(new["all_previous_operations_representable"])
+        update=next(r for r in new["operations"] if r["operation_id"]=="update_case")
+        self.assertEqual(update["changed_argument_types"],["body_status"])
+        self.assertFalse(new["new_disabled_proposal"]["operations"]["allow_writes"])
+        removed=deepcopy(doc);removed["paths"][PATH].pop("patch")
+        result=compare(SPEC,old,digest(old),removed)
+        self.assertIsNone(result["new_disabled_proposal"])
+        self.assertFalse(result["all_previous_operations_representable"])
+        with self.assertRaises(ImplementationError):compare(SPEC,old,"f"*64,doc)
 
     def test_cli_inspect_propose_exclusive_output(self):
         with tempfile.TemporaryDirectory() as root:
