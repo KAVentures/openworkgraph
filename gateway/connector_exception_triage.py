@@ -14,6 +14,7 @@ from .connector_jobs import JobError
 ID=r"^cet_[a-f0-9]{32}$"
 MAX_QUEUES=10
 MAX_ITEMS=20000
+MAX_ORG_ITEMS=40000
 MAX_HISTORY=10
 MAX_BATCH=50
 STATES=("open","investigating","reviewed","deferred")
@@ -171,14 +172,18 @@ class Queues:
                        org,report["conformance_sha256"]).fetchone()
             if old:
                 d=self._require(c,org,old[0])
+                result=self._public(c,org,d)
                 self.reviewed._fresh(d["expires_at"])
-                return {"queue":self._public(c,org,d),"already_exists":True}
+                return {"queue":result,"already_exists":True}
             if not report["exceptions"]:
                 raise JobError("no_exceptions_to_review",422)
             if len(report["exceptions"])>MAX_ITEMS:
                 raise JobError("exception_item_budget_exceeded")
             if self.q(c,"SELECT count(*) FROM connector_exception_queues WHERE organization_id=?",org).fetchone()[0]>=MAX_QUEUES:
                 raise JobError("exception_queue_limit")
+            total=self.q(c,"SELECT count(*) FROM connector_exception_items WHERE organization_id=?",org).fetchone()[0]
+            if total+len(report["exceptions"])>MAX_ORG_ITEMS:
+                raise JobError("organization_exception_item_budget_exceeded")
             queue="cet_"+secrets.token_hex(16);now=self.jobs.clock()
             d={k:report[k] for k in ("review_sha256","conformance_sha256","scope_sha256","expires_at","exception_count")}
             d.update(queue_id=queue,revision=1,created_at=now,updated_at=now,
@@ -186,17 +191,25 @@ class Queues:
             self.q(c,"INSERT INTO connector_exception_queues VALUES (?,?,?,?,?)",org,queue,d["conformance_sha256"],d["expires_at"],json.dumps(d))
             for p in spec.snapshots:
                 self.q(c,"INSERT INTO connector_exception_pins VALUES (?,?,?,?,?,?)",org,queue,p.job_id,p.grant_id,p.publication_revision,p.manifest_sha256)
+            batch=[]
             for row in report["exceptions"]:
                 identity=digest({"conformance_sha256":d["conformance_sha256"],
                                   "linked_case_id":row["linked_case_id"],"rule_id":row["rule_id"]})
                 item={**row,"item_id":identity,"state":"open","revision":1,"disposition":None,"history":[]}
-                self.q(c,"INSERT INTO connector_exception_items VALUES (?,?,?,?,?,?)",
-                       org,queue,identity,"open",1,json.dumps(item))
+                batch.append((org,queue,identity,"open",1,json.dumps(item)))
+                if len(batch)==100:
+                    self._insert_items(c,batch);batch=[]
+            if batch:self._insert_items(c,batch)
             self._audit(c,org,d,principal,"created",{"exception_count":d["exception_count"]})
             result=self._public(c,org,d)
             self.reviewed._fresh(d["expires_at"])
             return {"queue":result,"already_exists":False}
         return _review(self.reviewed,org,spec,principal,worklist=True,retain=retain)
+
+    def _insert_items(self,c,batch):
+        # 600 bind variables at most, below even legacy SQLite limits.
+        sql="INSERT INTO connector_exception_items VALUES "+",".join(["(?,?,?,?,?,?)"]*len(batch))
+        self.q(c,sql,*(v for row in batch for v in row))
 
     def inventory(self,org):
         with self.jobs._tx(org) as c:
@@ -204,7 +217,9 @@ class Queues:
             rows=[]
             for (queue,) in self.q(c,"SELECT queue_id FROM connector_exception_queues WHERE organization_id=? ORDER BY queue_id",org).fetchall():
                 d=self._valid(c,org,queue)
-                if d:rows.append(self._public(c,org,d))
+                if d:
+                    result=self._public(c,org,d)
+                    if d["expires_at"]>self.jobs.clock():rows.append(result)
             return {"queues":rows,"retention_cleanup_ok":self.retention_ok,
                     "raw_events_stored":False,"activity_labels_stored":False}
 
