@@ -152,6 +152,9 @@ def _key(p, domain, value):
 
 
 def _check_binding(p):
+    if p.get("provider") == "slack":
+        from . import slack_native_feed as slack
+        return slack.check_binding(p)
     if p.get("provider") == "sql":
         from . import enterprise_sql_feed as sql
         return sql.check_binding(p)
@@ -339,6 +342,9 @@ def _begin(profile_id,revision,now):
             if p.get("provider")=="google":
                 from . import google_workspace_audit as google
                 now=google.review_cutoff(p,now,start)
+            if p.get("provider")=="slack":
+                from . import slack_native_feed as slack
+                now=slack.cutoff(p,now,start)
             if now<start:
                 raise FeedError("clock_before_checkpoint")
             until=min(now,start+timedelta(hours=p["config"]["window_hours"]))
@@ -495,7 +501,7 @@ def _retain(p,rows,counts,until):
                 added=result["added_events"]
                 duplicates=result["duplicate_events_skipped"]
             else:
-                result=workspace.import_log(source,name={"google":"Google Workspace audit ","sql":"Enterprise SQL "}.get(p.get("provider"),"Enterprise REST ")+p["profile_id"],source_format="csv",
+                result=workspace.import_log(source,name={"google":"Google Workspace audit ","sql":"Enterprise SQL ","slack":"Slack activity "}.get(p.get("provider"),"Enterprise REST ")+p["profile_id"],source_format="csv",
                                             mapping=mapping,_transaction_hook=checkpoint)
                 added=result["events"]
                 duplicates=0
@@ -543,7 +549,10 @@ def run(profile_id,revision,*,confirm_reads,confirm_retention,client_factory=htt
         raise FeedError("exact_revision_required",422)
     p,since,until=_begin(profile_id,revision,now or _now())
     try:
-        if p.get("provider")=="sql":
+        if p.get("provider")=="slack":
+            from . import slack_native_feed as slack
+            rows,counts=slack.extract(p,since,until,client_factory)
+        elif p.get("provider")=="sql":
             from . import enterprise_sql_feed as sql
             rows,counts=sql.extract(p,since,until)
         elif p.get("provider")=="google":
@@ -585,6 +594,7 @@ def run_scheduled(profile_id,revision):
         if error.code in {"unknown_rest_profile","rest_profile_disabled","profile_changed_or_disabled",
                            "credential_changed_reconfigure_required","rest_run_invalidated",
                            "endpoint_not_deployment_allowlisted","google_grant_unavailable","google_grant_scope_mismatch","google_reconnect_required",
+                           "slack_credential_unavailable","slack_enterprise_mismatch","slack_workspace_mismatch","slack_channel_scope_not_verified","slack_principal_changed_during_read",
                            "sql_source_not_deployment_allowlisted","sql_source_definition_changed",
                            "sql_source_schema_changed_requires_new_profile","sql_mapped_column_missing_or_type_changed"}:
             return "paused:rest_profile_changed",0.0
