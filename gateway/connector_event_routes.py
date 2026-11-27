@@ -313,6 +313,21 @@ def install(app,jobs,admin):
         return await reply(reassessments.record,organization_id,queue_id,packet_id,
                            await parse(request,ReassessmentApply,maximum=2*MAX_REQUEST+131072),principal)
 
+    from .connector_guided_reassessment import Guided, Discover as GuidedDiscover, Build as GuidedBuild
+    guided=Guided(queues)
+
+    @router.post(base+"/{organization_id}/exception-queues/{queue_id}/followups/{packet_id}/reassessment-catalog")
+    async def reassessment_catalog(organization_id:str,queue_id:str,packet_id:str,request:Request,authorization:str|None=Header(default=None)):
+        principal=owner(authorization,True)
+        return await reply(guided.discover,organization_id,queue_id,packet_id,
+                           await parse(request,GuidedDiscover,maximum=2*MAX_REQUEST+131072),principal)
+
+    @router.post(base+"/{organization_id}/exception-queues/{queue_id}/followups/{packet_id}/reassessment-build")
+    async def reassessment_build(organization_id:str,queue_id:str,packet_id:str,request:Request,authorization:str|None=Header(default=None)):
+        principal=owner(authorization,True)
+        return await reply(guided.build,organization_id,queue_id,packet_id,
+                           await parse(request,GuidedBuild,maximum=2*MAX_REQUEST+131072),principal)
+
     # Register the generic publication delete after specific queue/plan routes.
     @router.post(base+"/{organization_id}/{job_id}/{grant_id}/delete")
     async def delete(organization_id:str,job_id:str,grant_id:str,request:Request,authorization:str|None=Header(default=None)):
