@@ -3980,6 +3980,13 @@ the current selection. The dashboard checks that
 the saved hidden set has not changed since it loaded. If another view changed
 it, reload before saving; the stale selection is not applied.
 
+### Association result freshness
+
+Changing an association outcome or its settings clears the previous results and
+case actions. Run the analysis again before inspecting, tagging, filtering or
+saving cases. A response to an earlier request is discarded if settings change
+while it is running.
+
 ### Reusing activity groupings across logs
 
 Under **Group activities**, download a saved mapping as JSON. In another log,
