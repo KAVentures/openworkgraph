@@ -29,6 +29,38 @@ const path=require('node:path');
    await page.locator('#owgPipelineCard').waitFor();
    await page.locator('#owgPipelineCounts').filter({hasText:'No ideas yet.'}).waitFor();
 
+   // Exact budget frontier uses real local revisions and is read-only.
+   const frontierIds=await page.evaluate(async()=>{
+     const base='/v1/automation-pipeline',headers={'Content-Type':'application/json'},ids=[];
+     for(const [title,amount] of [['Frontier A',10],['Frontier B',20]]){
+       const r=await fetch(base,{method:'POST',headers,body:JSON.stringify({title})});
+       if(!r.ok)throw Error(await r.text());const idea=await r.json();ids.push(idea.idea_id);
+       const plan=await fetch(base+'/'+idea.idea_id+'/planning',{method:'POST',headers,body:JSON.stringify({expected_revision:idea.revision,budget:{amount,currency:'SEK',basis:'estimate'}})});
+       if(!plan.ok)throw Error(await plan.text());
+     }return ids;
+   });
+   await page.locator('#owgPipelineBudgetScenario').click();
+   await page.locator('#owgBudgetCurrency').fill('SEK');
+   await page.locator('#owgBudgetLimit').fill('20');
+   await page.getByLabel('Select Frontier A',{exact:true}).check();
+   await page.getByLabel('Priority points for Frontier A',{exact:true}).fill('30');
+   await page.getByLabel('Select Frontier B',{exact:true}).check();
+   await page.getByLabel('Priority points for Frontier B',{exact:true}).fill('50');
+   await page.locator('#owgBudgetFrontier').check();
+   await page.locator('#owgBudgetFrontierTargets').fill('30,50,80');
+   await page.locator('#owgBudgetFrontierCheckpoints').fill('0,10,20,30');
+   await page.getByRole('button',{name:'Evaluate exact portfolio combinations'}).click();
+   await page.locator('#owgBudgetFrontierResult').getByRole('heading',{name:'Budget checkpoint sensitivity'}).waitFor();
+   const [frontierDownload]=await Promise.all([page.waitForEvent('download'),page.getByRole('button',{name:'Download scenario report'}).click()]);
+   const frontierReport=JSON.parse(await fs.readFile(await frontierDownload.path(),'utf8'));
+   assert.equal(frontierReport.frontier_review.maximum_priority_at_current_budget,50);
+   assert.equal(frontierReport.frontier_review.priority_targets[2].least_cost_portfolio.additional_budget_required,'10');
+   assert.equal(frontierReport.frontier_review.budget_checkpoints[3].best_portfolio.priority_points,80);
+   await page.locator('#owgBudgetFrontierTargets').fill('80');
+   assert(await page.getByRole('button',{name:'Download scenario report'}).isDisabled());
+   await page.evaluate(async ids=>{for(const id of ids){const r=await fetch('/v1/automation-pipeline/'+id+'/delete',{method:'POST'});if(!r.ok)throw Error(await r.text());}},frontierIds);
+   await page.locator('#owgPipelineRefresh').click();
+   await page.locator('#owgPipelineCounts').filter({hasText:'No ideas yet.'}).waitFor();
    await page.locator('#owgPipelineTitle').fill('Copy approved prices into renewals');
    await page.locator('#owgPipelineSource').selectOption('process_catalog');await page.locator('#owgPipelineReference').fill('Renewals r3');
    await page.locator('#owgPipelineAdd').click();

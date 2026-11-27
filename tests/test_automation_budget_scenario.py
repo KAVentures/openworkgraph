@@ -157,6 +157,15 @@ with TestClient(app) as client:
     assert result.status_code==200,result.text
     assert result.headers["cache-control"]=="no-store"
     assert result.json()["alternatives"][0]["priority_points"]==110
+    extended=request([(a,10),(b,100)],limit=10,frontier_review={"priority_targets":[10,110],"budget_checkpoints":[0,10,30]})
+    assert client.post(url,json=extended,headers=bearer).status_code in (401,403)
+    review=client.post(url,json=extended,headers=h)
+    assert review.status_code==200,review.text
+    f=review.json()["frontier_review"]
+    assert f["maximum_priority_at_current_budget"]==10
+    assert f["priority_targets"][1]["least_cost_portfolio"]["additional_budget_required"]=="20"
+    assert f["budget_checkpoints"][-1]["best_portfolio"]["priority_points"]==110
+    assert review.headers["cache-control"]=="no-store"
     assert client.post(url,content=b'{"max_selected":1,"max_selected":2}',headers={**h,"Content-Type":"application/json"}).status_code==422
 """
     env={**os.environ,"WORKFLOW_OBSERVER_DATA":str(tmp_path/"data"),
