@@ -167,3 +167,65 @@ def test_guard_releases_and_refuses_parallel_search():
         with pytest.raises(p.PipelineError,match="another local portfolio"):s.solve(spec)
     finally:f.GUARD.release()
     assert s.solve(spec)["search_complete"]
+
+
+def test_stakeholder_robustness_exact_independent_oracle():
+    from server.automation_portfolio_preferences import Profile
+    rng=random.Random(1560)
+    for _ in range(120):
+        n=rng.randint(1,8)
+        ids=[f"i{i}" for i in range(n)]
+        costs=[Decimal(rng.randrange(1,12)) for _ in ids]
+        weights=[[rng.randrange(0,101) for _ in ids] for _ in range(3)]
+        cap=Decimal(rng.randrange(1,24))
+        profiles=[Profile(label=f"Profile {i}",priorities=dict(zip(ids,w))) for i,w in enumerate(weights[1:])]
+        engine=f.Frontier(ids,cap,[0],profiles=profiles)
+        population=[]
+        for k in range(n+1):
+            for subset in combinations(range(n),k):
+                cost=sum((costs[i] for i in subset),Decimal(0))
+                scores=tuple(sum(w[i] for i in subset) for w in weights)
+                engine.visit(sum(1<<i for i in subset),cost,scores[0])
+                if cost<=cap:population.append((tuple(ids[i] for i in subset),cost,scores))
+        result=engine.report()["preference_review"]
+        ideal=tuple(max(x[2][i] for x in population) for i in range(3))
+        def regrets(x):return tuple(a-b for a,b in zip(ideal,x[2]))
+        def secondary(x):return x[1],len(x[0]),x[0]
+        minimax=min(population,key=lambda x:(max(regrets(x)),sum(regrets(x)),*secondary(x)))
+        maximin=min(population,key=lambda x:(-min(x[2]),-sum(x[2]),*secondary(x)))
+        for label,expected in [("minimax_regret_portfolio",minimax),("maximin_priority_portfolio",maximin)]:
+            row=result[label]
+            assert tuple(row["selected_idea_ids"])==expected[0]
+            assert Decimal(row["budget_used"])==expected[1]
+            assert tuple(s["priority_points"] for s in row["profile_scores"])==expected[2]
+            assert row["maximum_regret_points"]==max(regrets(expected))
+        assert result["simultaneously_optimal_portfolios"]==sum(x[2]==ideal for x in population)
+        assert [x["ideal_priority_points"] for x in result["individual_optima"]]==list(ideal)
+
+
+def test_integrated_conflicting_preferences_and_compromise():
+    a=idea("A",10);b=idea("B",10);c=idea("Compromise",10)
+    r=s.solve(request([(a,100),(b,0),(c,60)],limit=10,frontier_review={
+        "priority_targets":[60],"preference_profiles":[{"label":"Other team",
+        "priorities":{a["idea_id"]:0,b["idea_id"]:100,c["idea_id"]:60}}]}))["frontier_review"]["preference_review"]
+    assert r["minimax_regret_portfolio"]["selected_idea_ids"]==[c["idea_id"]]
+    assert r["maximin_priority_portfolio"]["selected_idea_ids"]==[c["idea_id"]]
+    assert r["minimax_regret_portfolio"]["maximum_regret_points"]==40
+    assert r["simultaneously_optimal_portfolios"]==0
+
+
+def test_bad_preference_profiles_and_empty_feasible_population():
+    a=idea("A",10)
+    ident=a["idea_id"]
+    for profiles in [[{"label":"Team","priorities":{}}],
+                     [{"label":"Team","priorities":{ident:True}}],
+                     [{"label":"Team","priorities":{ident:101}}],
+                     [{"label":"Original priority","priorities":{ident:50}}],
+                     [{"label":"Team","priorities":{ident:10}},{"label":"team","priorities":{ident:20}}],
+                     [{"label":"Team","priorities":{ident:10,"foreign":20}}]]:
+        with pytest.raises(p.PipelineError):
+            s.solve(request([(a,10)],frontier_review={"priority_targets":[10],"preference_profiles":profiles}))
+    r=s.solve(request([(a,10)],limit=0,required=[ident],frontier_review={"priority_targets":[10],
+        "preference_profiles":[{"label":"Team","priorities":{ident:20}}]}))["frontier_review"]["preference_review"]
+    assert r["status"]=="no_feasible_portfolio"
+    assert r["minimax_regret_portfolio"] is None

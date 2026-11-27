@@ -86,3 +86,7 @@ and exact decimal costs. Real retained pipeline tests cover
 dependencies, infeasible caps, stale snapshots and admission recovery.
 Authenticated HTTP and real browser tests exercise the opt-in
 workbench and complete JSON export. Native CI remains required.
+
+## Competing stakeholder preferences
+
+Optionally declare up to three alternate priority profiles (at most 16 candidates for this mode, 65,536 subsets). Each profile must contain exactly one integer score 0–100 per selected idea and a distinct label. The original points form the first profile. The template button prepares an editable alternate profile using selected IDs. All profiles use the same current budget, prerequisites, required membership and feasible subsets. The engine retains the bounded feasible score vectors during the original enumeration, then finds each profile's optimum and exactly minimizes worst regret (gap from that profile's optimum), then total regret, cost, count and IDs. A second rule maximizes worst score, then total score, then minimizes cost/count/IDs. The output shows each score and regret, the number of portfolios simultaneously optimal for every profile, and exact alternate inputs. These are declared comparable preference scales, not predictions or measured benefits. The additional tests use 120 independently enumerated small populations and a conflicting-preference compromise case.

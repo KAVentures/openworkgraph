@@ -28,6 +28,7 @@ class PreferenceReview:
     def __init__(self,frontier,profiles):
         self.frontier=frontier
         self.labels=["Original priority",*(p.label for p in profiles)]
+        self.alternate_profiles=[p.model_dump() for p in profiles]
         self.scores=[tuple(p.priorities[k] for k in frontier.ids) for p in profiles]
         self.records=[]
         self.best=[None]*len(self.labels)
@@ -60,7 +61,7 @@ class PreferenceReview:
 
     def report(self):
         if not self.records:
-            return {"status":"no_feasible_portfolio","profiles":self.labels,"feasible_subsets":0,
+            return {"status":"no_feasible_portfolio","profiles":self.labels,"alternate_profile_inputs":self.alternate_profiles,"feasible_subsets":0,
                     "individual_optima":[],"minimax_regret_portfolio":None,"maximin_priority_portfolio":None,
                     "simultaneously_optimal_portfolios":0,"robustness_verified_over_declared_profiles":True,
                     "future_preferences_verified":False}
@@ -73,7 +74,7 @@ class PreferenceReview:
         minimax=min(self.records,key=regret_key)
         maximin=min(self.records,key=maximin_key)
         common=sum(tuple(r[2])==tuple(ideals) for r in self.records)
-        return {"status":"feasible","profiles":self.labels,"feasible_subsets":len(self.records),
+        return {"status":"feasible","profiles":self.labels,"alternate_profile_inputs":self.alternate_profiles,"feasible_subsets":len(self.records),
                 "individual_optima":[{"label":label,"ideal_priority_points":ideals[i],"portfolio":self.packet(r,ideals)}
                     for i,(label,r) in enumerate(zip(self.labels,self.best))],
                 "minimax_regret_portfolio":self.packet(minimax,ideals),

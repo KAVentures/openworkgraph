@@ -163,7 +163,7 @@ with TestClient(app) as client:
     assert review.status_code==200,review.text
     f=review.json()["frontier_review"]
     assert f["maximum_priority_at_current_budget"]==10
-    assert f["priority_targets"][1]["least_cost_portfolio"]["additional_budget_required"]=="20"
+    assert float(f["priority_targets"][1]["least_cost_portfolio"]["additional_budget_required"])==20
     assert f["budget_checkpoints"][-1]["best_portfolio"]["priority_points"]==110
     assert review.headers["cache-control"]=="no-store"
     assert client.post(url,content=b'{"max_selected":1,"max_selected":2}',headers={**h,"Content-Type":"application/json"}).status_code==422
