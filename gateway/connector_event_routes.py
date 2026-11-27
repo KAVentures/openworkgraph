@@ -183,7 +183,6 @@ def install(app,jobs,admin):
     @router.get("/admin/connector-publication-quality",include_in_schema=False)
     def quality_page():
         from .html_pages import render_page
-        from .html_pages import render_page
         return render_page("connector_publication_quality.html")
 
     @router.post(base+"/{organization_id}/case-quality-export")
