@@ -887,6 +887,67 @@
     }catch(error){$('integrityStatus').textContent=error.message;}
     finally{integrityLock(false);}
   };
+  let coverageRows=[],coverageBusy=false,coverageGeneration=0,coverageResult=null;
+  const coverageKinds={committed_request_window:'Committed request window',before_configured_anchor:'Before configured anchor',
+    unknown_prior_coverage:'Unknown prior coverage',not_yet_checkpointed:'Not yet checkpointed'};
+  const coverageHours=us=>us==null?'Unknown':(us/3600000000).toFixed(3);
+  function coverageReset(){
+    coverageGeneration++;coverageResult=null;$('coverageResults').replaceChildren();$('coverageExport').disabled=true;
+    $('coverageReview').disabled=coverageBusy||!coverageRows.some(x=>x.box.checked);
+  }
+  function coverageLock(value){
+    coverageBusy=value;$('coverageRefresh').disabled=value;$('coverageSince').disabled=value;$('coverageUntil').disabled=value;
+    for(const x of coverageRows)x.box.disabled=value;
+    $('coverageReview').disabled=value||!coverageRows.some(x=>x.box.checked);
+    $('coverageExport').disabled=value||!coverageResult;
+  }
+  $('coverageSince').oninput=coverageReset;$('coverageUntil').oninput=coverageReset;
+  $('coverageRefresh').onclick=async()=>{
+    if(coverageBusy)return;coverageReset();coverageLock(true);
+    try{
+      const data=await api(base+'/coverage');coverageRows=[];
+      const cards=data.profiles.map(p=>{
+        const item=check(p.provider+' / '+p.profile_id+' · revision '+p.revision);
+        item.box.onchange=coverageReset;coverageRows.push({profile:p,box:item.box});return item.node;
+      });
+      $('coverageTargets').replaceChildren(...cards.length?cards:[el('p','No configured retained feeds.')]);
+      if(!$('coverageSince').value||!$('coverageUntil').value){
+        const now=new Date(),earlier=new Date(now.getTime()-30*86400000);
+        $('coverageSince').value=earlier.toISOString();$('coverageUntil').value=now.toISOString();
+      }
+      $('coverageStatus').textContent='Select profiles and a UTC review interval up to 366 days.';
+    }catch(error){coverageRows=[];$('coverageTargets').replaceChildren();$('coverageStatus').textContent=error.message;}
+    finally{coverageLock(false);}
+  };
+  $('coverageReview').onclick=async()=>{
+    if(coverageBusy)return;coverageReset();const turn=coverageGeneration;
+    const targets=coverageRows.filter(x=>x.box.checked).map(x=>({profile_id:x.profile.profile_id,revision:x.profile.revision}));
+    const since=$('coverageSince').value.trim(),until=$('coverageUntil').value.trim();
+    if(!targets.length||targets.length>20||!since||!until){$('coverageStatus').textContent='Choose 1–20 profiles and a valid UTC interval.';return;}
+    coverageLock(true);
+    try{
+      const result=await api(base+'/coverage/review',{targets,since,until});
+      if(turn!==coverageGeneration)return;
+      const s=result.summary,root=$('coverageResults');
+      root.replaceChildren(el('h3','Exact committed request-window review'),
+        el('p',s.included_profiles+' of '+s.selected_profiles+' profiles included; '+s.excluded_inconsistent_profiles+' excluded due to inconsistent coverage state.'),
+        table(['Coverage classification','Profile-hours'],Object.entries(s.microseconds_by_kind).map(([k,v])=>[coverageKinds[k]||k,coverageHours(v)])),
+        el('p','Committed request-window fraction: '+(s.committed_request_window_fraction===null?'Unknown':(100*s.committed_request_window_fraction).toFixed(2)+'%')),
+        table(['Profile / provider','Index consistent','Recorded commits','Intervals retained','Checkpoint','Uncheckpointed planning hours','Estimated advancing windows'],result.profiles.map(p=>
+          [p.profile_id+' / '+p.provider,p.coverage_index_consistent,p.recorded_commits,p.retained_interval_count,p.checkpoint,coverageHours(p.backlog?.uncheckpointed_microseconds),p.backlog?.estimated_advancing_windows])),
+        el('h3','Exact interval partition'),
+        table(['Profile','Classification','From UTC','Until UTC','Hours'],result.profiles.flatMap(p=>
+          p.segments.map(x=>[p.profile_id,coverageKinds[x.kind]||x.kind,x.since,x.until,coverageHours(x.microseconds)]))),
+        el('p',result.interpretation));
+      coverageResult=result;$('coverageStatus').textContent='Local review completed. No provider reads or execution authorization.';
+    }catch(error){$('coverageStatus').textContent=error.message;}
+    finally{coverageLock(false);}
+  };
+  $('coverageExport').onclick=()=>{
+    if(coverageBusy||!coverageResult)return;
+    const url=URL.createObjectURL(new Blob([JSON.stringify(coverageResult,null,2)],{type:'application/json'}));
+    try{const a=el('a');a.href=url;a.download='owg-committed-window-coverage.json';a.click();}finally{URL.revokeObjectURL(url);}
+  };
   $('refresh').onclick=load;
   $('freshness').oninput=()=>{generation++;latest=null;$('download').disabled=true;$('refresh').disabled=busy;$('inventory').replaceChildren();$('profiles').replaceChildren();$('status').textContent='Threshold changed. Refresh local inventory.';};
   $('download').onclick=async()=>{

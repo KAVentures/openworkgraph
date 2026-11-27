@@ -19,6 +19,11 @@ p{overflow-wrap:anywhere;max-width:94ch}.profile{border:1px solid var(--border);
 <div class="grid"><label>Flag last success or checkpoint older than (hours)<input id="freshness" type="number" min="1" max="720" step="1" value="24"></label></div>
 <div class="row"><button id="refresh" type="button">Refresh local inventory</button><button id="download" type="button" disabled>Recheck and download inventory JSON</button></div>
 <p role="status" id="status">Open from the authenticated local dashboard.</p><div id="inventory"></div></section>
+<section aria-labelledby="coverageHeading"><h2 id="coverageHeading">Committed ingestion coverage and backlog</h2>
+<p>Review the exact union of locally committed ingestion request windows. Unknown prior coverage is not a proven gap in source events. The clock-based backlog estimate is not a provider availability or completion forecast.</p>
+<div class="row"><button id="coverageRefresh" type="button">Load profiles</button><button id="coverageReview" type="button" disabled>Review selected range</button><button id="coverageExport" type="button" disabled>Download reviewed coverage</button></div>
+<div class="grid"><label>From (ISO UTC)<input id="coverageSince" required maxlength="64"></label><label>Until (ISO UTC)<input id="coverageUntil" required maxlength="64"></label></div>
+<p role="status" id="coverageStatus">Load profiles to begin.</p><div id="coverageTargets"></div><div id="coverageResults"></div></section>
 <section aria-labelledby="integrityHeading"><h2 id="integrityHeading">Retained evidence integrity and containment</h2>
 <p>Inspect the local retained source-key index, event and case shape, and row-count consistency. Select up to five profiles. Holds disable future local ingestion and invalidate revision pins; no retained data is removed. Release requires a new clean structural review and leaves feeds disabled. Existing remote copies are not withdrawn.</p>
 <div class="row"><button id="integrityRefresh" type="button">Load retained profiles</button><button id="integrityPreview" type="button" disabled>Review selected profiles</button></div>
