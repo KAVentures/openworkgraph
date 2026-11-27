@@ -85,3 +85,37 @@ The requested types/activities and selected sample object IDs are visible only t
 - Independent user review and real-company acceptance are still necessary for competitor parity.
 
 Implementation: `server/event_log_object_lead_times.py`, the separate session-only `server/event_log_object_lead_time_routes.py`, and registration in `server/secure_app.py`. Tests exercise fixture-based exact metrics, literal qualifiers, repeat-event deduplication, reversed/missing cases, bounded refusal, private deletion and a real local HTTP authentication flow. No conflicting dashboard file was modified. A graphical dashboard panel can be layered on when its current owner releases it.
+
+## Repeated milestone review
+
+Enable **Include repeated milestone timing review** to compare two additional
+anchors on the same exact directed pairs: first source to first target at or
+after that source, and latest source at or before that same target. The
+original first-to-first counts and samples remain unchanged. This reveals
+pairs whose first target preceded the source but a later target exists, and
+how elapsed time changes when a source step repeats. The two anchors are
+not an inferred event pairing. Timestamp ties, earlier targets, later
+sources and repeated events are visible in each evidence row. Deduplication
+uses exact event IDs per object, not event timestamps.
+
+Optional deadline_seconds (integer 0–31,536,000) measures the first-source
+anchor. A later observed target is counted as within or observed late;
+no subsequent target remains unresolved, not automatically late. The
+within-share bounds use all source-observed pairs, exclude pairs lacking
+a source event and disclose unresolved counts. These describe retained
+history and missing-outcome sensitivity, not SLA compliance, source
+completeness or causal handoff. Shared objects can appear in multiple
+pairs; no case independence or employee performance is asserted.
+
+The existing endpoint accepts repeat_review=true, optional deadline_seconds,
+repeat_status (all, observed_forward, target_only_before_source,
+target_missing, source_missing, both_missing), repeat_offset and
+expected_repeat_sha256. Page size is sample_limit (0 gives aggregate-only).
+The review pin covers exact selected graph provenance, pair identities,
+activity choices, deadline, and all selected event IDs and timestamps.
+Changing the source refuses later pinned pages; changing only page/status
+filters does not change the review identity. All computations respect the
+original pair and event-link limits. Sorted timestamp lists and binary
+search avoid source-target event Cartesian products. All reads use the
+existing local dashboard authorization. Native and browser acceptance
+remain outstanding.

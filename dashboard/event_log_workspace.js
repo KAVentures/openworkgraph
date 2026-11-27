@@ -22,7 +22,7 @@
   const attrText=()=>[state.attr.attribute,state.attr.attribute_range?rangeText(state.attr.attribute_range):'',state.attr.starts_with?'starts with '+JSON.stringify(state.attr.starts_with):'',state.attr.ends_with?'ends with '+JSON.stringify(state.attr.ends_with):'',state.attr.duration?durationText(state.attr.duration):'',moreFilterText(state.attr)].filter(Boolean).join('; ');
   let labelLookupBusy=false;
   // Views that honour the workspace case filter; every other section uses all cases.
-  const FILTERED=new Set(['automation-candidates','summary','variants','variants/preview','variant-coverage','duration-distribution','activities','kpis','process-map','playback','dotted-chart','performance-spectrum','waiting-time','drift','model-discovery','organization','report.html','decision-points','decision-rules']);
+  const FILTERED=new Set(['automation-candidates','automation-estimate','summary','variants','variants/preview','variant-coverage','duration-distribution','activities','kpis','process-map','playback','dotted-chart','performance-spectrum','waiting-time','drift','model-discovery','organization','report.html','decision-points','decision-rules']);
   FILTERED.add('roles');
   FILTERED.add('process-map.dot');
   FILTERED.add('anonymized-export');
@@ -227,6 +227,7 @@
     const mapping=el('div',null,'row');mapping.id='owgEventLogMapping';mapping.style.alignItems='end';
     const cols={case:select('owgEventLogCase',[]),activity:select('owgEventLogActivity',[]),time:select('owgEventLogTime',[]),resource:select('owgEventLogResource',[])};
     const delimiter=select('owgEventLogDelimiter',[[',','Comma'],[';','Semicolon'],['t','Tab'],['|','Pipe']]);
+    const clock=select('owgEventLogTimeOfDay',[['','(none)']]);
     const encoding=select('owgEventLogEncoding',[['utf-8','UTF-8'],['windows-1252','Windows-1252 (Western European)'],['utf-16','UTF-16 (Excel Unicode text)']]);
     const extras=select('owgEventLogAttributes',[]);extras.multiple=true;extras.size=3;
     extras.title='Only the columns you choose are stored, for example a lifecycle (start/complete) or end-time column.';
@@ -235,7 +236,7 @@
     naiveOffset.title='For timestamps without a time zone, e.g. +01:00 or -05:00. Leave empty to reject such rows.';
     // Times such as 03/04/2024 14:05 need a declared format; the dashboard suggests one from the first rows.
     const timeFormat=select('owgEventLogTimeFormat',[['','ISO 8601 (2024-03-04T14:05:00Z)']]);
-    mapping.append(field('Case column',cols.case),field('Activity column',cols.activity),field('Timestamp column (with timezone)',cols.time),field('Timestamp format',timeFormat),field('Resource column',cols.resource),field('Extra columns to keep (optional)',extras),field('Delimiter',delimiter),field('Text encoding',encoding),field('Offset for times without one',naiveOffset));
+    mapping.append(field('Case column',cols.case),field('Activity column',cols.activity),field('Timestamp column (with timezone)',cols.time),field('Time-of-day column (if separate)',clock),field('Timestamp format',timeFormat),field('Resource column',cols.resource),field('Extra columns to keep (optional)',extras),field('Delimiter',delimiter),field('Text encoding',encoding),field('Offset for times without one',naiveOffset));
     const identity=el('fieldset');identity.id='owgEventLogIdentity';identity.append(el('legend','Supplied source-event IDs (optional)'));
     const useIdentity=input('owgEventLogUseIdentity','checkbox');
     const identityFields=el('div',null,'row');identityFields.style.alignItems='end';
@@ -308,7 +309,7 @@
       // so a delayed column read cannot overwrite another chosen file's mapping.
       const options=['case_id','activity','timestamp','source_event_id'].map(x=>[x,x]);
       for(const column of [cols.case,cols.activity,cols.time])setOptions(column,options);
-      setOptions(cols.resource,[['','(none)'],...options]);setOptions(extras,options);
+      setOptions(cols.resource,[['','(none)'],...options]);setOptions(extras,options);setOptions(clock,[['','(none)']]);
       setOptions(eventId,[['','Choose a column'],...options]);
       for(const column of [sourceColumn,caseColumn,jsonColumn])setOptions(column,[['','(none)'],...options]);
       cols.case.value='case_id';cols.activity.value='activity';cols.time.value='timestamp';cols.resource.value='';
@@ -344,7 +345,8 @@
     }
     function csvMapping(q){
       q.set('case_column',cols.case.value);q.set('activity_column',cols.activity.value);q.set('timestamp_column',cols.time.value);q.set('resource_column',cols.resource.value);
-      if(!(useIdentity.checked&&jsonColumn.value))[...extras.selectedOptions].forEach(o=>{if(![cols.case.value,cols.activity.value,cols.time.value,cols.resource.value].includes(o.value))q.append('attribute_column',o.value);});
+      if(clock.value)q.set('time_column',clock.value);
+      if(!(useIdentity.checked&&jsonColumn.value))[...extras.selectedOptions].forEach(o=>{if(![cols.case.value,cols.activity.value,cols.time.value,cols.resource.value,clock.value].includes(o.value))q.append('attribute_column',o.value);});
       q.set('delimiter',delimiter.value);if(keep.checked)q.set('keep_rejected','true');
       if(encoding.value!=='utf-8')q.set('encoding',encoding.value);
       if(naiveOffset.value.trim())q.set('naive_timestamp_offset',naiveOffset.value.trim());
@@ -391,6 +393,12 @@
       cols.activity.value=guess(columns,['activity','event','step','action'])||columns[1]||'';
       cols.time.value=guess(columns,['time','date','ts'])||columns[2]||'';
       cols.resource.value=guess(columns,['resource','user','who','agent','owner']);
+      // Exports that split date and time (such as "Posting Date" and "Time"): the date column is the
+      // timestamp column and the time column is joined to it.
+      setOptions(clock,[['','(none)'],...options]);clock.value='';
+      const dateOnly=columns.find(c=>/(^|[ _-])(date|datum|fecha|data)$/i.test(c.trim()));
+      const timeOnly=columns.find(c=>/^(time|uhrzeit|zeit|hora|ora|time of day)$|[ _-](time|uhrzeit|zeit)$/i.test(c.trim())&&c!==dateOnly);
+      if(dateOnly&&timeOnly){cols.time.value=dateOnly;clock.value=timeOnly;}
       setOptions(extras,options);[...extras.options].forEach(o=>{o.selected=/lifecycle/i.test(o.value);});
       setOptions(eventId,[['','Choose a column'],...options]);
       for(const control of [sourceColumn,caseColumn,jsonColumn])setOptions(control,[['','(none)'],...options]);
@@ -473,6 +481,18 @@
         const url=isParquet(chosen.name)?'/v1/event-logs/parquet-to-csv':isJsonLines(chosen.name)?'/v1/event-logs/jsonl-to-csv':database?'/v1/event-logs/sqlite-to-csv'+(sheet?'?table='+encodeURIComponent(sheet):''):'/v1/event-logs/xlsx-to-csv'+(sheet?'?sheet='+encodeURIComponent(sheet):'');
         const r=await (await api(url,{method:'POST',body:chosen,headers:{'Content-Type':'application/octet-stream'}})).json();
         if(!current())return;
+        if(r.ocel){
+          // Preserve object-centric data and ignore conversion results for a superseded selection.
+          status('Reading the OCEL 2.0 database '+chosen.name+'…');
+          const o=await (await api('/v1/event-logs/ocel-sqlite-to-json',{method:'POST',body:chosen,headers:{'Content-Type':'application/octet-stream'}})).json();
+          if(!current())return;
+          const transfer=new DataTransfer();transfer.items.add(new File([o.document],chosen.name.replace(/\.(sqlite3?|db)$/i,'')+'.jsonocel',{type:'application/json'}));
+          file.files=transfer.files;const converted=file.files[0];format.value='ocel';clearWorkbook();
+          const read=readColumns();const readSequence=columnReadSequence;await read;
+          if(columnReadSequence!==readSequence||file.files?.[0]!==converted||format.value!=='ocel')return;
+          status('Read an OCEL 2.0 database: '+Number(o.events).toLocaleString()+' events and '+Number(o.objects).toLocaleString()+' objects.'+(o.times_without_offset_read_as_utc?' '+Number(o.times_without_offset_read_as_utc).toLocaleString()+' times without an offset are read as UTC.':'')+(o.events_without_time?' '+Number(o.events_without_time).toLocaleString()+' events without a time are left out.':''));
+          return;
+        }
         const transfer=new DataTransfer();transfer.items.add(new File([r.csv],chosen.name.replace(/\.(xlsx|sqlite3?|db|jsonl|ndjson|parquet)$/i,'')+(database?'-'+r.sheet:'')+'.csv',{type:'text/csv'}));
         file.files=transfer.files;expectedFile=file.files[0];format.value='csv';delimiter.value=',';encoding.value='utf-8';
         stagedSheet=r.sheet;
@@ -528,13 +548,13 @@
     // Suggest a timestamp format from the first rows of the chosen time column (sent to this computer only).
     let formatSequence=0;
     async function detectTimeFormat(){
-      const sequence=++formatSequence,chosen=file.files&&file.files[0],column=cols.time.value,selectedDelimiter=delimiter.value;
+      const sequence=++formatSequence,chosen=file.files&&file.files[0],column=cols.time.value,selectedDelimiter=delimiter.value,timeColumn=clock.value;
       setOptions(timeFormat,[['','ISO 8601 (2024-03-04T14:05:00Z)']]);timeFormat.value='';
       if(!chosen||format.value!=='csv'||!column)return;
       try{
-        const q=new URLSearchParams({column,delimiter:selectedDelimiter});
+        const q=new URLSearchParams({column,delimiter:selectedDelimiter});if(timeColumn)q.set('time_column',timeColumn);
         const r=await (await api('/v1/event-logs/timestamp-formats?'+q,{method:'POST',body:await headText(chosen,256*1024,encoding.value),headers:{'Content-Type':'text/plain'}})).json();
-        if(sequence!==formatSequence||file.files?.[0]!==chosen||format.value!=='csv'||delimiter.value!==selectedDelimiter||cols.time.value!==column)return;
+        if(sequence!==formatSequence||file.files?.[0]!==chosen||format.value!=='csv'||delimiter.value!==selectedDelimiter||cols.time.value!==column||clock.value!==timeColumn)return;
         setOptions(timeFormat,[['','ISO 8601 (2024-03-04T14:05:00Z)'],...r.candidates.map(c=>[c.pattern,c.pattern+' \u2014 '+c.order+': '+c.first_value+' reads as '+c.first_value_reads_as])]);
         if(r.suggested){
           clearImportPreview();timeFormat.value=r.suggested;refreshImport();
@@ -545,7 +565,7 @@
         else if(r.samples&&!r.candidates.length&&r.iso_with_offset+r.iso_without_offset<r.samples)status('Some times in the first rows are not ISO 8601 and match no known format; those rows will be rejected.');
       }catch(_){/* detection is a convenience; the import still validates every row */}
     }
-    cols.time.addEventListener('change',detectTimeFormat);
+    cols.time.addEventListener('change',detectTimeFormat);clock.addEventListener('change',detectTimeFormat);
     // Offer the mapping recorded with an earlier import whose columns this file also has.
     const reuseRow=el('div',null,'row');reuseRow.id='owgEventLogReuse';reuseRow.hidden=true;mapping.appendChild(reuseRow);
     function applyMapping(m,header){
@@ -555,6 +575,7 @@
         setMappingColumns(header.columns);
       }
       cols.case.value=m.case_column;cols.activity.value=m.activity_column;cols.time.value=m.timestamp_column;cols.resource.value=m.resource_column||'';
+      clock.value=m.time_column||'';
       [...extras.options].forEach(o=>{o.selected=(m.attribute_columns||[]).includes(o.value);});
       naiveOffset.value=m.naive_timestamp_offset||'';
       if(m.timestamp_format&&![...timeFormat.options].some(o=>o.value===m.timestamp_format))timeFormat.appendChild(new Option(m.timestamp_format,m.timestamp_format));
@@ -1064,7 +1085,7 @@
         'ocel':'Includes objects linked to matching events, their timed attributes, and relationships between included objects.',
         'ocelxml':'Includes objects linked to matching events, their timed attributes, and relationships between included objects.',
         'jsonl':'One JSON object per line with case ID, activity, timestamp and resource (null when missing).',
-        'xlsx':'One Events worksheet with the exact CSV columns as text cells, a frozen header and a filter. At most 1,048,575 events.'
+        'xlsx':'Events worksheets with the exact CSV columns as text cells, a frozen header and a filter. Over 1,048,575 events, the rows continue on further worksheets.'
       }[formats.value];
     }
     formats.onchange=describeFormat;describeFormat();
@@ -1399,27 +1420,58 @@
     const box=section('Hide activities');box.id='owgHiddenActivities';
     box.appendChild(el('div','Leave chosen activities out of variants, maps, KPIs and the other case analyses of this log. The stored events are never changed, and saved signals and object views keep every event.','muted'));
     const pick=document.createElement('select');pick.id='owgHiddenActivitiesPick';pick.multiple=true;pick.size=6;
+    const search=input('owgHiddenActivitiesSearch','search','Search original activities');search.maxLength=200;
+    const find=button('Find activities','secondary');find.id='owgHiddenActivitiesFind';
+    const more=button('More activities','secondary');more.id='owgHiddenActivitiesMore';more.disabled=true;
+    const searchStatus=el('div',null,'muted');searchStatus.id='owgHiddenActivitiesSearchStatus';searchStatus.setAttribute('role','status');
     const save=button('Hide selected','secondary');save.id='owgHiddenActivitiesSave';
     const clear=button('Show all activities','secondary');clear.id='owgHiddenActivitiesClear';
+    const reload=button('Reload hidden activities','secondary');reload.id='owgHiddenActivitiesReload';
+    save.disabled=clear.disabled=true;let revision=null;
     const msg=el('div',null,'muted');msg.id='owgHiddenActivitiesStatus';msg.setAttribute('role','status');msg.setAttribute('aria-live','polite');
     const generation=state.generation;
     const url=()=>'/v1/event-logs/'+encodeURIComponent(state.logId)+'/hidden-activities';
     const render=r=>{
       if(generation!==state.generation)return;
       pick.replaceChildren(...r.activities.map(a=>{const o=el('option',a.activity+' ('+Number(a.events).toLocaleString()+' events)');o.value=a.activity;o.selected=a.hidden;return o;}));
-      clear.disabled=!r.hidden.length;
+      revision=r.definition_sha256;save.disabled=false;clear.disabled=!r.hidden.length;
       msg.textContent=r.hidden.length?'Hidden: '+r.hidden.map(h=>h.activity).join(', ')+' · '+Number(r.events_hidden).toLocaleString()+' of '+Number(r.events_total).toLocaleString()+' events left out.':'No activities are hidden.';
     };
     const store=async names=>{
       save.disabled=clear.disabled=true;
-      try{await api(url(),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({activities:names})});
+      try{await api(url(),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({activities:names,expected_sha256:revision})});
         if(generation===state.generation)await analyse();}
       catch(e){msg.textContent=e.message;save.disabled=false;clear.disabled=false;}
     };
     save.onclick=()=>{const names=[...pick.selectedOptions].map(o=>o.value);if(!names.length){msg.textContent='Choose at least one activity to hide, or use Show all activities.';return;}store(names);};
     clear.onclick=()=>store([]);
-    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Activities to hide (stored names)',pick),save,clear);
-    box.append(row,msg);
+    reload.onclick=()=>analyse().catch(e=>{msg.textContent=e.message;});
+    let searchTurn=0,searchQuery='',nextAfter=null;
+    async function searchPage(after){
+      const ticket=++searchTurn,query=searchQuery;
+      const current=()=>ticket===searchTurn&&generation===state.generation&&box.isConnected;
+      find.disabled=more.disabled=true;searchStatus.textContent='Searching original activities…';
+      try{
+        const response=await api(url()+'/search',{method:'POST',headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({search:query,...(after?{after}:{})})});
+        const result=await response.json();if(!current())return;
+        const present=new Set([...pick.options].map(option=>option.value));let added=0;
+        for(const activity of result.activities){
+          if(present.has(activity.activity))continue;
+          const option=el('option',activity.activity+' ('+Number(activity.events).toLocaleString()+' events)');
+          option.value=activity.activity;pick.appendChild(option);present.add(option.value);added++;
+        }
+        nextAfter=result.next_after;
+        searchStatus.textContent=result.activities.length+' matching '+(result.activities.length===1?'label':'labels')+' found; '+added+' added to the activity choices.'+(nextAfter?' More matches are available.':'');
+      }catch(error){if(current()){nextAfter=null;searchStatus.textContent=error.message;}}
+      finally{if(current()){find.disabled=false;more.disabled=nextAfter===null;}}
+    }
+    search.addEventListener('input',()=>{++searchTurn;nextAfter=null;more.disabled=true;find.disabled=false;searchStatus.textContent='';});
+    find.onclick=()=>{searchQuery=search.value;nextAfter=null;if(!searchQuery){searchStatus.textContent='Enter activity search text.';return;}searchPage(null);};
+    more.onclick=()=>{if(nextAfter!==null)searchPage(nextAfter);};
+    const searchRow=el('div',null,'row');searchRow.style.alignItems='end';searchRow.append(field('Find original activity labels',search),find,more);
+    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Activities to hide (stored names)',pick),save,clear,reload);
+    box.append(el('div','The picker starts with up to 2,000 frequent labels and all currently hidden labels. Search to add others.','muted'),searchRow,searchStatus,row,msg);
     getJSON(url()).then(render).catch(e=>{msg.textContent=e.message;});
     return box;
   }
@@ -1516,7 +1568,7 @@
     results.appendChild(cooccurrenceSection(inspection));
     results.appendChild(dueDatesSection(names,inspection));
     results.appendChild(unusualCasesSection());
-    results.appendChild(funnelSection(names));
+    results.appendChild(funnelSection(names,inspection));
     const petriReplay=petriReplaySection(inspection);
     results.appendChild(modelQualitySection(petriReplay.replayScored));
     results.appendChild(modelChangeSection(inspection));
@@ -2949,6 +3001,38 @@
         last=r;exports.enable(true);
       }catch(error){out.replaceChildren(el('div',error.message,'muted'));}
       finally{run.disabled=false;}};
+    // Hours-per-week ranges from the owner's own assumptions; only occurrences per week are measured.
+    const est=el('div');est.id='owgAutomationEstimate';
+    est.append(el('h4','Estimate the time automation could free'),
+      el('div','Enter how many minutes one occurrence takes. A log records when steps happened, not how long anyone worked on them, so this is your assumption. Results are ranges, not measured savings.','muted'));
+    const minLow=input('owgAutomationMinutesLow','number'),minHigh=input('owgAutomationMinutesHigh','number'),rate=input('owgAutomationHourlyCost','number');
+    for(const n of [minLow,minHigh,rate]){n.min='0';n.step='any';}
+    minLow.value='3';minHigh.value='8';
+    const estRun=button('Estimate','secondary');estRun.id='owgAutomationEstimateRun';
+    const estRow=el('div',null,'row');estRow.style.alignItems='end';
+    estRow.append(field('Minutes per occurrence, low',minLow),field('Minutes per occurrence, high',minHigh),field('Hourly cost (optional)',rate),estRun);
+    const estOut=el('div');estOut.id='owgAutomationEstimateResults';estOut.setAttribute('role','status');estOut.setAttribute('aria-live','polite');
+    est.append(estRow,estOut);box.appendChild(est);
+    const range=([a,b],f)=>f(a)+'\u2013'+f(b);
+    const hrs=v=>Number(v).toLocaleString(undefined,{maximumFractionDigits:1});
+    estRun.onclick=async()=>{
+      const low=Number(minLow.value),high=Number(minHigh.value);
+      if(!(low>=0)||!(high>=low)){estOut.replaceChildren(el('div','Enter a low and a high number of minutes, with the high at least the low.','muted'));return;}
+      const body={handling_minutes:[low,high],limit:15};
+      if(rate.value!==''){const c=Number(rate.value);if(!(c>0)){estOut.replaceChildren(el('div','The hourly cost must be above 0, or left empty.','muted'));return;}body.hourly_cost=c;}
+      estRun.disabled=true;estOut.replaceChildren(el('div','Estimating\u2026','muted'));
+      try{
+        const r=await (await api(logPath('automation-estimate',{}),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).json();
+        const withCost='cost_per_year_total' in r;
+        const shares=r.assumptions.automatable_share;
+        estOut.replaceChildren(
+          el('div','About '+range(r.hours_per_week_total,hrs)+' hours a week across these '+r.candidates.length+' activities'+(withCost?', about '+range(r.cost_per_year_total,hrs)+' a year at '+r.assumptions.hourly_cost+' an hour':'')+'.'),
+          table(['Activity','Routing','Per week (measured)','Share automatable (assumed)','Hours a week','Consider'].concat(withCost?['Cost a year']:[]),
+            r.candidates.map(c=>[c.activity,PATTERNS[c.routing_pattern],String(c.measured.occurrences_per_week),
+              range(c.assumed.automatable_share,v=>Math.round(v*100)+'%'),range(c.hours_per_week,hrs),c.alternative_to_consider].concat(withCost?[range(c.cost_per_year,hrs)]:[]))),
+          el('div','Assumed automatable shares: fixed '+range(shares.fixed,pct)+', mostly fixed '+range(shares.mostly_fixed,pct)+', variable '+range(shares.variable,pct)+'. '+r.interpretation,'muted'));
+      }catch(error){estOut.replaceChildren(el('div',error.message,'muted'));}
+      finally{estRun.disabled=false;}};
     return box;
   }
 
@@ -3915,6 +3999,16 @@
     const checkRow=el('div',null,'row');checkRow.style.alignItems='end';checkRow.append(run);
     if(otherLogs.length)checkRow.append(field('Object rule comparison log',compareLog),compare);
     const f={activity:field('Activity A',activity),related:field('Related type U',relatedType),required:field('Activity B',required),via:field('Related through',via),direction:field('Supplied assertion direction',direction),exact:field('Match exact supplied qualifier',exact),qualifier:field('Supplied qualifier (empty is a valid exact label)',qualifier),min:field('At least',min),max:field('At most',max)};
+    const exactActivity=input('owgObjectRuleExactActivity','text','Exact stored activity A (optional)');
+    const exactRequired=input('owgObjectRuleExactRequired','text','Exact stored activity B (optional)');
+    const exactVia=input('owgObjectRuleExactVia','text','Exact stored linking activity (optional)');
+    for(const [picker,entry] of [[activity,exactActivity],[required,exactRequired],[via,exactVia]]){
+      entry.maxLength=400;picker.addEventListener('change',()=>{entry.value='';});
+    }
+    f.activity.append(field('Exact activity A',exactActivity));
+    f.required.append(field('Exact activity B',exactRequired));
+    f.via.append(field('Exact linking activity',exactVia));
+    box.appendChild(el('div','Activity suggestions are limited to the displayed object graph. Exact entries override them and use stored event labels, before any activity mapping or hidden-activity filter.','muted'));
     if(types.length<2&&(allTypes.length>1||graph.log&&(graph.log.object_relationships||['ocel','ocelxml'].includes(graph.log.source_format))))template.value='supplied_object_cardinality';
     const sync=()=>{
       const t=template.value,supplied=t==='supplied_object_cardinality';
@@ -4162,7 +4256,16 @@
     };
     drawPending();
     manageSaved(()=>refreshSaved());
-    add.onclick=()=>{try{if(rules.length>=20)throw new Error('Check at most 20 object rules at once.');rules.push(objectRule({template:template.value,activity:activity.value,objectType:objectType.value,relatedType:relatedType.value,required:required.value,via:via.value,min:min.value,max:max.value,direction:direction.value,exactQualifier:exact.checked,qualifier:qualifier.value}));message.textContent='';drawPending();}catch(error){message.textContent=error.message;}};
+    add.onclick=()=>{try{
+      if(rules.length>=20)throw new Error('Check at most 20 object rules at once.');
+      const chosen=(entry,picker)=>{const value=entry.value||picker.value;if(value&&Array.from(value).length>200)throw new Error('Activity labels must have at most 200 characters.');return value;};
+      const t=template.value;
+      const a=['event_cardinality','synchronization'].includes(t)?chosen(exactActivity,activity):'';
+      const b=t==='synchronization'?chosen(exactRequired,required):'';
+      const link=t==='object_cardinality'?chosen(exactVia,via):'';
+      rules.push(objectRule({template:t,activity:a,objectType:objectType.value,relatedType:relatedType.value,required:b,via:link,min:min.value,max:max.value,direction:direction.value,exactQualifier:exact.checked,qualifier:qualifier.value}));
+      message.textContent='';drawPending();
+    }catch(error){message.textContent=error.message;}};
     run.onclick=async()=>{
       resetResults();busy=true;comparing=false;syncChecks();message.textContent='Checking object rules…';
       const turn=requestVersion;
@@ -4174,11 +4277,18 @@
           return text+(res.violating>shown.length?'; showing '+shown.length+' of '+res.violating+' retained violations':'');
         };
         const rows=r.results.map(res=>{
+          const absent=[['activity_in_log',res.rule.activity??res.rule.via_activity,'activity'],
+            ['required_activity_in_log',res.rule.required_activity,'required activity'],
+            ['object_type_in_log',res.rule.object_type,'object type'],['related_type_in_log',res.rule.related_type,'related object type']]
+            .filter(([key])=>res[key]===false).map(([,value,name])=>name+' '+JSON.stringify(value));
+          const description=el('div');description.appendChild(el('div',res.description));
+          if(absent.length)description.appendChild(el('div','Absent from this log · '+absent.join(', '),'muted'));
+          else if(res.complete&&res.activated===0)description.appendChild(el('div','No activated units; this does not establish compliance.','muted'));
           const open=button('Inspect violations','secondary');open.setAttribute('aria-label','Inspect violations for '+res.description);
           open.onclick=()=>inspect(turn,r,res);
-          return res.complete?[res.description,Number(res.activated).toLocaleString()+' '+unit[res.unit],Number(res.violating).toLocaleString(),
+          return res.complete?[description,Number(res.activated).toLocaleString()+' '+unit[res.unit],Number(res.violating).toLocaleString(),
           res.violation_rate===null?'—':pct(res.violation_rate)+(res.violation_rate_ci95?' ['+pct(res.violation_rate_ci95[0])+', '+pct(res.violation_rate_ci95[1])+']':' (retained set)'),
-          examples(res),res.violating?open:'']:[res.description,'—',unknown(res),'—','',''];
+          examples(res),res.violating?open:'']:[description,'—',unknown(res),'—','',''];
         });
         out.replaceChildren(el('div',r.rules_with_violations+' of '+r.results.length+' object rules have violations.','muted'),
           table(['Rule','Applies to','Violating','Violation rate (95% CI)','Examples','Evidence'],rows),el('div',r.interpretation,'muted'));
@@ -4202,7 +4312,7 @@
           const cell=el('div');
           cell.append(el('div',result.activated?number(result.violating)+' of '+number(result.activated)+' activated '+unit[result.unit]+' violate ('+pct(result.violation_rate)+')':'0 activated '+unit[result.unit]));
           const absent=[['activity','activity'],['object_type','object type'],['related_type','related type'],['required_activity','required activity']]
-            .filter(([key])=>result[key+'_in_log']===false).map(([key,name])=>name+' '+JSON.stringify(result.rule[key]));
+            .filter(([key])=>result[key+'_in_log']===false).map(([key,name])=>name+' '+JSON.stringify(key==='activity'?(result.rule.activity??result.rule.via_activity):result.rule[key]));
           if(absent.length)cell.append(el('div','Absent from this log · '+absent.join(', '),'muted'));
           if(result.violating){
             const open=button('Inspect violations','secondary');
@@ -6214,6 +6324,50 @@
       }catch(error){out.replaceChildren(el('div',error.message,'muted'));}
       finally{run.disabled=false;}
     };
+    const multi=el('details');multi.append(el('summary','Temporal sensitivity across cutoffs and seeds'));
+    const shares=input('owgSimTemporalShares','text'),seeds=input('owgSimTemporalSeeds','text'),tolerance=input('owgSimTemporalTolerance','number');
+    const trialCases=input('owgSimTemporalCases','number');trialCases.value='500';trialCases.min='50';trialCases.max='2000';trialCases.step='1';
+    shares.value='0.2, 0.3, 0.4';seeds.value='1, 2';tolerance.value='20';tolerance.min='0';tolerance.max='1000';tolerance.step='any';
+    const compare=button('Review all specified splits and seeds','secondary'),multiOut=el('div');multiOut.setAttribute('role','status');
+    let multiTurn=0;
+    const reset=()=>{multiTurn++;multiOut.replaceChildren();compare.disabled=false;};
+    for(const c of [shares,seeds,tolerance,trialCases,dist,basis,holdoutRouting])c.addEventListener('input',reset);
+    compare.onclick=async()=>{
+      const turn=++multiTurn,generation=state.generation;
+      const active=()=>turn===multiTurn&&generation===state.generation&&multi.isConnected;
+      const parse=x=>x.split(',').map(v=>v.trim()).map(v=>v===''?NaN:Number(v));
+      const cuts=parse(shares.value),randomSeeds=parse(seeds.value),max=Number(tolerance.value),count=Number(trialCases.value);
+      if(cuts.length<2||cuts.length>4||cuts.some(x=>!Number.isFinite(x)||x<.05||x>.5)||
+          randomSeeds.length<1||randomSeeds.length>2||randomSeeds.some(x=>!Number.isInteger(x)||x<0||x>2147483647)||
+          !tolerance.value||!Number.isFinite(max)||max<0||max>1000||!Number.isInteger(count)||count<50||count>2000||
+          new Set(cuts).size!==cuts.length||new Set(randomSeeds).size!==randomSeeds.length){
+        multiOut.replaceChildren(el('p','Choose 2–4 distinct shares, 1–2 distinct integer seeds, 50–2000 simulated cases and an error tolerance between 0 and 1000%.','note'));return;}
+      compare.disabled=true;multiOut.replaceChildren(el('p','Checking every specified split and seed…','muted'));
+      try{
+        const r=await (await api(logPath('simulation/temporal-sensitivity'),{method:'POST',headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({holdout_shares:cuts,seeds:randomSeeds,cases:count,distribution:dist.value,activity_time_basis:basis.value,routing:holdoutRouting.value,max_absolute_relative_error:max/100})})).json();
+        if(!active())return;
+        const percent=v=>v==null?'—':(v*100).toFixed(2)+'%';
+        const download=button('Download complete temporal review JSON','secondary');download.onclick=()=>{
+          if(!active())return;const url=URL.createObjectURL(new Blob([JSON.stringify(r,null,2)],{type:'application/json'}));
+          const a=el('a');a.href=url;a.download='owg-simulation-temporal-review.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);};
+        multiOut.replaceChildren(el('p',r.run_count+' simulations · '+r.distinct_cutoffs+' distinct cutoffs'),
+          table(['Metric','Within','Outside','Unresolved','Error range','Status'],Object.entries(r.metric_summary).map(([k,v])=>[k,v.within,v.outside,v.unresolved,percent(v.minimum_relative_error)+' – '+percent(v.maximum_relative_error),v.status.replaceAll('_',' ')])),
+          table(['Holdout','Seed','Cutoff','Calibration cases','Held-out cases','Spanning excluded','Median error','P90 error','Mean error','Stopped routes'],
+            r.runs.map(x=>[percent(x.holdout_share),x.seed,x.cutoff,x.cases.calibration,x.cases.held_out,x.cases.spanning_cutoff_left_out,
+              ...['p50','p90','mean'].map(k=>percent(x.cycle_time_seconds.relative_error[k])),x.routes_stopped_at_path_limit])),
+          ...(r.split_sensitivity?[el('h5','Within-split seed sensitivity'),
+            table(['Holdout','Metric','Observed elapsed','Simulated minimum','Simulated maximum','Simulated spread','Resolved seeds'],
+              r.split_sensitivity.flatMap(s=>Object.entries(s.metrics).map(([metric,m])=>[percent(s.holdout_share),metric,
+                duration(m.observed_seconds),duration(m.simulated_seconds_minimum),duration(m.simulated_seconds_maximum),
+                m.simulated_seconds_spread==null?'—':duration(m.simulated_seconds_spread),m.resolved_seeds+' / '+s.seed_count])))]:[]),
+          ...r.interpretation.map(x=>el('p',x,'muted')),download);
+      }catch(error){if(active())multiOut.replaceChildren(el('p',error.message,'note'));}
+      finally{if(active())compare.disabled=false;}
+    };
+    multi.append(el('p','Use the same distribution, measured time basis and routing selected above. No best split or seed is selected.','muted'),
+      field('Holdout shares, comma separated',shares),field('Seeds, comma separated',seeds),field('Simulated cases per run',trialCases),field('Maximum absolute relative error (%)',tolerance),compare,multiOut);
+    wrap.append(multi);
     return wrap;
   }
 
@@ -7781,6 +7935,11 @@
     const start=button('Explore from the start','secondary');start.id='owgPathsStart';
     const back=button('Back one step','secondary');back.id='owgPathsBack';back.disabled=true;
     const row=el('div',null,'row');row.style.alignItems='center';row.append(start,back,anywhereLabel);
+    const exact=input('owgPathsExact','text','Exact next activity');exact.maxLength=400;
+    const lookup=activityLabelLookup(exact,{id:part=>'owgPathsExact'+part,subject:'path activity'});
+    exact.addEventListener('input',lookup.reset);
+    const goExact=button('Go to exact activity','secondary');goExact.id='owgPathsExactGo';
+    row.append(field('Exact next activity',exact),lookup.wrap,goExact);
     const trail=el('div');trail.id='owgPathsTrail';
     const statusLine=el('div',null,'muted');statusLine.id='owgPathsStatus';statusLine.setAttribute('role','status');statusLine.setAttribute('aria-live','polite');
     const out=el('div');out.id='owgPathsResults';
@@ -7844,7 +8003,7 @@
         const t=table(['Next','Cases','Share','From previous (median)','To case end (median)','Actions'],r.next.map(x=>[x.is_end?'Case ends here':x.activity,Number(x.cases).toLocaleString(),pct(x.share),x.hours_from_previous?hrs(x.hours_from_previous.median):'—',x.hours_to_case_end?hrs(x.hours_to_case_end.median):'—','']));
         t.querySelectorAll('tbody tr').forEach((tr,i)=>{const x=r.next[i];
           const bar=el('div');bar.setAttribute('aria-hidden','true');bar.style.cssText='height:4px;background:currentColor;opacity:.35;margin-top:4px;width:'+Math.round((x.share||0)*100)+'%';tr.cells[2].appendChild(bar);
-          if(!x.is_end){const go=button('Go to '+x.activity,'secondary');go.onclick=()=>{path=[...path,x.activity];show();};tr.cells[5].appendChild(go);}
+          if(!x.is_end){const go=button('Go to '+x.activity,'secondary');go.disabled=path.length>=30;go.onclick=()=>{path=[...path,x.activity];show();};tr.cells[5].appendChild(go);}
           const inspect=button('Inspect cases','secondary');
           inspect.setAttribute('aria-label',x.is_end?'Inspect cases ending here':'Inspect cases continuing to '+x.activity);
           inspect.onclick=()=>showCases(url,x,current);tr.cells[5].appendChild(inspect);
@@ -7853,6 +8012,12 @@
         lastStep={...r,_path:[...path],_anchor:anywhere.checked?'anywhere':'start'};exports.enable(true);
       }catch(error){if(current())statusLine.textContent=error.message;}
       finally{if(current()){start.disabled=false;back.disabled=!path.length;}}};
+    goExact.onclick=()=>{
+      const value=exact.value;
+      if(!value||Array.from(value).length>200){statusLine.textContent='Enter an exact activity label of 1 to 200 characters.';return;}
+      if(path.length>=30){statusLine.textContent='A path can contain at most 30 activities. Go back before adding another.';return;}
+      path=[...path,value];show();
+    };
     start.onclick=()=>{path=[];anchored=0;anywhere.checked=false;show();};
     back.onclick=()=>{path=path.slice(0,-1);anchored=Math.min(anchored,path.length);if(!path.length)anywhere.checked=false;show();};
     anywhere.onchange=()=>{anchored=anywhere.checked?path.length:0;if(path.length)show();else if(anywhere.checked){anywhere.checked=false;statusLine.textContent='Choose a first step from the start, then look for it anywhere.';}};
@@ -8076,7 +8241,7 @@
     return box;
   }
 
-  function funnelSection(activityNames){
+  function funnelSection(activityNames,inspection){
     const box=section('Milestone funnel');box.id='owgFunnel';
     box.appendChild(el('div','Choose activities in order to see how many cases reach each one after the previous ones, how long that takes, and what the cases that stopped did last. Other activities may happen in between.','muted'));
     const options=[['','(choose an activity)'],...activityNames.slice(0,500).map(a=>[a,a])];
@@ -8084,7 +8249,7 @@
     const pickers=[];
     const addStep=()=>{if(pickers.length>=8)return;const n=pickers.length+1;const pick=select('owgFunnelStep'+n,options);
       if(activityNames[n-1])pick.value=activityNames[n-1];pickers.push(pick);steps.appendChild(field('Step '+n,pick));more.disabled=pickers.length>=8;};
-    const more=button('Add step','secondary');more.id='owgFunnelAdd';more.onclick=addStep;
+    const more=button('Add step','secondary');more.id='owgFunnelAdd';more.onclick=()=>{addStep();invalidate();};
     const windowPick=select('owgFunnelWindow',[['','No time limit'],['24','Within 24 hours of the previous step'],['168','Within 7 days'],['720','Within 30 days']]);
     const evidenceStep=select('owgFunnelEvidenceStep',[['','No case evidence'],...Array.from({length:8},(_,i)=>[String(i+1),'Step '+(i+1)])]);
     const evidenceStatus=select('owgFunnelEvidenceStatus',[['reached','Reached step'],['dropped','Stopped before step']]);
@@ -8106,6 +8271,9 @@
     const stale=()=>{lastFunnel=null;exports.enable(false);};
     steps.addEventListener('change',stale);row.addEventListener('change',stale);
     for(let i=0;i<3;i++)addStep();
+    let revision=0;
+    const invalidate=()=>{revision++;out.replaceChildren();run.disabled=false;statusLine.textContent='Settings changed; show the funnel again.';};
+    steps.addEventListener('change',invalidate);row.addEventListener('change',invalidate);
     const pct=x=>x===null||x===undefined?'—':Math.round(x*1000)/10+'%';
     const hrs=x=>x===null||x===undefined?'—':(x<48?(Math.round(x*10)/10)+' h':(Math.round(x/24*10)/10)+' d');
     run.onclick=async()=>{
@@ -8115,17 +8283,44 @@
       const generation=state.generation;run.disabled=true;statusLine.textContent='Following cases…';out.replaceChildren();stale();
       try{
         const params={step:chosen};if(windowPick.value)params.within_hours=windowPick.value;
-        if(evidenceStep.value){params.evidence_step=evidenceStep.value;params.evidence_status=evidenceStatus.value;}
-        const r=await getJSON(logPath('funnel',params));
-        if(generation!==state.generation)return;
+        if(evidenceStep.value){params.evidence_step=evidenceStep.value;params.evidence_status=evidenceStatus.value;params.evidence_page=true;}
+        const version=++revision,current=()=>generation===state.generation&&version===revision;
+        const basePath=logPath('funnel',params),r=await getJSON(basePath).catch(error=>{if(!current())return null;throw error;});
+        if(!current())return;
         const first=r.steps[0],last=r.steps[r.steps.length-1];
         statusLine.textContent=Number(last.cases).toLocaleString()+' of '+Number(first.cases).toLocaleString()+' cases that reached '+first.activity+' went on to reach '+last.activity+' ('+pct(r.completed.share_of_first_step)+'), in a median '+hrs(r.completed.hours_first_to_last.median)+'.'+(r.largest_drop?' The largest drop is before step '+r.largest_drop.to_step+' ('+Number(r.largest_drop.cases).toLocaleString()+' cases).':'');
         const t=table(['Step','Reached','Of step 1','From previous','Dropped','Median time from previous','Stopped cases did last'],r.steps.map(x=>[x.step+'. '+x.activity,Number(x.cases).toLocaleString(),pct(x.share_of_first_step),x.step===1?'—':pct(x.conversion_from_previous),x.step===1?'—':Number(x.dropped_after_previous).toLocaleString()+(x.stopped_cases_possibly_open?' ('+x.stopped_cases_possibly_open+' possibly open)':''),x.step===1?'—':hrs(x.hours_from_previous.median),x.step===1?'—':(x.stopped_cases_last_activity.map(a=>a.activity+' ('+a.cases+')').join(', ')||'—')]));
         t.querySelector('tbody').querySelectorAll('tr').forEach((tr,i)=>{const bar=el('div');bar.setAttribute('aria-hidden','true');bar.style.cssText='height:4px;background:currentColor;opacity:.35;margin-top:4px;width:'+Math.round((r.steps[i].share_of_first_step||0)*100)+'%';tr.cells[1].appendChild(bar);});
         out.appendChild(t);
-        if(r.evidence){const e=r.evidence;out.appendChild(el('h4','Case evidence'));
-          out.appendChild(el('div','Showing '+e.cases.length+' of '+e.total+' cases '+(e.status==='reached'?'reaching step ':'stopping before step ')+e.step+(e.truncated?' (first 50 by case ID).':'.'),'muted'));
-          if(e.cases.length)out.appendChild(table(['Case ID','Last recorded activity','Steps reached'],e.cases.map(c=>[c.case_id,c.last_activity,c.steps_reached])));}
+        if(r.evidence){
+          out.appendChild(el('h4','Case evidence'));
+          const host=el('div');host.id='owgFunnelEvidence';out.appendChild(host);
+          const cursors=[null],expected=r.evidence.revision;let page=0;
+          const showEvidence=e=>{
+            const message=el('div','Showing '+e.cases.length+' of '+e.total+' cases '+(e.status==='reached'?'reaching step ':'stopping before step ')+e.step+'.','muted');
+            const previous=button('Previous cases','secondary'),next=button('Next cases','secondary');
+            previous.id='owgFunnelEvidencePrevious';next.id='owgFunnelEvidenceNext';previous.disabled=page===0;next.disabled=!e.next_after;
+            const load=async(index,cursor)=>{
+              previous.disabled=next.disabled=true;message.textContent='Loading case evidence…';
+              try{
+                const url=new URL(basePath,location.href);
+                if(cursor!==null)url.searchParams.set('evidence_after',cursor);
+                url.searchParams.set('evidence_revision',expected);
+                const result=await getJSON(url.pathname+url.search);
+                if(!current()||!host.isConnected)return;
+                page=index;cursors[index]=cursor;showEvidence(result.evidence);
+              }catch(error){if(current()&&host.isConnected){message.textContent=error.message;previous.disabled=page===0;}}
+            };
+            previous.onclick=()=>load(page-1,cursors[page-1]);next.onclick=()=>load(page+1,e.next_after);
+            const rows=e.cases.map(c=>{
+              const open=button('Open case','secondary');open.setAttribute('aria-label','Open case '+c.case_id);
+              open.onclick=()=>{if(current())inspection.open(c.case_id,r.case_notion);};
+              return [c.case_id,c.last_activity,c.steps_reached,open];
+            });
+            host.replaceChildren(message,...(rows.length?[table(['Case ID','Last recorded activity','Steps reached','Evidence'],rows)]:[]),previous,next);
+          };
+          showEvidence(r.evidence);
+        }
         out.appendChild(el('div',r.caveat,'muted'));
         lastFunnel=r;exports.enable(true);
       }catch(error){statusLine.textContent=error.message;}
@@ -8141,10 +8336,11 @@
     const groupB=input('owgModelChangeCohortBAttribute','text','e.g. region=US');groupB.maxLength=400;groupB.autocomplete='off';
     const split=input('owgModelChangeSplit','date');
     const noise=select('owgModelChangeNoise',[['0.2','Leave out paths under 20% (default)'],['0','Keep every path'],['0.4','Leave out paths under 40%']]);
+    const shown=select('owgModelChangeCoverage',[['1','All activities'],['0.9','90% of events'],['0.75','75% of events'],['0.5','50% of events']]);
     const run=button('Compare periods','secondary');run.id='owgModelChangeRun';
     const splitField=field('Split at (empty: median case start)',split),aField=field('Group A (attribute=value)',groupA),bField=field('Group B (attribute=value)',groupB);
     const sync=()=>{splitField.hidden=mode.value!=='periods';aField.hidden=bField.hidden=mode.value!=='groups';};sync();
-    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Compare',mode),splitField,aField,bField,field('Models',noise),run);
+    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Compare',mode),splitField,aField,bField,field('Models',noise),field('Activities shown',shown),run);
     const statusLine=el('div',null,'muted');statusLine.id='owgModelChangeStatus';statusLine.setAttribute('role','status');statusLine.setAttribute('aria-live','polite');
     const out=el('div');out.id='owgModelChangeResults';
     box.append(row,statusLine,out);
@@ -8153,7 +8349,7 @@
     let revision=0;
     const reset=()=>{revision++;out.replaceChildren();run.disabled=false;statusLine.textContent='';};
     mode.onchange=()=>{sync();reset();};
-    split.oninput=groupA.oninput=groupB.oninput=noise.onchange=reset;
+    split.oninput=groupA.oninput=groupB.oninput=noise.onchange=shown.onchange=reset;
     function showCrossFit(report,names){
       const number=value=>value.toLocaleString();
       const ids=Object.keys(names);
@@ -8192,7 +8388,7 @@
         if(!groupA.value.includes('=')||!groupB.value.includes('=')){statusLine.textContent='Enter both groups as attribute=value.';out.replaceChildren();return;}
         run.disabled=true;statusLine.textContent='Discovering both groups…';out.replaceChildren();
         try{
-          const r=await getJSON(logPath('model-comparison',{group_a:groupA.value.trim(),group_b:groupB.value.trim(),noise:noise.value}));
+          const r=await getJSON(logPath('model-comparison',{group_a:groupA.value.trim(),group_b:groupB.value.trim(),noise:noise.value,activities:shown.value}));
           if(!current())return;
           const c=r.cross_fit,A=r.groups.a,B=r.groups.b;
           statusLine.textContent=A.filter+' ('+Number(A.cases).toLocaleString()+' cases) against '+B.filter+' ('+Number(B.cases).toLocaleString()+'): '+r.orderings.changed+' of '+r.orderings.pairs_compared+' activity orderings differ. '+B.filter+' cases fit the '+A.filter+' model '+pct(c.b_cases_on_a_model.fitness)+', against '+pct(c.a_cases_on_a_model.fitness)+' for its own cases.';
@@ -8208,7 +8404,7 @@
       }
       run.disabled=true;statusLine.textContent='Discovering both periods…';out.replaceChildren();
       try{
-        const params={noise:noise.value};if(split.value)params.split=split.value+'T00:00:00Z';
+        const params={noise:noise.value,activities:shown.value};if(split.value)params.split=split.value+'T00:00:00Z';
         const r=await getJSON(logPath('model-change',params));
         if(!current())return;
         const c=r.cross_fit,drop=r.fitness_drop_on_earlier_model;
@@ -8534,6 +8730,474 @@
       return inspect;
     };
     let lastNet=null;
+    const soundRun=button('Validate net soundness','secondary');soundRun.id='owgPetriSoundnessRun';soundRun.disabled=true;
+    const soundStatus=el('div',null,'muted');soundStatus.id='owgPetriSoundnessStatus';soundStatus.setAttribute('role','status');soundStatus.setAttribute('aria-live','polite');
+    const soundOut=el('div');soundOut.id='owgPetriSoundnessResults';
+    const soundBox=document.createElement('details');soundBox.append(el('summary','Structural and behavioral net validation'),
+      el('div','Check whether the model itself can reach completion, deadlock, leave tokens behind, loop indefinitely or contain transitions that can never fire. This check is independent of recorded cases.','muted'),
+      soundRun,soundStatus,soundOut);box.appendChild(soundBox);
+    const compareFile=input('owgPetriCompareFile','file');compareFile.accept='.pnml,application/xml,text/xml';
+    const compareRun=button('Compare completed behavior','secondary');compareRun.id='owgPetriCompareRun';compareRun.disabled=true;
+    const compareStatus=el('div',null,'muted');compareStatus.id='owgPetriCompareStatus';compareStatus.setAttribute('role','status');compareStatus.setAttribute('aria-live','polite');
+    const compareOut=el('div');compareOut.id='owgPetriCompareResults';
+    const compareBox=document.createElement('details');compareBox.append(el('summary','Compare two model revisions'),
+      el('div','Use the net just replayed as the baseline. Select a candidate PNML file to check whether completed visible activity sequences are added or removed. This does not compare timing, costs or business outcomes.','muted'),
+      field('Candidate Petri net (.pnml)',compareFile),compareRun,compareStatus,compareOut);
+    soundBox.appendChild(compareBox);
+    let compareBusy=false,compareRevision=0;
+    const clearCompare=()=>{compareRevision++;compareStatus.textContent='';compareOut.replaceChildren();compareRun.disabled=compareBusy||!lastNet||!compareFile.files?.length;};
+    compareFile.onchange=clearCompare;
+    compareRun.onclick=async()=>{
+      const net=lastNet,chosen=compareFile.files?.[0],revision=compareRevision;
+      if(!net||!chosen||compareBusy||net.generation!==state.generation)return;
+      const stillCurrent=()=>lastNet===net&&state.generation===net.generation&&compareRevision===revision;
+      compareBusy=true;compareRun.disabled=true;compareOut.replaceChildren();compareStatus.textContent='Exploring both model languages…';
+      try{
+        const baseline=new TextEncoder().encode(net.body);
+        if(baseline.byteLength>2*1024*1024||chosen.size>2*1024*1024)throw new Error('Each model must be at most 2 MB.');
+        const head=new Uint8Array(4);new DataView(head.buffer).setUint32(0,baseline.byteLength);
+        const body=new Blob([head,baseline,chosen],{type:'application/octet-stream'});
+        const r=await (await api('/v1/event-logs/petri-language-comparison',{method:'POST',headers:{'Content-Type':'application/octet-stream'},body})).json();
+        if(!stillCurrent())return;
+        const verdict=v=>v===true?'Verified':v===false?'Failed':'Inconclusive';
+        compareStatus.textContent='Completed behavior equivalence: '+verdict(r.equivalent)+'. '+Number(r.product_states).toLocaleString()+' paired states examined.'+(r.complete?' Complete comparison.':' Stopped: '+r.limit.replaceAll('_',' ')+'.');
+        compareOut.appendChild(table(['Property','Result'],[
+          ['Candidate preserves baseline traces',verdict(r.candidate_preserves_baseline_language)],
+          ['Candidate introduces no new traces',verdict(r.candidate_introduces_no_new_language)],
+          ['Baseline marking graph',r.baseline.complete?'Complete':'Incomplete: '+r.baseline.limit],
+          ['Candidate marking graph',r.candidate.complete?'Complete':'Incomplete: '+r.candidate.limit]
+        ]));
+        const examples=[['Removed from candidate',r.removed_trace],['Added by candidate',r.added_trace]].filter(([,w])=>w!==null);
+        if(examples.length){
+          compareOut.appendChild(el('h4','Shortest discovered distinguishing traces'));
+          compareOut.appendChild(table(['Difference','Visible activities','Length'],examples.map(([kind,w])=>[
+            kind,(w.activities.join(' → ')||'(empty trace)')+(w.truncated?' … (prefix only)':''),String(w.length)
+          ])));
+        }
+        compareOut.appendChild(el('div',r.caveat,'muted'));
+        const download=button('Download model comparison (JSON)','secondary');download.onclick=()=>{
+          if(!stillCurrent())return;
+          const url=URL.createObjectURL(new Blob([JSON.stringify(r,null,2)],{type:'application/json'}));
+          const link=document.createElement('a');link.href=url;link.download='petri-language-'+r.candidate.pnml_sha256.slice(0,12)+'.json';
+          document.body.appendChild(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
+        };compareOut.appendChild(download);
+      }catch(error){if(stillCurrent())compareStatus.textContent=error.message;}
+      finally{compareBusy=false;compareRun.disabled=!lastNet||lastNet.generation!==state.generation||!compareFile.files?.length;}
+    };
+    const policyBox=document.createElement('details');policyBox.append(el('summary','Verify declared compliance rules on the model'),
+      el('div','Check all reachable completed traces, not just recorded cases. Use exact visible activity names. Untimed activity rules only; resource and time constraints cannot be proved from this net.','muted'));
+    const policyTemplate=select('owgPetriPolicyTemplate',[
+      ['response','Every A is eventually followed by B'],['chain_response','Every A is immediately followed by B'],
+      ['precedence','Every B has an earlier A'],['not_coexistence','A and B never both occur'],['existence','Occurrence count of A']]);
+    const policyA=input('owgPetriPolicyA','text');policyA.maxLength=200;
+    const policyB=input('owgPetriPolicyB','text');policyB.maxLength=200;
+    const policyMin=input('owgPetriPolicyMin','number');policyMin.min='0';policyMin.max='1000000';policyMin.step='1';policyMin.value='1';
+    const policyMax=input('owgPetriPolicyMax','number');policyMax.min='0';policyMax.max='1000000';policyMax.step='1';
+    const policyBField=field('Activity B',policyB),policyMinField=field('Minimum count',policyMin),policyMaxField=field('Maximum count (optional)',policyMax);
+    const policyAdd=button('Add model rule','secondary');policyAdd.id='owgPetriPolicyAdd';
+    const policyRow=el('div',null,'row');policyRow.style.alignItems='end';
+    policyRow.append(field('Rule template',policyTemplate),field('Exact activity A',policyA),policyBField,policyMinField,policyMaxField,policyAdd);
+    const syncPolicyTemplate=()=>{const exists=policyTemplate.value==='existence';show(policyBField,!exists);show(policyMinField,exists);show(policyMaxField,exists);};
+    policyTemplate.onchange=syncPolicyTemplate;syncPolicyTemplate();
+    const policyText=document.createElement('textarea');policyText.id='owgPetriPolicyRules';policyText.rows=6;policyText.maxLength=65536;
+    policyText.style.cssText='width:100%;font-family:monospace';policyText.value=JSON.stringify({rules:[]},null,2);
+    const policyCandidate=input('owgPetriPolicyCandidate','file');policyCandidate.accept='.pnml,application/xml,text/xml';
+    const policyRun=button('Verify model rules','secondary');policyRun.id='owgPetriPolicyRun';policyRun.disabled=true;
+    const policyStatus=el('div',null,'muted');policyStatus.id='owgPetriPolicyStatus';policyStatus.setAttribute('role','status');policyStatus.setAttribute('aria-live','polite');
+    const policyOut=el('div');policyOut.id='owgPetriPolicyResults';
+    policyBox.append(policyRow,field('Rule suite JSON (editable; same untimed rule format as Compliance rules)',policyText),
+      field('Optional candidate revision (.pnml)',policyCandidate),policyRun,policyStatus,policyOut);
+    soundBox.appendChild(policyBox);
+    let policyBusy=false,policyRevision=0;
+    const clearPolicy=()=>{policyRevision++;policyStatus.textContent='';policyOut.replaceChildren();policyRun.disabled=policyBusy||!lastNet;};
+    policyText.oninput=clearPolicy;policyCandidate.onchange=clearPolicy;
+    policyAdd.onclick=()=>{
+      try{
+        const spec=JSON.parse(policyText.value);if(!spec||!Array.isArray(spec.rules)||Object.keys(spec).length!==1)throw new Error('Enter a JSON object with a rules array.');
+        if(spec.rules.length>=20)throw new Error('At most 20 rules are supported.');
+        const a=policyA.value,b=policyB.value,template=policyTemplate.value;
+        if(!a.trim())throw new Error('Enter exact activity A.');
+        let rule={template,a};
+        if(template==='existence'){
+          if(!policyMin.validity.valid||!policyMax.validity.valid||!policyMin.value)throw new Error('Enter valid whole-number count limits.');
+          rule.min=Number(policyMin.value);if(policyMax.value!=='')rule.max=Number(policyMax.value);
+          if(rule.max!==undefined&&rule.max<rule.min||rule.min===0&&rule.max===undefined)throw new Error('Specify a nontrivial count range.');
+        }else{
+          if(!b.trim()||a===b)throw new Error('Enter two different exact activity names.');
+          rule.b=b;
+        }
+        spec.rules.push(rule);policyText.value=JSON.stringify(spec,null,2);clearPolicy();
+      }catch(error){policyStatus.textContent=error.message;}
+    };
+    policyRun.onclick=async()=>{
+      const net=lastNet,revision=policyRevision,chosen=policyCandidate.files?.[0];
+      if(!net||policyBusy||net.generation!==state.generation)return;
+      const stillCurrent=()=>lastNet===net&&state.generation===net.generation&&policyRevision===revision;
+      policyBusy=true;policyRun.disabled=true;policyOut.replaceChildren();policyStatus.textContent='Exploring model and policy states…';
+      try{
+        const spec=JSON.parse(policyText.value),encoder=new TextEncoder();
+        const rules=encoder.encode(JSON.stringify(spec)),baseline=encoder.encode(net.body);
+        if(rules.byteLength>65536||baseline.byteLength>2*1024*1024||chosen&&chosen.size>2*1024*1024)throw new Error('Rule suite or model exceeds the review limit.');
+        const size=n=>{const bytes=new Uint8Array(4);new DataView(bytes.buffer).setUint32(0,n);return bytes;};
+        const body=new Blob([size(rules.byteLength),rules,size(baseline.byteLength),baseline,...(chosen?[chosen]:[])],{type:'application/octet-stream'});
+        const r=await (await api('/v1/event-logs/petri-policy-review',{method:'POST',headers:{'Content-Type':'application/octet-stream'},body})).json();
+        if(!stillCurrent())return;
+        const pretty=s=>({verified:'Verified',counterexample:'Counterexample found',vacuous_only:'Only vacuous satisfaction',no_completed_trace:'No completed trace',inconclusive:'Inconclusive'}[s]||s);
+        const possible=v=>v===true?'Possible':v===false?'Impossible':'Inconclusive';
+        const trace=w=>w?((w.activities.join(' → ')||'(empty trace)')+(w.truncated?' … (prefix only)':'')):'—';
+        const render=(label,model)=>{
+          policyOut.appendChild(el('h4',label));
+          policyOut.appendChild(table(['Check','Verdict','Satisfying trace','Violating trace','Counterexample'],[
+            ['All rules together',pretty(model.joint.status),possible(model.joint.satisfying_trace_possible),possible(model.joint.violating_trace_possible),trace(model.joint.witnesses.violating)],
+            ...model.rules.map(x=>[JSON.stringify(x.rule),pretty(x.status),possible(x.satisfying_trace_possible),possible(x.violating_trace_possible),trace(x.witnesses.violating)])
+          ]));
+          policyOut.appendChild(el('div','Joint satisfying example: '+trace(model.joint.witnesses.activated_satisfying||model.joint.witnesses.vacuous)+(model.joint.limit?' · Search stopped: '+model.joint.limit.replaceAll('_',' '):''),'muted'));
+        };
+        render('Baseline model',r.baseline);
+        if(r.candidate){
+          render('Candidate model',r.candidate);
+          policyOut.appendChild(el('h4','Change in possibility of violations'));
+          policyOut.appendChild(table(['Check','Violation possibility','Satisfaction possibility'],[
+            ['All rules together',r.changes.joint.violating_trace_possibility.replaceAll('_',' '),r.changes.joint.satisfying_trace_possibility.replaceAll('_',' ')],
+            ...r.changes.rules.map(x=>['Rule '+(x.rule_index+1),x.violating_trace_possibility.replaceAll('_',' '),x.satisfying_trace_possibility.replaceAll('_',' ')])
+          ]));
+          policyOut.appendChild(el('div','Unchanged possibility does not prove the same violating or satisfying trace language.','muted'));
+        }
+        policyStatus.textContent='Model policy review: '+pretty(r.baseline.joint.status)+(r.candidate?' · Candidate: '+pretty(r.candidate.joint.status):'')+'.';
+        policyOut.appendChild(el('div',r.caveat,'muted'));
+        const download=button('Download policy review (JSON)','secondary');download.onclick=()=>{
+          if(!stillCurrent())return;
+          const url=URL.createObjectURL(new Blob([JSON.stringify(r,null,2)],{type:'application/json'}));
+          const link=document.createElement('a');link.href=url;link.download='petri-policy-'+r.rules_sha256.slice(0,12)+'.json';
+          document.body.appendChild(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
+        };policyOut.appendChild(download);
+      }catch(error){if(stillCurrent())policyStatus.textContent=error.message;}
+      finally{policyBusy=false;policyRun.disabled=!lastNet||lastNet.generation!==state.generation;}
+    };
+    const acceptanceBox=document.createElement('details');
+    acceptanceBox.append(el('summary','Run workflow acceptance scenarios'),
+      el('div','Test exact visible activity sequences, whether a prefix can finish, and which next activities can still lead to completion. These are declared test expectations, not automatically learned policy.','muted'));
+    const acceptanceId=input('owgPetriAcceptanceId','text');acceptanceId.maxLength=80;
+    const acceptanceTrace=document.createElement('textarea');acceptanceTrace.id='owgPetriAcceptanceTrace';acceptanceTrace.rows=2;acceptanceTrace.value='[]';acceptanceTrace.maxLength=25000;
+    const acceptanceExpected=select('owgPetriAcceptanceExpected',[
+      ['completed_true','Trace can complete'],['completed_false','Trace cannot complete'],
+      ['fireable_true','Prefix can execute'],['fireable_false','Prefix cannot execute'],
+      ['finishable_true','Prefix can still finish'],['finishable_false','Prefix cannot finish'],
+      ['all_prefix_states_finishable_true','Every matching prefix state can finish'],['all_prefix_states_finishable_false','Not every matching prefix state can finish'],
+      ['required_next','Required next activities'],['forbidden_next','Forbidden next activities'],['exact_next','Exact set of next activities']]);
+    const acceptanceNext=document.createElement('textarea');acceptanceNext.id='owgPetriAcceptanceNext';acceptanceNext.rows=2;acceptanceNext.value='[]';acceptanceNext.maxLength=25000;
+    const acceptanceNextField=field('Next activities (JSON array)',acceptanceNext);
+    const syncAcceptance=()=>show(acceptanceNextField,acceptanceExpected.value.endsWith('_next'));
+    acceptanceExpected.onchange=syncAcceptance;syncAcceptance();
+    const acceptanceAdd=button('Add acceptance scenario','secondary');acceptanceAdd.id='owgPetriAcceptanceAdd';
+    const acceptanceText=document.createElement('textarea');acceptanceText.id='owgPetriAcceptanceSuite';acceptanceText.rows=8;acceptanceText.maxLength=262144;
+    acceptanceText.value=JSON.stringify({format:'openworkgraph.petri_acceptance_suite.v1',cases:[]},null,2);
+    acceptanceText.style.cssText='width:100%;font-family:monospace';
+    const acceptanceCandidate=input('owgPetriAcceptanceCandidate','file');acceptanceCandidate.accept='.pnml,application/xml,text/xml';
+    const acceptanceRun=button('Run acceptance suite','secondary');acceptanceRun.id='owgPetriAcceptanceRun';acceptanceRun.disabled=true;
+    const acceptanceStatus=el('div',null,'muted');acceptanceStatus.id='owgPetriAcceptanceStatus';acceptanceStatus.setAttribute('role','status');acceptanceStatus.setAttribute('aria-live','polite');
+    const acceptanceOut=el('div');acceptanceOut.id='owgPetriAcceptanceResults';
+    const generatedBox=document.createElement('details');generatedBox.append(el('summary','Generate characterization scenarios from the baseline'),
+      el('div','Generated expectations describe the current model, not independently approved business policy. Review them before adding them to your suite.','muted'));
+    const genCases=input('owgPetriGenCases','number');genCases.min='1';genCases.max='40';genCases.step='1';genCases.value='20';
+    const genDepth=input('owgPetriGenDepth','number');genDepth.min='1';genDepth.max='99';genDepth.step='1';genDepth.value='20';
+    const genRun=button('Generate proposed suite','secondary');genRun.id='owgPetriGenRun';genRun.disabled=true;
+    const genApply=button('Replace editor with proposed suite','secondary');genApply.id='owgPetriGenApply';genApply.disabled=true;
+    const genStatus=el('div',null,'muted');genStatus.id='owgPetriGenStatus';genStatus.setAttribute('role','status');genStatus.setAttribute('aria-live','polite');
+    const genOut=el('div');genOut.id='owgPetriGenResults';
+    generatedBox.append(field('Maximum scenarios',genCases),field('Maximum prefix depth',genDepth),genRun,genApply,genStatus,genOut);
+    let genBusy=false,genRevision=0,generated=null;
+    const clearGenerated=()=>{genRevision++;generated=null;genStatus.textContent='';genOut.replaceChildren();genApply.disabled=true;genRun.disabled=genBusy||!lastNet;};
+    genCases.oninput=clearGenerated;genDepth.oninput=clearGenerated;
+    genRun.onclick=async()=>{
+      const net=lastNet;if(!net||genBusy||net.generation!==state.generation)return;
+      clearGenerated();const revision=genRevision;const current=()=>lastNet===net&&state.generation===net.generation&&revision===genRevision;
+      genBusy=true;genRun.disabled=true;genStatus.textContent='Exploring reference model…';
+      try{
+        if(!genCases.value||!genDepth.value||!genCases.validity.valid||!genDepth.validity.valid)throw new Error('Enter valid whole-number limits.');
+        const q=new URLSearchParams({max_cases:genCases.value,max_depth:genDepth.value});
+        const r=await (await api('/v1/event-logs/petri-test-generation?'+q,{method:'POST',headers:{'Content-Type':'application/xml'},body:net.body})).json();
+        if(!current())return;
+        generated=r;genApply.disabled=!r.suite;
+        genStatus.textContent=r.suite?r.suite.cases.length+' proposed scenarios. '+(r.prefix_exploration_complete?'Complete prefix-state exploration.':'Exploration limited: '+r.limit+'.'):'No suite generated: '+(r.limit||'insufficient coverage')+'.';
+        if(r.suite){
+          genOut.appendChild(el('div','Selected categories: '+r.categories_selected.join(', ')+(r.categories_omitted.length?' · Omitted: '+r.categories_omitted.join(', '):''),'muted'));
+          if(r.selection_limited||r.suite_byte_limited)genOut.appendChild(el('div','Suite selection was limited; review omitted coverage.','muted'));
+          genOut.appendChild(table(['Scenario','Trace','Expectation'],r.suite.cases.map(c=>[c.id,JSON.stringify(c.trace),JSON.stringify(c.expect)])));
+          genOut.appendChild(el('div',r.coverage_caveat,'muted'));
+          const download=button('Download generation evidence (JSON)','secondary');download.onclick=()=>{
+            if(!current()||generated!==r)return;
+            const url=URL.createObjectURL(new Blob([JSON.stringify(r,null,2)],{type:'application/json'}));
+            const link=document.createElement('a');link.href=url;link.download='petri-generation-'+r.suite_sha256.slice(0,12)+'.json';
+            document.body.appendChild(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
+          };genOut.appendChild(download);
+        }
+        genOut.appendChild(el('div',r.caveat,'muted'));
+      }catch(error){if(current())genStatus.textContent=error.message;}
+      finally{genBusy=false;genRun.disabled=!lastNet||lastNet.generation!==state.generation;}
+    };
+    genApply.onclick=()=>{
+      if(!generated?.suite||!lastNet||lastNet.generation!==state.generation)return;
+      acceptanceText.value=JSON.stringify(generated.suite,null,2);clearAcceptance();
+      genStatus.textContent='Proposed suite copied to the editor. Review it before use.';
+    };
+    acceptanceBox.append(generatedBox);
+    acceptanceBox.append(field('Scenario ID',acceptanceId),field('Visible trace or prefix (JSON array)',acceptanceTrace),
+      field('Expectation',acceptanceExpected),acceptanceNextField,acceptanceAdd,field('Editable acceptance suite JSON',acceptanceText),
+      field('Optional candidate model (.pnml)',acceptanceCandidate),acceptanceRun,acceptanceStatus,acceptanceOut);
+    soundBox.appendChild(acceptanceBox);
+    const mutationBox=document.createElement('details');
+    mutationBox.append(el('summary','Challenge acceptance suite with synthetic faults'),
+      el('div','Evaluate the current suite against independently perturbed copies of the baseline model. No saved model is changed. Surviving faults with a completed-trace difference can suggest additional regression scenarios.','muted'));
+    const mutationCount=input('owgPetriMutationCount','number');mutationCount.min='1';mutationCount.max='8';mutationCount.step='1';mutationCount.value='4';
+    const mutationOps=[['hide_activity','Hide an activity'],['rename_activity','Rename an activity'],
+      ['remove_transition','Remove a transition'],['increase_input_weight','Increase an input-arc weight']].map(([value,label])=>{
+        const control=document.createElement('input');control.type='checkbox';control.checked=true;control.value=value;
+        const wrapper=el('label');wrapper.append(control,document.createTextNode(' '+label));return {control,wrapper};
+      });
+    const mutationRun=button('Challenge acceptance suite','secondary');mutationRun.id='owgPetriMutationRun';mutationRun.disabled=true;
+    const mutationStatus=el('div',null,'muted');mutationStatus.id='owgPetriMutationStatus';mutationStatus.setAttribute('role','status');mutationStatus.setAttribute('aria-live','polite');
+    const mutationOut=el('div');mutationOut.id='owgPetriMutationResults';
+    mutationBox.append(field('Maximum synthetic faults',mutationCount),...mutationOps.map(x=>x.wrapper),mutationRun,mutationStatus,mutationOut);
+    acceptanceBox.appendChild(mutationBox);
+    let mutationBusy=false,mutationRevision=0;
+    const clearMutation=()=>{mutationRevision++;mutationStatus.textContent='';mutationOut.replaceChildren();mutationRun.disabled=mutationBusy||!lastNet;};
+    mutationCount.oninput=clearMutation;mutationOps.forEach(x=>x.control.onchange=clearMutation);
+    mutationRun.onclick=async()=>{
+      const net=lastNet,revision=mutationRevision;
+      if(!net||mutationBusy||net.generation!==state.generation)return;
+      const current=()=>lastNet===net&&state.generation===net.generation&&mutationRevision===revision;
+      mutationBusy=true;mutationRun.disabled=true;mutationOut.replaceChildren();mutationStatus.textContent='Challenging the declared suite…';
+      try{
+        if(!mutationCount.validity.valid||!mutationCount.value)throw new Error('Choose 1–8 synthetic faults.');
+        const spec={suite:JSON.parse(acceptanceText.value),settings:{max_mutants:Number(mutationCount.value),operators:mutationOps.filter(x=>x.control.checked).map(x=>x.control.value)}};
+        if(!spec.settings.operators.length)throw new Error('Choose at least one fault operator.');
+        const encoder=new TextEncoder(),settings=encoder.encode(JSON.stringify(spec)),baseline=encoder.encode(net.body);
+        if(settings.byteLength>266240||baseline.byteLength>2*1024*1024)throw new Error('Suite or model exceeds the review limit.');
+        const header=new Uint8Array(4);new DataView(header.buffer).setUint32(0,settings.byteLength);
+        const body=new Blob([header,settings,baseline],{type:'application/octet-stream'});
+        const r=await (await api('/v1/event-logs/petri-mutation-review',{method:'POST',headers:{'Content-Type':'application/octet-stream'},body})).json();
+        if(!current())return;
+        if(r.status==='baseline_not_passed'){
+          mutationStatus.textContent='Baseline suite must pass before mutation testing.';
+          mutationOut.appendChild(table(['Baseline scenario','Status'],r.baseline.cases.map(c=>[c.id,c.status])));
+        }else if(r.status==='no_applicable_mutations'){
+          mutationStatus.textContent='No applicable synthetic faults for these operators.';
+        }else{
+          const c=r.counts,bounds=r.detected_fraction_bounds;
+          mutationStatus.textContent=c.detected+' detected · '+c.survived+' survived · '+c.inconclusive+' inconclusive';
+          mutationOut.appendChild(el('div','Selected '+r.selected_mutants+' of '+r.available_mutants+' possible individual faults. Detection fraction: '+pct(bounds.lower)+'–'+pct(bounds.upper)+'. '+r.survivors_with_proven_language_difference+' surviving faults have a proven completed-trace difference.','muted'));
+          mutationOut.appendChild(table(['Fault','Operator','Status','Failed scenarios','Completed-trace equivalence'],r.mutants.map(m=>[
+            m.id,m.recipe.operator.replaceAll('_',' '),m.status,m.failed_case_ids.join(', ')||'—',
+            m.language_comparison?(m.language_comparison.equivalent===true?'Verified equivalent':m.language_comparison.equivalent===false?'Different':'Inconclusive'):'Not checked'
+          ])));
+          for(const m of r.mutants){
+            const details=document.createElement('details');details.append(el('summary',m.id+' · '+m.status),el('div',JSON.stringify(m.recipe),'muted'));
+            if(m.reason)details.appendChild(el('div',m.reason,'muted'));
+            for(const scenario of m.suggested_cases||[]){
+              details.appendChild(el('div',JSON.stringify(scenario)));
+              const adopt=button('Add suggested regression scenario','secondary');adopt.onclick=()=>{
+                if(!current())return;
+                try{
+                  const suite=JSON.parse(acceptanceText.value);
+                  if(!Array.isArray(suite.cases)||suite.cases.length>=40)throw new Error('Suite must have room for another scenario.');
+                  if(suite.cases.some(c=>c.id===scenario.id))throw new Error('Scenario ID already exists.');
+                  suite.cases.push(scenario);acceptanceText.value=JSON.stringify(suite,null,2);clearAcceptance();
+                  mutationStatus.textContent='Suggested scenario added to editor. Review before running the suite.';
+                }catch(error){mutationStatus.textContent=error.message;}
+              };details.appendChild(adopt);
+            }
+            mutationOut.appendChild(details);
+          }
+        }
+        mutationOut.appendChild(el('div',r.caveat,'muted'));
+        const download=button('Download mutation review (JSON)','secondary');download.onclick=()=>{
+          if(!current())return;
+          const url=URL.createObjectURL(new Blob([JSON.stringify(r,null,2)],{type:'application/json'}));
+          const link=document.createElement('a');link.href=url;link.download='petri-mutation-'+r.suite_sha256.slice(0,12)+'.json';
+          document.body.appendChild(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
+        };mutationOut.appendChild(download);
+      }catch(error){if(current())mutationStatus.textContent=error.message;}
+      finally{mutationBusy=false;mutationRun.disabled=!lastNet||lastNet.generation!==state.generation;}
+    };
+    let acceptanceBusy=false,acceptanceRevision=0;
+    const clearAcceptance=()=>{acceptanceRevision++;acceptanceStatus.textContent='';acceptanceOut.replaceChildren();acceptanceRun.disabled=acceptanceBusy||!lastNet;clearMutation();};
+    acceptanceText.oninput=clearAcceptance;acceptanceCandidate.onchange=clearAcceptance;
+    acceptanceAdd.onclick=()=>{
+      try{
+        const suite=JSON.parse(acceptanceText.value),trace=JSON.parse(acceptanceTrace.value);
+        const id=acceptanceId.value,kind=acceptanceExpected.value;
+        if(suite?.format!=='openworkgraph.petri_acceptance_suite.v1'||!Array.isArray(suite.cases))throw new Error('Enter a valid acceptance suite.');
+        if(!/^[A-Za-z0-9._-]{1,80}$/.test(id)||suite.cases.some(c=>c.id===id))throw new Error('Use a distinct ASCII scenario ID.');
+        if(suite.cases.length>=40||!Array.isArray(trace)||trace.length>100||trace.some(x=>typeof x!=='string'))throw new Error('At most 40 scenarios and 100 activities per trace.');
+        let expect;
+        if(kind.endsWith('_next')){
+          const next=JSON.parse(acceptanceNext.value);
+          if(!Array.isArray(next)||next.length>100||next.some(x=>typeof x!=='string'))throw new Error('Next activities must be a JSON array of activity names.');
+          expect={[kind]:next};
+        }else{const split=kind.lastIndexOf('_');expect={[kind.slice(0,split)]:kind.slice(split+1)==='true'};}
+        suite.cases.push({id,trace,expect});acceptanceText.value=JSON.stringify(suite,null,2);clearAcceptance();
+      }catch(error){acceptanceStatus.textContent=error.message;}
+    };
+    acceptanceRun.onclick=async()=>{
+      const net=lastNet,revision=acceptanceRevision,chosen=acceptanceCandidate.files?.[0];
+      if(!net||acceptanceBusy||net.generation!==state.generation)return;
+      const stillCurrent=()=>lastNet===net&&state.generation===net.generation&&acceptanceRevision===revision;
+      acceptanceBusy=true;acceptanceRun.disabled=true;acceptanceOut.replaceChildren();acceptanceStatus.textContent='Running declared scenarios…';
+      try{
+        const spec=JSON.parse(acceptanceText.value),encoder=new TextEncoder(),suite=encoder.encode(JSON.stringify(spec)),baseline=encoder.encode(net.body);
+        if(suite.byteLength>262144||baseline.byteLength>2*1024*1024||chosen&&chosen.size>2*1024*1024)throw new Error('Suite or model exceeds the review limit.');
+        const size=n=>{const bytes=new Uint8Array(4);new DataView(bytes.buffer).setUint32(0,n);return bytes;};
+        const body=new Blob([size(suite.byteLength),suite,size(baseline.byteLength),baseline,...(chosen?[chosen]:[])],{type:'application/octet-stream'});
+        const r=await (await api('/v1/event-logs/petri-acceptance',{method:'POST',headers:{'Content-Type':'application/octet-stream'},body})).json();
+        if(!stillCurrent())return;
+        const verdict=v=>v===true?'Yes':v===false?'No':'Inconclusive';
+        const render=(label,model)=>{
+          acceptanceOut.appendChild(el('h4',label));
+          acceptanceOut.appendChild(el('div',model.counts.passed+' passed · '+model.counts.failed+' failed · '+model.counts.inconclusive+' inconclusive'+(model.work_limit_reached?' · Work limit reached':'')));
+          acceptanceOut.appendChild(table(['Scenario','Status','Can complete','Can execute prefix','Can still finish','Viable next activities'],model.cases.map(c=>[
+            c.id,c.status,verdict(c.observed.completed),verdict(c.observed.fireable),verdict(c.observed.finishable),
+            JSON.stringify(c.observed.viable_next_activities)+(c.observed.next_activities_complete?'':' (incomplete)')
+          ])));
+          for(const c of model.cases){
+            const details=document.createElement('details');details.append(el('summary',c.id+' · assertion details'),
+              el('div','Supplied trace: '+JSON.stringify(c.trace),'muted'),
+              table(['Property','Expected','Observed','Passed'],c.assertions.map(a=>[a.property,JSON.stringify(a.expected),JSON.stringify(a.observed),verdict(a.passed)])));
+            details.appendChild(el('div','Matching markings: '+(c.observed.matched_markings??'unknown')+' · Known completable: '+(c.observed.known_completable_markings??'unknown')+' · Noncompletable: '+(c.observed.noncompletable_markings??'unknown')+' · Every matching marking can finish: '+verdict(c.observed.all_prefix_states_finishable),'muted'));
+            const suffix=c.observed.completion_suffix;
+            if(suffix)details.appendChild(el('div','Completion suffix: '+JSON.stringify(suffix.activities)+(suffix.truncated?' (prefix only)':'')+(suffix.shortest_proven?' · shortest proven':' · shortest not established')));
+            acceptanceOut.appendChild(details);
+          }
+        };
+        render('Baseline acceptance',r.baseline);
+        if(r.candidate){
+          render('Candidate acceptance',r.candidate);
+          acceptanceOut.appendChild(el('h4','Scenario regression review'));
+          acceptanceOut.appendChild(table(['Scenario','Baseline','Candidate','Change'],r.changes.cases.map(c=>[c.id,c.baseline,c.candidate,c.change.replaceAll('_',' ')])));
+        }
+        acceptanceStatus.textContent='Acceptance suite: '+(r.baseline.suite_passed===true?'Passed':r.baseline.suite_passed===false?'Failed':'Inconclusive')+(r.candidate?' · Candidate: '+(r.candidate.suite_passed===true?'Passed':r.candidate.suite_passed===false?'Failed':'Inconclusive'):'')+'.';
+        acceptanceOut.appendChild(el('div',r.caveat,'muted'));
+        const download=button('Download acceptance report (JSON)','secondary');download.onclick=()=>{
+          if(!stillCurrent())return;
+          const url=URL.createObjectURL(new Blob([JSON.stringify(r,null,2)],{type:'application/json'}));
+          const link=document.createElement('a');link.href=url;link.download='petri-acceptance-'+r.suite_sha256.slice(0,12)+'.json';
+          document.body.appendChild(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
+        };acceptanceOut.appendChild(download);
+      }catch(error){if(stillCurrent())acceptanceStatus.textContent=error.message;}
+      finally{acceptanceBusy=false;acceptanceRun.disabled=!lastNet||lastNet.generation!==state.generation;}
+    };
+    const releaseBox=document.createElement('details');
+    releaseBox.append(el('summary','Review a model release against pinned criteria'),
+      el('div','Freeze the exact baseline, candidate, acceptance suite and declared criteria before recomputing model checks. Meeting these criteria does not authorize deployment or certify real agent behavior.','muted'));
+    const releaseCandidate=input('owgPetriReleaseCandidate','file');releaseCandidate.accept='.pnml,application/xml,text/xml';
+    const releaseSpec=document.createElement('textarea');releaseSpec.id='owgPetriReleaseSpec';releaseSpec.rows=12;releaseSpec.maxLength=393216;releaseSpec.style.cssText='width:100%;font-family:monospace';
+    releaseSpec.value=JSON.stringify({format:'openworkgraph.petri_release_spec.v1',suite:{format:'openworkgraph.petri_acceptance_suite.v1',cases:[]},rules:[],criteria:{language:'equivalent',require_baseline_acceptance:true,require_candidate_termination:false,require_candidate_one_safe:false,require_rule_activation:true}},null,2);
+    const releaseCopy=button('Copy current acceptance suite and rules','secondary');releaseCopy.id='owgPetriReleaseCopy';
+    const releasePin=button('Freeze model release specification','secondary');releasePin.id='owgPetriReleasePin';releasePin.disabled=true;
+    const releaseRun=button('Review frozen release','secondary');releaseRun.id='owgPetriReleaseRun';releaseRun.disabled=true;
+    const releaseStatus=el('div',null,'muted');releaseStatus.id='owgPetriReleaseStatus';releaseStatus.setAttribute('role','status');releaseStatus.setAttribute('aria-live','polite');
+    const releaseOut=el('div');releaseOut.id='owgPetriReleaseResults';
+    releaseBox.append(field('Candidate model (.pnml)',releaseCandidate),releaseCopy,field('Release specification JSON (editable before freezing)',releaseSpec),releasePin,releaseRun,releaseStatus,releaseOut);
+    soundBox.appendChild(releaseBox);
+    let releaseBusy=false,releaseRevision=0,releaseFrozen=null;
+    const releaseSync=()=>{releasePin.disabled=releaseBusy||!lastNet||!releaseCandidate.files?.length;releaseRun.disabled=releaseBusy||!releaseFrozen||!lastNet||!releaseCandidate.files?.length;};
+    const clearRelease=()=>{releaseRevision++;releaseFrozen=null;releaseStatus.textContent='';releaseOut.replaceChildren();releaseSync();};
+    releaseSpec.oninput=clearRelease;releaseCandidate.onchange=clearRelease;
+    releaseCopy.onclick=()=>{
+      try{
+        const current=JSON.parse(releaseSpec.value),rules=JSON.parse(policyText.value);
+        if(!Array.isArray(rules.rules))throw new Error('Expected a rules array.');
+        const spec={format:'openworkgraph.petri_release_spec.v1',suite:JSON.parse(acceptanceText.value),rules:rules.rules,criteria:current.criteria||{}};
+        releaseSpec.value=JSON.stringify(spec,null,2);clearRelease();
+      }catch(error){releaseStatus.textContent=error.message;}
+    };
+    const releaseDownload=(name,data)=>{
+      const url=URL.createObjectURL(new Blob([JSON.stringify(data,null,2)],{type:'application/json'}));
+      const link=document.createElement('a');link.href=url;link.download=name;document.body.appendChild(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
+    };
+    const releaseSubmit=async(action)=>{
+      const net=lastNet,chosen=releaseCandidate.files?.[0],revision=releaseRevision,frozen=releaseFrozen;
+      if(!net||!chosen||releaseBusy||net.generation!==state.generation||action==='review'&&!frozen)return;
+      const current=()=>lastNet===net&&state.generation===net.generation&&releaseRevision===revision;
+      releaseBusy=true;releaseSync();releaseOut.replaceChildren();releaseStatus.textContent=action==='pin'?'Freezing exact inputs…':'Recomputing all enabled model criteria…';
+      try{
+        const spec=action==='pin'?JSON.parse(releaseSpec.value):frozen.spec;
+        const encoder=new TextEncoder(),specBytes=encoder.encode(JSON.stringify(spec)),baseline=encoder.encode(net.body);
+        if(specBytes.byteLength>393216||baseline.byteLength>2*1024*1024||chosen.size>2*1024*1024)throw new Error('Release specification or model exceeds the review limit.');
+        const size=n=>{const bytes=new Uint8Array(4);new DataView(bytes.buffer).setUint32(0,n);return bytes;};
+        const body=new Blob([size(specBytes.byteLength),specBytes,size(baseline.byteLength),baseline,chosen],{type:'application/octet-stream'});
+        const r=await (await api('/v1/event-logs/petri-release/'+action,{method:'POST',headers:{'Content-Type':'application/octet-stream'},body})).json();
+        if(!current())return;
+        if(action==='pin'){
+          releaseFrozen=r;releaseStatus.textContent='Specification frozen. Review the exact model criteria.';
+          releaseOut.appendChild(table(['Pinned input','SHA-256'],[['Baseline',r.spec.baseline_sha256],['Candidate',r.spec.candidate_sha256],['Specification',r.spec_sha256]]));
+          const dl=button('Download frozen release specification (JSON)','secondary');dl.onclick=()=>{if(current())releaseDownload('petri-release-spec-'+r.spec_sha256.slice(0,12)+'.json',r.spec);};releaseOut.appendChild(dl);
+        }else{
+          if(r.spec_sha256!==frozen.spec_sha256)throw new Error('Returned specification does not match the frozen specification.');
+          const status={model_criteria_met:'Model criteria met',blocked:'Blocked',inconclusive:'Inconclusive'}[r.status]||r.status;
+          releaseStatus.textContent='Release review: '+status+'.';
+          releaseOut.appendChild(el('div',r.counts.passed+' passed · '+r.counts.failed+' failed · '+r.counts.inconclusive+' inconclusive'));
+          releaseOut.appendChild(table(['Gate','Status','Detail'],r.gates.map(g=>[g.id.replaceAll('_',' '),g.status,JSON.stringify(g.detail)])));
+          releaseOut.appendChild(el('div','Report SHA-256: '+r.report_sha256,'muted'));
+          releaseOut.appendChild(el('div',r.caveat,'muted'));
+          const dl=button('Download release review (JSON)','secondary');dl.onclick=()=>{if(current())releaseDownload('petri-release-'+r.report_sha256.slice(0,12)+'.json',r);};releaseOut.appendChild(dl);
+        }
+      }catch(error){if(current()){releaseStatus.textContent=error.message;if(action==='pin')releaseFrozen=null;}}
+      finally{releaseBusy=false;releaseSync();}
+    };
+    releasePin.onclick=()=>releaseSubmit('pin');releaseRun.onclick=()=>releaseSubmit('review');
+    let soundBusy=false;
+    const clearSound=()=>{soundStatus.textContent='';soundOut.replaceChildren();soundRun.disabled=true;clearCompare();clearPolicy();clearAcceptance();clearGenerated();clearRelease();};
+    soundRun.onclick=async()=>{
+      const net=lastNet;if(!net||soundBusy||net.generation!==state.generation)return;
+      soundBusy=true;soundRun.disabled=true;soundOut.replaceChildren();soundStatus.textContent='Exploring reachable markings…';
+      try{
+        const r=await (await api('/v1/event-logs/petri-soundness',{method:'POST',headers:{'Content-Type':'application/xml'},body:net.body})).json();
+        if(lastNet!==net||state.generation!==net.generation)return;
+        const verdict=v=>v===true?'Verified':v===false?'Failed':'Inconclusive';
+        soundStatus.textContent='Soundness: '+verdict(r.sound)+'. '+Number(r.reachable_markings).toLocaleString()+' reachable markings found. '+(r.complete?'Complete exploration.':'Exploration stopped at '+r.limit.replaceAll('_',' ')+'.');
+        soundOut.appendChild(table(['Property','Result'],[
+          ['Workflow-net structure',verdict(r.workflow_net_structure)],
+          ['Final marking reachable',verdict(r.final_reachable)],
+          ['Completion possible from every marking',verdict(r.option_to_complete)],
+          ['Proper completion',verdict(r.proper_completion)],
+          ['No dead transitions',verdict(r.no_dead_transitions)],
+          ['At most one token per place',verdict(r.one_safe)],
+          ['Every maximal execution completes',verdict(r.all_maximal_executions_complete)]
+        ]));
+        const steps=n=>n==null?'Not established':Number(n).toLocaleString();
+        soundOut.appendChild(table(['Execution property','Result'],[
+          ['Repeatable execution cycle possible',r.infinite_execution_possible===true?'Yes':r.infinite_execution_possible===false?'No':'Inconclusive'],
+          ['Shortest completion (transition firings)',steps(r.shortest_completion_steps)],
+          ['Longest execution when completion is guaranteed (transition firings)',steps(r.longest_execution_steps)]
+        ]));
+        const cycle=r.infinite_execution_witness;
+        if(cycle){
+          soundOut.appendChild(el('h4','Repeatable cycle witness'));
+          soundOut.appendChild(table(['Reach the cycle','Repeat these transitions'],[[
+            (cycle.entry.transition_ids.join(' → ')||'(initial marking)')+(cycle.entry.truncated?' … (prefix only)':''),
+            cycle.cycle_transition_ids.join(' → ')+(cycle.cycle_truncated?' … (prefix only)':'')
+          ]]));
+          soundOut.appendChild(el('div','A repeatable cycle proves that an infinite execution is possible, not that it is inevitable. A model can remain sound when the cycle has an exit.','muted'));
+        }
+        if(r.dead_transition_ids?.length)soundOut.appendChild(el('div','Unreachable transition IDs: '+r.dead_transition_ids.join(', ')));
+        const witnesses=Object.entries(r.witnesses).filter(([,w])=>w!==null);
+        if(witnesses.length){soundOut.appendChild(el('h4','Counterexamples'));
+          soundOut.appendChild(table(['Property','Transition ID sequence','Reached marking'],witnesses.map(([kind,w])=>[
+            kind.replaceAll('_',' '),(w.transition_ids.join(' → ')||'(initial marking)')+(w.truncated?' … (prefix of '+w.steps+' steps)':''),
+            w.marking.map(p=>p.place_id+': '+p.tokens).join(', ')||'(empty)'
+          ])));}
+        soundOut.appendChild(el('div',r.caveat,'muted'));
+        const download=button('Download validation report (JSON)','secondary');download.onclick=()=>{
+          if(lastNet!==net||state.generation!==net.generation)return;
+          const url=URL.createObjectURL(new Blob([JSON.stringify(r,null,2)],{type:'application/json'}));
+          const link=document.createElement('a');link.href=url;link.download='petri-soundness-'+r.pnml_sha256.slice(0,12)+'.json';
+          document.body.appendChild(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
+        };soundOut.appendChild(download);
+      }catch(error){if(lastNet===net&&state.generation===net.generation)soundStatus.textContent=error.message;}
+      finally{soundBusy=false;soundRun.disabled=!lastNet||lastNet.generation!==state.generation;}
+    };
+
     const auditBox=document.createElement('details');auditBox.append(el('summary','Exact completed-trace membership audit'),el('div','Unlike token fitness, this check explores every reachable marking consistent with each selected trace until it proves membership, proves nonmembership, or reaches a limit.','muted'));
     const auditRun=button('Audit exact trace membership','secondary');auditRun.id='owgPetriAuditRun';auditRun.disabled=true;
     const auditStatus=el('div',null,'muted');auditStatus.id='owgPetriAuditStatus';auditStatus.setAttribute('role','status');auditStatus.setAttribute('aria-live','polite');
@@ -8568,11 +9232,17 @@
       if(sectionGeneration!==state.generation||run.disabled)return;
       const generation=sectionGeneration,cohort=globalCohort();
       clearBpmnConversion();clearAudit();
-      run.disabled=own.disabled=happy.disabled=align.disabled=alertSave.disabled=true;aligned.replaceChildren();alertMessage.textContent='';lastNet=null;statusLine.textContent='Replaying on '+label+'…';out.replaceChildren();
+      run.disabled=own.disabled=happy.disabled=align.disabled=alertSave.disabled=true;aligned.replaceChildren();alertMessage.textContent='';lastNet=null;clearSound();statusLine.textContent='Replaying on '+label+'…';out.replaceChildren();
       try{
         const r=await (await api(logPath('petri-net-replay',{}),{method:'POST',headers:{'Content-Type':'application/xml'},body})).json();
         if(generation!==state.generation)return;
         lastNet={body,label,generation,cohort};
+        compareRun.disabled=compareBusy||!compareFile.files?.length;
+        policyRun.disabled=policyBusy;
+        acceptanceRun.disabled=acceptanceBusy;
+        mutationRun.disabled=mutationBusy;
+        releaseSync();
+        genRun.disabled=genBusy;
         const f=r.fitness;
         statusLine.textContent='Fitness '+pct(f.log)+' on '+label+': '+Number(f.fitting_cases).toLocaleString()+' of '+Number(r.cases).toLocaleString()+' cases ('+pct(f.fitting_case_share)+') replay without missing or remaining tokens.'+(r.precision.precision!==null?' Precision '+pct(r.precision.precision)+'.':'')+' The net has '+r.net.places+' places and '+r.net.transitions+' transitions ('+r.net.silent_transitions+' silent).'+(r.cases_excluded?' '+Number(r.cases_excluded).toLocaleString()+' cases beyond the length or variant limit were left out.':'');
         if(!r.net.final_marking_declared)out.appendChild(el('div','The file declares no final marking, so cases are expected to end with one token on each place nothing consumes from.','muted'));
@@ -8590,7 +9260,7 @@
           ])));out.appendChild(more);}
         out.appendChild(el('div',r.caveat,'muted'));
       }catch(error){statusLine.textContent=error.message;}
-      finally{run.disabled=own.disabled=happy.disabled=false;align.disabled=alertSave.disabled=saveRun.disabled=!lastNet;syncAudit();}};
+      finally{run.disabled=own.disabled=happy.disabled=false;align.disabled=alertSave.disabled=saveRun.disabled=!lastNet;soundRun.disabled=!lastNet||soundBusy;syncAudit();}};
     alertSave.onclick=async()=>{
       if(!lastNet)return;
       if(lastNet.body.length>60000){alertMessage.textContent='This net is too large to keep with a signal (over 60,000 characters).';return;}
@@ -9062,7 +9732,9 @@
       try{
         const r=await getJSON(logPath('quality/timestamp-ties'));
         if(generation!==state.generation||!tieOut.isConnected)return;
-        tieOut.replaceChildren(el('p',Number(r.tied_case_event_occurrences).toLocaleString()+' of '+Number(r.case_event_occurrences).toLocaleString()+' case-event occurrences share a timestamp in '+Number(r.cases_with_ties).toLocaleString()+' of '+Number(r.cases).toLocaleString()+' cases. '+Number(r.groups_with_different_activities).toLocaleString()+' timestamp groups contain different activity labels.','muted'),
+        const tieDownload=button('Download timestamp ordering JSON','secondary');tieDownload.id='owgQualityTiesJson';
+        tieDownload.onclick=()=>download('event-log-timestamp-ordering.json',JSON.stringify(r,null,2),'application/json');
+        tieOut.replaceChildren(tieDownload,el('p','The download contains this analysis snapshot, including activity names and any active case filter.','muted'),el('p',Number(r.tied_case_event_occurrences).toLocaleString()+' of '+Number(r.case_event_occurrences).toLocaleString()+' case-event occurrences share a timestamp in '+Number(r.cases_with_ties).toLocaleString()+' of '+Number(r.cases).toLocaleString()+' cases. '+Number(r.groups_with_different_activities).toLocaleString()+' timestamp groups contain different activity labels.','muted'),
           el('p',r.interpretation,'muted'),
           ...(r.activities_truncated?[el('p','Showing the 100 activities with the most tied occurrences; other activities are omitted.','muted')]:[]),
           table(['Activity','Occurrences','Tied occurrences','Cases with ties'],r.activities.map(a=>[a.activity,Number(a.occurrences).toLocaleString(),Number(a.tied_occurrences).toLocaleString(),Number(a.cases_with_ties).toLocaleString()])));
@@ -9108,6 +9780,8 @@
       const integrityLabel=integrity.status==='verified'?'Verified: current saved content matches the recorded import digest.':
         integrity.status==='mismatch'?'Mismatch: saved content differs from the recorded import digest. Investigate before relying on this log.':
         'Not verifiable: the available reports cannot establish current saved-content integrity.';
+      const qualityDownload=button('Download quality overview JSON','secondary');qualityDownload.id='owgQualityOverviewJson';
+      qualityDownload.onclick=()=>download('event-log-quality-overview.json',JSON.stringify(r,null,2),'application/json');
       const integrityStatus=el('p',integrityLabel,'muted');integrityStatus.id='owgQualityIntegrity';
       integrityStatus.setAttribute('role','status');
       integrityStatus.dataset.status=['verified','mismatch'].includes(integrity.status)?integrity.status:'not_verifiable';
@@ -9116,6 +9790,7 @@
       out.replaceChildren(
         ...(r.log.source_identity?[el('p','Source-ID deduplication compares declared namespace and supplied event ID. The content-duplicate diagnostic below compares payloads; distinct source IDs with identical payloads remain separate events. Neither establishes verified provider identity or complete history.')]:[]),
         el('div','Showing '+Number(r.window.batch_count).toLocaleString()+' of '+Number(r.window.total_batches).toLocaleString()+' batches. Use Compare batches below to browse older history.','muted'),
+        qualityDownload,el('p','The download contains this overview snapshot, including its batch window, mapping and attribute names; it does not include rejected rows.','muted'),
         integrityStatus,
         table(['Batch','Format','Accepted','Rejected','Duplicates skipped','Transform','Content v1','Content v2'],reports),
         ...(r.batches_without_report.length?[el('div','No report was stored on this page for '+r.batches_without_report.map(b=>b?'append '+b:'the import').join(', ')+' (imported before reports existed, or the report could not be written).','muted')]:[]),
@@ -10146,6 +10821,46 @@
       compareActivityA:field('Comparison activity A',mCompareActivityA),compareActivityB:field('Comparison activity B',mCompareActivityB),
       operation:field('Operation',mOperation)};
     for(const side of ['left','right'])for(const key of ['kind','metric','value','unit'])mf[side+key]=field((side==='left'?'Left':'Right')+' '+({kind:'operand',metric:'metric',value:'constant',unit:'constant unit'}[key]),operands[side][key]);
+    // Add exact-label lookup to each activity selector without altering the typed metric contract.
+    const metricActivities=new Map();
+    for(const [key,control,subject] of [
+      ['from',mFrom,'metric start activity'],['to',mTo,'metric end activity'],['activity',mActivity,'metric activity'],
+      ['statActivity',mStatActivity,'metric filtered activity'],['stageFrom',mStageFrom,'metric stage start'],
+      ['stageTo',mStageTo,'metric stage end'],['compareActivityA',mCompareActivityA,'comparison activity A'],
+      ['compareActivityB',mCompareActivityB,'comparison activity B']]){
+      const exact=input(control.id+'Exact','text','Exact activity label (optional)');exact.maxLength=400;
+      const lookup=activityLabelLookup(exact,{id:part=>control.id+part,subject});
+      const note=el('div','An exact label overrides the suggestion.','muted');
+      mf[key].append(field('Exact '+subject,exact),lookup.wrap,note);
+      let suggestion=control.value,added=null,changing=false;
+      const assign=(value,notify)=>{
+        if(added){added.remove();added=null;}
+        if(value&&Array.from(value).length<=200){
+          if(!Array.from(control.options).some(option=>option.value===value)){
+            added=document.createElement('option');added.value=value;added.textContent=value;control.appendChild(added);
+          }
+          control.value=value;note.textContent='An exact label overrides the suggestion.';
+        }else{
+          control.value=value?'':suggestion;
+          note.textContent=value?'Activity labels must have at most 200 characters.':'An exact label overrides the suggestion.';
+        }
+        if(notify){changing=true;control.dispatchEvent(new Event('change',{bubbles:true}));changing=false;}
+      };
+      exact.addEventListener('input',()=>{lookup.reset();assign(exact.value,true);});
+      control.addEventListener('change',()=>{
+        if(changing)return;
+        const value=control.value;
+        if(added){added.remove();added=null;}
+        if(Array.from(control.options).some(option=>option.value===value))suggestion=value;
+        control.value=suggestion;exact.value='';lookup.reset();note.textContent='An exact label overrides the suggestion.';
+      });
+      metricActivities.set(control,{exact,field:mf[key],set(value){
+        const v=String(value||'');lookup.reset();
+        const listed=Array.from(control.options).some(option=>option!==added&&option.value===v);
+        if(listed){if(added){added.remove();added=null;}control.value=v;suggestion=v;exact.value='';}
+        else{exact.value=v;assign(v,false);}
+      }});
+    }
     const mSync=()=>{const k=mKind.value;show(mf.from,k==='time_between');show(mf.fromOcc,k==='time_between');show(mf.to,k==='time_between');show(mf.toOcc,k==='time_between');
       const numeric=k==='event_attribute_statistic';
       show(mf.activity,k==='activity_count');show(mf.attribute,numeric||k.endsWith('_number')||k.endsWith('_sum'));show(mf.unit,numeric||k.endsWith('_number')||k.endsWith('_sum'));
@@ -10163,8 +10878,12 @@
     const library=el('div');library.id='owgMetricLibrary';
     const metricBox=document.createElement('fieldset');metricBox.style.cssText='border:1px solid var(--line,#ccc);border-radius:6px;padding:8px;margin-top:8px';
     const legend=el('legend','Case metrics (optional)');metricBox.append(legend,el('div','Define up to four values per case, then choose a measure. Numeric event statistics use only observed finite values; choose available or require all matching rows, optionally one activity and a first or last completed stage. Compare first and last completed stages adds three metrics atomically; fractional first-to-last change adds four, including (last minus first) divided by first, and selects a dimensionless ratio (2 means +200%, not 2%). A zero first-stage value leaves relative change unknown. Compare two distinct activities adds A, B, and signed B minus A as three ordinary metrics; absent or invalid matching values remain unknown. Compare a selected activity with the whole case using Total and Only this activity: the selected total divided by all recorded totals is a ratio, not a guaranteed 0–100% share. Missing selected values or zero whole-case totals remain unknown. Clear stage boundaries and the single-activity filter before comparing. Unfinished stages are not completed. Times are in seconds; declared units are never converted. Arithmetic uses earlier metrics or typed constants; ratio means dimensionless. Add/subtract need identical units; division by zero is missing. Saved arithmetic templates can add their saved dependencies together, but conflicting or missing definitions are refused atomically. Editing a metric name updates its dependent arithmetic and selected measures in the draft; rerun before saving or exporting. Save an analysis to retain all definitions together.','muted'),metricRow,metricList,library);
-    const readMetric=()=>caseMetric({kind:mKind.value,name:mName.value,from:mFrom.value,to:mTo.value,fromOccurrence:mFromOcc.value,toOccurrence:mToOcc.value,activity:mActivity.value,attribute:mAttribute.value,unit:mUnit.value,statistic:mStatistic.value,missingPolicy:mMissing.value,statActivity:mStatActivity.value,stageFrom:mStageFrom.value,stageTo:mStageTo.value,stageOccurrence:mStageOccurrence.value,operation:mOperation.value,
-      ...Object.fromEntries(Object.entries(operands).flatMap(([side,controls])=>Object.entries(controls).map(([key,node])=>[side+key[0].toUpperCase()+key.slice(1),node.value])))});
+    const readMetric=()=>{
+      if([...metricActivities.values()].some(item=>!item.field.hidden&&Array.from(item.exact.value).length>200))
+        throw new Error('Activity labels must have at most 200 characters.');
+      return caseMetric({kind:mKind.value,name:mName.value,from:mFrom.value,to:mTo.value,fromOccurrence:mFromOcc.value,toOccurrence:mToOcc.value,activity:mActivity.value,attribute:mAttribute.value,unit:mUnit.value,statistic:mStatistic.value,missingPolicy:mMissing.value,statActivity:mStatActivity.value,stageFrom:mStageFrom.value,stageTo:mStageTo.value,stageOccurrence:mStageOccurrence.value,operation:mOperation.value,
+        ...Object.fromEntries(Object.entries(operands).flatMap(([side,controls])=>Object.entries(controls).map(([key,node])=>[side+key[0].toUpperCase()+key.slice(1),node.value])))});
+    };
     // A changed metric draft cannot reuse an earlier result or its export/share grants.
     // Invalidate synchronously, including when a dependent metric is removed.
     function invalidateAnalysisResult(){
@@ -10198,7 +10917,7 @@
       sync();
     }
     function populateMetric(m){
-      const choose=(control,value)=>{const v=String(value||'');if(v&&![...control.options].some(o=>o.value===v))throw new Error('This metric references an activity no longer listed in the log; it can still be run.');control.value=v;};
+      const choose=(control,value)=>metricActivities.get(control).set(value);
       mKind.value=m.kind;mName.value=m.name;
       if(m.kind==='time_between'){
         choose(mFrom,m.from_activity);choose(mTo,m.to_activity);
@@ -10750,14 +11469,14 @@
   // Builds one compliance rule from form values; throws a readable error.
   function complianceRule(values){
     const rule={template:values.template,a:values.a};
-    if(!rule.a)throw new Error('Choose activity A.');
+    if(!rule.a||Array.from(rule.a).length>200)throw new Error('Choose activity A with at most 200 characters.');
     if(values.template==='existence'){
       const min=values.min===''?0:Number(values.min),max=values.max===''?null:Number(values.max);
       if(!Number.isInteger(min)||min<0||(max!==null&&(!Number.isInteger(max)||max<min)))throw new Error('Enter whole numbers with the maximum at least the minimum.');
       if(min===0&&max===null)throw new Error('Set a minimum above 0 or a maximum.');
       rule.min=min;if(max!==null)rule.max=max;return rule;
     }
-    rule.b=values.b;if(!rule.b||rule.b===rule.a)throw new Error('Choose a different activity B.');
+    rule.b=values.b;if(!rule.b||Array.from(rule.b).length>200||rule.b===rule.a)throw new Error('Choose a different activity B with at most 200 characters.');
     if(values.template==='response_within'){const h=Number(values.hours);if(!(h>0))throw new Error('Enter the time limit in hours.');rule.seconds=Math.round(h*3600);}
     return rule;
   }
@@ -10809,9 +11528,9 @@
       downloadNext.setAttribute('aria-label','Download next cases in cluster '+cluster.cluster+' as CSV');
       const exportStatus=el('div',null,'muted');exportStatus.setAttribute('role','status');
       nav.append(previous,next,download,downloadNext);
-      const tagging=document.createElement('details');tagging.id='owgClusterTagging';tagging.appendChild(el('summary','Tag cases matching this cluster'));
-      if(!cluster.cohort){
-        tagging.appendChild(el('p','This cluster has too many or too-long variant paths for a case-tag filter. Use the case list instead.','muted'));
+      const tagging=document.createElement('details');tagging.id='owgClusterTagging';tagging.appendChild(el('summary','Tag cases in this cluster'));
+      if(cluster.cases>100000){
+        tagging.appendChild(el('p','Tagging is limited to 100,000 cases at a time. Use the case list instead.','muted'));
       }else{
         const tag=input('owgClusterTagName','text','Tag name');tag.maxLength=60;
         const note=input('owgClusterTagNote','text','Optional tag note');note.maxLength=500;
@@ -10819,20 +11538,17 @@
         const tagStatus=el('div',null,'muted');tagStatus.id='owgClusterTagStatus';tagStatus.setAttribute('role','status');
         const examples=el('div');examples.id='owgClusterTagPreview';
         const tagRow=el('div',null,'row');tagRow.style.alignItems='end';tagRow.append(field('Tag',tag),field('Tag note',note),preview,apply);
-        tagging.append(el('p','These paths are re-evaluated in the original case scope; cases may have changed since clustering. Preview the selection. Applying an existing tag replaces its notes for matching cases.','muted'),tagRow,tagStatus,examples);
+        tagging.append(el('p','The cluster is recomputed in the original case scope; cases may have changed since clustering. Preview the selection. Applying an existing tag replaces its notes for matching cases.','muted'),tagRow,tagStatus,examples);
         let selection=null,tagTurn=0;
         const reset=()=>{++tagTurn;selection=null;apply.disabled=true;preview.disabled=false;tagStatus.textContent='';examples.replaceChildren();};
         tag.addEventListener('input',reset);note.addEventListener('input',reset);
-        const postTag=async(suffix,spec)=>(await api('/v1/event-logs/'+encodeURIComponent(state.logId)+'/case-tags'+suffix,
+        const postTag=async(suffix,spec)=>(await api(endpoint+'/tag'+suffix,
           {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)})).json();
         preview.onclick=async()=>{
           const ticket=++tagTurn,active=()=>current()&&ticket===tagTurn;
           selection=null;apply.disabled=true;examples.replaceChildren();
           const name=tag.value.trim();if(!name){tagStatus.textContent='Enter a tag.';return;}
-          const paths={variants:cluster.cohort.variants};
-          const cohort=settings.cohort&&Object.keys(settings.cohort).length?{all_of:[settings.cohort,paths]}:paths;
-          const spec={tag:name,note:note.value.trim(),case_type:caseNotion,cohort};
-          if(new TextEncoder().encode(JSON.stringify(spec)).length>262000){tagStatus.textContent='The cluster paths exceed the case-tag request limit. Use the case list instead.';return;}
+          const spec={...settings,cluster_key:cluster.cluster_key,tag:name,note:note.value.trim(),case_type:caseNotion};
           preview.disabled=true;tagStatus.textContent='Checking matching cases…';
           try{
             const result=await postTag('/preview',spec);if(!active())return;
@@ -10937,14 +11653,20 @@
     const template=select('owgComplianceTemplate',COMPLIANCE_TEMPLATES);
     const options=activityNames.slice(0,500).map(x=>[x,x]);
     const a=select('owgComplianceA',options),b=select('owgComplianceB',options);if(options.length>1)b.selectedIndex=1;
+    const exactA=input('owgComplianceAExact','text','Exact activity A (optional)'),exactB=input('owgComplianceBExact','text','Exact activity B (optional)');
+    exactA.maxLength=exactB.maxLength=400;
+    const lookupA=activityLabelLookup(exactA,{id:part=>'owgComplianceA'+part,subject:'compliance activity A'});
+    const lookupB=activityLabelLookup(exactB,{id:part=>'owgComplianceB'+part,subject:'compliance activity B'});
+    exactA.addEventListener('input',lookupA.reset);exactB.addEventListener('input',lookupB.reset);
+    a.addEventListener('change',()=>{exactA.value='';lookupA.reset();});b.addEventListener('change',()=>{exactB.value='';lookupB.reset();});
     const hours=input('owgComplianceHours','number');hours.min='0';hours.step='any';
     const min=input('owgComplianceMin','number');min.min='0';min.step='1';const max=input('owgComplianceMax','number');max.min='0';max.step='1';
     const add=button('Add rule','secondary');add.id='owgComplianceAdd';
     const run=button('Check rules');run.id='owgComplianceRun';run.disabled=true;
-    const f={b:field('Activity B',b),hours:field('Within (hours)',hours),min:field('At least',min),max:field('At most',max)};
-    const sync=()=>{const t=template.value;show(f.b,t!=='existence');show(f.hours,t==='response_within');show(f.min,t==='existence');show(f.max,t==='existence');};
+    const f={b:field('Activity B',b),exactB:field('Exact activity B',exactB),lookupB:lookupB.wrap,hours:field('Within (hours)',hours),min:field('At least',min),max:field('At most',max)};
+    const sync=()=>{const t=template.value;show(f.b,t!=='existence');show(f.exactB,t!=='existence');show(f.lookupB,t!=='existence');show(f.hours,t==='response_within');show(f.min,t==='existence');show(f.max,t==='existence');};
     template.onchange=sync;sync();
-    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Rule',template),field('Activity A',a),...Object.values(f),add);
+    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Rule',template),field('Activity A',a),field('Exact activity A',exactA),lookupA.wrap,...Object.values(f),add);
     const pending=el('div');pending.id='owgComplianceRules';
     const message=el('div',null,'muted');message.id='owgComplianceStatus';message.setAttribute('role','status');
     const out=el('div');out.id='owgComplianceResults';
@@ -11009,11 +11731,12 @@
     };
     const label=r=>({response:'every '+r.a+' is eventually followed by '+r.b,chain_response:'every '+r.a+' is immediately followed by '+r.b,precedence:'every '+r.b+' needs an earlier '+r.a,response_within:'every '+r.a+' is followed by '+r.b+' within '+duration(r.seconds),segregation_of_duties:r.a+' and '+r.b+' are done by different people',not_coexistence:r.a+' and '+r.b+' never happen together',existence:r.a+' happens '+(r.max===undefined?'at least '+r.min:r.min===r.max?'exactly '+r.min:r.min+'–'+r.max)+' times'}[r.template]);
     function drawPending(){
+      ++checkTurn;++reviewTurn;out.replaceChildren();review.replaceChildren();
       pending.replaceChildren(rules.length?table(['Rule',''],rules.map((r,i)=>{const del=button('Remove','secondary');del.setAttribute('aria-label','Remove rule '+label(r));del.onclick=()=>{rules.splice(i,1);drawPending();};return [label(r),del];})):el('div','No rules added yet.','muted'));
       run.disabled=!rules.length;
     }
     drawPending();
-    add.onclick=()=>{try{if(rules.length>=20)throw new Error('Check at most 20 rules at once.');rules.push(complianceRule({template:template.value,a:a.value,b:b.value,hours:hours.value,min:min.value,max:max.value}));message.textContent='';drawPending();}catch(error){message.textContent=error.message;}};
+    add.onclick=()=>{try{if(rules.length>=20)throw new Error('Check at most 20 rules at once.');rules.push(complianceRule({template:template.value,a:exactA.value||a.value,b:exactB.value||b.value,hours:hours.value,min:min.value,max:max.value}));message.textContent='';drawPending();}catch(error){message.textContent=error.message;}};
     run.onclick=async()=>{
       const ticket=++checkTurn;
       const current=()=>ticket===checkTurn&&generation===state.generation;
@@ -11024,13 +11747,13 @@
         if(!current())return;
         const rows=r.results.map(res=>{
           const keep=button('Save as signal','secondary');keep.setAttribute('aria-label','Save as signal: '+res.description);
-          keep.onclick=async()=>{try{const sig={name:res.description.slice(0,120),when:{kind:'compliance',rule:res.rule}};if(state.caseType)sig.case_type=state.caseType;
-            await api('/v1/event-logs/'+encodeURIComponent(state.logId)+'/signals',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(sig)});message.textContent='Saved as a signal.';}catch(error){message.textContent=error.message;}};
+          keep.onclick=async()=>{if(!current())return;try{const sig={name:res.description.slice(0,120),when:{kind:'compliance',rule:res.rule}};if(state.caseType)sig.case_type=state.caseType;
+            await api('/v1/event-logs/'+encodeURIComponent(state.logId)+'/signals',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(sig)});if(current())message.textContent='Saved as a signal.';}catch(error){if(current())message.textContent=error.message;}};
           const rate=res.violation_rate===null?'—':pct(res.violation_rate)+' ['+pct(res.violation_rate_ci95[0])+', '+pct(res.violation_rate_ci95[1])+']';
           const actions=el('div',null,'row');
           if(res.violating_cases){
             const browse=button('Review violations','secondary');browse.setAttribute('aria-label','Review violations of '+res.description);
-            browse.onclick=()=>reviewViolations(res,scope);
+            browse.onclick=()=>{if(current())reviewViolations(res,scope);};
             actions.append(browse);
           }
           actions.append(keep);
@@ -11343,6 +12066,8 @@
       if(values.metric==='sla_breach_rate'){if(!(hours>0))throw new Error('Enter the SLA in hours.');when.sla_seconds=Math.round(hours*3600);}
       return {name,when};
     }
+    if(['contains_activity','lacks_activity'].includes(values.condition)&&
+       (!values.activity||Array.from(values.activity).length>200))throw new Error('Choose an activity label of 1 to 200 characters.');
     const when={kind:'cases',condition:values.condition};
     const minimum=Number(values.minimumCases??1);
     if(!Number.isInteger(minimum)||minimum<1||minimum>1000000000)throw new Error('Enter a whole number of matching cases from 1 to 1,000,000,000.');
@@ -11445,6 +12170,33 @@
       show(fields.hours,k?metric.value==='sla_breach_rate':['duration_over','open_longer_than'].includes(condition.value));
       show(fields.activity,!k&&['contains_activity','lacks_activity'].includes(condition.value));show(fields.ends,!k&&condition.value==='open_longer_than');};
     kind.onchange=condition.onchange=metric.onchange=sync;sync();
+    const activityExact=input('owgSignalActivityExact','text','Exact activity label (optional)');activityExact.maxLength=400;
+    const activityLookup=activityLabelLookup(activityExact,{id:part=>'owgSignalActivity'+part,subject:'signal activity'});
+    const activityNote=el('div','An exact label overrides the suggestion; matching is literal.','muted');
+    fields.activity.append(field('Exact signal activity',activityExact),activityLookup.wrap,activityNote);
+    let activitySuggestion=activity.value,addedActivity=null;
+    activityExact.addEventListener('input',()=>{
+      activityLookup.reset();
+      if(addedActivity){addedActivity.remove();addedActivity=null;}
+      const value=activityExact.value;
+      if(value&&Array.from(value).length<=200){
+        if(!Array.from(activity.options).some(option=>option.value===value)){
+          addedActivity=document.createElement('option');addedActivity.value=value;addedActivity.textContent=value;activity.appendChild(addedActivity);
+        }
+        activity.value=value;activityNote.textContent='An exact label overrides the suggestion; matching is literal.';
+      }else{
+        activity.value=value?'':activitySuggestion;
+        activityNote.textContent=value?'Activity labels must have at most 200 characters.':'An exact label overrides the suggestion; matching is literal.';
+      }
+      activity.dispatchEvent(new Event('input',{bubbles:true}));
+    });
+    activity.addEventListener('change',()=>{
+      const selected=activity.value;
+      if(addedActivity){addedActivity.remove();addedActivity=null;}
+      if(Array.from(activity.options).some(option=>option.value===selected))activitySuggestion=selected;
+      activity.value=activitySuggestion;activityExact.value='';activityLookup.reset();
+      activityNote.textContent='An exact label overrides the suggestion; matching is literal.';
+    });
     const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Name',name),scopeField,field('Watch',kind),...Object.values(fields),preview,add);
     const rules=el('div');rules.id='owgSignalRules';
     const message=el('div',null,'muted');message.id='owgSignalStatus';message.setAttribute('role','status');
@@ -12443,6 +13195,35 @@
     const run=button('Predict');run.id='owgPredictRun';
     const watch=button('Monitor quality over time','secondary');watch.id='owgPredictMonitor';
     const f={hours:field('Hours',hours),activity:field('Activity',activity)};
+    const outcomeExact=input('owgPredictOutcomeExact','text','Exact activity label (optional)');outcomeExact.maxLength=400;
+    const outcomeLookup=activityLabelLookup(outcomeExact,{id:part=>'owgPredictOutcomeActivity'+part,subject:'prediction outcome activity'});
+    const outcomeNote=el('div','An exact label overrides the suggestion; matching is literal.','muted');
+    f.activity.append(field('Exact outcome activity',outcomeExact),outcomeLookup.wrap,outcomeNote);
+    let suggestion=activity.value,addedOutcome=null;
+    outcomeExact.addEventListener('input',()=>{
+      outcomeLookup.reset();
+      if(addedOutcome){addedOutcome.remove();addedOutcome=null;}
+      const value=outcomeExact.value;
+      if(value&&Array.from(value).length<=200){
+        if(!Array.from(activity.options).some(option=>option.value===value)){
+          addedOutcome=document.createElement('option');addedOutcome.value=value;addedOutcome.textContent=value;activity.appendChild(addedOutcome);
+        }
+        activity.value=value;outcomeNote.textContent='An exact label overrides the suggestion; matching is literal.';
+      }else{
+        activity.value=value?'':suggestion;
+        outcomeNote.textContent=value?'Activity labels must have at most 200 characters.':'An exact label overrides the suggestion; matching is literal.';
+      }
+      activity.dispatchEvent(new Event('input',{bubbles:true}));
+      ++watchTurn;monitorOut.replaceChildren();watch.disabled=false;
+    });
+    activity.addEventListener('change',()=>{
+      const selected=activity.value;
+      if(addedOutcome){addedOutcome.remove();addedOutcome=null;}
+      if(Array.from(activity.options).some(option=>option.value===selected))suggestion=selected;
+      activity.value=suggestion;outcomeExact.value='';outcomeLookup.reset();
+      outcomeNote.textContent='An exact label overrides the suggestion; matching is literal.';
+      ++watchTurn;monitorOut.replaceChildren();watch.disabled=false;
+    });
     const sync=()=>{
       show(f.hours,outcome.value==='duration_over');show(f.activity,outcome.value==='contains_activity');
       rankBy.querySelector('option[value="outcome"]').disabled=!outcome.value;
