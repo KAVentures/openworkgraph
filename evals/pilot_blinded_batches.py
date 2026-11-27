@@ -172,7 +172,7 @@ def _batch(plan,schedule,ledger,states,enrolled,truth,batch,completion_revisions
 
 
 def reconcile(plan,schedule,ledger,truth,batches,*,expected_plan_sha256,
-              expected_schedule_sha256,expected_ledger_sha256,confirmed):
+              expected_schedule_sha256,expected_ledger_sha256,confirmed,review_dispositions=None):
     execution._confirmed(confirmed)
     states,_,enrolled,*_=execution.replay(plan,schedule,ledger,
         expected_plan_sha256=expected_plan_sha256,expected_schedule_sha256=expected_schedule_sha256,
@@ -189,6 +189,25 @@ def reconcile(plan,schedule,ledger,truth,batches,*,expected_plan_sha256,
             raise ValueError("attempt or review ID assigned to multiple batches")
         seen.update(cells);review_ids.update(ids);reviewed.update(rows)
         pins.append(batch["expected_batch_sha256"])
+    # A completed execution can subsequently lack consent or review material.
+    # Do not rewrite execution history or let a withdrawn batch re-enter scoring.
+    exclusions={}
+    if review_dispositions is None:
+        review_dispositions=[]
+    if not isinstance(review_dispositions,list) or len(review_dispositions)>len(states):
+        raise ValueError("invalid review dispositions")
+    for row in review_dispositions:
+        cohort.exact(row,("episode_id","arm","status"))
+        eid=cohort.token(row["episode_id"]);arm=row["arm"]
+        if arm not in cohort.ARMS or eid not in enrolled:
+            raise ValueError("unknown review disposition")
+        cell=(eid,arm)
+        if (row["status"] not in ("withdrawn","review_pending","review_unavailable") or
+                cell in exclusions or cell in reviewed or states[cell]["state"]!="completed"):
+            raise ValueError("review disposition conflicts with completed review or execution state")
+        if row["status"]=="withdrawn" and cell in seen:
+            raise ValueError("remove withdrawn material from submitted review batches")
+        exclusions[cell]=row["status"]
     runs={a:[] for a in cohort.ARMS};dispositions=[]
     for (eid,arm),state in sorted(states.items()):
         if (eid,arm) in reviewed:
@@ -197,7 +216,7 @@ def reconcile(plan,schedule,ledger,truth,batches,*,expected_plan_sha256,
         raw=state["state"]
         status=("review_pending" if (eid,arm) in seen else "review_unavailable") if raw=="completed" else (
                  "other" if raw=="started" else raw)
-        dispositions.append({"episode_id":eid,"arm":arm,"status":status})
+        dispositions.append({"episode_id":eid,"arm":arm,"status":exclusions.get((eid,arm),status)})
     result=cohort.score(plan,truth,runs,dispositions,expected_plan_sha256=expected_plan_sha256,confirmed=True)
     body={"format":"owg.pilot-blinded-reconciliation.v1",
           "ledger_sha256":expected_ledger_sha256,"schedule_sha256":expected_schedule_sha256,
@@ -223,6 +242,7 @@ def main(argv=None):
     prep.add_argument("--materials",type=Path,required=True)
     prep.add_argument("--private-key",type=Path,required=True)
     rec.add_argument("--batches",type=Path,required=True)
+    rec.add_argument("--review-dispositions",type=Path)
     args=parser.parse_args(argv)
     try:
         if args.command=="template":
@@ -241,7 +261,8 @@ def main(argv=None):
             cohort._write(args.private_key,key)
             cohort._write(args.out,packet)
         else:
-            cohort._write(args.out,reconcile(plan,schedule,ledger,truth,cohort._load(args.batches),**kw))
+            cohort._write(args.out,reconcile(plan,schedule,ledger,truth,cohort._load(args.batches),
+                            review_dispositions=cohort._load(args.review_dispositions) if args.review_dispositions else None,**kw))
     except (ValueError,TypeError,OSError,RecursionError,OverflowError):
         parser.exit(2,"Blinded pilot operation refused: invalid evidence, pin, or file access.\n")
     return 0
