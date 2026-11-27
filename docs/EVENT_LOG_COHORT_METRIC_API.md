@@ -1,4 +1,4 @@
-# Saved-log numeric cohort metric (R9, integration in progress)
+# Saved-log numeric cohort metrics
 
 A local dashboard session may POST `/v1/event-logs/{log_id}/cohort-metric`
 with `Content-Type: application/json` and `Authorization: OWG-Session <session>`.
@@ -36,6 +36,18 @@ keys are rejected. The response is no-store. Existing saved-log retention,
 deletion and local access rules apply; this is *not* a remote multi-tenant
 authorization boundary.
 
-**Dashboard integration added (pending CI):** The saved-log analysis view now includes a Cohort metrics section with metric selection (case duration in seconds/hours, events per case, distinct resources per case), the existing case-cohort filters, active follow rules, a read-only calculation action, and aggregate-only output. It refuses oversized cohorts through the API, displays empty cohorts and request errors, and discards results when the selected log/case type or analysis generation changes. A Playwright event-log import/analyse test exercises the authenticated positive path and an empty filtered cohort.
+In the dashboard, **Calculate cohort metric** returns the aggregate.
+**Review cohort metric cases** calculates the same aggregate and shows its
+case values. You can review the highest, lowest, or missing values and open
+a case's event timeline. Both actions apply the selected cohort filters and
+active follow rules.
 
-**Not complete:** Exact-head native/browser CI, independent review, safe merge to main, and real consenting-user acceptance remain necessary before R9 is accepted as shipped. Arbitrary expression editing is intentionally not exposed in the UI; the server still validates and supports the documented bounded expression contract.
+Pass `?include_case_values=true` to the ad hoc or
+`/cohort-metric-definitions/{metric_id}/evaluate` endpoint to request case
+values. The response adds a `case_values` array containing one `case_id`
+and a decimal-string or null `value` per matching case. Values are sorted
+numerically in ascending order, with missing values last and ties ordered
+by case key. The aggregate and the rows come from the same evaluation.
+Case values contain no event rows or case attributes. Opening a timeline
+reads the current retained case. The same 1,000-case limit and local
+dashboard authorization apply to both actions.

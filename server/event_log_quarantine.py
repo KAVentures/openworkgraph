@@ -166,7 +166,7 @@ def _timestamp_decision(body: dict[str, Any]) -> tuple[str, str]:
         raise workspace.EventLogWorkspaceError(str(exc)) from None
     if workspace.timestamp_formats.has_offset(pattern):
         if offset:
-            raise workspace.EventLogWorkspaceError("leave the assumed offset blank when the timestamp format includes %z")
+            raise workspace.EventLogWorkspaceError("leave the assumed offset blank when the timestamp format includes %z or is Unix time")
     elif not offset:
         raise workspace.EventLogWorkspaceError("choose the UTC offset to assume for times written without one")
     return offset, pattern

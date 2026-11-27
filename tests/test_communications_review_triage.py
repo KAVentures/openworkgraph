@@ -130,6 +130,56 @@ def test_stale_model_falls_back_to_keywords_without_using_predictions(monkeypatc
         "keyword_ambiguous", "keyword_unclassified", "routine"]
 
 
+def test_diverse_order_rotates_declared_languages_and_keyword_groups(monkeypatch):
+    enabled()
+    monkeypatch.setattr(review, "_split", lambda _id: "train")
+    review.add_examples([
+        {"text":"refund English first", "language":"en"},
+        {"text":"refund English second", "language":"en"},
+        {"text":"cancel English", "language":"en"},
+        {"text":"refund Swedish", "language":"sv"},
+        {"text":"cancel Swedish", "language":"sv"},
+        {"text":"refund unknown"},
+    ])
+    priority = triage.queue(TAXONOMY)
+    result = triage.queue(TAXONOMY, order="diverse")
+    assert result["review_order"] == "diverse"
+    assert result["eligible_by_declared_language"] == {"en":3,"sv":2,"und":1}
+    assert len({row["language"] for row in result["examples"][:3]}) == 3
+    english = [row for row in result["examples"] if row["language"]=="en"]
+    assert len({row["keyword_intent"] for row in english[:2]}) == 2
+    assert {row["example_id"] for row in result["examples"]} == {row["example_id"] for row in priority["examples"]}
+    first = triage.queue(TAXONOMY, order="diverse", limit=2)
+    second = triage.queue(TAXONOMY, order="diverse", limit=4, offset=2)
+    assert first["examples"] + second["examples"] == result["examples"]
+    assert not result["language_inferred"] and not result["sampling_representativeness_verified"]
+    with pytest.raises(review.ReviewError, match="choose priority"):
+        triage.queue(TAXONOMY, order="other")
+
+
+def test_consent_revoked_during_ranking_refuses_copied_text(monkeypatch):
+    seed(monkeypatch)
+    original = mining.classify
+    def revoke(text, intents):
+        review.configure({"enabled":False})
+        return original(text, intents)
+    monkeypatch.setattr(mining,"classify",revoke)
+    with pytest.raises(review.ReviewError, match="turn on review examples"):
+        triage.queue(TAXONOMY,order="diverse")
+
+
+def test_deletion_during_ranking_refuses_old_population(monkeypatch):
+    examples = seed(monkeypatch)
+    selected = next(row["example_id"] for row in examples if row["split"]=="train")
+    original = mining.classify
+    def delete(text,intents):
+        review.delete([selected])
+        return original(text,intents)
+    monkeypatch.setattr(mining,"classify",delete)
+    with pytest.raises(review.ReviewError,match="changed during ranking"):
+        triage.queue(TAXONOMY)
+
+
 def test_local_http_route_requires_dashboard_session_and_opt_in(tmp_path):
     code = r"""
 from fastapi.testclient import TestClient
@@ -155,6 +205,10 @@ with TestClient(app) as client:
     assert body['labels_auto_applied'] is False
     assert body['review_texts_are_existing_redacted_opt_in_examples'] is True
     assert client.get(route+'?limit=10000',headers=owner).status_code == 422
+    assert client.get(route+'?order=other',headers=owner).status_code == 422
+    assert client.get(route+'?order=diverse',headers=owner).json()['review_order']=='diverse'
+    assert client.get(route+'?expected_queue_sha256='+('0'*64),headers=owner).status_code==409
+    assert client.get(route+'?language=und',headers=owner).status_code==200
 """
     env = os.environ.copy()
     env.update({"WORKFLOW_OBSERVER_DATA": str(tmp_path / "data"),
@@ -163,3 +217,115 @@ with TestClient(app) as client:
     run = subprocess.run([sys.executable, "-c", code], env=env,
         cwd=Path(__file__).resolve().parents[1], capture_output=True, text=True, timeout=120)
     assert run.returncode == 0, f"stdout={run.stdout}\nstderr={run.stderr}"
+
+
+def test_exact_facets_pinned_pages_and_filter_change(monkeypatch):
+    enabled()
+    monkeypatch.setattr(review,"_split",lambda _: "train")
+    review.add_examples([{"text":"refund first","language":"en"},
+        {"text":"refund second","language":"en"},{"text":"cancel third","language":"sv"},
+        {"text":"refund cancel fourth","language":"en"}])
+    first=triage.queue(TAXONOMY,language="en",keyword_intent="Refund",limit=1)
+    assert first["total_eligible"]==4 and first["matching_count"]==2
+    assert first["eligible_facets"]["language"]=={"en":3,"sv":1}
+    assert first["matching_facets"]["keyword_intent"]=={"Refund":2}
+    assert first["next_offset"]==1
+    second=triage.queue(TAXONOMY,language="en",keyword_intent="Refund",limit=1,offset=1,
+                       expected_queue_sha256=first["queue_sha256"])
+    assert second["queue_sha256"]==first["queue_sha256"]
+    assert first["examples"][0]["example_id"]!=second["examples"][0]["example_id"]
+    assert second["next_offset"] is None
+    with pytest.raises(review.ReviewError,match="queue changed"):
+        triage.queue(TAXONOMY,language="sv",expected_queue_sha256=first["queue_sha256"])
+    assert triage.queue(TAXONOMY,language="unknown")["matching_count"]==0
+
+
+def test_pin_changes_after_label_and_taxonomy_edit(monkeypatch):
+    seed(monkeypatch)
+    r=triage.queue(TAXONOMY)
+    review.label({"example_id":r["examples"][0]["example_id"],"labels":["Refund"]},["Refund","Cancel"])
+    with pytest.raises(review.ReviewError,match="queue changed"):
+        triage.queue(TAXONOMY,expected_queue_sha256=r["queue_sha256"])
+    r=triage.queue(TAXONOMY)
+    changed={**TAXONOMY,"intents":[{"name":"Refund","terms":["return"]},TAXONOMY["intents"][1]]}
+    with pytest.raises(review.ReviewError,match="queue changed"):
+        triage.queue(changed,expected_queue_sha256=r["queue_sha256"])
+
+
+def test_model_replacement_and_labelled_basis_change_during_ranking(monkeypatch):
+    seed(monkeypatch)
+    model={"model_sha256":"initial"}
+    monkeypatch.setattr(review,"_load_model",lambda:dict(model))
+    monkeypatch.setattr(review,"_freshness",lambda *_:(False,"stale"))
+    original=mining.classify
+    def replace(text,intents):
+        model["model_sha256"]="replacement"
+        return original(text,intents)
+    monkeypatch.setattr(mining,"classify",replace)
+    with pytest.raises(review.ReviewError,match="changed during ranking"):
+        triage.queue(TAXONOMY)
+
+
+def test_taxonomy_recheck_during_ranking(monkeypatch):
+    seed(monkeypatch)
+    with pytest.raises(review.ReviewError,match="changed during ranking"):
+        triage.queue(TAXONOMY,current_taxonomy=lambda:{**TAXONOMY,"intents":[]})
+
+
+def test_filter_validation_and_holdout_exclusion(monkeypatch):
+    seed(monkeypatch)
+    for kwargs in ({"priority":"other"},{"language":True},{"keyword_intent":""},
+                   {"expected_queue_sha256":"bad"}):
+        with pytest.raises(review.ReviewError):
+            triage.queue(TAXONOMY,**kwargs)
+    assert triage.queue(TAXONOMY,keyword_intent="Cancel")["matching_count"]==0
+
+
+def test_labelled_basis_change_during_ranking_refuses_stale_queue(monkeypatch):
+    entries=seed(monkeypatch)
+    held=next(e for e in entries if e["split"]=="holdout")
+    review.label({"example_id":held["example_id"],"labels":["Cancel"]},["Refund","Cancel"])
+    original=mining.classify
+    def change(text,intents):
+        review.label({"example_id":held["example_id"],"labels":["Refund"]},["Refund","Cancel"])
+        return original(text,intents)
+    monkeypatch.setattr(mining,"classify",change)
+    with pytest.raises(review.ReviewError,match="changed during ranking"):
+        triage.queue(TAXONOMY)
+
+
+@pytest.mark.parametrize("order",["priority","diverse"])
+def test_priority_filters_preserve_requested_value_and_partition_full_queue(monkeypatch,order):
+    seed(monkeypatch)
+    whole=triage.queue(TAXONOMY,order=order)
+    assert whole["filters"]["priority"] is None
+    assert whole["matching_count"]==whole["total_eligible"]==3
+    assert whole["eligible_facets"]["priority"]=={
+        "keyword_ambiguous":1,"keyword_unclassified":1,"routine":1}
+    ids=[]
+    for priority in triage.PRIORITIES:
+        page=triage.queue(TAXONOMY,order=order,priority=priority)
+        assert page["filters"]["priority"]==priority
+        expected=[r for r in whole["examples"] if r["priority"]==priority]
+        assert page["matching_count"]==len(expected)
+        assert {r["example_id"] for r in page["examples"]}=={r["example_id"] for r in expected}
+        assert page["eligible_facets"]==whole["eligible_facets"]
+        assert page["matching_facets"]["priority"]==({priority:len(expected)} if expected else {})
+        ids.extend(r["example_id"] for r in page["examples"])
+    assert sorted(ids)==sorted(r["example_id"] for r in whole["examples"])
+
+
+def test_priority_and_language_intersection_and_pinned_page(monkeypatch):
+    enabled()
+    monkeypatch.setattr(review,"_split",lambda _: "train")
+    review.add_examples([{"text":"refund A","language":"en"},{"text":"refund B","language":"en"},
+        {"text":"refund C","language":"sv"},{"text":"unmatched D","language":"en"}])
+    first=triage.queue(TAXONOMY,priority="routine",language="en",limit=1)
+    assert first["matching_count"]==2 and first["next_offset"]==1
+    next_page=triage.queue(TAXONOMY,priority="routine",language="en",limit=1,offset=1,
+                          expected_queue_sha256=first["queue_sha256"])
+    assert next_page["examples"][0]["example_id"]!=first["examples"][0]["example_id"]
+    assert next_page["next_offset"] is None
+    with pytest.raises(review.ReviewError,match="queue changed"):
+        triage.queue(TAXONOMY,priority="keyword_unclassified",language="en",
+                     expected_queue_sha256=first["queue_sha256"])

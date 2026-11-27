@@ -526,3 +526,24 @@ def test_literal_csv_headers_are_shared_by_streaming_and_columnar_import():
     out=StringIO();workspace.export_log(log['log_id'],'csv',out)
     rows=list(csv.DictReader(StringIO(out.getvalue())))
     assert {(r['case_id'],r['activity'],r['resource']) for r in rows}=={(' Case',' Review > ',' bot,system '),('Case ','ReviewArrow ','bot ')}
+
+
+@pytest.mark.parametrize('delimiter', [';', ','])
+def test_csv_trailing_delimiter_leaves_an_empty_unnamed_column_that_is_ignored(delimiter):
+    d = delimiter
+    raw = (f'case{d}activity{d}time{d}note{d}\nc1{d}A{d}2024-01-01T00:00:00Z{d}x{d}\n'
+           f'c1{d}B{d}2024-01-01T01:00:00Z{d}{d}\n')
+    mapping = MAPPING | {'resource_column': '', 'delimiter': d, 'attribute_columns': ['note']}
+    log = _import(raw, 'csv', mapping=mapping)
+    assert log['events'] == 2
+    streamed = list(formats.read_csv(StringIO(raw), delimiter=d, **(MAPPING | {'resource_column': ''})))
+    assert sum(isinstance(r, formats.EventRecord) for r in streamed) == 2
+    # The unnamed column must stay empty; otherwise the file is refused rather than a value dropped.
+    full = raw.replace(f'x{d}\n', f'x{d}stray\n')
+    with pytest.raises(workspace.EventLogWorkspaceError, match='last column has no name but holds values'):
+        _import(full, 'csv', mapping=mapping)
+    with pytest.raises(formats.EventLogFormatError, match='last column has no name'):
+        list(formats.read_csv(StringIO(full), delimiter=d, **(MAPPING | {'resource_column': ''})))
+    # Two trailing delimiters (two unnamed columns) remain ambiguous and are refused.
+    with pytest.raises(workspace.EventLogWorkspaceError):
+        _import(raw.replace(f'note{d}\n', f'note{d}{d}\n'), 'csv', mapping=mapping)

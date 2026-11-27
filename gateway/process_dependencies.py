@@ -2,6 +2,8 @@
 import json
 
 from shared.process_dependencies import Saved, MAX_REVISIONS, MAX_ROOTS, MAX_PROCESSES, MAX_LINKS, content_digest, topology, impact
+from shared.process_dependency_reassessment import reassessment
+from shared.process_dependency_build_basis import focused_basis
 from .process_collaboration import ProcessCollaborationError as Error, _now
 from .process_hierarchies import ProcessHierarchies
 
@@ -157,16 +159,115 @@ class ProcessDependencies:
                 item=items[edge['consumer']];d=item['dependencies'];link=next(link for link in d['links'] if link['id']==edge['link_id'])
                 edge.update(consumer_process=d['root_process'],prerequisite_process=link['prerequisite'],
                     declaration_revision=item['revision'],declaration_sha256=item['content_sha256'])
+            graph['reassessment_worklist']=reassessment(graph,items)
             result['graph']=graph;result['current_basis']=bool(items) and all(n['current_declared_basis'] for n in nodes)
             result['status']='empty' if not items else 'current_declared_basis' if result['current_basis'] else 'needs_reassessment'
             if focus:
-                try:result['impact']=impact(graph,focus)
+                try:
+                    result['impact']=impact(graph,focus)
+                    result['focused_build_basis']=focused_basis(p.organization_id,graph,items,focus)
                 except ValueError:raise Error('Selected process is absent from the declared dependency graph',404) from None
             evidence.append([{key:value for key,value in node.items() if key!='title'} for node in nodes])
         result['fingerprint']=content_digest({'organization_id':p.organization_id,'records_and_resolutions':evidence,'blockers':result['blockers']})
         if len(json.dumps(result,allow_nan=False).encode())>MAX_RESPONSE_BYTES:
             result.update(status='withheld',graph=None,impact=None,current_basis=False,blockers=[{'code':'response_byte_limit'}])
+            result.pop('focused_build_basis',None)
         return result
+
+    def check_build_basis(self,p,wid,revision,expected_basis):
+        """Return minimized live read-only status, never an execution grant."""
+        with self.catalog.reading(p) as c:
+            result=self.snapshot(c,p,wid)
+            basis=result.get('focused_build_basis')
+            root=next((r for r in basis['processes'] if r['workflow_id']==wid),None) if basis else None
+            exact=bool(root and root['current_model']['revision']==revision
+                and basis['basis_sha256']==expected_basis)
+            current=bool(exact and basis['all_declared_prerequisites_current'])
+            model_pin=None;process_reference=None
+            if current:
+                from shared.process_agent_project import process_model_digest
+                record=self.store._record(c,p,wid,revision)
+                if record['content_sha256']!=root['current_model']['content_sha256']:
+                    raise Error('Root model changed during dependency check')
+                model_pin=process_model_digest(record['process_model'])
+                process_reference={key:record[key] for key in ('workflow_id','revision','content_sha256')}
+            response={'format':'openworkgraph.dependency-build-basis-status.v1',
+                'organization_id':p.organization_id,'workflow_id':wid,'requested_revision':revision,
+                'requested_basis_sha256':expected_basis,'current_exact_reviewed_basis':current,
+                'process_reference':process_reference,'process_model_sha256':model_pin,
+                'status':'current' if current else 'unavailable' if not basis else 'changed_or_unreviewed',
+                'checked_at':_now(),'read_only':True,'execution_authorized':False,
+                'business_outcomes_verified':False}
+        self.db.audit(organization_id=p.organization_id,principal_id=p.audit_id,
+            action='process.dependencies.build.checked',details={'workflow_id':wid,'revision':revision,
+                'basis_sha256':expected_basis,'current':current})
+        return response
+
+    def build_bundle(self,p,wid,revision,expected_basis):
+        """Create a root starter plus its exact reviewed prerequisite basis.
+
+        Both are built from the same authorized database snapshot. The
+        prerequisite models are deliberately not copied into this release.
+        """
+        import hashlib
+        from io import BytesIO
+        from zipfile import ZipFile, ZipInfo, ZIP_DEFLATED
+        from shared.process_agent_project import build_runtime_project
+        from shared.process_agent_release import create_manifest
+        with self.catalog.reading(p) as c:
+            result=self.snapshot(c,p,wid)
+            basis=result.get('focused_build_basis')
+            if (not basis or basis['basis_sha256']!=expected_basis
+                    or not basis['all_declared_prerequisites_current']):
+                raise Error('Prerequisite basis is unavailable, changed or requires reassessment; refresh before building')
+            root=next(row for row in basis['processes'] if row['workflow_id']==wid)
+            model=root['current_model']
+            if model['revision']!=revision:
+                raise Error('Select the current reviewed root revision')
+            record=self.store._record(c,p,wid,revision)
+            if record['content_sha256']!=model['content_sha256']:
+                raise Error('Root model changed during dependency preflight')
+            packet={'format':'openworkgraph.versioned-process-export.v1',
+                'workflow_id':wid,'revision':revision,'content_sha256':record['content_sha256'],
+                'process_model':record['process_model'],'execution_authorization':False,
+                'organization_catalog_reference':{'organization_id':p.organization_id}}
+            archive=build_runtime_project(packet)
+        # The existing manifest covers every file, including the new sidecar.
+        # Pin the dependency basis in the runtime spec, which the existing intent hashes.
+        with ZipFile(BytesIO(archive)) as original:
+            files={name:original.read(name).decode('utf-8') for name in original.namelist()
+                   if name!='release-manifest.json'}
+        files['dependency-build-basis.json']=json.dumps(basis,indent=2,ensure_ascii=False,allow_nan=False)+'\n'
+        files['README.md'] += ('\n## Declared dependency build basis\n\n'
+            'This starter was exported with a reviewed prerequisite closure. See dependency-build-basis.json. '
+            'Recheck the exact basis against the authenticated shared process portal before use. '
+            'The runtime rechecks the pinned basis at existing catalog checkpoints; it does not execute prerequisites. '
+            'The snapshot grants no business execution permissions.\n')
+        from pathlib import Path
+        files['check_dependency_basis.py']=(Path(__file__).resolve().parents[1]/
+            'shared/process_agent_templates/check_dependency_basis.py.txt').read_text(encoding='utf-8')
+        files['README.md'] += ('\nRun python check_dependency_basis.py --manifest-sha256 YOUR_INDEPENDENT_PIN '
+            '--catalog-url YOUR_CATALOG_URL using the existing catalog-read credential. '
+            'A nonzero exit code means the basis was not established. '
+            'This optional standalone preflight supplements automatic catalog checks during authorized execution.\n')
+        spec=json.loads(files['workflow.spec.json'])
+        spec['dependency_build_basis_sha256']=basis['basis_sha256']
+        files['workflow.spec.json']=json.dumps(spec,indent=2,ensure_ascii=False)+'\n'
+        example=json.loads(files['shadow-cases.example.json'])
+        example['spec_sha256']=hashlib.sha256(json.dumps(spec,sort_keys=True,allow_nan=False).encode()).hexdigest()
+        files['shadow-cases.example.json']=json.dumps(example,indent=2)+'\n'
+        files['release-manifest.json']=create_manifest(files,spec)
+        out=BytesIO()
+        with ZipFile(out,'w',compression=ZIP_DEFLATED) as bundle:
+            for name,content in files.items():
+                info=ZipInfo(name,date_time=(1980,1,1,0,0,0))
+                info.compress_type=ZIP_DEFLATED;info.external_attr=0o644<<16
+                bundle.writestr(info,content)
+        self.db.audit(organization_id=p.organization_id,principal_id=p.audit_id,
+            action='process.dependencies.build.exported',details={'workflow_id':wid,'revision':revision,
+                'basis_sha256':expected_basis,'process_count':basis['process_count'],
+                'manifest_sha256':hashlib.sha256(files['release-manifest.json'].encode()).hexdigest()})
+        return out.getvalue()
 
     def graph(self,p,focus=None,*,expected_fingerprint=None,exporting=False):
         with self.catalog.reading(p) as c:

@@ -94,6 +94,11 @@ const path=require('node:path');
 
    assert.match(await page.locator('#owgEventLogResults').textContent(),/Receive → Check → Approve → Close/);
    await page.locator('#owgQualityResults table').first().waitFor();
+   const [qualityDownload]=await Promise.all([page.waitForEvent('download'),page.locator('#owgQualityOverviewJson').click()]);
+   assert.equal(qualityDownload.suggestedFilename(),'event-log-quality-overview.json');
+   const qualityExport=JSON.parse(await fs.readFile(await qualityDownload.path(),'utf8'));
+   assert.deepEqual(qualityExport,qualityPayload,'download preserves the displayed snapshot, its bounds and digests');
+   assert.doesNotMatch(JSON.stringify(qualityExport),/C99/,'kept rejected row values are excluded');
    const qualityText=await page.locator('#owgQualityResults').textContent();
    assert.match(qualityText,/Import\s*csv\s*274\s*1 \(1 time without a UTC offset\)/);
    assert.match(qualityText,/Case columncase_id/);assert.match(qualityText,/not known to be complete/);
@@ -252,12 +257,26 @@ const path=require('node:path');
    outline=await page.locator('#owgDiscoveryOutline').textContent();
    assert.match(outline,/Choose one of:\n {2}Option 1 · 6 cases:\n {4}\(skip\)\n {2}Option 2 · 54 cases:\n {4}Approve\nClose/);
    assert.match(await page.locator('#owgDiscoveryStatus').textContent(),/fits 60 of 60 checked cases/);
+   // The discovered tree itself downloads as PTML, with the skip as a silent task.
+   const [ptmlDownload]=await Promise.all([page.waitForEvent('download'),page.locator('#owgDiscoveryPtml').click()]);
+   assert.match(ptmlDownload.suggestedFilename(),/-discovered\.ptml$/);
+   const ptmlText=await fs.readFile(await ptmlDownload.path(),'utf8');
+   assert.match(ptmlText,/<processTree /);assert.match(ptmlText,/<manualTask [^>]*name="Approve"/);assert.match(ptmlText,/<automaticTask /);
+   await page.locator('#owgDiscoveryStatus').filter({hasText:'Process tree downloaded (nodes='}).waitFor();
+   await page.locator('#owgDiscoveryNotationBox summary').click();
+   assert.match(await page.locator('#owgDiscoveryNotation').textContent(),/^->\( .*X\( tau, 'Approve' \), 'Close' \)$/);
    // The same draft downloads as a PNML workflow net with the skip as a silent transition.
    const [pnmlDownload]=await Promise.all([page.waitForEvent('download'),page.locator('#owgDiscoveryPnml').click()]);
    assert.match(pnmlDownload.suggestedFilename(),/-discovered\.pnml$/);
    const pnmlText=await fs.readFile(await pnmlDownload.path(),'utf8');
    assert.match(pnmlText,/<pnml>/);assert.match(pnmlText,/<text>Approve<\/text>/);assert.match(pnmlText,/\$invisible\$/);
    await page.locator('#owgDiscoveryStatus').filter({hasText:'Petri net downloaded (places='}).waitFor();
+   // And as BPMN 2.0 with diagram interchange, marked as an unreviewed draft.
+   const [bpmnDownload]=await Promise.all([page.waitForEvent('download'),page.locator('#owgDiscoveryBpmn').click()]);
+   assert.match(bpmnDownload.suggestedFilename(),/-discovered\.bpmn$/);
+   const bpmnText=await fs.readFile(await bpmnDownload.path(),'utf8');
+   assert.match(bpmnText,/name="Approve"/);assert.match(bpmnText,/BPMNShape/);assert.match(bpmnText,/Unreviewed draft discovered/);
+   await page.locator('#owgDiscoveryStatus').filter({hasText:'BPMN downloaded (tasks='}).waitFor();
    const [snapshotResponse]=await Promise.all([
      page.waitForResponse(r=>r.url().endsWith('/model-discovery-draft')&&r.request().method()==='POST'),
      page.locator('#owgDiscoveryDraft').click()
@@ -795,6 +814,13 @@ const path=require('node:path');
    let org=await page.locator('#owgEventLogOrgResults').textContent();
    assert.match(org,/Resource 01/);assert.doesNotMatch(org,/\bann\b|\bbob\b|\bbot\b/);assert.match(org,/No speed|not say who|None says/);
    assert.equal(await page.locator('#owgEventLogOrgResults').getByRole('button',{name:/Review .* cases for/}).count(),0);
+   // The pseudonymous network downloads as GraphML without any resource name from the log.
+   const [graphmlDownload]=await Promise.all([page.waitForEvent('download'),page.locator('#owgEventLogOrgGraphml').click()]);
+   assert.match(graphmlDownload.suggestedFilename(),/-resources\.graphml$/);
+   const graphmlText=await fs.readFile(await graphmlDownload.path(),'utf8');
+   assert.match(graphmlText,/<graphml/);assert.match(graphmlText,/>handover</);assert.match(graphmlText,/>Resource 01</);
+   assert.doesNotMatch(graphmlText,/>(ann|bob|bot)</);
+   await page.locator('#owgEventLogOrgResults').getByText(/Resources are pseudonymous in the file/).waitFor();
    await page.locator('#owgEventLogOrgNames').check();await page.locator('#owgEventLogOrgRun').click();
    await page.locator('#owgEventLogOrgResults').getByText('bot',{exact:true}).first().waitFor();
    const relationship=page.locator('#owgEventLogOrgCaseReview');
@@ -845,7 +871,8 @@ const path=require('node:path');
    await page.locator('#owgSignalEvaluate').click();
    await page.locator('#owgSignalResults').getByText('signals hold now').waitFor();
    const signalText=await page.locator('#owgSignalResults').textContent();
-   assert.match(signalText,/1 of 1 signals hold now/);assert.match(signalText,/6 cases/);assert.match(signalText,/C0\b/);assert.match(signalText,/first check/);
+   assert.match(signalText,/1 of 1 signals hold now/);assert.match(signalText,/6 cases/);assert.match(signalText,/first check/);
+   await page.locator('#owgSignalResults').getByRole('button',{name:'Open case C0',exact:true}).waitFor();
    await page.locator('#owgSignalEvaluate').click();
    await page.locator('#owgSignalResults').getByText('first check').waitFor({state:'detached'});
    // Manual reviews belong to the current evaluated state. They do not grant
@@ -1568,7 +1595,8 @@ const path=require('node:path');
    assert.equal(checkedAge.signals[0].new_cases_since_last_evaluation,null);
    assert.deepEqual([checkedAge.signals[0].new_cases_comparison.lower_bound,checkedAge.signals[0].new_cases_comparison.upper_bound],[0,1]);
    await page.locator('#owgSignalResults').getByText('0–1 (bounded history)',{exact:true}).waitFor();
-   assert.match(await page.locator('#owgSignalResults').textContent(),/ARecent \(age .*idle /);
+   await page.locator('#owgSignalResults').getByRole('button',{name:'Open case ARecent',exact:true}).waitFor();
+   assert.match(await page.locator('#owgSignalResults').textContent(),/ARecent\s+Age\s+4\.2 d, idle 60 min\./);
    const ageAudit=await page.evaluate(async()=>window.axe.run(document.querySelector('#owgEventLogCard'),{
      runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21a','wcag21aa']},resultTypes:['violations']}));
    assert.deepEqual(ageAudit.violations.map(v=>v.id),[]);

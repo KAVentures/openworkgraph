@@ -1,5 +1,8 @@
 # Bring a BPMN design into the process catalog
 
+For organizations migrating many diagrams, the [offline BPMN portfolio migration assessment](BPMN_PORTFOLIO_MIGRATION.md) provides a bounded JSON inventory and CSV remediation worklist using this same importer, without saving any drafts.
+
+
 Open **Evidence → Process catalog → Import a BPMN design as an unreviewed
 draft**. Choose an authorized UTF-8 `.bpmn` or `.xml` file and explicitly select
 **Preview selected BPMN**. Selecting a file makes no request. Preview parses
