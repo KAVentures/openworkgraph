@@ -7,7 +7,7 @@ from collections import defaultdict
 from hashlib import sha256
 import json
 from typing import Literal
-from pydantic import Field,StrictInt,model_validator
+from pydantic import Field,StrictBool,StrictInt,model_validator
 from shared.connector_event_snapshot import Strict,Event,Manifest,Snapshot,DIGEST,digest,manifest_digest
 
 FORMAT="openworkgraph.connector-event-bundle.v1"
@@ -35,12 +35,14 @@ class Bundle(Strict):
     manifests:list[Source]=Field(min_length=1,max_length=10)
     events:list[Row]=Field(min_length=1,max_length=MAX_EVENTS)
     event_count:StrictInt=Field(ge=1,le=MAX_EVENTS)
-    cross_source_identity_verified:Literal[False]
-    provider_completeness_verified:Literal[False]
+    cross_source_identity_verified:StrictBool
+    provider_completeness_verified:StrictBool
     mapping:dict[str,str]
 
     @model_validator(mode="after")
     def verify(self):
+        if self.cross_source_identity_verified or self.provider_completeness_verified:
+            raise ValueError("unverified source claims must remain false")
         if self.mapping!=MAPPING or len(self.events)!=self.event_count:
             raise ValueError("invalid bundle mapping or count")
         sources={s.job_id:s for s in self.manifests}
