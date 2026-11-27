@@ -550,7 +550,7 @@ def _retain(p,rows,counts,until):
                 added=result["added_events"]
                 duplicates=result["duplicate_events_skipped"]
             else:
-                result=workspace.import_log(source,name={"google":"Google Workspace audit ","sql":"Enterprise SQL ","slack":"Slack activity ","salesforce":"Salesforce field history ","servicenow":"ServiceNow operations ","sap":"SAP procurement day evidence ","dataverse":"Dataverse audit ","hubspot":"HubSpot property history ","databricks":"Databricks event view ","snowflake":"Snowflake event view ","netsuite":"NetSuite event record "}.get(p.get("provider"),"Enterprise REST ")+p["profile_id"],source_format="csv",
+                result=workspace.import_log(source,name={"google":"Google Workspace audit ","sql":"Enterprise SQL ","slack":"Slack activity ","salesforce":"Salesforce field history ","servicenow":"ServiceNow operations ","sap":"SAP procurement day evidence ","dataverse":"Dataverse audit ","hubspot":"HubSpot property history ","databricks":"Databricks event view ","snowflake":"Snowflake event view ","netsuite":"NetSuite event record ","workday":"Workday RaaS event report "}.get(p.get("provider"),"Enterprise REST ")+p["profile_id"],source_format="csv",
                                             mapping=mapping,_transaction_hook=checkpoint)
                 added=result["events"]
                 duplicates=0
