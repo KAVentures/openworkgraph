@@ -63,6 +63,8 @@ def create_enterprise_app(
     install_organization_admin(app, db=db, settings=settings)
     install_identity(app, db=db, settings=settings)
     install_identity_security_hardening()
+    from .connector_job_routes import install_connector_jobs
+    install_connector_jobs(app,db,settings)
 
     core_health = _take_get_endpoint(app, "/health")
     core_capabilities = _take_get_endpoint(app, "/v1/capabilities")
@@ -86,6 +88,12 @@ def create_enterprise_app(
             "rate_limiting": "opt_in_default_disabled",
             "postgres_connection_pooling": "opt_in_default_disabled",
             "distributed_edge_rate_limit_required_for_multi_replica": True,
+        }
+        payload["enterprise_connector_jobs"] = {
+            "job_scoped_workers": True, "database_serialized_leases": True,
+            "explicit_operator_approval": True, "raw_source_payloads_received": False,
+            "provider_credentials_received": False, "expired_leases_require_reconciliation": True,
+            "worker_reported_receipts": True,
         }
         payload["enterprise_declared_policy"] = {
             "signed_bundle_distribution": True,
