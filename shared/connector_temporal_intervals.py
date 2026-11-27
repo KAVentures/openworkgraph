@@ -93,9 +93,29 @@ def compare(left,right):
     pairs=len(left)*len(right)
     known=len(a)*len(b)
     overlap=known-a_before-b_before-ties
-    return {"event_pairs":pairs,"left_strictly_before_right":a_before,
+    separated=None
+    gap=None
+    if pairs and known==pairs and a_before==pairs:
+        separated="left_before_right"
+        gap=boundary_gap(a,b)
+    elif pairs and known==pairs and b_before==pairs:
+        separated="right_before_left"
+        gap=boundary_gap(b,a)
+    return {"separation":separated,"reported_boundary_gap_bounds":gap,
+            "event_pairs":pairs,"left_strictly_before_right":a_before,
             "right_strictly_before_left":b_before,"equal_reported_points":ties,
             "overlapping_intervals":overlap,"unaligned_date_pairs":pairs-known}
+
+
+def boundary_gap(earlier,later):
+    """Gap between latest earlier and earliest later reported representatives.
+
+    Called only for wholly separated source intervals. This is not a
+    process wait time, handoff duration, or proof of inactivity.
+    """
+    lo=min(x[0] for x in later)-max(x[1] for x in earlier)
+    hi=min(x[1] for x in later)-max(x[0] for x in earlier)
+    return {"minimum_seconds":seconds(lo),"maximum_seconds":seconds(hi)}
 
 
 def span(intervals):
