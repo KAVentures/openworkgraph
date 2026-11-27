@@ -86,8 +86,19 @@ def prepare(plan, schedule, ledger, truth, materials, *, expected_plan_sha256,
 
 
 def template(packet):
-    if not isinstance(packet,dict) or packet.get("format")!=FORMAT:
+    cohort.exact(packet,("format","entries","limitations"))
+    if packet["format"]!=FORMAT or packet["limitations"]!="Operator-approved free text; blinding is not guaranteed.":
         raise ValueError("unsupported blinded packet")
+    entries=packet["entries"]
+    if not isinstance(entries,list) or not 1<=len(entries)<=cohort.MAX_EPISODES*len(cohort.ARMS):
+        raise ValueError("invalid review packet size")
+    seen=set()
+    for entry in entries:
+        cohort.exact(entry,("review_id","prompt","review_text"))
+        rid=cohort.token(entry["review_id"])
+        if rid in seen:
+            raise ValueError("duplicate review ID")
+        seen.add(rid);_text(entry["prompt"]);_text(entry["review_text"])
     return blinded.review_template(packet)
 
 
@@ -202,6 +213,10 @@ def main(argv=None):
     sub=parser.add_subparsers(dest="command",required=True)
     prep=sub.add_parser("prepare")
     rec=sub.add_parser("reconcile")
+    reviewer=sub.add_parser("template")
+    reviewer.add_argument("--packet",type=Path,required=True)
+    reviewer.add_argument("--out",type=Path,required=True)
+    reviewer.add_argument("--confirm",action="store_true",required=True)
     for cmd in (prep,rec):
         execution._arguments(cmd,ledger_required=True)
         cmd.add_argument("--episodes",type=Path,required=True)
@@ -210,6 +225,9 @@ def main(argv=None):
     rec.add_argument("--batches",type=Path,required=True)
     args=parser.parse_args(argv)
     try:
+        if args.command=="template":
+            cohort._write(args.out,template(cohort._load(args.packet)))
+            return 0
         plan=cohort._load(args.plan);schedule=cohort._load(args.schedule)
         ledger=cohort._load(args.ledger);truth=cohort._load_jsonl(args.episodes)
         kw={"expected_plan_sha256":args.plan_sha256,"expected_schedule_sha256":args.schedule_sha256,
