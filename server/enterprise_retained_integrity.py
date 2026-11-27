@@ -131,6 +131,11 @@ def audit(c, p):
     # are supported elsewhere and do not count as projection violations.
     check("unexpected_event_attributes", """SELECT count(*) FROM events WHERE log_id=?
         AND trim(attributes)<>'{}'""", log)
+    from . import enterprise_case_exclusions as exclusions
+    excluded=exclusions.keys(p)
+    if excluded:
+        check("excluded_cases_present", """SELECT count(*) FROM objects WHERE log_id=?
+            AND object_id IN (SELECT unnest(?))""", log, [prefix+key for key in sorted(excluded)])
     result["violations"] = {k: n for k, n in v.items() if n}
     result["status"] = "violations" if result["violations"] else "structurally_consistent"
     return result
