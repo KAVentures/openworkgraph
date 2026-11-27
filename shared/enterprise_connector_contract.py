@@ -8,7 +8,7 @@ replacement. None of these declarations assert live provider acceptance.
 from typing import Literal, get_args
 
 Provider = Literal["rest", "google", "sql", "slack", "salesforce",
-                   "servicenow", "sap", "dataverse", "hubspot", "databricks", "snowflake", "netsuite", "workday", "oracle_fusion", "bigquery"]
+                   "servicenow", "sap", "dataverse", "hubspot", "databricks", "snowflake", "netsuite", "workday", "oracle_fusion", "bigquery", "zendesk"]
 PROVIDERS = frozenset(get_args(Provider))
 CROSSWALK_PROVIDERS = frozenset({"rest", "sql", "salesforce", "servicenow",
                                  "sap", "dataverse", "hubspot", "databricks", "snowflake",
@@ -33,6 +33,7 @@ NATIVE_ADAPTERS = {
     "workday": "workday_raas_feed",
     "oracle_fusion": "oracle_fusion_procurement_feed",
     "bigquery": "bigquery_event_feed",
+    "zendesk": "zendesk_ticket_audit_feed",
 }
 
 def capabilities(provider):

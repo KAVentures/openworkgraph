@@ -31,7 +31,7 @@ jobs:
   integrated-contract:
     # Validate the consolidated candidate even while it remains a draft.
     # Ordinary feature drafts continue to use the existing cheap smoke path.
-    if: github.event_name == 'workflow_dispatch' || startsWith(github.head_ref, 'integration/enterprise-connectors-') || github.head_ref == 'feat/enterprise-databricks-approved-views' || github.head_ref == 'feat/enterprise-snowflake-approved-views' || github.head_ref == 'feat/enterprise-netsuite-suiteql-events' || github.head_ref == 'feat/enterprise-workday-raas-events' || github.head_ref == 'feat/enterprise-oracle-fusion-procurement' || github.head_ref == 'feat/enterprise-new-provider-crosswalk-batch' || github.head_ref == 'feat/enterprise-bigquery-approved-views' || github.head_ref == 'feat/enterprise-reviewed-ingestion-tuning' || github.head_ref == 'feat/enterprise-ingestion-run-ledger' || github.head_ref == 'feat/enterprise-source-onboarding-readiness' || github.head_ref == 'feat/enterprise-retained-integrity-review'
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.head_ref, 'integration/enterprise-connectors-') || github.head_ref == 'feat/enterprise-databricks-approved-views' || github.head_ref == 'feat/enterprise-snowflake-approved-views' || github.head_ref == 'feat/enterprise-netsuite-suiteql-events' || github.head_ref == 'feat/enterprise-workday-raas-events' || github.head_ref == 'feat/enterprise-oracle-fusion-procurement' || github.head_ref == 'feat/enterprise-new-provider-crosswalk-batch' || github.head_ref == 'feat/enterprise-bigquery-approved-views' || github.head_ref == 'feat/enterprise-reviewed-ingestion-tuning' || github.head_ref == 'feat/enterprise-ingestion-run-ledger' || github.head_ref == 'feat/enterprise-source-onboarding-readiness' || github.head_ref == 'feat/enterprise-retained-integrity-review' || github.head_ref == 'feat/enterprise-zendesk-ticket-audits'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     services:
@@ -98,6 +98,7 @@ jobs:
             tests/test_enterprise_ingestion_run_history.py \
             tests/test_enterprise_source_onboarding.py \
             tests/test_enterprise_retained_integrity.py \
+            tests/test_zendesk_ticket_audit_feed.py \
             tests/test_gateway_connector_jobs.py \
             tests/test_enterprise_connector_worker.py \
             tests/test_connector_event_publications.py \

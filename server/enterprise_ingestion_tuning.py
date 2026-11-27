@@ -29,7 +29,7 @@ PAGE_LIMITS = {"rest": (1, 500), "google": (1, 500), "sql": (1, 500),
                "bigquery": (1, 1000)}
 LAG_PROVIDERS = frozenset({"google", "slack", "salesforce", "servicenow", "dataverse",
                           "hubspot", "databricks", "snowflake", "netsuite", "workday",
-                          "oracle_fusion", "bigquery"})
+                          "oracle_fusion", "bigquery", "zendesk"})
 FIELDS = ("window_hours", "overlap_minutes", "ingestion_lag_minutes", "page_size", "lag_days")
 
 
