@@ -314,3 +314,11 @@ async def retained_integrity_apply(request:Request,action:str=Query(default="hol
     require(request)
     body=await _json_body(request,"Reviewed retained evidence containment",strict=True,limit=4096)
     return await call(request,integrity.apply,body,action=action)
+
+
+@router.post("/v1/enterprise-connectors/zendesk")
+async def zendesk_create(request:Request):
+    from . import zendesk_ticket_audit_feed as zendesk
+    require(request)
+    body=await _json_body(request,"Zendesk retained ticket audit profile",strict=True,limit=4096)
+    return await call(request,zendesk.create,body)
