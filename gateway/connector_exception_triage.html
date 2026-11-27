@@ -83,10 +83,9 @@ async function loadFollowups(){
       const label=el('label','Reviewed comparison input (JSON)'),file=el('input');file.type='file';file.accept='.json,application/json';label.append(file);
       const consent=approval('I assert the exact mapped cases and activity selectors correspond; this is not independently verified.');
       const report=el('div');let selectedInput=null,selectedReport=null;
-      const preview=btn('Preview later evidence comparison',async()=>{
-        if(!file.files[0]||file.files[0].size>2*1024*1024||!consent.input.checked)throw Error('Choose a bounded reviewed JSON file and approve correspondence.');
-        selectedInput=JSON.parse(await file.files[0].text());
-        selectedInput={...selectedInput,expected_queue_revision:active.revision,expected_packet_revision:p.revision,confirm_case_and_selector_correspondence:true};
+      async function showComparison(value){
+        selectedReport=null;report.replaceChildren();
+        selectedInput={...value,expected_queue_revision:active.revision,expected_packet_revision:p.revision,confirm_case_and_selector_correspondence:true};
         selectedReport=await api(packetPath()+'/'+p.packet_id+'/reassessment-preview',selectedInput);
         report.replaceChildren(el('h4','Later sample assessment'),el('p',selectedReport.interpretation),
           table(Object.entries(selectedReport.summary)),el('p','Review SHA-256: '+selectedReport.reassessment_sha256));
@@ -103,10 +102,110 @@ async function loadFollowups(){
         });
         record.disabled=true;exact.input.onchange=sample.input.onchange=()=>record.disabled=busy||!exact.input.checked||!sample.input.checked;
         report.append(exact.l,sample.l,record);
+      }
+      const preview=btn('Preview later evidence comparison',async()=>{
+        if(!file.files[0]||file.files[0].size>2*1024*1024||!consent.input.checked)throw Error('Choose a bounded reviewed JSON file and approve correspondence.');
+        await showComparison(JSON.parse(await file.files[0].text()));
       });
       preview.disabled=true;
       file.onchange=consent.input.onchange=()=>{selectedReport=selectedInput=null;report.replaceChildren();preview.disabled=busy||!file.files[0]||!consent.input.checked;};
-      review.append(template,label,consent.l,preview,report);
+      const guided=el('fieldset');guided.append(el('legend','Guided mapping — no JSON editing'),
+        el('p','Choose the baseline conformance request and later linkage request exported from the case review console. The server checks both live sets of grants before showing candidates. No match is automatically selected.'));
+      function requestFile(title){
+        const l=el('label',title),input=el('input');input.type='file';input.accept='.json,application/json';l.append(input);guided.append(l);return input;
+      }
+      const baselineFile=requestFile('Baseline conformance request (JSON)'),laterFile=requestFile('Later linked-case request (JSON)');
+      const inspect=approval('I approve inspecting the exact selected later and baseline publications and their activity catalogs.');
+      const mappingRoot=el('div');let guidance=null;
+      function clearMapping(){guidance=null;mappingRoot.replaceChildren();selectedInput=selectedReport=null;report.replaceChildren();}
+      function invalidateComparison(){selectedInput=selectedReport=null;report.replaceChildren();}
+      async function readRequest(input){
+        if(!input.files[0]||input.files[0].size>1024*1024)throw Error('Choose a reviewed request file (at most 1 MiB).');
+        const doc=JSON.parse(await input.files[0].text());
+        if(!doc||typeof doc.request!=='object'||doc.request===null)throw Error('Use an exported reviewed request file.');
+        return doc.request;
+      }
+      function choose(title,options){
+        const l=el('label',title),s=el('select');const blank=el('option','Choose explicitly');blank.value='';s.append(blank);
+        for(const [value,name] of options){const o=el('option',name);o.value=value;s.append(o);}
+        l.append(s);return {l,s};
+      }
+      const prepare=btn('Load eligible mapping candidates',async()=>{
+        if(!inspect.input.checked)throw Error('Explicit inspection approval required.');
+        clearMapping();
+        const baseline=await readRequest(baselineFile),subsequent=await readRequest(laterFile);
+        const g=await api(packetPath()+'/'+p.packet_id+'/mapping-guidance',{expected_queue_revision:active.revision,
+          expected_packet_revision:p.revision,baseline,subsequent,confirm_mapping_inspection:true});
+        guidance=g;const choices=new Map(),caseChoices=new Map(),selectorChoices=new Map(),dependent=el('div');
+        const submitConsent=approval('I reviewed the explicit source, case and activity mappings; correspondence is my assertion, not independent verification.');
+        const submit=btn('Preview guided reassessment',async()=>{
+          if(guidance!==g||!submitConsent.input.checked)throw Error('Review and approve the mappings first.');
+          const jobs=g.baseline_sources.map(a=>({before:a.job_id,after:choices.get(a.job_id).value}));
+          const cases=g.baseline_cases.map(a=>({before:a.linked_case_id,after:caseChoices.get(a.linked_case_id).value}));
+          if(jobs.some(x=>!x.after)||new Set(jobs.map(x=>x.after)).size!==jobs.length||
+             cases.some(x=>!x.after)||new Set(cases.map(x=>x.after)).size!==cases.length)throw Error('Choose distinct sources and cases for every mapping.');
+          const byJob=new Map(jobs.map(j=>[j.before,j.after]));
+          const selector=s=>{
+            if(!s)return null;
+            const key=JSON.stringify([s.job_id,s.activity]),input=selectorChoices.get(key);
+            const value=input?.value;
+            if(!value)throw Error('Complete every exact activity correspondence.');
+            return {job_id:byJob.get(s.job_id),activity:value};
+          };
+          const rules=g.rules.map(r=>({...r,left:selector(r.left),right:selector(r.right)}));
+          await showComparison({baseline,subsequent:{...subsequent,rules,confirm_conformance_review:true,filter_status:'all',offset:0},
+            jobs,cases});
+        });
+        submit.disabled=true;
+        function changed(){invalidateComparison();submitConsent.input.checked=false;submit.disabled=true;}
+        function renderDependents(){
+          changed();dependent.replaceChildren();caseChoices.clear();selectorChoices.clear();
+          const map=new Map([...choices].map(([k,s])=>[k,s.value]));
+          if([...map.values()].some(v=>!v)||new Set(map.values()).size!==map.size){dependent.append(el('p','Choose distinct later jobs first.'));return;}
+          for(const old of g.baseline_cases){
+            const shape=Object.entries(old.source_multiplicities).map(([k,v])=>[map.get(k),v]).sort((a,b)=>a[0].localeCompare(b[0]));
+            const candidates=g.subsequent_cases.filter(x=>x.basis===old.basis&&JSON.stringify(Object.entries(x.source_multiplicities).sort((a,b)=>a[0].localeCompare(b[0])))===JSON.stringify(shape));
+            const input=choose('Later case corresponding to '+old.linked_case_id,
+              candidates.map(x=>[x.linked_case_id,x.linked_case_id+' · '+x.events+' events · '+x.first_observed+' – '+x.last_observed]));
+            input.s.onchange=changed;caseChoices.set(old.linked_case_id,input.s);
+            dependent.append(input.l);if(!candidates.length)dependent.append(el('p','No later case has the same reviewed source shape and basis.'));
+          }
+          for(const rule of g.rules)for(const s of [rule.left,rule.right]){
+            if(!s)continue;const key=JSON.stringify([s.job_id,s.activity]);if(selectorChoices.has(key))continue;
+            const mode=g.baseline_sources.find(x=>x.job_id===s.job_id).activity_mode;
+            const later=map.get(s.job_id),catalog=g.activity_catalogs.find(x=>x.job_id===later);
+            const l=el('label','Later activity corresponding to '+s.job_id+' / '+s.activity);
+            const input=el('input');input.type='text';input.maxLength=160;input.autocomplete='off';input.spellcheck=false;
+            if(mode==='labels'){input.value=s.activity;input.readOnly=true;}
+            else{
+              const pick=choose('Observed later activity code (optional)',(catalog?.activities||[]).map(x=>[x.activity,x.activity+' · '+x.events+' events']));
+              pick.s.onchange=()=>{input.value=pick.s.value;changed();};dependent.append(pick.l);
+              if(catalog?.truncated)dependent.append(el('p','Catalog truncated; an exact approved code can be entered manually.'));
+              input.placeholder='Exact A_ code, including independently reviewed absent code';
+            }
+            input.oninput=changed;l.append(input);selectorChoices.set(key,input);dependent.append(l);
+          }
+          dependent.append(submitConsent.l,submit);
+        }
+        mappingRoot.append(el('h4','Source correspondence'),el('p','Guidance digest: '+g.guidance_sha256));
+        for(const old of g.baseline_sources){
+          const allowed=g.source_candidates.find(x=>x.before===old.job_id)?.candidates||[];
+          const options=g.subsequent_sources.filter(x=>allowed.includes(x.job_id)).map(x=>[x.job_id,
+            x.job_id+' · '+x.provider+' · '+x.since+' – '+x.until+' · '+x.event_count+' events']);
+          const input=choose(old.job_id+' · '+old.provider,options);choices.set(old.job_id,input.s);
+          input.s.onchange=renderDependents;mappingRoot.append(input.l);
+          if(!options.length)mappingRoot.append(el('p','No eligible later source for this publication.'));
+        }
+        submitConsent.input.onchange=()=>{invalidateComparison();submit.disabled=busy||!submitConsent.input.checked;};
+        mappingRoot.append(dependent);renderDependents();
+      });
+      prepare.disabled=true;
+      baselineFile.onchange=laterFile.onchange=inspect.input.onchange=()=>{
+        clearMapping();prepare.disabled=busy||!baselineFile.files[0]||!laterFile.files[0]||!inspect.input.checked;
+      };
+      guided.append(inspect.l,prepare,mappingRoot);
+      const advanced=el('details');advanced.append(el('summary','Advanced JSON comparison request'),template,label,consent.l,preview);
+      review.append(guided,advanced,report);
       for(const receipt of p.reassessment_receipts||[])review.append(el('p','Recorded comparison digest: '+receipt.reassessment_sha256+' · '+new Date(receipt.recorded_at*1000).toLocaleString()));
       a.append(review);
     }
