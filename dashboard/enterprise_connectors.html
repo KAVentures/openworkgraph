@@ -136,6 +136,23 @@ p{overflow-wrap:anywhere;max-width:94ch}.profile{border:1px solid var(--border);
 <p><label><input id="sfIdentity" type="checkbox" required> I approve transient identity metadata readback to verify the integration user and organization.</label></p>
 <p><label><input id="sfAll" type="checkbox"> I separately authorize reads across all visible records for any selected object without a record-ID restriction.</label></p>
 <button id="sfCreateButton" type="submit" disabled>Save Salesforce profile</button></form></details>
+<details><summary>Create native Zendesk ticket audit feed</summary>
+<p>Choose up to four exact ticket IDs and the approved audit fields. Zendesk may return transient ticket comments, identity metadata and other audit payloads; only selected status, priority, type and assignment-action labels with pseudonymous identities and timestamps are retained. The bounded reader repeats each ticket scan and verifies the configured agent identity. Large audit histories may exceed the read budget.</p>
+<form id="zdCreate"><div class="grid">
+<label>Profile name<input id="zdName" required maxlength="100"></label>
+<label>Zendesk OAuth connection<select id="zdConnection" required></select></label>
+<label>Exact tenant host<input id="zdHost" required maxlength="80" placeholder="customer.zendesk.com"></label>
+<label>Integration agent numeric ID<input id="zdPrincipal" required maxlength="18"></label>
+<label>Selected ticket IDs (comma-separated, maximum four)<input id="zdTickets" required maxlength="80"></label>
+<label>First history window (ISO UTC)<input id="zdSince" required placeholder="2026-11-01T00:00:00Z"></label>
+<label>Window (hours)<input id="zdWindow" type="number" min="1" max="168" value="24" required></label>
+<label>Overlap (minutes)<input id="zdOverlap" type="number" min="0" max="1440" value="60" required></label>
+<label>Reporting lag (minutes)<input id="zdLag" type="number" min="0" max="1440" value="15" required></label></div>
+<fieldset><legend>Approved fields</legend><label><input id="zdFieldstatus" type="checkbox" checked> Status</label><label><input id="zdFieldpriority" type="checkbox"> Priority</label><label><input id="zdFieldtype" type="checkbox"> Ticket type</label><label><input id="zdFieldassignee_id" type="checkbox"> Assignment set / cleared</label><label><input id="zdFieldgroup_id" type="checkbox"> Group set / cleared</label></fieldset>
+<label><input id="zdConfirm" type="checkbox" required> I reviewed the exact tenant, connection, agent and selected tickets.</label>
+<label><input id="zdTransient" type="checkbox" required> I authorize transient full ticket audit and agent identity payload reads.</label>
+<label><input id="zdRetention" type="checkbox" required> I approve retention of selected activity labels, pseudonymous identities and timestamps.</label>
+<button id="zdCreateButton" type="submit" disabled>Save Zendesk profile</button></form></details>
 <details><summary>Create native ServiceNow operations feed</summary>
 <p>Choose exact tables, tracked field names, optional creation events and record IDs. The integration account must be configured for UTC. Source reads use fixed Table API projections; field values, descriptions, usernames and approval decisions are not retained. The stricter repeat-read option checks whether the same projected records are returned twice within one bounded window.</p>
 <form id="snCreate"><div class="grid">
