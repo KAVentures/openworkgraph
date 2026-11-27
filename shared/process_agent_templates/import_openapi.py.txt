@@ -1,0 +1,355 @@
+"""Offline conservative OpenAPI JSON onboarding for the direct HTTP runtime.
+
+This is not a general OpenAPI client, provider validation, or execution
+authorization. No URL is fetched, reference is downloaded or example run.
+"""
+import argparse
+from copy import deepcopy
+from hashlib import sha256
+import json
+import os
+from pathlib import Path
+import re
+from urllib.parse import urlsplit
+from execute import ImplementationError,digest,reference,endpoint,_pairs,_constant,load_object
+
+FORMAT="openworkgraph.customer-http-operations.v1"
+PROPOSAL="openworkgraph.openapi-operation-proposal.v1"
+MAX_BYTES=2*1024*1024
+MAX_PATHS=300
+MAX_OPERATIONS=40
+MAX_FIELDS=30
+METHODS=("get","post","put","patch")
+HTTP_METHODS=(*METHODS,"delete","head","options","trace")
+NAME=re.compile(r"[A-Za-z][A-Za-z0-9_]{0,63}\Z")
+SEGMENT=re.compile(r"[A-Za-z0-9_-][A-Za-z0-9_.~-]{0,199}\Z")
+PLACEHOLDER=re.compile(r"\{([A-Za-z][A-Za-z0-9_]{0,63})\}\Z")
+KINDS={"string","integer","number","boolean"}
+ANNOTATIONS={"title","description","example","examples","deprecated","$comment"}
+
+
+def require(ok,code):
+    if not ok:raise ImplementationError(code)
+
+
+def object_value(value):
+    require(isinstance(value,dict),"object_required")
+    return value
+
+
+def allowed(value,keys,code):
+    require(isinstance(value,dict) and set(value)<=set(keys),code)
+
+
+def read_document(raw):
+    require(isinstance(raw,bytes) and 1<=len(raw)<=MAX_BYTES,"openapi_byte_budget")
+    try:
+        doc=json.loads(raw.decode("utf-8"),object_pairs_hook=_pairs,parse_constant=_constant)
+    except (ValueError,UnicodeError,RecursionError):
+        raise ImplementationError("invalid_openapi_json") from None
+    object_value(doc)
+    require(isinstance(doc.get("openapi"),str) and re.fullmatch(r"3\.[01]\.[0-9]+",doc["openapi"]),"unsupported_openapi_version")
+    require("jsonSchemaDialect" not in doc,"custom_schema_dialect_unsupported")
+    paths=object_value(doc.get("paths"))
+    require(1<=len(paths)<=MAX_PATHS,"openapi_path_budget")
+    # Ignore top-level documentation but never follow references or URLs.
+    return doc
+
+
+def load_document(path):
+    with Path(path).open("rb") as stream:
+        return read_document(stream.read(MAX_BYTES+1))
+
+
+def resolve(doc,value,category):
+    seen=set()
+    for _ in range(8):
+        value=object_value(value)
+        if "$ref" not in value:return value
+        require(set(value)=={"$ref"},"reference_siblings_unsupported")
+        ref=value["$ref"]
+        prefix="#/components/"+category+"/"
+        require(isinstance(ref,str) and ref.startswith(prefix),"external_or_noncomponent_reference_unsupported")
+        name=ref[len(prefix):]
+        require(re.fullmatch(r"[A-Za-z0-9_.-]{1,128}",name) and ref not in seen,"invalid_or_cyclic_reference")
+        seen.add(ref)
+        category_map=object_value(object_value(doc.get("components",{})).get(category,{}))
+        require(name in category_map,"missing_local_component")
+        value=category_map[name]
+    raise ImplementationError("reference_depth_exceeded")
+
+
+def scalar(doc,value):
+    s=resolve(doc,value,"schemas")
+    allowed(s,{"type",*ANNOTATIONS},"scalar_constraints_not_representable")
+    kind=s.get("type")
+    require(isinstance(kind,str) and kind in KINDS,"non_scalar_schema_unsupported")
+    return kind
+
+
+def fixed_origin(value):
+    try:
+        normalized=endpoint(value)
+        parts=urlsplit(normalized)
+        require(value==normalized and parts.path=="" and parts.netloc==parts.netloc.lower()
+                and (parts.scheme=="https" or parts.hostname in ("127.0.0.1","::1")),
+                "fixed_https_or_numeric_loopback_origin_required")
+        require(not any(c in value for c in "{}\\") and value.isascii(),"invalid_fixed_origin")
+        return value
+    except (ValueError,ImplementationError):
+        raise ImplementationError("fixed_https_or_numeric_loopback_origin_required") from None
+
+
+def server_origin(doc,item,op,chosen):
+    fixed_origin(chosen)
+    servers=op.get("servers",item.get("servers",doc.get("servers")))
+    require(isinstance(servers,list) and 1<=len(servers)<=20,"explicit_servers_required")
+    candidates=[]
+    for s in servers:
+        s=object_value(s)
+        if "variables" in s:continue
+        try:candidates.append(fixed_origin(s.get("url")))
+        except ImplementationError:continue
+    require(chosen in candidates,"chosen_origin_not_in_effective_fixed_servers")
+
+
+def bearer(doc,op):
+    req=op.get("security",doc.get("security"))
+    require(isinstance(req,list) and len(req)==1 and isinstance(req[0],dict) and len(req[0])==1,
+            "exact_bearer_security_required")
+    name,scopes=next(iter(req[0].items()))
+    require(scopes==[],"scoped_or_alternative_security_unsupported")
+    schemes=object_value(object_value(doc.get("components",{})).get("securitySchemes",{}))
+    require(name in schemes,"unknown_security_scheme")
+    scheme=resolve(doc,schemes[name],"securitySchemes")
+    require(scheme.get("type")=="http" and scheme.get("scheme")=="bearer","non_bearer_security_unsupported")
+    allowed(scheme,{"type","scheme","bearerFormat","description"},"unsupported_bearer_scheme")
+
+
+def path_names(path):
+    require(isinstance(path,str) and 2<=len(path)<=400 and path.startswith("/"),"invalid_fixed_path")
+    names=[]
+    for segment in path[1:].split("/"):
+        match=PLACEHOLDER.fullmatch(segment)
+        if match:names.append(match.group(1))
+        else:require(SEGMENT.fullmatch(segment) and segment not in (".",".."),"unsupported_path_segment")
+    require(len(names)==len(set(names)),"repeated_path_placeholder")
+    return names
+
+
+def parameters(doc,rows):
+    require(isinstance(rows,list) and len(rows)<=MAX_FIELDS,"parameter_budget")
+    result={}
+    for raw in rows:
+        p=resolve(doc,raw,"parameters")
+        allowed(p,{"name","in","required","schema","description","deprecated","style","explode","allowReserved",
+                   "allowEmptyValue","example","examples"},"parameter_semantics_unsupported")
+        name,loc=p.get("name"),p.get("in")
+        require(isinstance(name,str) and isinstance(loc,str) and loc in ("path","query","header"),
+                "unsupported_parameter_location")
+        if loc=="header":
+            name=name.lower()
+            require(name in ("if-match","idempotency-key"),"unsupported_header")
+        else:require(NAME.fullmatch(name),"unsupported_parameter_name")
+        require(p.get("required") is True,"optional_parameter_unsupported")
+        style="form" if loc=="query" else "simple"
+        require(p.get("style",style)==style and p.get("explode",loc=="query") is (loc=="query")
+                and p.get("allowReserved",False) is False and p.get("allowEmptyValue",False) is False,
+                "parameter_serialization_unsupported")
+        key=(loc,name)
+        require(key not in result,"duplicate_parameter")
+        result[key]=scalar(doc,p.get("schema"))
+    return result
+
+
+def success_response(doc,op):
+    responses=object_value(op.get("responses"))
+    success=[k for k in responses if k.startswith("2")]
+    require(bool(success) and set(success)<={"200","201"},"unsupported_success_status")
+    for status in success:
+        response=resolve(doc,responses[status],"responses")
+        content=object_value(response.get("content"))
+        require(set(content)=={"application/json"},"unsupported_success_media")
+        media=object_value(content["application/json"])
+        schema=resolve(doc,media.get("schema"),"schemas")
+        # No response field mapping or constraints are inferred; the executor
+        # only accepts a JSON object and independently reviewed result pointer.
+        require(schema.get("type")=="object" and not set(schema)&{"oneOf","anyOf","allOf","not","$dynamicRef"},
+                "success_object_required")
+
+
+def body_fields(doc,op):
+    if "requestBody" not in op:return {}
+    raw=resolve(doc,op["requestBody"],"requestBodies")
+    allowed(raw,{"content","required","description"},"request_body_semantics_unsupported")
+    require(raw.get("required") is True,"optional_body_unsupported")
+    content=object_value(raw.get("content"))
+    require(set(content)=={"application/json"},"unsupported_request_media")
+    media=object_value(content["application/json"])
+    allowed(media,{"schema","example","examples"},"request_encoding_unsupported")
+    s=resolve(doc,media.get("schema"),"schemas")
+    allowed(s,{"type","properties","required","additionalProperties",*ANNOTATIONS},"body_constraints_not_representable")
+    props=object_value(s.get("properties"))
+    required=s.get("required")
+    require(s.get("type")=="object" and s.get("additionalProperties") is False
+            and isinstance(required,list) and all(isinstance(k,str) for k in required)
+            and len(required)==len(set(required)) and set(required)==set(props)
+            and len(props)<=MAX_FIELDS,"closed_required_scalar_body_required")
+    require(all(NAME.fullmatch(k) for k in props),"unsupported_body_field_name")
+    return {k:scalar(doc,v) for k,v in props.items()}
+
+
+def compile_operation(doc,chosen,path,method):
+    names=path_names(path)
+    require(method in METHODS,"unsupported_http_method")
+    item=object_value(doc["paths"].get(path))
+    require("$ref" not in item,"path_item_reference_unsupported")
+    op=object_value(item.get(method))
+    allowed(op,{"tags","summary","description","externalDocs","operationId","parameters","requestBody",
+                "responses","deprecated","security","servers"},"operation_semantics_unsupported")
+    require(op.get("deprecated",False) is False,"deprecated_operation")
+    name=op.get("operationId")
+    require(isinstance(name,str) and NAME.fullmatch(name),"safe_operation_id_required")
+    server_origin(doc,item,op,chosen);bearer(doc,op)
+    # OAS operation-level parameters replace same (name,in) path-level
+    # parameters. Refuse ambiguous duplicates within either declaration.
+    path_params=parameters(doc,item.get("parameters",[]))
+    op_params=parameters(doc,op.get("parameters",[]))
+    params={**path_params,**op_params}
+    fields={};query={};body={}
+    def add(arg,kind):
+        require(NAME.fullmatch(arg) and arg not in fields,"argument_name_collision_or_length")
+        fields[arg]=kind
+    require(set(names)=={n for loc,n in params if loc=="path"},"path_parameter_mismatch")
+    for n in names:
+        kind=params["path",n];require(kind in ("string","integer"),"path_scalar_unsupported");add(n,kind)
+    for (loc,n),kind in sorted(params.items()):
+        if loc=="query":
+            # httpx uses lower-case true/false for booleans. Explicit
+            # customer review remains required for provider interpretation.
+            arg="query_"+n;add(arg,kind);query[arg]=n
+    headers={n:k for (loc,n),k in params.items() if loc=="header"}
+    version=key=None
+    if method=="get":
+        require(not headers and "requestBody" not in op,"get_body_or_write_header_unsupported")
+    else:
+        require(headers=={"if-match":"string","idempotency-key":"string"},"required_write_headers_missing")
+        version="owg_expected_version";key="owg_idempotency_key"
+        add(version,"string");add(key,"string")
+        for n,kind in sorted(body_fields(doc,op).items()):
+            arg="body_"+n;add(arg,kind);body[arg]=n
+    require(len(fields)<=MAX_FIELDS,"argument_budget")
+    success_response(doc,op)
+    return {"name":name,"method":method.upper(),"path":path,"fields":fields,"query":query,"body":body,
+            "expected_version_argument":version,"idempotency_argument":key,"reviewed_provider_contract":False}
+
+
+def inventory(doc,chosen):
+    fixed_origin(chosen)
+    rows=[]
+    ids={}
+    for path,item in sorted(doc["paths"].items()):
+        if not isinstance(item,dict):continue
+        for method in HTTP_METHODS:
+            if method not in item:continue
+            op=item[method];name=op.get("operationId") if isinstance(op,dict) else None
+            if isinstance(name,str) and NAME.fullmatch(name):ids[name]=ids.get(name,0)+1
+            # Unsafe identifiers are not copied into a diagnostic export.
+            try:path_names(path)
+            except ImplementationError:continue
+            row={"path":path,"method":method,"operation_id":name if isinstance(name,str) and NAME.fullmatch(name) else None}
+            try:
+                operation=compile_operation(doc,chosen,path,method)
+                row.update(status="candidate",reason=None,operation=operation)
+            except ImplementationError as exc:
+                row.update(status="unsupported",reason=str(exc),operation=None)
+            rows.append(row)
+    require(len(rows)<=MAX_PATHS*len(HTTP_METHODS),"operation_inventory_budget")
+    for row in rows:
+        if row["operation_id"] is not None and ids[row["operation_id"]]>1:
+            row.update(status="unsupported",reason="duplicate_operation_id",operation=None)
+    return {"format":"openworkgraph.openapi-inventory.v1","openapi_sha256":digest(doc),
+            "origin":chosen,"operations":rows,"candidate_count":sum(r["status"]=="candidate" for r in rows),
+            "business_tool_calls":False,"provider_contract_verified":False,"execution_authorized":False}
+
+
+def propose(spec,doc,chosen,selection):
+    require(isinstance(selection,list) and 1<=len(selection)<=MAX_OPERATIONS,"selection_budget")
+    report=inventory(doc,chosen)
+    lookup={(r["path"],r["method"]):r for r in report["operations"]}
+    seen=set();operations=[]
+    for row in selection:
+        require(isinstance(row,dict) and set(row)=={"path","method"} and
+                isinstance(row["path"],str) and isinstance(row["method"],str),"exact_path_method_selection_required")
+        k=(row["path"],row["method"])
+        require(k not in seen and k in lookup and lookup[k]["status"]=="candidate","unsupported_duplicate_or_unknown_selection")
+        seen.add(k);operations.append(lookup[k]["operation"])
+    ops={"format":FORMAT,"process_reference":reference(spec),"spec_sha256":digest(spec),
+         "origin":chosen,"reviewed":False,"allow_writes":False,"operations":sorted(operations,key=lambda r:r["name"])}
+    out={"format":PROPOSAL,"openapi_sha256":report["openapi_sha256"],
+         "selection":[{"path":p,"method":m} for p,m in sorted(seen)],"operations":ops,
+         "write_candidates":sum(r["method"]!="GET" for r in operations),
+         "provider_contract_verified":False,"execution_authorized":False}
+    return {**out,"proposal_sha256":digest(out)}
+
+
+def approve(spec,doc,proposal,expected,reviewed_names,*,confirm_contracts,confirm_writes):
+    require(confirm_contracts is True,"explicit_provider_contract_review_required")
+    require(isinstance(proposal,dict) and isinstance(proposal.get("operations"),dict),"invalid_proposal")
+    candidate=propose(spec,doc,proposal["operations"].get("origin"),proposal.get("selection"))
+    require(digest(candidate)==digest(proposal) and candidate["proposal_sha256"]==expected,"openapi_proposal_changed")
+    result=deepcopy(candidate["operations"]);names=[r["name"] for r in result["operations"]]
+    require(isinstance(reviewed_names,list) and all(isinstance(n,str) for n in reviewed_names)
+            and len(reviewed_names)==len(names) and set(reviewed_names)==set(names),"explicit_exact_operation_review_required")
+    require(type(confirm_writes) is bool and confirm_writes==bool(candidate["write_candidates"]),
+            "separate_write_contract_approval_required")
+    result.update(reviewed=True,allow_writes=confirm_writes)
+    for row in result["operations"]:row["reviewed_provider_contract"]=True
+    # Final compatibility check against the actual direct adapter; no IO.
+    from execute_http import Operations
+    Operations(spec,result,digest(result))
+    return result
+
+
+def write_new(path,value):
+    data=json.dumps(value,ensure_ascii=True,indent=2,allow_nan=False).encode()
+    require(len(data)<=MAX_BYTES,"output_byte_budget")
+    fd=os.open(path,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
+    with os.fdopen(fd,"wb") as stream:
+        stream.write(data);stream.flush();os.fsync(stream.fileno())
+
+
+def main(argv=None):
+    p=argparse.ArgumentParser(description=__doc__)
+    sub=p.add_subparsers(dest="command",required=True)
+    i=sub.add_parser("inspect");pr=sub.add_parser("propose");ap=sub.add_parser("approve")
+    for cmd in (i,pr,ap):
+        cmd.add_argument("--openapi",required=True);cmd.add_argument("--out",required=True)
+    for cmd in (i,pr):cmd.add_argument("--origin",required=True)
+    for cmd in (pr,ap):cmd.add_argument("--spec",default=str(Path(__file__).parent/"workflow.spec.json"))
+    pr.add_argument("--selection",required=True)
+    ap.add_argument("--proposal",required=True);ap.add_argument("--proposal-sha256",required=True)
+    ap.add_argument("--review-operation",action="append",required=True)
+    ap.add_argument("--confirm-provider-contracts",action="store_true",required=True)
+    ap.add_argument("--confirm-write-contracts",action="store_true")
+    args=p.parse_args(argv)
+    try:
+        doc=load_document(args.openapi)
+        if args.command=="inspect":result=inventory(doc,args.origin)
+        elif args.command=="propose":
+            spec=load_object(args.spec,MAX_BYTES);selection=load_object(args.selection)
+            require(set(selection)=={"operations"},"invalid_selection")
+            result=propose(spec,doc,args.origin,selection["operations"])
+        else:
+            spec=load_object(args.spec,MAX_BYTES)
+            result=approve(spec,doc,load_object(args.proposal,MAX_BYTES),args.proposal_sha256,args.review_operation,
+                           confirm_contracts=args.confirm_provider_contracts,confirm_writes=args.confirm_write_contracts)
+        write_new(args.out,result)
+        print(digest(result) if args.command=="approve" else result.get("proposal_sha256",result["openapi_sha256"]))
+    except (ImplementationError,OSError,ValueError,TypeError,KeyError,RecursionError,OverflowError,ImportError):
+        p.exit(2,"OpenAPI onboarding refused: invalid input, unsupported contract, changed pin or missing explicit review.\n")
+    return 0
+
+
+if __name__=="__main__":
+    raise SystemExit(main())
