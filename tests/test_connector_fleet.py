@@ -221,3 +221,43 @@ def test_publication_grant_state_fences_bulk_plan(deployed):
     assert not updated["worklist"][0]["publication"]["upload_pin_current"]
     assert "publication_upload_pin_changed" in updated["worklist"][0]["review_flags"]
     assert len(pubs.inventory("customer")["publications"])==1
+
+
+def test_owner_only_fleet_http_and_strict_requests(tmp_path,monkeypatch):
+    from fastapi.testclient import TestClient
+    from gateway import admin_accounts
+    from gateway.settings import GatewaySettings
+    from gateway.hardening import HardeningSettings
+    from gateway.enterprise_app import create_enterprise_app
+    from test_gateway_connector_jobs import spec
+    monkeypatch.setenv("OWG_GATEWAY_ADMIN_TOKEN_API","enabled")
+    app=create_enterprise_app(settings=GatewaySettings(database_url="sqlite:///"+str(tmp_path/"fleet.db"),
+        admin_token="test-admin",enrollment_token="test-enroll"),hardening=HardeningSettings())
+    with TestClient(app) as c:
+        h={"Authorization":"Bearer test-admin"}
+        base="/v1/admin/connector-jobs"
+        url=base+"/acme/fleet"
+        assert c.get(url).status_code==401
+        made=c.post(base,json=spec().model_dump(),headers=h).json()
+        worker={"Authorization":"Bearer "+made["worker_token"]}
+        assert c.get(url,headers=worker).status_code==401
+        result=c.get(url,headers=h)
+        assert result.status_code==200,result.text
+        assert result.headers["cache-control"]=="no-store"
+        selection=select(made["job"]).model_dump()
+        response=c.post(url+"/preview",json=selection,headers=h)
+        assert response.status_code==200,response.text
+        plan=response.json()
+        body={**selection,"expected_plan_sha256":plan["plan_sha256"],"confirm_exact_dispatch_changes":True}
+        for role in ("viewer","admin"):
+            who=admin_accounts.AdminIdentity("fixture-"+role,role+"@example.test",role,role,"test")
+            monkeypatch.setattr(admin_accounts,"validate_session",lambda db,token:who)
+            other={"Authorization":"Bearer "+admin_accounts.SESSION_PREFIX+"test"}
+            assert c.get(url,headers=other).status_code==403
+            assert c.post(url+"/preview",json=selection,headers=other).status_code==403
+            assert c.post(url+"/apply",json=body,headers=other).status_code==403
+        assert c.post(url+"/preview",content=b'{"action":"pause","action":"resume"}',
+                      headers={**h,"Content-Type":"application/json"}).status_code==422
+        r=c.post(url+"/apply",json=body,headers=h)
+        assert r.status_code==200,r.text
+        assert r.json()["changed_count"]==1
