@@ -13,6 +13,7 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictFloat, StrictInt, ValidationError
 
 from . import automation_pipeline as pipeline
+from .automation_budget_sensitivity import Sensitivity
 
 MAX_CANDIDATES = 18
 MAX_ALTERNATIVES = 5
@@ -40,6 +41,8 @@ class Scenario(BaseModel):
     budget_limit: MONEY
     max_selected: int = Field(ge=1, le=MAX_CANDIDATES)
     candidates: list[Candidate] = Field(min_length=1, max_length=MAX_CANDIDATES)
+    include_sensitivity: StrictBool = False
+    priority_targets: list[Annotated[StrictInt, Field(ge=0, le=1800)]] = Field(default_factory=list, max_length=12)
 
 
 def _digest(value):
@@ -75,6 +78,10 @@ def _parse(value):
     ids = [c.idea_id for c in result.candidates]
     if len(set(ids)) != len(ids):
         raise pipeline.PipelineError("select distinct opportunity IDs")
+    if len(set(result.priority_targets)) != len(result.priority_targets):
+        raise pipeline.PipelineError("select distinct priority targets")
+    if result.priority_targets and not result.include_sensitivity:
+        raise pipeline.PipelineError("enable sensitivity to review priority targets")
     return result
 
 
@@ -161,6 +168,7 @@ def _solve(value):
     cap = _money(spec.budget_limit)
     n = len(ids)
     priorities = [c.priority for c in choices]
+    sensitivity = Sensitivity(ids) if spec.include_sensitivity else None
 
     def packet(mask, total, points):
         return {"selected_idea_ids":[ids[j] for j in range(n) if mask & (1 << j)],
@@ -202,6 +210,8 @@ def _solve(value):
         # then fewer ideas; then lexicographic stable IDs. No modeled ROI.
         key = (-points,total,count,tuple(ids[k] for k in range(n) if mask & (1<<k)))
         row = (key,mask,total,points)
+        if sensitivity is not None:
+            sensitivity.observe(row)
         if len(best) < MAX_ALTERNATIVES or key < best[-1][0]:
             best.append(row)
             best.sort(key=lambda item:item[0])
@@ -215,8 +225,8 @@ def _solve(value):
         if required & (1<<j):
             required_closure |= closure[j]
     required_cost = sum((costs[j] for j in range(n) if required_closure & (1<<j)),Decimal(0))
-    return {"format":"openworkgraph.portfolio-budget-scenario.v1",
-            "snapshot_sha256":snapshot["snapshot_sha256"],"scenario_sha256":_digest(spec.model_dump()),
+    result = {"format":"openworkgraph.portfolio-budget-scenario.v1",
+            "snapshot_sha256":snapshot["snapshot_sha256"],"scenario_sha256":_digest(spec.model_dump(exclude={"include_sensitivity", "priority_targets"}) if not spec.include_sensitivity else spec.model_dump()),
             "currency":spec.currency,"budget_basis":spec.budget_basis,"budget_limit":_decimal(cap),
             "max_selected":spec.max_selected,"candidates":[{**by_id[c.idea_id], "priority":c.priority,
                     "required":c.required,"blockers":blocked.get(j,[]),
@@ -234,3 +244,6 @@ def _solve(value):
             "objective":"maximize_reviewed_priority_points_then_minimize_cost_then_count_then_ids",
             "priority_points_are_user_entered_not_measured_benefits":True,
             "no_currency_conversion":True,**CLAIMS}
+    if sensitivity is not None:
+        result["sensitivity"] = sensitivity.report(cap, sorted(spec.priority_targets))
+    return result
