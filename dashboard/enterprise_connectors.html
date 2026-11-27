@@ -93,6 +93,25 @@ p{overflow-wrap:anywhere;max-width:94ch}.profile{border:1px solid var(--border);
 <p><label><input id="slackOrg" type="checkbox"> I separately authorize organization-wide Enterprise audit reads if selected.</label></p>
 <p><label><input id="slackTransient" type="checkbox"> I separately authorize transient retrieval of message payloads for the selected channel; message content will not be retained.</label></p>
 <button id="slackCreateButton" type="submit">Save Slack profile</button></form></details>
+<details><summary>Create native Salesforce CRM history feed</summary>
+<p>Use an approved Salesforce API and identity-scoped OAuth sign-in with a read-only integration user. Select tracked field names and optional exact CRM record IDs. This connector requests field-change metadata, not old/new values or record contents. An empty record list requires separate unrestricted-record approval.</p>
+<form id="sfCreate"><div class="grid">
+<label>Profile name<input id="sfName" required maxlength="100"></label>
+<label>Salesforce OAuth connection<select id="sfConnection" required></select></label>
+<label>Exact API instance host<input id="sfHost" required maxlength="253" placeholder="customer.my.salesforce.com"></label>
+<label>Salesforce organization ID<input id="sfOrg" required maxlength="18"></label>
+<label>Integration user ID<input id="sfUser" required maxlength="18"></label>
+<label>First history window (whole-second ISO UTC)<input id="sfSince" required placeholder="2026-11-01T00:00:00Z"></label>
+<label>Window (hours)<input id="sfWindow" type="number" min="1" max="168" value="24" required></label>
+<label>Overlap (minutes)<input id="sfOverlap" type="number" min="0" max="1440" value="60" required></label>
+<label>Reporting lag (minutes)<input id="sfLag" type="number" min="0" max="1440" value="15" required></label>
+<label>Requested page size<input id="sfPage" type="number" min="200" max="2000" value="200" required></label></div>
+<div id="sfSelections"></div>
+<p><label><input id="sfConfirm" type="checkbox" required> I reviewed this exact OAuth connection, instance, organization, integration user, objects and record scopes.</label></p>
+<p><label><input id="sfLabels" type="checkbox" required> I approve retention of selected field-change labels, pseudonymous identities and timestamps.</label></p>
+<p><label><input id="sfIdentity" type="checkbox" required> I approve transient identity metadata readback to verify the integration user and organization.</label></p>
+<p><label><input id="sfAll" type="checkbox"> I separately authorize reads across all visible records for any selected object without a record-ID restriction.</label></p>
+<button id="sfCreateButton" type="submit" disabled>Save Salesforce profile</button></form></details>
 <p id="restStatus" role="status"></p><div id="profiles"></div></section>
 <section><h2>Other configured adapters</h2><p>Use the main dashboard's Privacy → Business system sign-in and Evidence panels for the existing provider-specific consent and configuration workflows. CLI-only adapters remain outside this local inventory.</p><a href="/">Open the main dashboard</a></section>
 </main></body></html>
