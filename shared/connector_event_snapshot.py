@@ -54,7 +54,7 @@ class Manifest(Strict):
     profile_id: str=Field(pattern=PROFILE)
     profile_revision: StrictInt=Field(ge=1,le=1_000_000)
     profile_sha256: str=Field(pattern=DIGEST)
-    provider: Literal["rest","google","sql","slack"]
+    provider: Literal["rest","google","sql","slack","salesforce"]
     since: str=Field(max_length=40)
     until: str=Field(max_length=40)
     checkpoint: str=Field(max_length=40)
