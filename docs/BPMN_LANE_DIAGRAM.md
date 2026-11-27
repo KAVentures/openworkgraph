@@ -92,3 +92,21 @@ Regression tests verify exact shape/flow coverage, boundary attachment,
 orthogonality, avoidance of activity interiors, semantic XML preservation,
 repeatable coordinates, branching joins, cyclic exits, and the maximum
 supported graph size. No executable semantics or permissions are introduced.
+
+## Dense branching and joining routes
+
+Column gaps now allocate a distinct vertical track per edge/gap occurrence.
+Only congested gaps expand; the minimum column separation is preserved.
+Adjacent forward edges use one track and other non-self edges use two,
+including a reserved gap before the first column when necessary. Tracks are
+integer coordinates and have six-unit separation. The existing distinct
+upper horizontal tracks remain for long and backward flows. Rectangular
+task side ports spread in the order of the opposite endpoint's position,
+with bounded integer spacing. Extremely high degree can share a task port;
+gateways and events retain center-side ports to avoid implying attachment
+to nonrectangular shape corners. Self-loop task return ports spread along
+the top side. No artificial node, semantic flow, responsibility, ordering
+or execution grant is introduced. Crossings and shared horizontal segments
+remain possible, and label positioning is not optimized. Regression tests
+cover 20-way fan-out/fan-in, dense cross-lane routing, backward and same-column
+tracks, port capacity, existing obstacle avoidance, and deterministic XML.

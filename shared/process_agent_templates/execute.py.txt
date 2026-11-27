@@ -174,6 +174,10 @@ def prepare(spec, plan_document, case, bindings):
             or not isinstance(spec.get('content_sha256'), str) or not re.fullmatch(r'[a-f0-9]{64}', spec['content_sha256'])):
         raise ImplementationError('An exported versioned agent-runtime project is required')
     origin = spec.get('organization_catalog_reference')
+    if 'dependency_build_basis_sha256' in spec and (not origin
+        or not isinstance(spec['dependency_build_basis_sha256'],str)
+        or re.fullmatch(r'[a-f0-9]{64}',spec['dependency_build_basis_sha256']) is None):
+        raise ImplementationError('A dependency-aware runtime requires an exact organization and basis pin')
     if origin is not None and (not isinstance(origin, dict) or set(origin) != {'organization_id'}
             or not isinstance(origin['organization_id'], str) or not 1 <= len(origin['organization_id']) <= 200
             or any(ord(c) < 32 for c in origin['organization_id'])):
@@ -373,11 +377,29 @@ async def _source_state_receipt(base,token,request):
 
 
 async def _catalog_state(base, token, spec):
+    if 'dependency_build_basis_sha256' in spec:
+        return await _read_json(base + '/v1/human/processes/' + quote(spec['workflow_id'], safe='') + '/dependencies/build-status',
+            token, {'revision':spec['revision'],'basis_sha256':spec['dependency_build_basis_sha256']})
     return await _read_json(base + '/v1/human/processes/' + quote(spec['workflow_id'], safe='') + '/implementation-status',
         token, {'revision': spec['revision']})
 
 
 def catalog_is_current(state, spec):
+    if 'dependency_build_basis_sha256' in spec:
+        pin=spec['dependency_build_basis_sha256']
+        return (isinstance(pin,str) and re.fullmatch(r'[a-f0-9]{64}',pin) is not None
+            and isinstance(state,dict)
+            and state.get('format')=='openworkgraph.dependency-build-basis-status.v1'
+            and state.get('organization_id')==spec.get('organization_catalog_reference',{}).get('organization_id')
+            and state.get('workflow_id')==spec['workflow_id']
+            and type(state.get('requested_revision')) is int and state['requested_revision']==spec['revision']
+            and state.get('requested_basis_sha256')==pin
+            and digest(state.get('process_reference'))==digest(reference(spec))
+            and state.get('process_model_sha256')==spec.get('process_model_sha256')
+            and state.get('status')=='current'
+            and state.get('current_exact_reviewed_basis') is True
+            and state.get('read_only') is True and state.get('execution_authorized') is False
+            and state.get('business_outcomes_verified') is False)
     return (isinstance(state, dict)
         and state.get('format') == 'openworkgraph.process-implementation-state.v1'
         and state.get('organization_id') == spec['organization_catalog_reference']['organization_id']
@@ -502,8 +524,14 @@ async def execute_approved(spec, plan_document, case, bindings, intent, *, journ
         def record(phase, **details):
             journal.write(json.dumps({'phase': phase, 'at': datetime.now(timezone.utc).isoformat(), **details}) + '\n')
             journal.flush(); os.fsync(journal.fileno())
-        record('started', execution_id=execution_id, process_reference=reference(spec), spec_sha256=digest(spec))
-        async def check_catalog():
+        dependency_route={}
+        if 'dependency_build_basis_sha256' in spec:
+            dependency_route={'dependency_route_activity_ids':list(prepared['plan']['activity_ids']),
+                'dependency_precondition_attempts':[i for i,action in enumerate(prepared['actions'],1) if action['precondition']]}
+        record('started', execution_id=execution_id, process_reference=reference(spec), spec_sha256=digest(spec), **dependency_route)
+        dependency_check_number=0
+        async def check_catalog(purpose='refresh',attempt=None):
+            nonlocal dependency_check_number
             if not spec.get('organization_catalog_reference'):
                 return
             ensure_current(intent, now, stop_marker)
@@ -513,7 +541,13 @@ async def execute_approved(spec, plan_document, case, bindings, intent, *, journ
             except Exception:
                 current = False
             result['catalog_current_at_last_check'] = bool(current)
-            record('catalog_checked', current_independent_design_review=bool(current))
+            fields={}
+            if 'dependency_build_basis_sha256' in spec:
+                dependency_check_number+=1
+                fields={'dependency_build_basis_sha256':spec['dependency_build_basis_sha256'],
+                        'dependency_check_number':dependency_check_number,
+                        'dependency_check_purpose':purpose,'dependency_check_attempt':attempt}
+            record('catalog_checked', current_independent_design_review=bool(current),**fields)
             if not current:
                 raise ImplementationError('Shared process changed, lost review, was archived or is unavailable')
             ensure_current(intent, now, stop_marker)
@@ -557,7 +591,7 @@ async def execute_approved(spec, plan_document, case, bindings, intent, *, journ
             if not passed:raise ImplementationError('Fresh source rule invariant was false or unknown')
             await check_decisions()
         try:
-            await check_catalog()
+            await check_catalog('initial')
             await check_source_rules()
         except ImplementationError:
             result.update(stopped_before_tools=True, all_tool_results_matched=False, all_declared_operations_verified=False)
@@ -610,6 +644,8 @@ async def execute_approved(spec, plan_document, case, bindings, intent, *, journ
                         if action['precondition']:
                             await check_decisions()
                             condition = action['precondition']
+                            if 'dependency_build_basis_sha256' in spec:
+                                await check_catalog('precondition',index+1)
                             record('precondition_pending', activity_id=action['activity_id'], attempt=index+1)
                             try:
                                 ensure_current(intent, now, stop_marker)
@@ -624,6 +660,8 @@ async def execute_approved(spec, plan_document, case, bindings, intent, *, journ
                         await check_catalog()
                         await check_source_rules()
                         ensure_current(intent, now, stop_marker)
+                        if 'dependency_build_basis_sha256' in spec:
+                            await check_catalog('action',index+1)
                         record('attempt_pending', activity_id=action['activity_id'], attempt=index+1,
                                arguments_sha256=digest(action['arguments']))
                         status = 'uncertain'
@@ -669,6 +707,12 @@ async def execute_approved(spec, plan_document, case, bindings, intent, *, journ
             summary = source_summary(receipt, request, now=now)
             summary['source_request_attempted'] = attempted
             result['source_checks'].append(summary); record('source_checked', **summary)
+        if 'dependency_build_basis_sha256' in spec:
+            try:
+                await check_catalog('completion')
+            except ImplementationError:
+                result['implementation_contract_or_intent_not_established']=True
+                record('implementation_contract_or_intent_not_established')
         result['all_tool_results_matched'] = (len(result['actions']) == len(prepared['actions'])
             and all(row['status'] == 'tool_returned_expected_structure' for row in result['actions']))
         result['all_declared_operations_verified'] = bool(prepared['outcomes']) and all(row['operation_verified'] for row in result['source_checks'])

@@ -100,6 +100,37 @@
         filter.onchange=drawWorklist;
         section.append(label('Filter reassessment worklist',filter),count,list);drawWorklist();output.append(section);
       }
+      const basis=graph.focused_build_basis;
+      if(basis){
+        const section=el('section');section.id='dependencyFocusedBuildBasis';
+        section.append(el('h4','Selected process prerequisite basis'),
+          el('p',basis.all_declared_prerequisites_current?
+            'All declared prerequisites and this process have a current reviewed design and declaration.':
+            basis.review_needed_count+' of '+basis.process_count+' processes in this prerequisite closure need reassessment.'),
+          el('p','Unrelated consumers do not affect this focused basis. It is not execution approval.'),
+          el('p','Exact basis SHA-256: '+basis.basis_sha256));
+        const list=el('ul');
+        for(const row of basis.processes){
+          const node=data.nodes.find(n=>n.workflow_id===row.workflow_id);
+          const item=el('li',(node?.available?node.title:row.workflow_id)+' · '+row.status.replaceAll('_',' ')+
+            ' · model r'+(row.current_model.revision??'unknown')+' · dependency r'+(row.declaration?.revision??'unassessed'));
+          if(row.direct_findings.length)item.append(el('p',row.direct_findings.map(v=>v.replaceAll('_',' ')).join('; ')));
+          list.append(item);
+        }
+        section.append(list);
+        const root=basis.processes.find(row=>row.workflow_id===basis.root_workflow_id);
+        const build=button('Download dependency-aware starter ZIP','dependencyBuildExport',()=>work(async ok=>{
+          const revision=root.current_model.revision;
+          const result=await call('/v1/human/processes/'+encodeURIComponent(basis.root_workflow_id)+'/dependencies/build?'+
+            new URLSearchParams({revision:String(revision),basis_sha256:basis.basis_sha256}),undefined,{archive:true});
+          if(!ok())return;
+          const url=URL.createObjectURL(new Blob([result.bytes],{type:'application/zip'}));
+          const link=el('a');link.href=url;link.download='owg-dependency-starter-r'+revision+'.zip';link.click();URL.revokeObjectURL(url);
+          notice.textContent='Downloaded starter and pinned prerequisite snapshot. This is not execution approval.';
+        }));
+        build.disabled=!basis.all_declared_prerequisites_current||!root?.current_model.revision;
+        section.append(build);output.append(section);
+      }
       if(graph.impact){
         const groups=[
           ['Prerequisites',graph.impact.prerequisites,'prerequisites',' → '],

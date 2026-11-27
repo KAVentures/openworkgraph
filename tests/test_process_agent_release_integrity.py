@@ -57,7 +57,7 @@ def test_export_includes_offline_manifest_verifier_and_exact_workflow_identity(t
     assert result["manifest_sha256"] == digest
     assert result["workflow_reference"] == {
         "workflow_id": "synthetic_release", "revision": 3, "content_sha256": "b" * 64}
-    assert result["verified_generated_file_count"] == 34
+    assert result["verified_generated_file_count"] == 36
     assert result["independently_signed"] is False
     assert result["remote_deployment_verified"] is False
     assert result["remote_execution_or_outcome_verified"] is False
@@ -359,3 +359,139 @@ def test_randomized_structural_delta_against_set_oracle():
             k for k in set(a)&set(b) if json.dumps(av[k],sort_keys=True)!=json.dumps(bv[k],sort_keys=True)}
         assert delta["retained_identity_order_changed"] == (
             [k for k in a if k in b]!=[k for k in b if k in a])
+
+
+def _archive(root,path,extra=(),omit=()):
+    with ZipFile(path,"w") as z:
+        for p in sorted(root.rglob("*")):
+            if p.is_file():
+                name=p.relative_to(root).as_posix()
+                if name not in omit:z.writestr(name,p.read_bytes())
+        for name,data in extra:z.writestr(name,data)
+    return path
+
+
+def test_verify_archive_before_extraction_and_cli(tmp_path):
+    from shared.process_agent_release import verify_archive
+    root=tmp_path/"generated"
+    data=_extract(root)
+    path=tmp_path/"release.zip";path.write_bytes(data)
+    pin=_pin(root)
+    result=verify_archive(path,pin)
+    assert result["generated_file_integrity_ok"] and result["archive_inventory_closed"]
+    assert result["archive_sha256"]==hashlib.sha256(data).hexdigest()
+    assert not result["archive_extracted"] and not result["execution_authorized"]
+    before=set(tmp_path.iterdir())
+    p=subprocess.run([sys.executable,"-S",str(root/"verify_release.py"),"--archive",str(path),
+                      "--manifest-sha256",pin],capture_output=True,text=True,timeout=20)
+    assert p.returncode==0,p.stderr
+    assert json.loads(p.stdout)==result
+    assert set(tmp_path.iterdir())==before
+    for bad in (None,"bad","f"*64):
+        with pytest.raises(ReleaseIntegrityError):verify_archive(path,bad)
+
+
+def test_archive_upgrade_compares_exact_content_not_zip_container(tmp_path):
+    from shared.process_agent_release import compare_archives
+    a,b=tmp_path/"a",tmp_path/"b"
+    _extract(a);_extract(b)
+    old=_archive(a,tmp_path/"a.zip")
+    new=_archive(b,tmp_path/"b.zip")
+    result=compare_archives(old,new,_pin(a),_pin(b))
+    assert not result["generated_files_changed"] and not result["requires_review_before_upgrade"]
+    (b/"agent.py").write_bytes((b/"agent.py").read_bytes()+b"\n# candidate")
+    pin=_reinventory(b)
+    _archive(b,new)
+    result=compare_archives(old,new,_pin(a),pin)
+    assert result["archive_bytes_changed"] and result["requires_review_before_upgrade"]
+    assert result["generated_file_changes"]["changed"][0]["path"]=="agent.py"
+    assert result["both_archive_inventories_closed"] and not result["archives_extracted"]
+    p=subprocess.run([sys.executable,"-S",str(a/"verify_release.py"),"--archive",str(old),
+        "--manifest-sha256",_pin(a),"--compare-archive",str(new),"--compare-manifest-sha256",pin],
+        capture_output=True,text=True,timeout=20)
+    assert p.returncode==0,p.stderr
+    assert json.loads(p.stdout)==result
+
+
+@pytest.mark.parametrize("extra",["../outside","/absolute","C:/bad","bad\\path","AGENT.PY",
+    "CON.txt","bad.","agent.py/child","untracked.py","folder/"])
+def test_archive_refuses_unsafe_or_untracked_members(tmp_path,extra):
+    from shared.process_agent_release import verify_archive
+    root=tmp_path/"generated";_extract(root)
+    path=_archive(root,tmp_path/"bad.zip",[(extra,b"x")])
+    with pytest.raises(ReleaseIntegrityError):verify_archive(path,_pin(root))
+
+
+def test_archive_refuses_duplicate_symlink_missing_and_corrupt_members(tmp_path):
+    from shared.process_agent_release import verify_archive
+    from zipfile import ZipInfo
+    import stat
+    root=tmp_path/"generated";_extract(root);pin=_pin(root)
+    with pytest.warns(UserWarning,match="Duplicate name"):
+        duplicate=_archive(root,tmp_path/"duplicate.zip",[("agent.py",b"duplicate")])
+    link=ZipInfo("agent.py");link.create_system=3;link.external_attr=(stat.S_IFLNK|0o777)<<16
+    symlink=_archive(root,tmp_path/"symlink.zip",[(link,b"/private")],omit=("agent.py",))
+    missing=_archive(root,tmp_path/"missing.zip",omit=("agent.py",))
+    corrupt=_archive(root,tmp_path/"corrupt.zip",[("agent.py",b"changed")],omit=("agent.py",))
+    for p in (duplicate,symlink,missing,corrupt):
+        with pytest.raises(ReleaseIntegrityError):verify_archive(p,pin)
+    broken=tmp_path/"broken.zip";broken.write_bytes(b"not a zip")
+    with pytest.raises(ReleaseIntegrityError):verify_archive(broken,pin)
+
+
+def test_archive_bounds_before_payload_and_no_extraction(tmp_path,monkeypatch):
+    from shared import process_agent_release as release
+    root=tmp_path/"generated";_extract(root);pin=_pin(root)
+    path=_archive(root,tmp_path/"valid.zip")
+    monkeypatch.setattr(ZipFile,"extract",lambda *a,**k:pytest.fail("unexpected extraction"))
+    monkeypatch.setattr(ZipFile,"extractall",lambda *a,**k:pytest.fail("unexpected extraction"))
+    assert release.verify_archive(path,pin)["archive_inventory_closed"]
+    monkeypatch.setattr(release,"MAX_TOTAL_EXPANDED_BYTES",1)
+    with pytest.raises(ReleaseIntegrityError,match="total expanded"):
+        release.verify_archive(path,pin)
+    monkeypatch.setattr(release,"MAX_ARCHIVE_BYTES",1)
+    with pytest.raises(ReleaseIntegrityError,match="archive byte"):
+        release.verify_archive(path,pin)
+
+
+@pytest.mark.parametrize("names",[
+    ["nested/one.py","NESTED/two.py"],["nested/Sub/a.py","nested/sub/b.py"],
+    ["folder","folder/child"],["folder/child","folder"],["a.py","A.py"],["a.py","a.py"],
+])
+def test_archive_cross_platform_path_inventory_refuses_aliases(names):
+    from shared.process_agent_release import _check_path_aliases
+    with pytest.raises(ReleaseIntegrityError):_check_path_aliases(names)
+    with pytest.raises(ReleaseIntegrityError):_check_path_aliases(list(reversed(names)))
+
+
+def test_archive_consistent_directory_spellings():
+    from shared.process_agent_release import _check_path_aliases
+    _check_path_aliases(["nested/Sub/a.py","nested/Sub/b.py","nested/other.py","other/Sub/a.py"])
+
+
+def test_archive_normalizes_corrupt_deflate_error(tmp_path,monkeypatch):
+    from shared.process_agent_release import verify_archive
+    import zlib
+    root=tmp_path/"generated";_extract(root)
+    path=_archive(root,tmp_path/"release.zip")
+    def corrupt(*args,**kwargs):raise zlib.error("private malformed compressed data")
+    monkeypatch.setattr(ZipFile,"open",corrupt)
+    with pytest.raises(ReleaseIntegrityError,match="could not be checked") as e:
+        verify_archive(path,_pin(root))
+    assert "private malformed" not in str(e.value)
+
+
+def test_archive_rejects_invalid_reference_even_when_manifest_is_consistent(tmp_path):
+    from shared.process_agent_release import verify_archive, MANIFEST_NAME
+    root=tmp_path/"generated";_extract(root)
+    spec_path=root/"workflow.spec.json"
+    spec=json.loads(spec_path.read_text());spec["revision"]=True
+    spec_path.write_text(json.dumps(spec))
+    manifest_path=root/MANIFEST_NAME
+    manifest=json.loads(manifest_path.read_text())
+    manifest["workflow_reference"]["revision"]=True
+    digest=hashlib.sha256(spec_path.read_bytes()).hexdigest()
+    manifest["files"]["workflow.spec.json"]=manifest["workflow_spec_sha256"]=digest
+    manifest_path.write_text(json.dumps(manifest))
+    with pytest.raises(ReleaseIntegrityError,match="Invalid versioned release identity"):
+        verify_archive(_archive(root,tmp_path/"bad.zip"),_pin(root))

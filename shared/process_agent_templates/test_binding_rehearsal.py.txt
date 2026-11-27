@@ -1,0 +1,189 @@
+"""Synthetic route rehearsal fixtures with no business tools or provider calls."""
+import json
+import asyncio
+from unittest.mock import patch
+import unittest
+from importlib.util import find_spec
+
+# The dependency-free (-S) smoke run cannot load configure's Pydantic models.
+# Installed runtime acceptance must still run this suite with its dependencies.
+if find_spec('pydantic') is None:
+    raise unittest.SkipTest('Install requirements.txt for binding rehearsal tests')
+from copy import deepcopy
+from datetime import datetime,timezone
+
+from execute import ImplementationError,digest,reference
+from review_bindings import rehearse, capture_schemas, SCHEMA_FORMAT
+from test_execution import fixture
+
+
+def inputs():
+    spec,plan,case,bindings,_=fixture()
+    suite={"format":"openworkgraph.reviewed-shadow-cases.v1",
+        "process_reference":reference(spec),"spec_sha256":digest(spec),
+        "reviewed_by_customer":True,"case_inputs_authorized":True,
+        "cases":[{"id":"case_1","category":"normal","input":case,
+            "expected":{"status":"proposal","accepted_routes":[plan["activity_ids"]],
+                        "review_confirmed":True}}]}
+    def tool(name,fields):
+        return {"name":name,"description":"untrusted description",
+                "input_schema_sha256":digest(fields),
+                "input_fields":[{"name":n,"type":k,"required":True} for n,k in fields.items()],
+                "schema_constraints_omitted":True,"annotations_are_authorization":False}
+    tools=[tool("resolve_case",{"issue":"string","expected_version":"integer","request_id":"string"}),
+           tool("read_case",{"issue":"string"})]
+    catalog={"format":"openworkgraph.customer-tool-catalog.v1","process_reference":reference(spec),
+        "spec_sha256":digest(spec),"tool_server_url":bindings["tool_server_url"],
+        "inspected_at":datetime.now(timezone.utc).isoformat(),"tools":tools}
+    pins={t["name"]:t["input_schema_sha256"] for t in tools}
+    for row in bindings["bindings"]:
+        row["tool_schema_sha256"]=pins[row["tool_name"]]
+        if row.get("precondition"):
+            row["precondition"]["tool_schema_sha256"]=pins[row["precondition"]["tool_name"]]
+    return spec,suite,bindings,catalog
+
+
+class RehearsalCases(unittest.TestCase):
+    def test_reviewed_mapping_matches_metadata_without_disclosing_values(self):
+        spec,suite,bindings,catalog=inputs()
+        result=rehearse(spec,suite,bindings,catalog)
+        self.assertEqual(result["counts"]["offline_checks_match_routes"],1)
+        self.assertEqual(result["activity_ids_without_reviewed_route"],[])
+        self.assertEqual(result["cases"][0]["routes"][0]["deferred_live_checks"]["terminal_source_check_count"],1)
+        self.assertFalse(result["execution_authorized"])
+        self.assertFalse(result["full_json_schema_validated"])
+        self.assertNotIn("SYNTHETIC_PRIVATE_RECORD",json.dumps(result))
+        self.assertNotIn("synthetic-idempotency-key",json.dumps(result))
+
+    def test_missing_schema_pin_and_required_field(self):
+        spec,suite,bindings,catalog=inputs()
+        bindings["bindings"][0].pop("tool_schema_sha256")
+        bindings["bindings"][0]["argument_map"].pop("issue")
+        result=rehearse(spec,suite,bindings,catalog)
+        self.assertEqual(result["counts"]["blocked_routes"],1)
+        issues=result["cases"][0]["routes"][0]["requirements"]
+        self.assertIn("schema_pin_missing",issues)
+        self.assertIn("required_argument_missing",issues)
+
+    def test_type_mismatch_and_missing_tool(self):
+        spec,suite,bindings,catalog=inputs()
+        catalog["tools"][0]["input_fields"][0]["type"]="boolean"
+        catalog["tools"].pop()
+        result=rehearse(spec,suite,bindings,catalog)
+        issues=result["cases"][0]["routes"][0]["requirements"]
+        self.assertIn("argument_type_mismatch",issues)
+        self.assertIn("tool_not_in_inspected_catalog",issues)
+
+    def test_disabled_binding_and_clarification_not_passed(self):
+        spec,suite,bindings,catalog=inputs()
+        bindings["enabled"]=False
+        suite["cases"].append({"id":"case_2","category":"missing_facts","input":{},
+            "expected":{"status":"needs_clarification","accepted_routes":[],"review_confirmed":True}})
+        result=rehearse(spec,suite,bindings,catalog)
+        self.assertEqual(result["counts"]["blocked_routes"],1)
+        self.assertEqual(result["counts"]["clarification_only_cases"],1)
+        self.assertIn("customer_bindings_disabled",result["requirement_route_counts"])
+
+    def test_catalog_endpoint_and_staleness_refused(self):
+        spec,suite,bindings,catalog=inputs()
+        with self.assertRaises(ImplementationError):
+            rehearse(spec,suite,bindings,{**catalog,"tool_server_url":"https://other.example/mcp"})
+        with self.assertRaises(ImplementationError):
+            rehearse(spec,suite,bindings,{**catalog,"inspected_at":"2000-01-01T00:00:00Z"})
+
+    def test_preparation_error_is_minimized(self):
+        spec,suite,bindings,catalog=inputs()
+        del suite["cases"][0]["input"]["issue"]
+        result=rehearse(spec,suite,bindings,catalog)
+        self.assertEqual(result["cases"][0]["routes"][0]["requirements"],["offline_prepare_rejected"])
+
+
+def schema_inputs():
+    spec,suite,bindings,catalog=inputs()
+    schema_by_name={
+        "resolve_case":{"type":"object","properties":{
+            "issue":{"type":"string","minLength":1},
+            "expected_version":{"type":"integer","minimum":1},
+            "request_id":{"type":"string","minLength":1},
+            "context":{"type":"object","properties":{"region":{"enum":["EU","US"]}},
+                       "required":["region"],"additionalProperties":False}},
+            "required":["issue","expected_version","request_id","context"],"additionalProperties":False},
+        "read_case":{"type":"object","properties":{"issue":{"type":"string"}},"required":["issue"]}}
+    suite["cases"][0]["input"]["context"]={"region":"EU"}
+    bindings["bindings"][0]["argument_map"]["context"]="/context"
+    catalog["tools"][0]["input_fields"].append({"name":"context","type":"object","required":True})
+    def pin():
+        pins={name:digest(schema) for name,schema in schema_by_name.items()}
+        for row in catalog["tools"]:
+            row["input_schema_sha256"]=pins[row["name"]]
+        for row in bindings["bindings"]:
+            row["tool_schema_sha256"]=pins[row["tool_name"]]
+            if row.get("precondition"):
+                row["precondition"]["tool_schema_sha256"]=pins[row["precondition"]["tool_name"]]
+        return {"format":SCHEMA_FORMAT,"spec_sha256":digest(spec),"catalog_sha256":digest(catalog),
+                "schemas":[{"name":n,"schema":s} for n,s in schema_by_name.items()]}
+    return spec,suite,bindings,catalog,schema_by_name,pin
+
+
+class NestedSchemaCases(unittest.TestCase):
+    def test_nested_required_enum_and_number_bounds(self):
+        spec,suite,bindings,catalog,schemas,pin=schema_inputs()
+        bundle=pin()
+        report=rehearse(spec,suite,bindings,catalog,bundle)
+        self.assertEqual(report["counts"]["offline_checks_match_routes"],1)
+        self.assertEqual(report["schema_bundle_sha256"],digest(bundle))
+        for change in ({"context":{"region":"SECRET_REGION"}},{"context":{}},{"version":0}):
+            candidate=deepcopy(suite)
+            candidate["cases"][0]["input"].update(change)
+            self.assertEqual(rehearse(spec,candidate,bindings,catalog)["counts"]["offline_checks_match_routes"],1)
+            result=rehearse(spec,candidate,bindings,catalog,bundle)
+            self.assertIn("nested_schema_validation_failed",result["requirement_route_counts"])
+            self.assertNotIn("SECRET_REGION",json.dumps(result))
+
+    def test_schema_tampering_and_unsupported_keywords(self):
+        spec,suite,bindings,catalog,schemas,pin=schema_inputs()
+        bundle=pin()
+        tampered=deepcopy(bundle);tampered["schemas"][0]["schema"]["minimum"]=1
+        with self.assertRaises(ImplementationError):
+            rehearse(spec,suite,bindings,catalog,tampered)
+        schemas["resolve_case"]["properties"]["issue"]={"$ref":"https://example.invalid/schema"}
+        bundle=pin()
+        report=rehearse(spec,suite,bindings,catalog,bundle)
+        self.assertIn("unsupported_schema_keywords",report["requirement_route_counts"])
+        schemas["resolve_case"]["properties"]["issue"]={"type":"string","pattern":"^x+$"}
+        report=rehearse(spec,suite,bindings,catalog,pin())
+        self.assertIn("unsupported_schema_keywords",report["requirement_route_counts"])
+
+    def test_bundle_missing_precondition_schema_blocks(self):
+        spec,suite,bindings,catalog,schemas,pin=schema_inputs()
+        bundle=pin();bundle["schemas"].pop()
+        report=rehearse(spec,suite,bindings,catalog,bundle)
+        self.assertIn("schema_not_in_bundle",report["requirement_route_counts"])
+
+
+class SchemaCaptureCases(unittest.IsolatedAsyncioTestCase):
+    async def test_metadata_only_exact_schema_capture_and_drift(self):
+        spec,suite,bindings,catalog,schemas,pin=schema_inputs()
+        pin()
+        class Tools:
+            def __init__(self):self.calls=0
+            async def __aenter__(self):return self
+            async def __aexit__(self,*args):return False
+            async def list_tools(self):
+                self.calls+=1
+                return [{"name":name,"inputSchema":schema} for name,schema in schemas.items()]
+            async def call_tool(self,*args):raise AssertionError("no business tool calls")
+        tools=Tools()
+        with patch.dict("os.environ",{"OWG_EXECUTION_MCP_TOKEN":"SYNTHETIC_METADATA_CREDENTIAL"}):
+            bundle=await capture_schemas(spec,catalog,client_factory=lambda *args:tools)
+            self.assertEqual(tools.calls,1)
+            self.assertEqual(bundle["catalog_sha256"],digest(catalog))
+            self.assertFalse(bundle["business_tools_called"])
+            self.assertEqual(rehearse(spec,suite,bindings,catalog,bundle)["counts"]["offline_checks_match_routes"],1)
+            schemas["resolve_case"]["properties"]["issue"]["minLength"]=3
+            with self.assertRaises(ImplementationError):
+                await capture_schemas(spec,catalog,client_factory=lambda *args:tools)
+            schemas["resolve_case"]["description"]="SYNTHETIC_METADATA_CREDENTIAL"
+            pin()
+            with self.assertRaises(ImplementationError):
+                await capture_schemas(spec,catalog,client_factory=lambda *args:tools)

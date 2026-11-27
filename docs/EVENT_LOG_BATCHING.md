@@ -54,3 +54,16 @@ Send a returned `batch_id` with those settings to `POST /v1/event-logs/{log_id}/
 to get its cases in literal case-key order. Both endpoints take an optional `limit` of 1–100
 (default 50). Pass the returned `next_after` as `after` to continue. Each page reflects the
 current log.
+
+## Downloads
+
+**Download JSON** saves the summary shown. **Download CSV** has one row per activity, including
+activities with no batches. Each row gives:
+
+- events, batched share, batches and simultaneous batches;
+- median, 90th percentile and largest batch size;
+- the median wait before batched and unbatched events, in seconds;
+- the simulation proposal's batch size and maximum wait in minutes.
+
+Changing the gap, the smallest batch or the resource grouping disables the download until
+batches are found again.
