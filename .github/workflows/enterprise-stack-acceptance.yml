@@ -31,7 +31,7 @@ jobs:
   integrated-contract:
     # Validate the consolidated candidate even while it remains a draft.
     # Ordinary feature drafts continue to use the existing cheap smoke path.
-    if: github.event_name == 'workflow_dispatch' || startsWith(github.head_ref, 'integration/enterprise-connectors-') || github.head_ref == 'feat/enterprise-databricks-approved-views' || github.head_ref == 'feat/enterprise-snowflake-approved-views' || github.head_ref == 'feat/enterprise-netsuite-suiteql-events' || github.head_ref == 'feat/enterprise-workday-raas-events' || github.head_ref == 'feat/enterprise-oracle-fusion-procurement' || github.head_ref == 'feat/enterprise-new-provider-crosswalk-batch' || github.head_ref == 'feat/enterprise-bigquery-approved-views' || github.head_ref == 'feat/enterprise-reviewed-ingestion-tuning' || github.head_ref == 'feat/enterprise-ingestion-run-ledger' || github.head_ref == 'feat/enterprise-source-onboarding-readiness' || github.head_ref == 'feat/enterprise-retained-integrity-review' || github.head_ref == 'feat/enterprise-zendesk-ticket-audits' || github.head_ref == 'feat/enterprise-committed-window-coverage' || github.head_ref == 'feat/enterprise-reviewed-case-exclusions' || github.head_ref == 'integration/enterprise-historical-recovery-current' || github.head_ref == 'integration/enterprise-monitoring-recovery-current'
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.head_ref, 'integration/enterprise-connectors-') || github.head_ref == 'feat/enterprise-databricks-approved-views' || github.head_ref == 'feat/enterprise-snowflake-approved-views' || github.head_ref == 'feat/enterprise-netsuite-suiteql-events' || github.head_ref == 'feat/enterprise-workday-raas-events' || github.head_ref == 'feat/enterprise-oracle-fusion-procurement' || github.head_ref == 'feat/enterprise-new-provider-crosswalk-batch' || github.head_ref == 'feat/enterprise-bigquery-approved-views' || github.head_ref == 'feat/enterprise-reviewed-ingestion-tuning' || github.head_ref == 'feat/enterprise-ingestion-run-ledger' || github.head_ref == 'feat/enterprise-source-onboarding-readiness' || github.head_ref == 'feat/enterprise-retained-integrity-review' || github.head_ref == 'feat/enterprise-zendesk-ticket-audits' || github.head_ref == 'feat/enterprise-committed-window-coverage' || github.head_ref == 'feat/enterprise-reviewed-case-exclusions' || github.head_ref == 'integration/enterprise-historical-recovery-current' || github.head_ref == 'integration/enterprise-monitoring-recovery-current' || github.head_ref == 'integration/enterprise-fleet-current'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     services:
@@ -64,6 +64,7 @@ jobs:
           node --check dashboard/enterprise_connectors.js
           node --check tests/browser/enterprise_connectors.cjs
           node --check tests/browser/connector_crosswalks.cjs
+          node --check tests/browser/connector_fleet.cjs
           python - <<'PY'
           from pathlib import Path
           import re, subprocess, tempfile
@@ -102,6 +103,7 @@ jobs:
             tests/test_enterprise_ingestion_coverage.py \
             tests/test_enterprise_case_exclusions.py \
             tests/test_enterprise_connector_history.py \
+            tests/test_connector_fleet.py \
             tests/test_enterprise_ingestion_service_levels.py \
             tests/test_gateway_connector_jobs.py \
             tests/test_enterprise_connector_worker.py \
@@ -123,6 +125,9 @@ jobs:
       - name: Crosswalk and saved review acceptance
         if: success() || failure()
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/connector_crosswalks.cjs
+      - name: Fleet owner console acceptance
+        if: success() || failure()
+        run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/connector_fleet.cjs
       - name: Verify repository database isolation
         if: success() || failure()
         run: |
