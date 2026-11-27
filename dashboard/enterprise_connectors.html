@@ -70,6 +70,29 @@ p{overflow-wrap:anywhere;max-width:94ch}.profile{border:1px solid var(--border);
 <p><label><input id="sqlConfirm" type="checkbox" required> I reviewed the exact approved source, mapped columns and time-window settings.</label></p>
 <p><label><input id="sqlRetention" type="checkbox" required> I approve retention of the selected activity labels, pseudonymous identifiers and timestamps locally.</label></p>
 <button id="sqlCreateButton" type="submit" disabled>Save SQL feed configuration</button></form></details>
+<details><summary>Create native Slack feed</summary>
+<p>Choose either Enterprise Audit Logs (organization-owner user token with auditlogs:read) or one explicitly approved, non-shared channel (member token with the appropriate channel read/history permissions). The deployment provides a dedicated token environment variable. Message content may be returned transiently by Slack's history API; only activity metadata is retained. Direct messages, externally shared channels and thread-reply traversal are excluded.</p>
+<form id="slackCreate"><div class="grid">
+<label>Profile name<input id="slackName" maxlength="100" required></label>
+<label>Native Slack source<select id="slackMode"><option value="enterprise_audit">Enterprise audit events</option><option value="channel_activity">Selected channel activity</option></select></label>
+<label>Token environment variable<input id="slackEnv" required maxlength="70" placeholder="OWG_SLACK_TOKEN_AUDIT"></label>
+<label>Exact enterprise ID<input id="slackEnterprise" maxlength="64" placeholder="E123ABC"></label>
+<label>Exact workspace ID (channel only)<input id="slackTeam" maxlength="64" placeholder="T123ABC"></label>
+<label>Exact channel ID (channel only)<input id="slackChannel" maxlength="64" placeholder="C123ABC"></label>
+<label>Case grouping<select id="slackCase"><option value="actor">Audit actor</option><option value="entity">Audit entity</option><option value="location">Audit location</option></select></label>
+<label>Audit action filters (optional, comma separated)<input id="slackActions" maxlength="3000" placeholder="user_login,file_uploaded"></label>
+<label>Audit actor ID (optional)<input id="slackActor" maxlength="64" placeholder="U123ABC"></label>
+<label>First event window start (ISO 8601 UTC)<input id="slackSince" required placeholder="2026-11-01T00:00:00Z"></label>
+<label>Advancing window (hours)<input id="slackWindow" type="number" min="1" max="168" value="24" required></label>
+<label>Late-arrival overlap (minutes)<input id="slackOverlap" type="number" min="0" max="1440" value="60" required></label>
+<label>Reporting lag (minutes)<input id="slackLag" type="number" min="0" max="1440" value="15" required></label>
+<label>Maximum page records<input id="slackPage" type="number" min="1" max="500" value="100" required></label>
+</div>
+<p><label><input id="slackConfirm" type="checkbox" required> I reviewed the exact credential reference, organization/workspace and selected scope.</label></p>
+<p><label><input id="slackRetention" type="checkbox" required> I authorize local retention of pseudonymous activity identities, event labels and timestamps.</label></p>
+<p><label><input id="slackOrg" type="checkbox"> I separately authorize organization-wide Enterprise audit reads if selected.</label></p>
+<p><label><input id="slackTransient" type="checkbox"> I separately authorize transient retrieval of message payloads for the selected channel; message content will not be retained.</label></p>
+<button id="slackCreateButton" type="submit">Save Slack profile</button></form></details>
 <p id="restStatus" role="status"></p><div id="profiles"></div></section>
 <section><h2>Other configured adapters</h2><p>Use the main dashboard's Privacy → Business system sign-in and Evidence panels for the existing provider-specific consent and configuration workflows. CLI-only adapters remain outside this local inventory.</p><a href="/">Open the main dashboard</a></section>
 </main></body></html>
