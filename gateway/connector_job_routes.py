@@ -94,6 +94,15 @@ def install_connector_jobs(app,db,settings):
         spec=await parse(request,Rotate)
         return await reply(jobs.rotate,organization_id,job_id,spec.expected_revision,spec.confirmed,principal)
 
+    @router.post("/v1/admin/connector-jobs/{organization_id}/{job_id}/rebind")
+    async def rebind(organization_id:str,job_id:str,request:Request,authorization:str|None=Header(default=None)):
+        from .connector_jobs import Rebind
+        principal=admin(authorization,True)
+        identity=admin_accounts.current_admin()
+        if identity is None or not identity.is_owner():
+            raise HTTPException(403,"Gateway owner approval required for profile rebinding")
+        return await reply(jobs.rebind,organization_id,job_id,await parse(request,Rebind),principal)
+
     @router.post("/v1/connector-worker/claim")
     async def claim(request:Request,authorization:str|None=Header(default=None)):
         return await reply(jobs.claim,bearer(authorization),await parse(request,Claim))
