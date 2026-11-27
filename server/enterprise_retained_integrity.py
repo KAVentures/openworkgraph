@@ -196,6 +196,9 @@ def apply(value, *, action="hold", _transaction_hook=None):
                     p = rest._get(c, item["profile_id"])
                     if action == "hold":
                         history.invalidate(c, p, "retained_integrity_hold")
+                        if p.get("historical_active"):
+                            from .enterprise_connector_history import finalize
+                            finalize(p,outcome="uncertain",code="historical_run_invalidated_by_integrity_hold")
                         p["integrity_hold"] = {"at": rest._iso(rest._now()), "plan_sha256": spec.plan_sha256,
                                                "violation_codes": sorted(item["violations"])}
                     else:

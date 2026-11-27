@@ -247,6 +247,8 @@ def _public(p,now):
         out["credential_binding_available"]=False
     from .enterprise_connector_rotation import metadata
     out["credential_management"]=metadata(p)
+    from .enterprise_connector_history import public_status
+    out.update(public_status(p,now))
     out.update(provider_live_health="unknown", source_completeness_verified=False,
                credentials_exposed=False, execution_authorized=False)
     return out
@@ -324,6 +326,9 @@ def change(profile_id,revision,enabled):
             c.execute("BEGIN")
             try:
                 history.invalidate(c,p,"profile_revision_changed")
+                if p.get("historical_active"):
+                    from .enterprise_connector_history import finalize
+                    finalize(p,outcome="uncertain",code="historical_run_invalidated_by_profile_change")
                 p.update(revision=revision+1,enabled=enabled,run_id=None,lease_until=0,
                          status="ready" if enabled else ("dataset_deleted" if p["status"]=="dataset_deleted" else "disabled"))
                 _put(c,p)
@@ -373,6 +378,8 @@ def forget_dataset(conn,log_id):
             coverage.erase(conn,p["profile_id"])
             p.pop("integrity_hold",None)
             p.pop("excluded_case_keys",None)
+            p.pop("historical_active",None)
+            p.pop("historical_receipts",None)
             p.update(enabled=False,status="dataset_deleted",revision=p["revision"]+1,run_id=None,lease_until=0,
                      log_id=None,checkpoint=None,last_result=None,last_success_at=None,
                      source_schema_sha256=None)
@@ -407,6 +414,8 @@ def _begin(profile_id,revision,now):
                 raise FeedError("retained_integrity_hold_requires_reviewed_release")
             if p["revision"]!=revision or not p["enabled"]:
                 raise FeedError("profile_changed_or_disabled")
+            if p.get("historical_active"):
+                raise FeedError("historical_run_requires_completion_or_reconciliation")
             if p["run_id"] and p["lease_until"]>time.time():
                 raise FeedError("rest_run_in_progress")
             if p["retry_not_before"]>time.time():
@@ -575,10 +584,16 @@ def _retain(p,rows,counts,until):
         else:
             added=duplicates=0
         saved=dict(p)
-        saved.update(log_id=log_id,checkpoint=_iso(until),last_success_at=_iso(_now()),status="read_retained",
-                     run_id=None,lease_until=0,retry_not_before=0,
-                     last_result={**counts,"outcome":"succeeded","distinct_events_in_window":len(rows),
-                                  "events_added":added,"duplicates_skipped":duplicates})
+        if p.get("historical_active"):
+            from .enterprise_connector_history import finalize
+            saved["log_id"]=log_id
+            finalize(saved,outcome="succeeded",added=added,duplicates=duplicates,
+                     observed=len(rows)+excluded,excluded=excluded)
+        else:
+            saved.update(log_id=log_id,checkpoint=_iso(until),last_success_at=_iso(_now()),status="read_retained",
+                         run_id=None,lease_until=0,retry_not_before=0,
+                         last_result={**counts,"outcome":"succeeded","distinct_events_in_window":len(rows),
+                                      "events_added":added,"duplicates_skipped":duplicates})
         if p.get("provider")=="sql":
             saved["source_schema_sha256"]=counts["source_schema_sha256"]
         if p.get("provider")=="slack":
@@ -588,9 +603,12 @@ def _retain(p,rows,counts,until):
         _put(conn,saved)
         from . import enterprise_ingestion_run_history as history
         from . import enterprise_ingestion_coverage as coverage
-        coverage.commit(conn,p,until)
-        history.finish(conn,p["profile_id"],p["run_id"],"succeeded",
-                       checkpoint=saved["checkpoint"],counts=saved["last_result"])
+        if p.get("historical_active"):
+            coverage.commit_historical(conn,p,until)
+        else:
+            coverage.commit(conn,p,until)
+            history.finish(conn,p["profile_id"],p["run_id"],"succeeded",
+                           checkpoint=saved["checkpoint"],counts=saved["last_result"])
     with workspace._LOCK:
         _check(p)
         if rows:
@@ -640,21 +658,39 @@ def _fail(p,error):
             # quality-report error. Never rewrite that committed success.
             if live["run_id"]!=p["run_id"] or live["revision"]!=p["revision"]:
                 return
-            live.update(status="failed",run_id=None,lease_until=0,
-                        retry_not_before=max(live["retry_not_before"],time.time()+error.retry_after) if error.retry_after else live["retry_not_before"],
-                        last_result={"outcome":"failed","error":error.code})
+            historical=bool(live.get("historical_active"))
+            if historical:
+                from .enterprise_connector_history import finalize
+                finalize(live,outcome="failed",code=error.code)
+                if error.retry_after:
+                    live["retry_not_before"]=max(live["retry_not_before"],time.time()+error.retry_after)
+            else:
+                live.update(status="failed",run_id=None,lease_until=0,
+                            retry_not_before=max(live["retry_not_before"],time.time()+error.retry_after) if error.retry_after else live["retry_not_before"],
+                            last_result={"outcome":"failed","error":error.code})
             from . import enterprise_ingestion_run_history as history
             c.execute("BEGIN")
             try:
                 _put(c,live)
-                history.finish(c,p["profile_id"],p["run_id"],"failed",error=error.code,
-                               retry_not_before=live["retry_not_before"])
+                if not historical:
+                    history.finish(c,p["profile_id"],p["run_id"],"failed",error=error.code,
+                                   retry_not_before=live["retry_not_before"])
                 c.execute("COMMIT")
             except Exception:
                 c.execute("ROLLBACK")
                 raise
         finally:
             c.close()
+
+
+def _extract_window(p,since,until,client_factory):
+    provider=p.get("provider","rest")
+    adapter=_adapter(provider)
+    if adapter is None:
+        return _extract(p,since,until,client_factory)
+    if provider=="sql":
+        return adapter.extract(p,since,until)
+    return adapter.extract(p,since,until,client_factory)
 
 
 def run(profile_id,revision,*,confirm_reads,confirm_retention,client_factory=httpx.Client,now=None):
@@ -664,14 +700,7 @@ def run(profile_id,revision,*,confirm_reads,confirm_retention,client_factory=htt
         raise FeedError("exact_revision_required",422)
     p,since,until=_begin(profile_id,revision,now or _now())
     try:
-        provider=p.get("provider","rest")
-        adapter=_adapter(provider)
-        if adapter is None:
-            rows,counts=_extract(p,since,until,client_factory)
-        elif provider=="sql":
-            rows,counts=adapter.extract(p,since,until)
-        else:
-            rows,counts=adapter.extract(p,since,until,client_factory)
+        rows,counts=_extract_window(p,since,until,client_factory)
         return _retain(p,rows,counts,until)
     except FeedError as error:
         _fail(p,error)

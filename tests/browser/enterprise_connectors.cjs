@@ -115,6 +115,26 @@ const path=require('node:path');
     assert.equal(sqlProfile.retained_event_count,1);
     assert.equal(sqlProfile.counts.schema_pin_observed,true);
     assert.ok(!JSON.stringify(sqlReport).includes(sourcePath));
+    // Historical reconciliation uses the same real local SQL view.
+    const extra=spawnSync(process.env.OWG_BROWSER_PYTHON||'python',['-c',
+      'import sqlite3,sys,time; c=sqlite3.connect(sys.argv[1]); t=int(time.time()*1000000)-12*3600*1000000; c.execute("INSERT INTO events VALUES (?,?,?,?,?)",("late-private-event","private-case","Approve",t,t)); c.commit(); c.close()',sourcePath],{encoding:'utf8'});
+    assert.equal(extra.status,0,extra.stderr);
+    await page.locator('#profiles summary').filter({hasText:'Historical window reconciliation'}).click();
+    await page.getByRole('button',{name:'Preview historical window',exact:true}).click();
+    await page.getByText('Plan SHA-256',{exact:true}).waitFor();
+    assert.ok(await page.getByRole('button',{name:'Read and retain historical window'}).isDisabled());
+    await page.getByLabel('Authorize one historical provider read of the exact reviewed window.').check();
+    await page.getByLabel('Retain recovered evidence using existing source identities; checkpoint stays fixed.').check();
+    await page.getByLabel('I stopped/reconciled external workers and paused or removed competing local schedules.').check();
+    await page.getByRole('button',{name:'Read and retain historical window'}).click();
+    await page.locator('#restStatus').filter({hasText:'Historical succeeded: 1 added, 1 duplicates.'}).waitFor();
+    await page.getByRole('heading',{name:'SQL browser fixture'}).waitFor();
+    const [recoveryDownload]=await Promise.all([page.waitForEvent('download'),page.locator('#download').click()]);
+    const recovered=JSON.parse(await fs.readFile(await recoveryDownload.path(),'utf8')).profiles.find(p=>p.provider==='sql');
+    assert.equal(recovered.retained_event_count,2);
+    assert.equal(recovered.checkpoint_at,sqlProfile.checkpoint_at);
+
+
     await page.getByRole('button',{name:'Remove configuration'}).click();
     await page.locator('#profiles').getByText('No configured REST feeds.').waitFor();
     // Slack profile configuration is passive; scoped source reads require

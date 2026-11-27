@@ -358,3 +358,27 @@ async def case_exclusion_apply(request:Request):
     require(request)
     body=await _json_body(request,"Reviewed prospective native case exclusions",strict=True,limit=65536)
     return await call(request,exclusions.apply,body)
+
+
+@router.post("/v1/enterprise-connectors/rest/{profile_id}/historical-preview")
+async def historical_preview(request:Request,profile_id:str):
+    from . import enterprise_connector_history as history
+    require(request)
+    body=await _json_body(request,"Historical connector window",strict=True,limit=2048)
+    return await call(request,history.preview,profile_id,body)
+
+
+@router.post("/v1/enterprise-connectors/rest/{profile_id}/historical-execute")
+async def historical_execute(request:Request,profile_id:str):
+    from . import enterprise_connector_history as history
+    require(request)
+    body=await _json_body(request,"Reviewed historical connector read",strict=True,limit=2048)
+    return await call(request,history.execute,profile_id,body)
+
+
+@router.post("/v1/enterprise-connectors/rest/{profile_id}/historical-reconcile")
+async def historical_reconcile(request:Request,profile_id:str):
+    from . import enterprise_connector_history as history
+    require(request)
+    body=await _json_body(request,"Expired historical connector run",strict=True,limit=1024)
+    return await call(request,history.reconcile,profile_id,body)
