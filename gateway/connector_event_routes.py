@@ -35,11 +35,6 @@ def install(app,jobs,admin):
         principal=owner(authorization,True)
         return await reply(store.approve,organization_id,job_id,await parse(request,Approve),principal)
 
-    @router.post(base+"/{organization_id}/{job_id}/{grant_id}/delete")
-    async def delete(organization_id:str,job_id:str,grant_id:str,request:Request,authorization:str|None=Header(default=None)):
-        principal=owner(authorization,True)
-        return await reply(store.remove,organization_id,job_id,await parse(request,Remove),principal,grant_id)
-
     @router.post(base+"/{organization_id}/export")
     async def export(organization_id:str,request:Request,authorization:str|None=Header(default=None)):
         principal=owner(authorization,True)
@@ -270,5 +265,12 @@ def install(app,jobs,admin):
     def crosswalk_page():
         from .html_pages import render_page
         return render_page("connector_crosswalks.html")
+
+    # Specific saved-review and exception-queue delete routes must be registered
+    # before the generic job/grant deletion pattern.
+    @router.post(base+"/{organization_id}/{job_id}/{grant_id}/delete")
+    async def delete(organization_id:str,job_id:str,grant_id:str,request:Request,authorization:str|None=Header(default=None)):
+        principal=owner(authorization,True)
+        return await reply(store.remove,organization_id,job_id,await parse(request,Remove),principal,grant_id)
 
     app.include_router(router)
