@@ -100,6 +100,18 @@ def install(app,jobs,admin):
         principal=owner(authorization,True)
         return await reply(review,reviewed,organization_id,await parse(request,Review,maximum=MAX_REQUEST+65536),principal)
 
+    @router.post(base+"/{organization_id}/case-conformance-worklist")
+    async def case_conformance_worklist(organization_id:str,request:Request,authorization:str|None=Header(default=None)):
+        from .connector_linked_conformance import Worklist,worklist,worklist_csv
+        import json
+        principal=owner(authorization,True)
+        result=await reply(worklist,reviewed,organization_id,await parse(request,Worklist,maximum=MAX_REQUEST+65536),principal)
+        data=json.loads(result.body)
+        return Response(worklist_csv(data),media_type="text/csv",headers={
+            "Cache-Control":"no-store","X-Content-Type-Options":"nosniff",
+            "X-OWG-Conformance-SHA256":data["conformance_sha256"],
+            "Content-Disposition":'attachment; filename="owg-linked-conformance-exceptions.csv"'})
+
     @router.post(base+"/{organization_id}/case-export")
     async def case_export(organization_id:str,request:Request,authorization:str|None=Header(default=None)):
         principal=owner(authorization,True)
