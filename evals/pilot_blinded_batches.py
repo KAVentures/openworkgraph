@@ -135,7 +135,8 @@ def resolve_adjudication(packet, document, *, forbidden):
                            "expected_adjudication_sha256","resolutions"))
     first_rows,second_rows=document["first_review"],document["second_review"]
     public,basis,agreement=prepare_adjudication(packet,first_rows,second_rows,forbidden=forbidden)
-    if (public!=document["packet"] or basis!=document["basis"] or
+    if (cohort.canonical(public)!=cohort.canonical(document["packet"]) or
+            cohort.canonical(basis)!=cohort.canonical(document["basis"]) or
             basis["adjudication_sha256"]!=cohort.pin(document["expected_adjudication_sha256"])):
         raise ValueError("adjudication differs from frozen independent pin")
     entries={r["review_id"]:r for r in packet["entries"]}
@@ -186,6 +187,8 @@ def _batch(plan,schedule,ledger,states,enrolled,truth,batch,completion_revisions
     if not isinstance(batch,dict):
         raise ValueError("batch object required")
     adjudicated="adjudication" in batch
+    if adjudicated!=(schedule["review_protocol"]=="dual_adjudication"):
+        raise ValueError("review batch differs from prospective review protocol")
     cohort.exact(batch,("packet","key","expected_batch_sha256","adjudication" if adjudicated else "reviews"))
     packet,key=batch["packet"],batch["key"]
     cohort.exact(key,("format","plan_sha256","schedule_sha256","ledger_sha256",
