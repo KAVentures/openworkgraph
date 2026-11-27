@@ -120,6 +120,50 @@ const path=require('node:path');
     assert.deepEqual(errors,[]);
     assert.deepEqual(foreign,[]);
 
+    // The same authorized OCEL log can be independently replayed on all
+    // selected object lifecycle models, with original-event evidence.
+    await page.goto(base+'/synchronized-object-replay');
+    await page.waitForFunction(()=>!document.querySelector('#discover').disabled);
+    await page.locator('#discover').click();
+    await page.locator('#setupStatus').filter({hasText:'Discovered and validated draft.'}).waitFor();
+    const [replay]=await Promise.all([
+      page.waitForResponse(r=>r.url().endsWith('/synchronized-replay')&&r.request().method()==='POST'),
+      page.locator('#run').click()
+    ]);
+    assert.equal(replay.status(),200,await replay.text());
+    const synchronous=await replay.json();
+    assert.equal(synchronous.component_status_counts.complete,1);
+    assert.equal(synchronous.component_status_counts.deviation,1);
+    assert.equal(synchronous.source_population.selected_events,5);
+    assert.equal(synchronous.source_population.distinct_selected_memberships,8);
+    await page.locator('#componentStatus').filter({hasText:'matching components'}).waitFor();
+    await page.locator('#componentFilter').selectOption('deviation');
+    await page.locator('#componentStatus').filter({hasText:'1 matching components'}).waitFor();
+    await page.locator('#components button').click();
+    await page.locator('#detailStatus').filter({hasText:'matching evidence rows'}).waitFor();
+    assert.match(await page.locator('#detail').textContent(),/missing_required_object_type/);
+    await page.locator('#detailFilter').selectOption('deviation');
+    await page.locator('#detailStatus').filter({hasText:'1 matching evidence rows'}).waitFor();
+    await page.locator('#detail button').click();
+    await page.locator('#participantStatus').filter({hasText:'1 retained distinct modeled participants'}).waitFor();
+    assert.match(await page.locator('#participants').textContent(),/order|item/);
+    await page.locator('#view').selectOption('objects');
+    await page.locator('#detailStatus').filter({hasText:'matching evidence rows'}).waitFor();
+    assert.equal(await page.locator('#participantDetail').isHidden(),true);
+    assert.match(await page.locator('#detail').textContent(),/unknown/);
+    await page.addScriptTag({content:await fs.readFile(require.resolve('axe-core/axe.min.js'),'utf8')});
+    const syncAxe=await page.evaluate(async()=>window.axe.run(document.querySelector('main'),{
+      runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21a','wcag21aa']},resultTypes:['violations']
+    }));
+    assert.deepEqual(syncAxe.violations.map(v=>v.id),[]);
+    assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=document.documentElement.clientWidth+2));
+    await page.locator('#clear').click();
+    assert.equal(await page.locator('#results').isHidden(),true);
+    assert.equal(await page.locator('#evidence').isHidden(),true);
+    assert.equal(await page.locator('#download').isDisabled(),true);
+    assert.deepEqual(errors,[]);
+    assert.deepEqual(foreign,[]);
+
     const guest=await browser.newContext();
     const anonymous=await guest.newPage();
     await anonymous.goto(base+'/object-binding-continuity');
