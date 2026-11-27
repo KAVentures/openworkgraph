@@ -23,6 +23,7 @@ MAX_ATTRIBUTES = 20
 MAX_TRANSITIONS = 10
 MAX_TIMELINE = 200
 MAX_ASOF_LINKS = 5_000_000      # event links examined to compare stored values with values at event time
+MAX_STATE_EVIDENCE = 20         # exact values at a conflicting timestamp; complete history remains pageable
 
 _INITIAL = "TIMESTAMP '1970-01-01 00:00:00'"
 
@@ -69,13 +70,14 @@ def browse_objects(log_id: str, object_type: str, search: str = '', after: str |
 
 
 def object_history(log_id: str, object_type: str, object_id: str, offset: int = 0,
-                   limit: int = 50, revision: int | None = None) -> dict[str, Any]:
+                   limit: int = 50, revision: int | None = None, attribute: str | None = None) -> dict[str, Any]:
     """Page one literal object's retained timed values from a single log revision."""
     if (not isinstance(object_type, str) or not 1 <= len(object_type) <= 200 or
             not isinstance(object_id, str) or not 1 <= len(object_id) <= 200 or
             type(offset) is not int or not 0 <= offset <= 2_147_483_647 or
             type(limit) is not int or not 1 <= limit <= 100 or
-            (revision is not None and (type(revision) is not int or revision < 0))):
+            (revision is not None and (type(revision) is not int or revision < 0)) or
+            (attribute is not None and (not isinstance(attribute, str) or not 1 <= len(attribute) <= 200))):
         raise workspace.EventLogWorkspaceError('invalid object attribute history request')
     if offset and revision is None:
         raise workspace.EventLogWorkspaceError('restart object attribute history from the first page')
@@ -90,12 +92,14 @@ def object_history(log_id: str, object_type: str, object_id: str, offset: int = 
                                  [log_id, object_id, object_type]).fetchone()
             if not found:
                 raise workspace.EventLogWorkspaceError('the object was not found in the selected type')
-            total = conn.execute('SELECT count(*) FROM object_attribute_values WHERE log_id=? AND object_id=?',
-                                 [log_id, object_id]).fetchone()[0]
+            where = 'log_id=? AND object_id=?' + (' AND name=?' if attribute is not None else '')
+            params = [log_id, object_id, *([attribute] if attribute is not None else [])]
+            total = conn.execute('SELECT count(*) FROM object_attribute_values WHERE ' + where, params).fetchone()[0]
             rows = conn.execute('''SELECT name, valid_from, value FROM object_attribute_values
-                WHERE log_id=? AND object_id=? ORDER BY valid_from, name, value LIMIT ? OFFSET ?''',
-                                [log_id, object_id, limit, offset]).fetchall()
+                WHERE ''' + where + ' ORDER BY valid_from, name, value LIMIT ? OFFSET ?',
+                                [*params, limit, offset]).fetchall()
             return {'object_type': object_type, 'object_id': object_id, 'log_revision': current,
+                    'attribute': attribute,
                     'total_values': total, 'offset': offset,
                     'next_offset': offset + len(rows) if offset + len(rows) < total else None,
                     'values': [{'name': name, 'valid_from': _iso(at), 'value': value} for name, at, value in rows]}
@@ -207,20 +211,26 @@ def event_detail(log_id: str, object_type: str, object_id: str, event_id: str, r
             history_names = {r[0] for r in conn.execute('''SELECT DISTINCT name FROM object_attribute_values
                 WHERE log_id=? AND object_id=?''', [log_id, object_id]).fetchall()}
             names = set(stored_attributes) | history_names
-            rows = conn.execute('''SELECT name, valid_from, count(DISTINCT value) AS distinct_values, min(value) AS value
+            rows = conn.execute('''SELECT name, valid_from, list(DISTINCT value ORDER BY value) AS values_at_time
                 FROM object_attribute_values WHERE log_id=? AND object_id=? AND valid_from <= ?
                 GROUP BY name, valid_from QUALIFY row_number() OVER (PARTITION BY name ORDER BY valid_from DESC)=1''',
                                 [log_id, object_id, timestamp]).fetchall()
-            at_time = {name: (at, count, value) for name, at, count, value in rows}
+            at_time = {name: (at, values) for name, at, values in rows}
+            future = dict(conn.execute('''SELECT name, min(valid_from) FROM object_attribute_values
+                WHERE log_id=? AND object_id=? AND valid_from > ? GROUP BY name''',
+                                       [log_id, object_id, timestamp]).fetchall())
             states = []
             for name in sorted(names):
                 if name not in at_time:
                     states.append({'name': name, 'status': 'before_first_value' if name in history_names else 'missing_history',
-                                   'valid_from': None, 'value': None})
+                                   'valid_from': None, 'value': None, 'next_recorded_at': _iso(future.get(name)),
+                                   'evidence_values': [], 'evidence_value_count': 0, 'evidence_values_truncated': False})
                 else:
-                    at, count, value = at_time[name]
-                    states.append({'name': name, 'status': 'known' if count == 1 else 'ambiguous',
-                                   'valid_from': _iso(at), 'value': value if count == 1 else None})
+                    at, values = at_time[name]
+                    states.append({'name': name, 'status': 'known' if len(values) == 1 else 'ambiguous',
+                                   'valid_from': _iso(at), 'value': values[0] if len(values) == 1 else None,
+                                   'next_recorded_at': _iso(future.get(name)), 'evidence_values': values[:MAX_STATE_EVIDENCE],
+                                   'evidence_value_count': len(values), 'evidence_values_truncated': len(values) > MAX_STATE_EVIDENCE})
             return {'object_type': object_type, 'object_id': object_id, 'event_id': event_id,
                     'log_revision': current, 'activity': activity, 'timestamp': _iso(timestamp), 'resource': resource,
                     'event_attributes': [{'name': name, 'value': value} for name, value in sorted(event_attributes.items())],

@@ -4933,11 +4933,13 @@
     const attrOut=el('div');attrOut.id='owgEventLogObjectAttributesBox';
     const history=el('div');history.id='owgObjectAttributeHistory';
     const historyId=input('owgObjectAttributeHistoryId','text','Exact object ID');historyId.maxLength=400;
+    const historyAttribute=input('owgObjectAttributeHistoryName','text','All attributes');historyAttribute.maxLength=400;
     const historyOpen=button('Review attribute history','secondary');
     const eventOpen=button('Review recorded events','secondary');
     historyOpen.disabled=eventOpen.disabled=true;
     const historyStatus=el('div',null,'muted');historyStatus.setAttribute('role','status');
     const historyRows=el('div'),historyPrevious=button('Previous attribute values','secondary'),historyNext=button('Next attribute values','secondary');
+    historyRows.id='owgObjectAttributeHistoryRows';
     const historyControls=el('div',null,'row');historyControls.append(historyPrevious,historyNext);
     const browser=document.createElement('details');browser.id='owgObjectBrowser';
     const browserSearch=input('owgObjectBrowserSearch','search');browserSearch.maxLength=400;
@@ -4946,7 +4948,7 @@
     const browserStatus=el('div',null,'muted');browserStatus.setAttribute('role','status');
     const browserRows=el('div'),browserNav=el('div',null,'row');browserNav.append(browserPrevious,browserNext);
     browser.append(el('summary','Find an object'),el('p','Search literal object IDs in the selected type. Matching is case-sensitive; leave the search empty to browse all objects, including those with no events.','muted'),field('Object ID contains',browserSearch),browserRun,browserStatus,browserRows,browserNav);
-    history.append(el('h4','Object history'),el('p','Enter an exact object ID from the selected type. Values are recorded observations; 1970-01-01 denotes an initial value without a known time.','muted'),browser,field('Exact object ID',historyId),historyOpen,eventOpen,historyStatus,historyRows,historyControls);
+    history.append(el('h4','Object history'),el('p','Enter an exact object ID from the selected type. Values are recorded observations; 1970-01-01 denotes an initial value without a known time.','muted'),browser,field('Exact object ID',historyId),field('Exact attribute name (optional)',historyAttribute),historyOpen,eventOpen,historyStatus,historyRows,historyControls);
     const eventPanel=el('div');eventPanel.id='owgObjectEventHistory';
     const eventStatus=el('div',null,'muted');eventStatus.setAttribute('role','status');
     const eventRows=el('div'),eventPrevious=button('Previous recorded events','secondary'),eventNext=button('Next recorded events','secondary');
@@ -4969,20 +4971,24 @@
     let participantTurn=0,participantEvent='',participantRevision=null,participantIndex=0,participantFollowing=null,participantCursors=[null];
     const clearParticipants=()=>{++participantTurn;participantEvent='';participantRevision=null;participantIndex=0;participantFollowing=null;participantCursors=[null];participantRows.replaceChildren();participantStatus.textContent='';participantPrevious.disabled=participantNext.disabled=true;show(participants,false);};
     const clearObjectEvents=()=>{++eventTurn;eventRevision=null;eventOffset=0;eventFollowing=null;eventStatus.textContent='';eventRows.replaceChildren();eventPrevious.disabled=eventNext.disabled=true;clearParticipants();clearEventDetail();show(eventPanel,false);};
-    const clearObjectHistory=()=>{++historyTurn;historyRevision=null;historyOffset=0;historyFollowing=null;historyStatus.textContent='';historyRows.replaceChildren();historyPrevious.disabled=historyNext.disabled=true;clearObjectEvents();};
+    const clearAttributeHistory=()=>{++historyTurn;historyRevision=null;historyOffset=0;historyFollowing=null;historyStatus.textContent='';historyRows.replaceChildren();historyPrevious.disabled=historyNext.disabled=true;};
+    const clearObjectHistory=()=>{clearAttributeHistory();historyAttribute.value='';clearObjectEvents();};
     clearObjectHistory();historyId.oninput=clearObjectHistory;
+    historyAttribute.oninput=clearAttributeHistory;
     async function loadObjectHistory(offset){
-      const ticket=++historyTurn,selected=pick.value,object=historyId.value;
-      const active=()=>current()&&ticket===historyTurn&&pick.value===selected&&historyId.value===object;
+      const ticket=++historyTurn,selected=pick.value,object=historyId.value,attribute=historyAttribute.value;
+      const active=()=>current()&&ticket===historyTurn&&pick.value===selected&&historyId.value===object&&historyAttribute.value===attribute;
       historyPrevious.disabled=historyNext.disabled=true;historyStatus.textContent='Loading attribute values…';historyRows.replaceChildren();
       if(!object){historyStatus.textContent='Enter an exact object ID.';return;}
+      if(Array.from(attribute).length>200){historyStatus.textContent='Use at most 200 characters for the attribute name.';return;}
       const query=new URLSearchParams({object_type:selected,object_id:object,offset:String(offset),limit:'50'});
+      if(attribute)query.set('attribute',attribute);
       if(historyRevision!==null)query.set('revision',String(historyRevision));
       try{
         const result=await getJSON(logPath('object-attribute-history').replace(/\?.*$/,'')+'?'+query);
         if(!active())return;
         historyRevision=result.log_revision;historyOffset=offset;historyFollowing=result.next_offset;
-        historyStatus.textContent=result.total_values?'Showing '+(offset+1).toLocaleString()+'–'+(offset+result.values.length).toLocaleString()+' of '+Number(result.total_values).toLocaleString()+' retained attribute values.':'No retained timed values for this object.';
+        historyStatus.textContent=result.total_values?'Showing '+(offset+1).toLocaleString()+'–'+(offset+result.values.length).toLocaleString()+' of '+Number(result.total_values).toLocaleString()+' retained attribute values.':attribute?'No retained timed values for this attribute.':'No retained timed values for this object.';
         if(result.values.length)historyRows.replaceChildren(table(['Attribute','Recorded from (UTC)','Value'],result.values.map(v=>[v.name,v.valid_from,v.value])));
         historyPrevious.disabled=offset===0;historyNext.disabled=historyFollowing===null;
       }catch(error){if(active()){historyRevision=null;historyStatus.textContent=error.message;}}
@@ -5031,7 +5037,12 @@
         eventDetailRows.replaceChildren(el('p','Resource: '+(result.resource||'Not recorded'),'muted'),el('h4','Event attributes'),
           result.event_attributes.length?table(['Attribute','Value'],result.event_attributes.map(a=>[a.name,a.value])):el('p','No retained event attributes.','muted'),
           el('h4','Object attribute values at this event'),
-          result.object_attribute_states.length?table(['Attribute','Status','Recorded from (UTC)','Value'],result.object_attribute_states.map(a=>[a.name,labels[a.status]||a.status,a.valid_from||'—',a.value===null?'—':a.value])):el('p','No retained object attributes.','muted'));
+          result.object_attribute_states.length?table(['Attribute','Status','Recorded from (UTC)','Value or conflicting evidence','Next recorded (UTC)','History'],result.object_attribute_states.map(a=>{
+            const evidence=a.status==='ambiguous'?JSON.stringify(a.evidence_values)+(a.evidence_values_truncated?' (showing '+a.evidence_values.length+' of '+a.evidence_value_count+' values)':''):(a.value===null?'—':a.value);
+            const review=button('Review attribute history','secondary');review.setAttribute('aria-label','Review history for attribute '+JSON.stringify(a.name));
+            review.onclick=()=>{historyAttribute.value=a.name;clearAttributeHistory();historyRevision=basis;loadObjectHistory(0);historyStatus.tabIndex=-1;historyStatus.focus();};
+            return [a.name,labels[a.status]||a.status,a.valid_from||'—',evidence,a.next_recorded_at||'—',review];
+          })):el('p','No retained object attributes.','muted'));
       }catch(error){if(active())eventDetailStatus.textContent=error.message;}
     }
     async function loadParticipants(index){

@@ -242,19 +242,28 @@ def test_event_participants_page_distinct_objects_and_validate_evidence():
 def test_event_detail_reports_recorded_values_at_event_time_without_inventing_state():
     doc = _orders()
     doc['objects'][0]['attributes'].append(_value('untimed', 'not a time', 'stored'))
+    doc['objects'][2]['attributes'] = [_value('status', '2024-01-01T01:00:00Z', f'v{n:02}') for n in range(30)]
     doc['events'][1]['attributes'] = [{'name': 'priority', 'value': '<urgent>'}]
     log = _import(doc)['log_id']
     revision = attributes.object_events(log, 'order', 'o1')['log_revision']
     detail = attributes.event_detail(log, 'order', 'o1', 'e2', revision)
     assert detail['event_attributes'] == [{'name': 'priority', 'value': '<urgent>'}]
     states = {s['name']: s for s in detail['object_attribute_states']}
-    assert states['status'] == {'name': 'status', 'status': 'known', 'valid_from': '2024-01-01T03:00:00Z', 'value': 'approved'}
+    assert states['status']['status'] == 'known' and states['status']['valid_from'] == '2024-01-01T03:00:00Z'
+    assert states['status']['value'] == 'approved' and states['status']['next_recorded_at'] == '2024-01-01T05:00:00Z'
     assert states['region']['value'] == 'EU' and states['region']['valid_from'] == T0
     assert states['untimed']['status'] == 'missing_history' and states['untimed']['value'] is None
     earlier = attributes.event_detail(log, 'order', 'o2', 'e4', revision)['object_attribute_states']
     assert earlier[0]['status'] == 'before_first_value' and earlier[0]['value'] is None
+    assert earlier[0]['next_recorded_at'] == '2024-01-01T04:00:00Z'
     ambiguous = attributes.event_detail(log, 'order', 'o3', 'e4', revision)['object_attribute_states']
     assert ambiguous[0]['status'] == 'ambiguous' and ambiguous[0]['value'] is None
+    assert ambiguous[0]['evidence_values'] == [f'v{n:02}' for n in range(20)]
+    assert ambiguous[0]['evidence_value_count'] == 30 and ambiguous[0]['evidence_values_truncated'] is True
+    history = attributes.object_history(log, 'order', 'o3', attribute='status')
+    assert history['total_values'] == 30 and [v['value'] for v in history['values']] == [f'v{n:02}' for n in range(30)]
+    assert attributes.object_history(log, 'order', 'o1', attribute='region')['total_values'] == 1
+    assert attributes.object_history(log, 'order', 'o1', attribute='missing')['total_values'] == 0
     with pytest.raises(workspace.EventLogWorkspaceError, match='not linked'):
         attributes.event_detail(log, 'order', 'o1', 'e4', revision)
     newer = {'objectTypes': [], 'eventTypes': [], 'objects': [{'id': 'new', 'type': 'order'}],
@@ -356,6 +365,8 @@ with TestClient(app) as client:
     history = client.get(history_path, params={"object_type": "order", "object_id": "o1"}, headers=headers)
     assert history.status_code == 200 and history.headers["cache-control"] == "no-store"
     assert [v['value'] for v in history.json()['values']] == ['open', 'closed']
+    filtered = client.get(history_path, params={"object_type": "order", "object_id": "o1", "attribute": "status"}, headers=headers)
+    assert filtered.status_code == 200 and filtered.json()['attribute'] == 'status' and filtered.json()['total_values'] == 2
     assert client.get(history_path, params={"object_type": "other", "object_id": "o1"}, headers=headers).status_code == 422
     browser_path = "/v1/event-logs/" + made.json()["log_id"] + "/object-browser"
     assert client.get(browser_path, params={"object_type": "order"}, headers=bearer).status_code in (401, 403)
