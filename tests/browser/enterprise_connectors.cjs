@@ -15,7 +15,7 @@ const path=require('node:path');
   assert.equal(sqlSeed.status,0,sqlSeed.stderr);
   env.OWG_SQL_SOURCE_CATALOG=JSON.stringify({browser_sql:{engine:'sqlite',path:sourcePath,relation:'events',mapping:{event_id:'eid',case_id:'cid',activity:'label',event_time:'happened',change_time:'changed'}}});
   const seeded=spawnSync(process.env.OWG_BROWSER_PYTHON||'python',['-c',
-    'from server import connector_oauth as o; o._save({"version":1,"connections":{"conn_aaaaaaaaaaaaaaaa":{"provider":"google","host":"","scopes":[o.GOOGLE_AUDIT_SCOPE],"client_id":"test-client","refresh_token":"synthetic-browser-only","connected_at":"2026-01-01T00:00:00Z"},"conn_bbbbbbbbbbbbbbbb":{"provider":"salesforce","host":"customer.my.salesforce.com","api_host":"customer.my.salesforce.com","scopes":["api","refresh_token","id"],"client_id":"test-client","refresh_token":"synthetic-salesforce-only","connected_at":"2026-01-01T00:00:00Z"}}})'],
+    'from server import connector_oauth as o; o._save({"version":1,"connections":{"conn_aaaaaaaaaaaaaaaa":{"provider":"google","host":"","scopes":[o.GOOGLE_AUDIT_SCOPE],"client_id":"test-client","refresh_token":"synthetic-browser-only","connected_at":"2026-01-01T00:00:00Z"},"conn_bbbbbbbbbbbbbbbb":{"provider":"salesforce","host":"customer.my.salesforce.com","api_host":"customer.my.salesforce.com","scopes":["api","refresh_token","id"],"client_id":"test-client","refresh_token":"synthetic-salesforce-only","connected_at":"2026-01-01T00:00:00Z"},"conn_cccccccccccccccc":{"provider":"servicenow","host":"customer.service-now.com","scopes":["useraccount"],"client_id":"test-client","refresh_token":"synthetic-servicenow-only","connected_at":"2026-01-01T00:00:00Z"}}})'],
     {env:{...env,WORKFLOW_OBSERVER_DATA:path.join(scratch,'data'),WORKFLOW_OBSERVER_AUTH_DIR:path.join(scratch,'auth'),WORKFLOW_OBSERVER_CONFIG:path.join(scratch,'config.json')},encoding:'utf8'});
   assert.equal(seeded.status,0,seeded.stderr);
   const server=spawn(process.env.OWG_BROWSER_PYTHON||'python',['-m','uvicorn','process_logs_app:app','--app-dir','tests/browser','--host','127.0.0.1','--port','8787'],{env,stdio:['ignore','pipe','pipe']});
@@ -154,6 +154,26 @@ const path=require('node:path');
     const sfReport=JSON.parse(await fs.readFile(await sfDownload.path(),'utf8'));
     assert.equal(sfReport.profiles.find(p=>p.provider==='salesforce').provider_live_health,'unknown');
     assert.ok(!JSON.stringify(sfReport).includes('00D000000000001'));
+    await page.getByRole('button',{name:'Remove configuration'}).click();
+    await page.locator('#profiles').getByText('No configured REST feeds.').waitFor();
+    await page.locator('summary').filter({hasText:'Create native ServiceNow operations feed'}).click();
+    await page.locator('#snName').fill('ServiceNow browser fixture');
+    await page.locator('#snConnection').selectOption('conn_cccccccccccccccc');
+    await page.locator('#snHost').fill('customer.service-now.com');
+    await page.locator('#snSince').fill(new Date(Math.floor((Date.now()-86400000)/1000)*1000).toISOString());
+    await page.locator('#snSelectincident').check();
+    await page.locator('#snFieldsincident').fill('state,assignment_group');
+    await page.locator('#snIdsincident').fill('00000000000000000000000000000001');
+    await page.locator('#snCreatedincident').check();
+    await page.locator('#snConfirm').check();await page.locator('#snUTC').check();await page.locator('#snAudit').check();await page.locator('#snCreation').check();
+    await page.locator('#snCreateButton').click();
+    await page.locator('#restStatus').filter({hasText:'ServiceNow profile saved. No source was read.'}).waitFor();
+    await page.getByRole('heading',{name:'ServiceNow browser fixture'}).waitFor();
+    assert.ok(await page.getByRole('button',{name:'Run next window'}).isDisabled());
+    const [snDownload]=await Promise.all([page.waitForEvent('download'),page.locator('#download').click()]);
+    const snReport=JSON.parse(await fs.readFile(await snDownload.path(),'utf8'));
+    assert.equal(snReport.profiles.find(p=>p.provider==='servicenow').provider_live_health,'unknown');
+    assert.ok(!JSON.stringify(snReport).includes('customer.service-now.com'));
     await page.getByRole('button',{name:'Remove configuration'}).click();
     await page.locator('#profiles').getByText('No configured REST feeds.').waitFor();
     await page.addScriptTag({content:await fs.readFile(require.resolve('axe-core/axe.min.js'),'utf8')});
