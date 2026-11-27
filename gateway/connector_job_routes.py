@@ -100,4 +100,9 @@ def install_connector_jobs(app,db,settings):
     async def complete(request:Request,authorization:str|None=Header(default=None)):
         return await reply(jobs.complete,bearer(authorization),await parse(request,Receipt))
 
+    @router.get("/admin/connector-jobs",include_in_schema=False)
+    def page():
+        from .html_pages import render_page
+        return render_page("connector_jobs.html")
+
     app.include_router(router)
