@@ -2,13 +2,17 @@
 const {chromium}=require('playwright');
 const assert=require('node:assert/strict');
 const fs=require('node:fs/promises');
-const {spawn}=require('node:child_process');
+const {spawn,spawnSync}=require('node:child_process');
 const {tmpdir}=require('node:os');
 const path=require('node:path');
 (async()=>{
   const scratch=await fs.mkdtemp(path.join(tmpdir(),'owg-enterprise-connectors-'));
   const base='http://127.0.0.1:8787',endpoint='https://customer.example.com/events';
   const env={...process.env,OWG_BROWSER_TEST_DIR:scratch,OWG_REST_ALLOWED_ENDPOINTS:JSON.stringify([endpoint]),OWG_REST_TOKEN_BROWSER:'browser-fixture-only'};
+  const seeded=spawnSync(process.env.OWG_BROWSER_PYTHON||'python',['-c',
+    'from server import connector_oauth as o; o._save({"version":1,"connections":{"conn_aaaaaaaaaaaaaaaa":{"provider":"google","host":"","scopes":[o.GOOGLE_AUDIT_SCOPE],"client_id":"test-client","refresh_token":"synthetic-browser-only","connected_at":"2026-01-01T00:00:00Z"}}})'],
+    {env:{...env,WORKFLOW_OBSERVER_DATA:path.join(scratch,'data'),WORKFLOW_OBSERVER_AUTH_DIR:path.join(scratch,'auth'),WORKFLOW_OBSERVER_CONFIG:path.join(scratch,'config.json')},encoding:'utf8'});
+  assert.equal(seeded.status,0,seeded.stderr);
   const server=spawn(process.env.OWG_BROWSER_PYTHON||'python',['-m','uvicorn','process_logs_app:app','--app-dir','tests/browser','--host','127.0.0.1','--port','8787'],{env,stdio:['ignore','pipe','pipe']});
   let logs='',browser,spawnError;server.on('error',e=>{spawnError=e;});
   for(const pipe of [server.stdout,server.stderr])pipe.on('data',c=>{logs=(logs+c).slice(-8000);});
@@ -52,6 +56,30 @@ const path=require('node:path');
     assert.match(await page.locator('#inventory').textContent(),/schedule profile revision mismatch/);
     await page.getByRole('button',{name:'Remove schedule'}).click();
     await page.locator('#restStatus').filter({hasText:'Schedule removed.'}).waitFor();
+    await page.getByRole('button',{name:'Remove configuration'}).click();
+    await page.locator('#profiles').getByText('No configured REST feeds.').waitFor();
+    // Native Google profile setup uses the stored grant without a live read.
+    await page.locator('summary').filter({hasText:'Create native Google Workspace audit feed'}).click();
+    await page.locator('#googleName').fill('Google browser fixture');
+    await page.locator('#googleConnection').selectOption('conn_aaaaaaaaaaaaaaaa');
+    await page.locator('#googleCustomer').fill('C012abc34');
+    await page.locator('#googleUser').fill('all');
+    await page.locator('#googleApplication').selectOption('drive');
+    await page.locator('#googleCase').selectOption('drive_document');
+    await page.locator('#googleSince').fill(new Date(Date.now()-86400000).toISOString());
+    await page.locator('#googleConfirm').check();
+    await page.locator('#googleRetention').check();
+    await page.locator('#googleDomain').check();
+    await page.locator('#googleParameters').check();
+    await page.locator('#googleCreateButton').click();
+    await page.locator('#restStatus').filter({hasText:'Google audit profile saved. No source was read.'}).waitFor();
+    await page.getByRole('heading',{name:'Google browser fixture'}).waitFor();
+    assert.ok(await page.getByRole('button',{name:'Run next window'}).isDisabled());
+    assert.match(await page.locator('#profiles').textContent(),/Google Workspace audit/);
+    const [googleDownload]=await Promise.all([page.waitForEvent('download'),page.locator('#download').click()]);
+    const googleReport=JSON.parse(await fs.readFile(await googleDownload.path(),'utf8'));
+    assert.equal(googleReport.profiles.find(p=>p.provider==='google').provider_live_health,'unknown');
+    assert.ok(!JSON.stringify(googleReport).includes('C012abc34'));
     await page.getByRole('button',{name:'Remove configuration'}).click();
     await page.locator('#profiles').getByText('No configured REST feeds.').waitFor();
     await page.addScriptTag({content:await fs.readFile(require.resolve('axe-core/axe.min.js'),'utf8')});

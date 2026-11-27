@@ -288,7 +288,7 @@
         <p><a href="/enterprise-connectors">Open enterprise connector operations and customer REST feeds</a></p>
         <div class="muted">Connect a business system with an app you registered in your own tenant. You approve the access at the provider; tokens stay encrypted on this computer and are never shown to AI. Connecting reads nothing by itself: each connector still asks before reading.</div>
         <div class="pv-delete">
-          <select id="pvOAuthProvider" aria-label="Provider"><option value="salesforce">Salesforce</option><option value="servicenow">ServiceNow</option><option value="microsoft">Microsoft 365</option><option value="atlassian">Atlassian (Jira)</option><option value="zendesk">Zendesk</option></select>
+          <select id="pvOAuthProvider" aria-label="Provider"><option value="salesforce">Salesforce</option><option value="servicenow">ServiceNow</option><option value="microsoft">Microsoft 365</option><option value="atlassian">Atlassian (Jira)</option><option value="zendesk">Zendesk</option><option value="google">Google Workspace audit</option></select>
           <input type="text" id="pvOAuthHost" placeholder="Host or tenant (e.g. acme.my.salesforce.com)" aria-label="Provider host or tenant" spellcheck="false">
           <input type="text" id="pvOAuthClient" placeholder="Client ID" aria-label="Client ID" spellcheck="false">
           <input type="password" id="pvOAuthSecret" placeholder="Client secret (only if required)" aria-label="Client secret (optional)" autocomplete="off">

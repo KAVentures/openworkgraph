@@ -152,6 +152,9 @@ def _key(p, domain, value):
 
 
 def _check_binding(p):
+    if p.get("provider") == "google":
+        from . import google_workspace_audit as google
+        return google.check_binding(p)
     _endpoint(p["config"]["endpoint"])
     token = _credential(p["config"]["credential_env"])
     if not hmac.compare_digest(_key(p,"credential",token),p["credential_binding"]):
@@ -183,6 +186,7 @@ def _public(p,now):
     out={k:p[k] for k in ("profile_id","revision","enabled","created_at","status","log_id",
                            "checkpoint","last_success_at","last_attempt_at","last_result","retry_not_before")}
     out["config"] = p["config"]
+    out["provider"] = p.get("provider", "rest")
     if p["status"]=="running" and p["lease_until"]<=now:
         out["status"]="interrupted"
     try:
@@ -223,11 +227,16 @@ def create(value):
         raise FeedError("invalid_profile_name",422)
     config=spec.model_dump(exclude={"confirm_configuration","confirm_activity_labels"})
     config.update(name=spec.name.strip(),endpoint=endpoint,initial_since=_iso(since))
-    p={"profile_id":"rest_"+secrets.token_hex(12),"revision":1,"enabled":True,
+    return create_profile(config,token,now)
+
+
+def create_profile(config,identity,now,*,provider="rest"):
+    """Internal factory: provider adapters validate configuration first."""
+    p={"profile_id":"rest_"+secrets.token_hex(12),"revision":1,"enabled":True,"provider":provider,
        "key":secrets.token_hex(32),"config":config,"created_at":_iso(now),"status":"ready",
        "log_id":None,"checkpoint":None,"last_success_at":None,"last_attempt_at":None,
        "last_result":None,"run_id":None,"lease_until":0,"retry_not_before":0}
-    p["credential_binding"]=_key(p,"credential",token)
+    p["credential_binding"]=_key(p,"credential",identity)
     with workspace._LOCK:
         c=_connect()
         try:
@@ -320,6 +329,10 @@ def _begin(profile_id,revision,now):
             if p["log_id"]:
                 workspace._check_log(c,p["log_id"])
             start=_stamp(p["checkpoint"] or p["config"]["initial_since"])
+            attempted_at=now
+            if p.get("provider")=="google":
+                from . import google_workspace_audit as google
+                now=google.review_cutoff(p,now,start)
             if now<start:
                 raise FeedError("clock_before_checkpoint")
             until=min(now,start+timedelta(hours=p["config"]["window_hours"]))
@@ -327,7 +340,7 @@ def _begin(profile_id,revision,now):
             if until<=start:
                 raise FeedError("no_new_checkpoint_window")
             p.update(run_id=secrets.token_hex(16),lease_until=time.time()+LEASE_SECONDS,
-                     status="running",last_attempt_at=_iso(now))
+                     status="running",last_attempt_at=_iso(attempted_at))
             _put(c,p)
             return p,since,until
         finally:
@@ -474,7 +487,7 @@ def _retain(p,rows,counts,until):
                 added=result["added_events"]
                 duplicates=result["duplicate_events_skipped"]
             else:
-                result=workspace.import_log(source,name="Enterprise REST "+p["profile_id"],source_format="csv",
+                result=workspace.import_log(source,name=("Google Workspace audit " if p.get("provider")=="google" else "Enterprise REST ")+p["profile_id"],source_format="csv",
                                             mapping=mapping,_transaction_hook=checkpoint)
                 added=result["events"]
                 duplicates=0
@@ -522,7 +535,11 @@ def run(profile_id,revision,*,confirm_reads,confirm_retention,client_factory=htt
         raise FeedError("exact_revision_required",422)
     p,since,until=_begin(profile_id,revision,now or _now())
     try:
-        rows,counts=_extract(p,since,until,client_factory)
+        if p.get("provider")=="google":
+            from . import google_workspace_audit as google
+            rows,counts=google.extract(p,since,until,client_factory)
+        else:
+            rows,counts=_extract(p,since,until,client_factory)
         return _retain(p,rows,counts,until)
     except FeedError as error:
         _fail(p,error)
@@ -556,7 +573,7 @@ def run_scheduled(profile_id,revision):
     except FeedError as error:
         if error.code in {"unknown_rest_profile","rest_profile_disabled","profile_changed_or_disabled",
                            "credential_changed_reconfigure_required","rest_run_invalidated",
-                           "endpoint_not_deployment_allowlisted"}:
+                           "endpoint_not_deployment_allowlisted","google_grant_unavailable","google_grant_scope_mismatch","google_reconnect_required"}:
             return "paused:rest_profile_changed",0.0
         if error.code=="no_new_checkpoint_window":
             return "skipped_no_new_window",0.0

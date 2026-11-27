@@ -6,6 +6,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from starlette.concurrency import run_in_threadpool
 
 from . import enterprise_rest_feed as rest
+from . import google_workspace_audit as google
 from . import enterprise_connector_operations as operations
 from .event_log_routes import _json_body
 from .local_auth import dashboard_session_valid
@@ -57,6 +58,13 @@ async def rest_create(request:Request):
     require(request)
     body=await _json_body(request,"REST feed configuration",strict=True,limit=8192)
     return await call(request,rest.create,body)
+
+
+@router.post("/v1/enterprise-connectors/google")
+async def google_create(request:Request):
+    require(request)
+    body=await _json_body(request,"Google Workspace audit profile",strict=True,limit=8192)
+    return await call(request,google.create,body)
 
 
 @router.post("/v1/enterprise-connectors/rest/{profile_id}/run")
