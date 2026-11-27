@@ -93,6 +93,11 @@
         section.append(el('h5','Paired outcome probability reliability'),el('p',r.paired_probability_cases+' valid paired forecasts; '+r.excluded_invalid_probability_pairs+' excluded invalid pairs.'),
           grid(['Forecast','Eventual fixed-bin ECE bounds','Cases in supported bins'],
             ['model','baseline'].map(arm=>[arm,bounds(r[arm].eventual_fixed_bin_ece_lower,r[arm].eventual_fixed_bin_ece_upper),r[arm].supported_bin_cases])));
+        const joint=r.paired_ece_difference;
+        if(joint?.estimated) section.append(el('h5','Paired calibration difference under shared outcomes'),
+          grid(['Model minus baseline ECE lower','Model minus baseline ECE upper','Method','Direction','Joint assignments evaluated'],
+            [[pct(joint.eventual_model_minus_baseline_ece_lower),pct(joint.eventual_model_minus_baseline_ece_upper),
+              human(joint.method),human(joint.direction),joint.compressed_assignments_evaluated]]),el('p',joint.interpretation));
         for(const arm of ['model','baseline']){
           const d=el('details');d.append(el('summary',human(arm)+' fixed probability bins'),
             grid(['Probability interval','Cases','Known positive','Known negative','Unknown','Mean risk','Eventual observed rate','Absolute gap bounds','Diagnosis','Evidence'],

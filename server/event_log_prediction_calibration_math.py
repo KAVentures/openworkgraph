@@ -124,11 +124,14 @@ def reliability(rows,bins,minimum):
         out[arm]={"bins":reports,"paired_cases":n,"supported_bin_cases":sum(x["cases"] for x in reports if x["minimum_support_met"]),
                   "eventual_fixed_bin_ece_lower":num(low_total/n) if n>=minimum else None,
                   "eventual_fixed_bin_ece_upper":num(high_total/n) if n>=minimum else None}
+    from . import event_log_joint_calibration as joint
+    comparison=joint.compare(paired,bins,minimum,out)
     return {"paired_probability_cases":len(paired),"excluded_invalid_probability_pairs":len(rows)-len(paired),
             "bins_per_arm":bins,"minimum_bin_cases":minimum,**out,
-            "ece_includes_all_nonempty_bins":True,"paired_ece_difference_bounds_computed":False,
+            "ece_includes_all_nonempty_bins":True,"paired_ece_difference_bounds_computed":comparison["estimated"],
+            "paired_ece_difference":comparison,
             "interpretation":"Each arm has its own fixed bins on identical paired cases. Integer positive-count bounds give sharp marginal ECE bounds for that arm across all assignments of unknown binary labels. "
-                "Model and baseline bounds are not joint difference bounds. Fixed-bin empirical calibration depends on the selected binning and does not establish future calibration."}
+                "Individual model and baseline bounds are not joint difference bounds; use the separate paired comparison. Fixed-bin empirical calibration depends on the selected binning and does not establish future calibration."}
 
 
 def group_key(row,group_by):

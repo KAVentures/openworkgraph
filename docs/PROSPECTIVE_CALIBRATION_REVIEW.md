@@ -82,3 +82,7 @@ Append /evidence and include the same settings plus evidence:
 ## Verification
 
 The new regressions include 160 exhaustive binary-label assignment oracle populations and 120 independent quantile-membership oracle populations, tie and boundary cases, discrete ECE minima, subgroup support, actual retained-log append and deletion, stale pins, strict input validation, dashboard authorization and real-browser evidence/download workflows. Native CI remains required.
+
+## Paired calibration difference
+
+The additional paired comparison keeps each unresolved outcome shared between the forecasters. Unknown cases are partitioned by their pair of fixed model/baseline bin memberships; a group of u unknowns has exactly u+1 attainable positive counts. Enumerate the Cartesian product of these counts when it contains at most 8,192 assignments, computing exact rational ECE differences. Larger products return conservative outer bounds from exact marginal extrema, explicitly not sharp joint bounds. Negative favors the model; the direction remains unresolved if the interval spans zero unless it is identically zero. This uses the same paired population, not different possible labels for each model. The exhaustive binary-label oracle independently checks these joint bounds, and a forced-budget test checks the fallback.

@@ -74,6 +74,7 @@ def test_independent_exhaustive_binary_label_calibration_oracle():
             labels=[int(r["outcome"]) if r["state"]=="finished" else None for r in rows]
             for i,y in zip(unknown,values):labels[i]=y
             assignments.append(labels)
+        oracle={}
         for arm,key in [("model","outcome_probability"),("baseline","base_rate")]:
             def ece(labels):
                 # Oracle bins via direct rational interval tests, not engine indexing.
@@ -86,8 +87,14 @@ def test_independent_exhaustive_binary_label_calibration_oracle():
                     total+=abs(sum(labels[i] for i in ix)-sum((Fraction(str(rows[i]["frozen"][key])) for i in ix),Fraction(0)))
                 return total/n
             values=[ece(a) for a in assignments]
+            oracle[arm]=values
             assert result[arm]["eventual_fixed_bin_ece_lower"]==pytest.approx(float(min(values)))
             assert result[arm]["eventual_fixed_bin_ece_upper"]==pytest.approx(float(max(values)))
+        paired=result["paired_ece_difference"]
+        differences=[a-b for a,b in zip(oracle["model"],oracle["baseline"])]
+        assert paired["exact_joint_bounds"]
+        assert paired["eventual_model_minus_baseline_ece_lower"]==pytest.approx(float(min(differences)))
+        assert paired["eventual_model_minus_baseline_ece_upper"]==pytest.approx(float(max(differences)))
 
 
 def test_independent_quantile_membership_oracle():
@@ -169,3 +176,24 @@ def test_invalid_evidence_filters_and_no_outcome():
     for extra in [{"arm":"model"},{"arm":"model","bin_index":10},{"group_sha256":"0"*64},{"arm":"model","bin_index":0}]:
         with pytest.raises(workspace.EventLogWorkspaceError):
             c.evidence(log,sid,{**body,"evidence":{"expected_review_sha256":r["review_sha256"],**extra}})
+
+
+def test_joint_calibration_same_predictions_always_tie_despite_unknown_labels():
+    r=m.reliability([row(i,p=.3,b=.3,state="still_open") for i in range(100)],10,5)
+    assert r["model"]["eventual_fixed_bin_ece_upper"]>r["model"]["eventual_fixed_bin_ece_lower"]
+    joint=r["paired_ece_difference"]
+    assert joint["exact_joint_bounds"] and joint["compressed_assignments_evaluated"]==101
+    assert joint["eventual_model_minus_baseline_ece_lower"]==joint["eventual_model_minus_baseline_ece_upper"]==0
+    assert joint["direction"]=="always_equal_ece"
+
+
+def test_joint_calibration_budget_fallback_is_conservative(monkeypatch):
+    from server import event_log_joint_calibration as joint
+    rows=[row(i,p=i/10,b=(9-i)/10,state="still_open") for i in range(8)]
+    exact=m.reliability(rows,10,5)["paired_ece_difference"]
+    monkeypatch.setattr(joint,"MAX_ASSIGNMENTS",1)
+    bounded=m.reliability(rows,10,5)["paired_ece_difference"]
+    assert not bounded["exact_joint_bounds"]
+    assert bounded["compressed_assignments_evaluated"]==0
+    assert bounded["eventual_model_minus_baseline_ece_lower"]<=exact["eventual_model_minus_baseline_ece_lower"]
+    assert bounded["eventual_model_minus_baseline_ece_upper"]>=exact["eventual_model_minus_baseline_ece_upper"]
