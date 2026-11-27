@@ -19,7 +19,7 @@ p{overflow-wrap:anywhere;max-width:94ch}.profile{border:1px solid var(--border);
 <div class="grid"><label>Flag last success or checkpoint older than (hours)<input id="freshness" type="number" min="1" max="720" step="1" value="24"></label></div>
 <div class="row"><button id="refresh" type="button">Refresh local inventory</button><button id="download" type="button" disabled>Recheck and download inventory JSON</button></div>
 <p role="status" id="status">Open from the authenticated local dashboard.</p><div id="inventory"></div></section>
-<section aria-labelledby="restHeading"><h2 id="restHeading">Customer REST event feeds</h2>
+<section aria-labelledby="restHeading"><h2 id="restHeading">Enterprise event feeds</h2>
 <p>For a customer API that implements OWG's event-feed contract. Configure its exact HTTPS endpoint in the deployment allowlist and supply its read-only bearer in a named environment variable. Nothing is read until separately confirmed. All source event, case and resource identifiers are pseudonymized; activity labels are retained as entered by the source.</p>
 <details><summary>Create a feed</summary><form id="create">
 <div class="grid"><label>Profile name<input id="name" maxlength="100" required></label>
@@ -38,6 +38,25 @@ p{overflow-wrap:anywhere;max-width:94ch}.profile{border:1px solid var(--border);
 <p><label><input id="confirmConfig" type="checkbox" required> I reviewed the exact endpoint, credential reference, mapping and bounded windows.</label></p>
 <p><label><input id="confirmLabels" type="checkbox" required> I approve retention of the selected source's activity labels in the local log.</label></p>
 <button type="submit" id="createButton">Save feed configuration</button></form></details>
+<details><summary>Create native Google Workspace audit feed</summary>
+<p>Connect Google Workspace audit in the main dashboard's Business system sign-in first. The Google Admin SDK Reports API must be enabled for your registered app. This connector reads audit event metadata, not mail, chat or document contents.</p>
+<form id="googleCreate"><div class="grid">
+<label>Profile name<input id="googleName" maxlength="100" required></label>
+<label>Stored Google sign-in<select id="googleConnection" required></select></label>
+<label>Exact Google Workspace customer ID<input id="googleCustomer" required maxlength="64" placeholder="C012abc34"></label>
+<label>Report user scope<input id="googleUser" required maxlength="64" placeholder="Exact numeric profile ID or all"></label>
+<label>Audit application<select id="googleApplication"><option value="drive">Drive</option><option value="calendar">Calendar</option><option value="admin">Admin console</option><option value="login">Login</option><option value="gmail">Gmail audit</option><option value="chat">Chat audit</option><option value="meet">Meet audit</option></select></label>
+<label>Declared case notion<select id="googleCase"><option value="actor">Pseudonymous actor</option><option value="audit_record">Audit record</option><option value="drive_document">Exact Drive document (Drive only)</option></select></label>
+<label>First audit window start (ISO 8601 UTC)<input id="googleSince" required placeholder="2026-11-01T00:00:00Z"></label>
+<label>Advancing window (hours)<input id="googleWindow" type="number" min="1" max="168" value="24" required></label>
+<label>Late-arrival overlap (minutes)<input id="googleOverlap" type="number" min="0" max="1440" value="60" required></label>
+<label>Reporting lag (minutes)<input id="googleLag" type="number" min="0" max="1440" value="60" required></label>
+<label>Maximum records per page<input id="googlePage" type="number" min="1" max="500" value="200" required></label></div>
+<p><label><input id="googleConfirm" type="checkbox" required> I reviewed the exact customer, sign-in, application and user scope.</label></p>
+<p><label><input id="googleRetention" type="checkbox" required> I approve retention of pseudonymous audit event identifiers, event labels and timestamps locally.</label></p>
+<p><label><input id="googleDomain" type="checkbox"> I separately authorize domain-wide audit reads if scope is all.</label></p>
+<p><label><input id="googleParameters" type="checkbox"> For Drive document cases, I approve transient retrieval of ordinary string event parameters; only exact document IDs are used.</label></p>
+<button id="googleCreateButton" type="submit">Save Google audit profile</button></form></details>
 <p id="restStatus" role="status"></p><div id="profiles"></div></section>
 <section><h2>Other configured adapters</h2><p>Use the main dashboard's Privacy → Business system sign-in and Evidence panels for the existing provider-specific consent and configuration workflows. CLI-only adapters remain outside this local inventory.</p><a href="/">Open the main dashboard</a></section>
 </main></body></html>
