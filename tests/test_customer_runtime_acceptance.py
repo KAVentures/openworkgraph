@@ -65,7 +65,7 @@ raise SystemExit(check.main(["--manifest-sha256", sys.argv[1],
     run = _run(tmp_path, code, _pin(tmp_path), suite_status, env=env)
     assert run.returncode == exit_code, run.stderr
     data = json.loads(run.stdout)
-    assert len(data["suites"]) == 10
+    assert len(data["suites"]) == 11
     assert {"test_run_queue", "test_binding_rehearsal", "test_heldout"} <= {suite["suite"] for suite in data["suites"]}
     assert data["manifest_sha256"] == _pin(tmp_path)
     assert data["status"] == ("failed" if exit_code == 1 else suite_status)
