@@ -1530,15 +1530,18 @@
     // Every variant (not just the top ones) for review in a spreadsheet, with running share and durations.
     const variantsCsv=button('Download all variants (CSV)','secondary');variantsCsv.id='owgVariantsCsv';
     const variantsCsvStatus=el('span',null,'muted');variantsCsvStatus.id='owgVariantsCsvStatus';variantsCsvStatus.setAttribute('role','status');
-    variantsCsv.onclick=async()=>{
-      variantsCsv.disabled=true;
-      try{const response=await api(logPath('variants.csv',{}));const blob=await response.blob();
-        downloadBlob(blob,(state.logId||'log')+'-variants.csv');
+    const exactVariantsCsv=button('Download variants with exact paths (CSV)','secondary');exactVariantsCsv.id='owgVariantsExactCsv';
+    const downloadVariants=async exact=>{
+      variantsCsv.disabled=exactVariantsCsv.disabled=true;
+      try{const response=await api(logPath('variants.csv',exact?{exact_paths:true}:{}));const blob=await response.blob();
+        if(generation!==state.generation)return;
+        downloadBlob(blob,(state.logId||'log')+(exact?'-variants-exact.csv':'-variants.csv'));
         const info=response.headers.get('X-OWG-Variants')||'';
-        variantsCsvStatus.textContent=' Downloaded '+(/written=(\d+)/.exec(info)||[,'the'])[1]+' variants'+(/truncated=true/.test(info)?' (the most common; the list was cut)':'')+'.';}
-      catch(error){variantsCsvStatus.textContent=' '+error.message;}
-      finally{variantsCsv.disabled=false;}};
-    const csvRow=el('div',null,'row');csvRow.append(variantsCsv,variantsCsvStatus);variantBox.appendChild(csvRow);
+        variantsCsvStatus.textContent=' Downloaded '+(/written=(\d+)/.exec(info)||[,'the'])[1]+' variants'+(/truncated=true/.test(info)?' (the most common; the list was cut)':'')+'.'+(exact?' Exact paths are in the path_json column.':'');}
+      catch(error){if(generation===state.generation)variantsCsvStatus.textContent=' '+error.message;}
+      finally{variantsCsv.disabled=exactVariantsCsv.disabled=false;}};
+    variantsCsv.onclick=()=>downloadVariants(false);exactVariantsCsv.onclick=()=>downloadVariants(true);
+    const csvRow=el('div',null,'row');csvRow.append(variantsCsv,exactVariantsCsv,variantsCsvStatus);variantBox.appendChild(csvRow);
     results.appendChild(variantBox);
     results.appendChild(variantCoverageSection(names));
     results.appendChild(reworkSection(inspection));
