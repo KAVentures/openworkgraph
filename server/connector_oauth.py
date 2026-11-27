@@ -180,6 +180,7 @@ def _public(conn_id: str, conn: dict[str, Any]) -> dict[str, Any]:
     return {
         "connection_id": conn_id, "provider": conn["provider"],
         "label": PROVIDERS[conn["provider"]].label, "host": conn.get("host") or None,
+        "api_host": (conn.get("api_host") or conn.get("host")) if conn["provider"]=="salesforce" else None,
         "scopes": conn.get("scopes", []), "connected_at": conn.get("connected_at"),
         "last_refreshed_at": conn.get("last_refreshed_at"),
         "has_refresh_token": bool(conn.get("refresh_token")),
