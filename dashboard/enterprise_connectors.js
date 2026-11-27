@@ -1067,6 +1067,66 @@
     }catch(error){$('exclusionStatus').textContent=error.message;}
     finally{exclusionLock(false);}
   };
+  let slaData=null,slaBusy=false;
+  const slaFields=['slaProfile','slaInterval','slaSuccess','slaCheckpoint','slaFailures','slaHistoricalFailures','slaUnknownHours','slaLookback','slaExpired','slaHold','slaEnabled','slaConfirm'];
+  const slaSelected=()=>slaData?.profiles.find(x=>x.profile_id===$('slaProfile').value);
+  function slaLock(value){
+    slaBusy=value;for(const id of slaFields)$(id).disabled=value||!slaData?.profiles.length;
+    $('slaRefresh').disabled=value;$('slaEvaluate').disabled=value||!slaData?.profiles.some(p=>p.rule?.enabled);
+    $('slaSave').disabled=value||!slaSelected();
+    $('slaResults').querySelectorAll('button').forEach(b=>b.disabled=value);
+  }
+  function slaFill(){
+    const p=slaSelected(),r=p?.rule;
+    $('slaInterval').value=r?.interval_minutes??15;$('slaSuccess').value=r?r.success_age_hours??'':24;
+    $('slaCheckpoint').value=r?r.checkpoint_age_hours??'':48;$('slaFailures').value=r?r.failure_streak??'':3;
+    $('slaHistoricalFailures').value=r?.historical_failure_streak??'';$('slaUnknownHours').value=r?.unknown_coverage_hours??'';$('slaLookback').value=r?.coverage_lookback_days??30;
+    $('slaExpired').checked=r?.watch_expired_intent??true;$('slaHold').checked=r?.watch_integrity_hold??true;
+    $('slaEnabled').checked=r?.enabled??true;$('slaConfirm').checked=false;
+  }
+  function slaRender(){
+    const d=slaData,root=$('slaResults');
+    root.replaceChildren(el('p',d.active_alerts+' active alerts; '+d.unacknowledged_alerts+' unacknowledged.'),
+      table(['Profile','Policy revision','Enabled','Last evaluated','Next due'],d.profiles.map(p=>[p.profile_id,p.rule?.revision,p.rule?.enabled,p.rule?.last_evaluated_at,p.rule?.next_due_at])),
+      table(['Profile','Signal','Observation','Value','Threshold','Reason'],d.profiles.flatMap(p=>(p.rule?.last_observations||[]).map(o=>[p.profile_id,o.signal,o.state,o.signal==='unknown_prior_coverage'&&o.value!=null?(o.value/3600000000).toFixed(3)+' h':o.value,o.signal==='unknown_prior_coverage'&&o.threshold!=null?(o.threshold/3600000000)+' h':o.threshold,o.reason]))),
+      el('h3','Alert episodes'),table(['Profile','Signal','Active','Opened','Last observation','Acknowledged','Closed','Close reason'],d.episodes.map(e=>[e.profile_id,e.signal,e.active,e.opened_at,e.observation.state,e.acknowledged_at,e.closed_at,e.close_reason])));
+    for(const e of d.episodes.filter(e=>e.active&&!e.acknowledged_at)){
+      const wrap=el('div');const approve=check('Acknowledge '+e.signal+' for '+e.profile_id+' (does not resolve the alert).');
+      const b=button('Acknowledge',async()=>{
+        if(slaBusy||!approve.box.checked)return;
+        await slaAction(()=>api(base+'/service-levels/acknowledge',{episode_id:e.episode_id,version:e.version,confirm_acknowledgement:true}),'Alert acknowledged, not resolved.');
+      },true);approve.box.onchange=()=>b.disabled=slaBusy||!approve.box.checked;wrap.append(approve.node,b);root.append(wrap);
+    }
+  }
+  async function slaLoad(){
+    const data=await api(base+'/service-levels'),previous=$('slaProfile').value;
+    slaData=data;const select=$('slaProfile');select.replaceChildren();
+    for(const p of data.profiles){const o=el('option',p.provider+' / '+p.profile_id+' · revision '+p.revision);o.value=p.profile_id;select.append(o);}
+    if(data.profiles.some(p=>p.profile_id===previous))select.value=previous;
+    slaFill();slaRender();
+  }
+  async function slaAction(fn,message){
+    if(slaBusy)return;slaLock(true);
+    try{if(fn)await fn();await slaLoad();$('slaStatus').textContent=message;}
+    catch(error){slaData=null;$('slaResults').replaceChildren();$('slaStatus').textContent=error.message;}
+    finally{slaLock(false);$('slaResults').querySelectorAll('button').forEach(b=>b.disabled=true);}
+  }
+  $('slaRefresh').onclick=()=>slaAction(null,'Local monitoring loaded. Provider health remains unknown.');
+  $('slaProfile').onchange=slaFill;
+  $('slaEvaluate').onclick=()=>slaAction(async()=>{
+    const r=await api(base+'/service-levels/evaluate',{confirm_local_evaluation:true});
+    if(r.errors.length)throw Error('Some local evaluations failed; reload to review committed results.');
+  },'Local policies evaluated without provider reads.');
+  $('slaForm').onsubmit=event=>{
+    event.preventDefault();const p=slaSelected();if(!p||!$('slaConfirm').checked)return;
+    const number=id=>$(id).value===''?null:Number($(id).value);
+    const payload={profile_id:p.profile_id,profile_revision:p.revision,expected_rule_revision:p.rule?.revision??0,
+      enabled:$('slaEnabled').checked,interval_minutes:number('slaInterval'),success_age_hours:number('slaSuccess'),
+      checkpoint_age_hours:number('slaCheckpoint'),failure_streak:number('slaFailures'),
+      historical_failure_streak:number('slaHistoricalFailures'),unknown_coverage_hours:number('slaUnknownHours'),coverage_lookback_days:number('slaLookback'),watch_expired_intent:$('slaExpired').checked,
+      watch_integrity_hold:$('slaHold').checked,confirm_local_monitoring:true};
+    slaAction(()=>api(base+'/service-levels/save',payload),'Reviewed local monitoring policy saved.');
+  };
   $('refresh').onclick=load;
   $('freshness').oninput=()=>{generation++;latest=null;$('download').disabled=true;$('refresh').disabled=busy;$('inventory').replaceChildren();$('profiles').replaceChildren();$('status').textContent='Threshold changed. Refresh local inventory.';};
   $('download').onclick=async()=>{

@@ -382,3 +382,35 @@ async def historical_reconcile(request:Request,profile_id:str):
     require(request)
     body=await _json_body(request,"Expired historical connector run",strict=True,limit=1024)
     return await call(request,history.reconcile,profile_id,body)
+
+
+@router.get("/v1/enterprise-connectors/service-levels")
+async def service_level_inventory(request:Request):
+    from . import enterprise_ingestion_service_levels as sla
+    return await call(request,sla.inventory)
+
+
+@router.post("/v1/enterprise-connectors/service-levels/save")
+async def service_level_save(request:Request):
+    from . import enterprise_ingestion_service_levels as sla
+    require(request)
+    body=await _json_body(request,"Local ingestion service-level policy",strict=True,limit=4096)
+    return await call(request,sla.save,body)
+
+
+@router.post("/v1/enterprise-connectors/service-levels/evaluate")
+async def service_level_evaluate(request:Request):
+    from . import enterprise_ingestion_service_levels as sla
+    require(request)
+    body=await _json_body(request,"Explicit local monitoring evaluation",strict=True,limit=1024)
+    if body!={"confirm_local_evaluation":True} or body.get("confirm_local_evaluation") is not True:
+        raise HTTPException(422,"explicit_local_evaluation_required")
+    return await call(request,sla.evaluate_due,force=True)
+
+
+@router.post("/v1/enterprise-connectors/service-levels/acknowledge")
+async def service_level_ack(request:Request):
+    from . import enterprise_ingestion_service_levels as sla
+    require(request)
+    body=await _json_body(request,"Alert acknowledgement",strict=True,limit=1024)
+    return await call(request,sla.acknowledge,body)
