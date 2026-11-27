@@ -45,15 +45,24 @@
     $('inventory').replaceChildren();$('profiles').replaceChildren();$('status').textContent='Reading local operational evidence…';
     try{
       const h=threshold();
-      const [r,feeds]=await Promise.all([api(base+'?freshness_hours='+h),api(base+'/rest')]);
+      const [r,feeds,grants]=await Promise.all([api(base+'?freshness_hours='+h),api(base+'/rest'),api('/v1/connector-oauth').catch(()=>({connections:[]}))]);
       if(turn!==generation)return;
-      latest=r;render(r);renderProfiles(feeds,r);$('download').disabled=false;
+      latest=r;render(r);renderProfiles(feeds,r);renderGoogleGrants(grants);$('download').disabled=false;
       $('status').textContent='Local inventory refreshed. No provider reads performed.';
     }catch(error){if(turn===generation)$('status').textContent=error.message;}
     finally{if(turn===generation)$('refresh').disabled=busy;}
   }
+  function renderGoogleGrants(grants){
+    const select=$('googleConnection'),previous=select.value;
+    select.replaceChildren();
+    for(const grant of (grants.connections||[]).filter(g=>g.provider==='google'&&!g.reauthorization_required&&g.has_refresh_token)){
+      const option=el('option',grant.connection_id);option.value=grant.connection_id;select.append(option);
+    }
+    if([...select.options].some(o=>o.value===previous))select.value=previous;
+    $('googleCreateButton').disabled=!select.options.length||busy;
+  }
   async function action(fn){
-    if(busy)return;busy=true;$('createButton').disabled=true;$('refresh').disabled=true;
+    if(busy)return;busy=true;$('createButton').disabled=true;$('googleCreateButton').disabled=true;$('refresh').disabled=true;
     const root=$('profiles');root.querySelectorAll('button').forEach(b=>b.disabled=true);
     try{const r=await fn();$('restStatus').textContent=r;}
     catch(error){$('restStatus').textContent=error.message;}
@@ -64,8 +73,8 @@
     for(const p of feeds.profiles){
       const card=el('article');card.className='profile';card.append(el('h3',p.config.name),
         el('p',p.profile_id+' · revision '+p.revision+' · '+p.status),
-        table(['Configuration','Value'],[['Fixed endpoint',p.config.endpoint],['Credential binding available',p.credential_binding_available],['Change window (hours)',p.config.window_hours],['Overlap (minutes)',p.config.overlap_minutes],['Last attempt',p.last_attempt_at],['Last successful retention',p.last_success_at],['Checkpoint',p.checkpoint],['Retained log',p.log_id],['Last result',p.last_result?JSON.stringify(p.last_result):null]]));
-      const read=check('Authorize one bounded read from the exact configured endpoint.');
+        table(['Configuration','Value'],[...(p.provider==='google'?[['Provider','Google Workspace audit'],['Application',p.config.application],['Customer',p.config.customer_id],['User scope',p.config.user_key],['Case notion',p.config.case_basis],['Reporting lag (minutes)',p.config.ingestion_lag_minutes]]:[['Fixed endpoint',p.config.endpoint]]),['Credential binding available',p.credential_binding_available],['Change window (hours)',p.config.window_hours],['Overlap (minutes)',p.config.overlap_minutes],['Last attempt',p.last_attempt_at],['Last successful retention',p.last_success_at],['Checkpoint',p.checkpoint],['Retained log',p.log_id],['Last result',p.last_result?JSON.stringify(p.last_result):null]]));
+      const read=check(p.provider==='google'?'Authorize one bounded Google audit read for the exact customer, application and user scope.':'Authorize one bounded read from the exact configured endpoint.');
       const retain=check('Authorize retention of the selected mapped events locally.');
       const run=button('Run next window',()=>action(async()=>{
         if(!read.box.checked||!retain.box.checked)throw Error('Confirm both read and retention.');
@@ -114,6 +123,14 @@
         mapping:{event_id:$('eventId').value,case_id:$('caseId').value,activity:$('activity').value,event_time:$('eventTime').value,
           change_time:$('changeTime').value,resource:$('resource').value||null},confirm_configuration:$('confirmConfig').checked,confirm_activity_labels:$('confirmLabels').checked});
       $('confirmConfig').checked=$('confirmLabels').checked=false;return 'Feed saved. No source was read.';
+    });
+  };
+  $('googleCreate').onsubmit=event=>{
+    event.preventDefault();
+    action(async()=>{
+      await api(base+'/google',{name:$('googleName').value,connection_id:$('googleConnection').value,customer_id:$('googleCustomer').value,user_key:$('googleUser').value,application:$('googleApplication').value,case_basis:$('googleCase').value,initial_since:$('googleSince').value,window_hours:Number($('googleWindow').value),overlap_minutes:Number($('googleOverlap').value),ingestion_lag_minutes:Number($('googleLag').value),page_size:Number($('googlePage').value),confirm_configuration:$('googleConfirm').checked,confirm_audit_retention:$('googleRetention').checked,confirm_domain_scope:$('googleDomain').checked,confirm_drive_parameters:$('googleParameters').checked});
+      for(const id of ['googleConfirm','googleRetention','googleDomain','googleParameters'])$(id).checked=false;
+      return 'Google audit profile saved. No source was read.';
     });
   };
   $('refresh').onclick=load;
