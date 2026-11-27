@@ -285,14 +285,16 @@
       </div>
       <div class="card" id="pvOAuth">
         <h2>Business system sign-in</h2>
+        <p><a href="/enterprise-connectors">Open enterprise connector operations and customer REST feeds</a></p>
         <div class="muted">Connect a business system with an app you registered in your own tenant. You approve the access at the provider; tokens stay encrypted on this computer and are never shown to AI. Connecting reads nothing by itself: each connector still asks before reading.</div>
         <div class="pv-delete">
-          <select id="pvOAuthProvider" aria-label="Provider"><option value="salesforce">Salesforce</option><option value="servicenow">ServiceNow</option><option value="microsoft">Microsoft 365</option><option value="atlassian">Atlassian (Jira)</option><option value="zendesk">Zendesk</option></select>
+          <select id="pvOAuthProvider" aria-label="Provider"><option value="salesforce">Salesforce</option><option value="servicenow">ServiceNow</option><option value="microsoft">Microsoft 365</option><option value="atlassian">Atlassian (Jira)</option><option value="zendesk">Zendesk</option><option value="google">Google Workspace audit</option></select>
           <input type="text" id="pvOAuthHost" placeholder="Host or tenant (e.g. acme.my.salesforce.com)" aria-label="Provider host or tenant" spellcheck="false">
           <input type="text" id="pvOAuthClient" placeholder="Client ID" aria-label="Client ID" spellcheck="false">
           <input type="password" id="pvOAuthSecret" placeholder="Client secret (only if required)" aria-label="Client secret (optional)" autocomplete="off">
           <button type="button" class="secondary" id="pvOAuthConnect">Connect</button>
         </div>
+        <label><input type="checkbox" id="pvOAuthSfIdentity"> For Salesforce history, additionally request identity scope (transient organization and integration-user verification).</label>
         <div class="muted" id="pvOAuthStatus" role="status" aria-live="polite"></div>
         <div id="pvOAuthList" aria-label="Connected business systems"></div>
       </div>
@@ -1373,7 +1375,8 @@
       const value = id => panel.querySelector(id).value.trim();
       try {
         const result = await api('/v1/connector-oauth/begin', send('POST', {provider: value('#pvOAuthProvider'),
-          host: value('#pvOAuthHost') || null, client_id: value('#pvOAuthClient'), client_secret: value('#pvOAuthSecret') || null}));
+          host: value('#pvOAuthHost') || null, client_id: value('#pvOAuthClient'), client_secret: value('#pvOAuthSecret') || null,
+          ...(value('#pvOAuthProvider')==='salesforce'&&panel.querySelector('#pvOAuthSfIdentity').checked?{scopes:['api','refresh_token','id']}: {})}));
         panel.querySelector('#pvOAuthSecret').value = '';
         window.open(result.authorization_url, '_blank', 'noopener');
         if (oauthStatus) oauthStatus.textContent = 'Approve access in the new tab, then return here. Register ' + result.redirect_uri + ' as the redirect URI of your app.';
