@@ -16,13 +16,13 @@ test('rejects non-PR, completed, missing, ambiguous, foreign or mismatched assoc
 });
 function mock({state='closed',openBranch=false,dry=false,reopened=false,changed=false}={}){
   const calls=[];let reads=0;
-  const pr={state,head:{sha,ref:'feature',repo:{id,owner:{login:'owner'}}},base:{repo:{id}}};
+  const pr={number,state,head:{sha,ref:'feature',repo:{id,owner:{login:'owner'}}},base:{repo:{id}}};
   const github={rest:{actions:{
-    listWorkflowRunsForRepo:async args=>({data:{workflow_runs:args.status==='queued'?[queued]:[]}}),
+    listWorkflowRunsForRepo:async args=>{assert.equal(args.head_sha,sha);return {data:{workflow_runs:[queued]}};},
     getWorkflowRun:async()=>({data:changed?{...queued,status:'completed'}:queued}),
     cancelWorkflowRun:async a=>calls.push(a.run_id)
   },pulls:{get:async()=>({data:{...pr,state:reopened&&++reads>1?'open':state}}),
-    list:async()=>({data:openBranch?[{number:8}]:[]})}}};
+    list:async args=>({data:args.state==='closed'?[{...pr,state:'closed'}]:openBranch?[{number:8}]:[]})}}};
   const context={repo:{owner:'owner',repo:'repo'},eventName:dry?'workflow_dispatch':'schedule',
     payload:{repository:{id},inputs:{dry_run:'true'}}};
   const core={info(){},warning(){},setFailed(m){throw Error(m)}};
@@ -33,4 +33,12 @@ test('preserves active PRs, open branch reuse, dry runs, reopened PRs and comple
   for(const config of [{state:'open'},{openBranch:true},{dry:true},{reopened:true},{changed:true}]){
     let m=mock(config);await run(m);assert.deepEqual(m.calls,[]);
   }
+});
+test('closed-event targets the exact PR head without querying other closed PRs',async()=>{
+  let m=mock();
+  m.context.eventName='pull_request_target';
+  m.context.payload.pull_request={...association,state:'closed'};
+  const list=m.github.rest.pulls.list;
+  m.github.rest.pulls.list=async args=>{assert.equal(args.state,'open');return list(args);};
+  await run(m);assert.deepEqual(m.calls,[99]);
 });

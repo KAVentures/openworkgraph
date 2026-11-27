@@ -23,19 +23,35 @@ async function run({github, context, core}) {
   const base = {owner, repo};
   let examined = 0, cancelled = 0, errors = 0;
   const seen = new Set();
-  for (const status of ACTIVE) {
-    // Bound per-run API use; subsequent hourly runs scan again.
-    for (let page = 1; page <= 3; page++) {
+  // A global queue can exceed GitHub's 1,000-result search cap. Enumerate
+  // recently retired PRs directly, then query runs by their exact head SHA.
+  // Limit each invocation to 100 PRs and 100 actionable runs.
+  const targets = target ? [target] : [];
+  if (!target) {
+    for (let page = 1; page <= 3 && targets.length < 100; page++) {
+      const result = await github.rest.pulls.list({
+        ...base, state:'closed', sort:'updated', direction:'desc', per_page:100, page
+      });
+      for (const pr of result.data) {
+        if (targets.length >= 100) break;
+        if (pr.state === 'closed' && !pr.merged_at && pr.head?.repo?.id === repositoryId &&
+            pr.base?.repo?.id === repositoryId && pr.head.sha) targets.push(pr);
+      }
+      if (result.data.length < 100) break;
+    }
+  }
+  outer: for (const closed of targets) {
+    for (let page = 1; page <= 2; page++) {
       const result = await github.rest.actions.listWorkflowRunsForRepo({
-        ...base, event:'pull_request', status, per_page:100, page,
-        ...(target ? {head_sha:target.head.sha} : {})
+        ...base, event:'pull_request', head_sha:closed.head.sha, per_page:100, page
       });
       const runs = result.data.workflow_runs;
       for (const item of runs) {
         if (seen.has(item.id)) continue;
         seen.add(item.id);
-        const number = closedRunCandidate(item, repositoryId, target?.number);
+        const number = closedRunCandidate(item, repositoryId, closed.number);
         if (number === null) continue;
+        if (examined >= 100) break outer;
         examined++;
         try {
           const pr = (await github.rest.pulls.get({...base,pull_number:number})).data;
