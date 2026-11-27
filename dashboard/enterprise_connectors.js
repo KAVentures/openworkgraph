@@ -47,7 +47,7 @@
       const h=threshold();
       const [r,feeds,grants,sql]=await Promise.all([api(base+'?freshness_hours='+h),api(base+'/rest'),api('/v1/connector-oauth').catch(()=>({connections:[]})),api(base+'/sql/catalog').catch(()=>({sources:[],unavailable:true}))]);
       if(turn!==generation)return;
-      latest=r;render(r);renderProfiles(feeds,r);renderGoogleGrants(grants);renderSfGrants(grants);renderSqlCatalog(sql);$('download').disabled=false;
+      latest=r;render(r);renderProfiles(feeds,r);renderGoogleGrants(grants);renderSfGrants(grants);renderSnGrants(grants);renderSqlCatalog(sql);$('download').disabled=false;
       $('status').textContent='Local inventory refreshed. No provider reads performed.';
     }catch(error){if(turn===generation)$('status').textContent=error.message;}
     finally{if(turn===generation)$('refresh').disabled=busy;}
@@ -83,6 +83,29 @@
     selected.box.onchange=()=>{fields.disabled=ids.disabled=!selected.box.checked;fields.required=selected.box.checked;};
     fieldset.append(selected.node,fl,il);$('sfSelections').append(fieldset);
   }
+  const snTables=['incident','problem','change_request','change_task','sc_request','sc_req_item','sc_task','sysapproval_approver'];
+  function renderSnGrants(grants){
+    const select=$('snConnection'),previous=select.value;
+    select.replaceChildren();
+    for(const grant of (grants.connections||[]).filter(g=>g.provider==='servicenow'&&!g.reauthorization_required&&g.has_refresh_token&&(g.scopes||[]).length===1&&g.scopes.includes('useraccount'))){
+      const option=el('option',grant.connection_id+' · '+(grant.host||'instance'));
+      option.value=grant.connection_id;select.append(option);
+    }
+    if([...select.options].some(o=>o.value===previous))select.value=previous;
+    $('snCreateButton').disabled=busy||!select.options.length;
+  }
+  for(const name of snTables){
+    const fieldset=el('fieldset');fieldset.append(el('legend',name));
+    const selected=check('Include '+name);selected.box.id='snSelect'+name;
+    const created=check('Include record creation');created.box.id='snCreated'+name;
+    const fields=el('input');fields.id='snFields'+name;fields.placeholder='state,assignment_group';fields.maxLength=2500;
+    const ids=el('input');ids.id='snIds'+name;ids.placeholder='Optional comma-separated sys_ids';ids.maxLength=3400;
+    const fl=el('label','Tracked audit field names (comma separated)');fl.append(fields);
+    const il=el('label','Exact record IDs (comma separated)');il.append(ids);
+    fields.disabled=ids.disabled=created.box.disabled=true;
+    selected.box.onchange=()=>{fields.disabled=ids.disabled=created.box.disabled=!selected.box.checked;};
+    fieldset.append(selected.node,fl,il,created.node);$('snSelections').append(fieldset);
+  }
   let sqlSources=[];
   function renderSqlCatalog(catalog){
     sqlSources=catalog.sources||[];
@@ -112,7 +135,7 @@
   }
   $('sqlSource').onchange=()=>{$('sqlConfirm').checked=false;renderSqlReview();};
   async function action(fn){
-    if(busy)return;busy=true;$('createButton').disabled=true;$('googleCreateButton').disabled=true;$('sqlCreateButton').disabled=true;$('refresh').disabled=true;
+    if(busy)return;busy=true;$('createButton').disabled=true;$('googleCreateButton').disabled=true;$('sqlCreateButton').disabled=true;$('sfCreateButton').disabled=true;$('snCreateButton').disabled=true;$('refresh').disabled=true;
     const root=$('profiles');root.querySelectorAll('button').forEach(b=>b.disabled=true);
     try{const r=await fn();$('restStatus').textContent=r;}
     catch(error){$('restStatus').textContent=error.message;}
@@ -123,8 +146,8 @@
     for(const p of feeds.profiles){
       const card=el('article');card.className='profile';card.append(el('h3',p.config.name),
         el('p',p.profile_id+' · revision '+p.revision+' · '+p.status),
-        table(['Configuration','Value'],[...(p.provider==='google'?[['Provider','Google Workspace audit'],['Application',p.config.application],['Customer',p.config.customer_id],['User scope',p.config.user_key],['Case notion',p.config.case_basis],['Reporting lag (minutes)',p.config.ingestion_lag_minutes]]:p.provider==='salesforce'?[['Provider','Salesforce field history'],['Instance',p.config.instance_host],['Organization',p.config.organization_id],['User',p.config.user_id],['Reviewed object/field/record scope',JSON.stringify(p.config.selections)],['Reporting lag (minutes)',p.config.ingestion_lag_minutes]]:p.provider==='slack'?[['Provider','Slack native'],['Mode',p.config.mode],['Enterprise',p.config.enterprise_id],['Workspace',p.config.team_id],['Channel',p.config.channel_id],['Case notion',p.config.case_basis],['Audit action filters',p.config.actions.join(', ')||'All'],['Audit actor filter',p.config.actor_id],['Reporting lag (minutes)',p.config.ingestion_lag_minutes]]:p.provider==='sql'?[['Provider','Native SQL'],['Source alias',p.config.source_alias],['Engine',p.config.engine],['Reviewed source definition',p.config.source_sha256],['Retained schema pin',p.source_schema_sha256||'No successful snapshot yet']]:[['Fixed endpoint',p.config.endpoint]]),['Credential binding available',p.credential_binding_available],['Change window (hours)',p.config.window_hours],['Overlap (minutes)',p.config.overlap_minutes],['Last attempt',p.last_attempt_at],['Last successful retention',p.last_success_at],['Checkpoint',p.checkpoint],['Retained log',p.log_id],['Last result',p.last_result?JSON.stringify(p.last_result):null]]));
-      const read=check(p.provider==='google'?'Authorize one bounded Google audit read for the exact customer, application and user scope.':p.provider==='salesforce'?'Authorize one bounded read of the exact approved Salesforce history scope.':p.provider==='slack'?'Authorize one bounded read from the exact selected Slack scope.':p.provider==='sql'?'Authorize one bounded read-only SQL snapshot from the exact approved source.':'Authorize one bounded read from the exact configured endpoint.');
+        table(['Configuration','Value'],[...(p.provider==='google'?[['Provider','Google Workspace audit'],['Application',p.config.application],['Customer',p.config.customer_id],['User scope',p.config.user_key],['Case notion',p.config.case_basis],['Reporting lag (minutes)',p.config.ingestion_lag_minutes]]:p.provider==='servicenow'?[['Provider','ServiceNow operations'],['Instance',p.config.instance_host],['Reviewed table/field/record scope',JSON.stringify(p.config.selections)],['Require repeat read',p.config.verify_repeat],['Reporting lag (minutes)',p.config.ingestion_lag_minutes]]:p.provider==='salesforce'?[['Provider','Salesforce field history'],['Instance',p.config.instance_host],['Organization',p.config.organization_id],['User',p.config.user_id],['Reviewed object/field/record scope',JSON.stringify(p.config.selections)],['Reporting lag (minutes)',p.config.ingestion_lag_minutes]]:p.provider==='slack'?[['Provider','Slack native'],['Mode',p.config.mode],['Enterprise',p.config.enterprise_id],['Workspace',p.config.team_id],['Channel',p.config.channel_id],['Case notion',p.config.case_basis],['Audit action filters',p.config.actions.join(', ')||'All'],['Audit actor filter',p.config.actor_id],['Reporting lag (minutes)',p.config.ingestion_lag_minutes]]:p.provider==='sql'?[['Provider','Native SQL'],['Source alias',p.config.source_alias],['Engine',p.config.engine],['Reviewed source definition',p.config.source_sha256],['Retained schema pin',p.source_schema_sha256||'No successful snapshot yet']]:[['Fixed endpoint',p.config.endpoint]]),['Credential binding available',p.credential_binding_available],['Change window (hours)',p.config.window_hours],['Overlap (minutes)',p.config.overlap_minutes],['Last attempt',p.last_attempt_at],['Last successful retention',p.last_success_at],['Checkpoint',p.checkpoint],['Retained log',p.log_id],['Last result',p.last_result?JSON.stringify(p.last_result):null]]));
+      const read=check(p.provider==='google'?'Authorize one bounded Google audit read for the exact customer, application and user scope.':p.provider==='servicenow'?'Authorize one bounded read of the exact approved ServiceNow scope.':p.provider==='salesforce'?'Authorize one bounded read of the exact approved Salesforce history scope.':p.provider==='slack'?'Authorize one bounded read from the exact selected Slack scope.':p.provider==='sql'?'Authorize one bounded read-only SQL snapshot from the exact approved source.':'Authorize one bounded read from the exact configured endpoint.');
       const retain=check('Authorize retention of the selected mapped events locally.');
       const run=button('Run next window',()=>action(async()=>{
         if(!read.box.checked||!retain.box.checked)throw Error('Confirm both read and retention.');
@@ -236,6 +259,20 @@
         confirm_configuration:$('sfConfirm').checked,confirm_field_labels:$('sfLabels').checked,confirm_identity_metadata:$('sfIdentity').checked,confirm_unrestricted_records:$('sfAll').checked});
       for(const id of ['sfConfirm','sfLabels','sfIdentity','sfAll'])$(id).checked=false;
       return 'Salesforce profile saved. No source was read.';
+    });
+  };
+  $('snCreate').onsubmit=event=>{
+    event.preventDefault();
+    action(async()=>{
+      const values=id=>$(id).value.split(',').map(x=>x.trim()).filter(Boolean);
+      const selections=snTables.filter(n=>$('snSelect'+n).checked).map(n=>({table:n,fields:values('snFields'+n),record_ids:values('snIds'+n),include_created:$('snCreated'+n).checked}));
+      if(!selections.length||selections.some(x=>!x.fields.length&&!x.include_created))throw Error('Choose audit fields or creation events for each selected table.');
+      await api(base+'/servicenow',{name:$('snName').value,connection_id:$('snConnection').value,instance_host:$('snHost').value.trim(),selections,
+        initial_since:$('snSince').value,window_hours:Number($('snWindow').value),overlap_minutes:Number($('snOverlap').value),ingestion_lag_minutes:Number($('snLag').value),page_size:Number($('snPage').value),
+        verify_repeat:$('snRepeat').checked,confirm_configuration:$('snConfirm').checked,confirm_utc_account:$('snUTC').checked,confirm_audit_retention:$('snAudit').checked,
+        confirm_creation_retention:$('snCreation').checked,confirm_unrestricted_records:$('snAll').checked});
+      for(const id of ['snConfirm','snUTC','snAudit','snCreation','snAll'])$(id).checked=false;
+      return 'ServiceNow profile saved. No source was read.';
     });
   };
   $('refresh').onclick=load;
