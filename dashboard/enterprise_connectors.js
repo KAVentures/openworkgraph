@@ -1190,6 +1190,63 @@
     }catch(error){$('catchupStatus').textContent=error.message;}
     finally{catchupLock(false);$('catchupResults').querySelectorAll('input').forEach(n=>n.disabled=false);}
   };
+  let routineBusy=false,routineGeneration=0;
+  function routineLock(value){
+    routineBusy=value;$('routineRefresh').disabled=value;
+    $('routineIntents').querySelectorAll('button').forEach(b=>b.disabled=value);
+    if(value)$('routineReview').querySelectorAll('button,input').forEach(n=>n.disabled=true);
+  }
+  async function routineLoad(){
+    if(routineBusy)return;const turn=++routineGeneration;
+    $('routineReview').replaceChildren();routineLock(true);
+    try{
+      const data=await api(base+'/routine-reconciliation');
+      if(turn!==routineGeneration)return;
+      const root=$('routineIntents');
+      root.replaceChildren(table(['Provider / profile','Run','Lease expires','Journal state','Eligible','Reason'],
+        data.intents.map(p=>[p.provider+' / '+p.profile_id,p.run_id,p.lease_expires_at,p.journal_state,p.eligible,p.reason])));
+      for(const p of data.intents){
+        const actions=el('div');
+        const preview=button('Review '+p.provider+' / '+p.profile_id,async()=>{
+          if(routineBusy)return;const reviewTurn=++routineGeneration;routineLock(true);
+          $('routineReview').replaceChildren();
+          try{
+            const plan=await api(base+'/routine-reconciliation/preview',{profile_id:p.profile_id,revision:p.revision,run_id:p.run_id});
+            if(reviewTurn!==routineGeneration)return;
+            const r=$('routineReview'),i=plan.intent;
+            r.append(el('h3','Exact routine intent review'),table(['Field','Value'],[
+              ['Profile',p.profile_id],['Run',i.run_id],['Admitted start',i.admitted_since],['Admitted end',i.admitted_until],
+              ['Checkpoint preserved',plan.checkpoint],['Legacy admission missing',i.legacy_missing_admission],
+              ['Eligible',i.eligible],['Reason',i.reason],['Next revision',plan.next_revision],['Expires',plan.expires_at]]));
+            if(!i.eligible)return;
+            const checks=[check('I reviewed this exact expired intent.'),check('I stopped or reconciled competing workers.'),
+              check('I accept the remote outcome is uncertain; this does not cancel remote reads.'),
+              check('I approve disabling the feed and separately reauthorizing dispatch.')];
+            const apply=button('Reconcile reviewed intent',async()=>{
+              if(routineBusy||reviewTurn!==routineGeneration||!checks.every(x=>x.box.checked))return;
+              routineLock(true);
+              try{
+                const receipt=await api(base+'/routine-reconciliation/apply',{profile_id:p.profile_id,revision:p.revision,run_id:p.run_id,
+                  reviewed_at:plan.reviewed_at,plan_sha256:plan.plan_sha256,confirm_exact_intent:true,confirm_workers_reconciled:true,
+                  confirm_uncertain_remote_outcome:true,confirm_disable_and_reauthorize:true});
+                routineLock(false);await routineLoad();
+                $('routineReview').append(el('p','Reconciled '+receipt.run_id+'. Feed disabled; checkpoint preserved. Separate enablement and reauthorization required.'));
+                if(!busy)await load();
+              }catch(e){$('routineReview').replaceChildren();$('routineStatus').textContent=e.message;}
+              finally{routineLock(false);}
+            },true);
+            for(const x of checks){x.box.onchange=()=>apply.disabled=routineBusy||!checks.every(y=>y.box.checked);r.append(x.node);}
+            r.append(apply);
+          }catch(e){$('routineStatus').textContent=e.message;}
+          finally{routineLock(false);}
+        });
+        actions.append(preview);root.append(actions);
+      }
+      $('routineStatus').textContent=data.intents.length+' routine intents observed. Provider health unknown.';
+    }catch(e){$('routineIntents').replaceChildren();$('routineStatus').textContent=e.message;}
+    finally{routineLock(false);}
+  }
+  $('routineRefresh').onclick=routineLoad;
   $('refresh').onclick=load;
   $('freshness').oninput=()=>{generation++;latest=null;$('download').disabled=true;$('refresh').disabled=busy;$('inventory').replaceChildren();$('profiles').replaceChildren();$('status').textContent='Threshold changed. Refresh local inventory.';};
   $('download').onclick=async()=>{
