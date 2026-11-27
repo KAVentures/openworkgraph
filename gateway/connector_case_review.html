@@ -61,6 +61,14 @@ async function temporalPage(at){
     table(Object.entries(r.summary).map(([k,v])=>[k.replaceAll('_',' '),v])),
     el('p','Temporal scope: '+r.temporal_scope_sha256),
     el('p','Showing groups '+(r.offset+1)+'–'+(r.offset+r.groups.length)+' of '+r.summary.linked_groups+'.')];
+  nodes.push(el('h3','Cross-case source-pair patterns'),el('p','Group counts weight each linked case once. Gap quantiles use only wholly separated groups in the indicated direction; these are not operational waiting-time estimates.'));
+  for(const roll of r.source_pair_rollup){
+    const c=el('article');c.append(el('h4',roll.left_provider+' · '+roll.left_job_id+' versus '+roll.right_provider+' · '+roll.right_job_id),
+      table([['Linked groups',roll.linked_groups],['Wholly left before right',roll.wholly_left_before_right_groups],['Wholly right before left',roll.wholly_right_before_left_groups],['Not wholly separated',roll.not_wholly_separated_groups],['Groups with unaligned dates',roll.groups_with_unaligned_dates],['Groups with overlapping intervals',roll.groups_with_overlaps],['Groups with equal reported points',roll.groups_with_equal_reported_points],['Groups with both ordering directions',roll.groups_with_pairs_in_both_directions]]));
+    for(const [name,d] of [['Left before right',roll.left_before_right_gap_distribution],['Right before left',roll.right_before_left_gap_distribution]])if(d)c.append(el('h5',name+' · '+d.groups+' wholly separated groups'),table([['p50 gap bounds',bounds(d.p50_bounds)],['p90 gap bounds',bounds(d.p90_bounds)]]));
+    nodes.push(c);
+  }
+  nodes.push(el('h3','Linked case detail'));
   for(const g of r.groups){
     const c=el('article');c.append(el('h4',g.linked_case_id),table([['Reported span bounds',bounds(g.reported_span_bounds)],['Events',g.event_count],['Unaligned events',g.unaligned_events]]));
     for(const source of g.sources)c.append(el('h5',source.provider+' · '+source.job_id),
