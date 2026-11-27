@@ -109,4 +109,41 @@ def install(app,jobs,admin):
         from .html_pages import render_page
         return render_page("connector_case_review.html")
 
+    from .connector_crosswalk_proposals import Propose, propose, MAX_REQUEST as CROSSWALK_MAX
+    from .connector_review_plans import SavedPlans, Save, Delete
+    saved=SavedPlans(reviewed)
+    saved_start,saved_stop=retention_hooks(saved)
+    extend_lifespan(app,startup=saved_start,shutdown=saved_stop)
+    app.state.connector_review_plans=saved
+
+    @router.post(base+"/{organization_id}/crosswalk-proposals")
+    async def crosswalk_proposals(organization_id:str,request:Request,authorization:str|None=Header(default=None)):
+        principal=owner(authorization,True)
+        return await reply(propose,reviewed,organization_id,await parse(request,Propose,maximum=CROSSWALK_MAX),principal)
+
+    @router.get(base+"/{organization_id}/saved-reviews")
+    async def saved_reviews(organization_id:str,authorization:str|None=Header(default=None)):
+        owner(authorization)
+        return await reply(saved.inventory,organization_id)
+
+    @router.post(base+"/{organization_id}/saved-reviews")
+    async def save_review(organization_id:str,request:Request,authorization:str|None=Header(default=None)):
+        principal=owner(authorization,True)
+        return await reply(saved.save,organization_id,await parse(request,Save,maximum=MAX_REQUEST+4096),principal)
+
+    @router.get(base+"/{organization_id}/saved-reviews/{plan_id}/{revision}")
+    async def read_review(organization_id:str,plan_id:str,revision:int,authorization:str|None=Header(default=None)):
+        principal=owner(authorization,True)
+        return await reply(saved.read,organization_id,plan_id,revision,principal)
+
+    @router.post(base+"/{organization_id}/saved-reviews/{plan_id}/delete")
+    async def delete_review(organization_id:str,plan_id:str,request:Request,authorization:str|None=Header(default=None)):
+        principal=owner(authorization,True)
+        return await reply(saved.delete,organization_id,plan_id,await parse(request,Delete),principal)
+
+    @router.get("/admin/connector-crosswalks",include_in_schema=False)
+    def crosswalk_page():
+        from .html_pages import render_page
+        return render_page("connector_crosswalks.html")
+
     app.include_router(router)
