@@ -90,7 +90,7 @@ def test_later_sample_and_digest_only_receipt(comparison):
     assert saved["queue"]["revision"]==d["revision"]+1
     assert saved["packet"]["revision"]==p["revision"]+1
     assert items(f.queues,saved["queue"])==[i]
-    assert set(saved["receipt"])=={"reassessment_sha256","recorded_at","source_remediation_verified"}
+    assert set(saved["receipt"])=={"reassessment_sha256","comparison_content_sha256","recorded_at","source_remediation_verified"}
     with f.jobs._tx("customer") as c:
         state=f.queues._require(c,"customer",d["queue_id"])
         serialized=json.dumps(state)
@@ -99,6 +99,12 @@ def test_later_sample_and_digest_only_receipt(comparison):
             assert s.events[0].activity not in serialized
     with pytest.raises(JobError,match="exception_queue_revision_changed"):
         record(f,d,p,value,report)
+    fresh={**value,"expected_queue_revision":saved["queue"]["revision"],
+           "expected_packet_revision":saved["packet"]["revision"]}
+    repeated=compare(f,saved["queue"],saved["packet"],fresh)
+    assert repeated["comparison_content_sha256"]==report["comparison_content_sha256"]
+    with pytest.raises(JobError,match="reassessment_already_recorded"):
+        record(f,saved["queue"],saved["packet"],fresh,repeated)
 
 
 def test_wrong_rule_mapping_and_consents_refused(comparison):
