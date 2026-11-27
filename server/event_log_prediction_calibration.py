@@ -4,7 +4,7 @@ import json
 from threading import BoundedSemaphore
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from . import event_log_prediction_snapshots as snapshots
 from . import event_log_predictions as predictions
@@ -18,7 +18,13 @@ HASH=r"^[a-f0-9]{64}$"
 
 class Settings(BaseModel):
     model_config=ConfigDict(extra="forbid",strict=True)
-    bins: Literal[5,10,20]=10
+    bins: int=10
+
+    @field_validator('bins')
+    @classmethod
+    def valid_bins(cls,value):
+        if value not in (5,10,20):raise ValueError('choose 5, 10 or 20 bins')
+        return value
     minimum_cases: int=Field(default=5,ge=5,le=5000)
     group_by: Literal["none","activity","basis"]="activity"
 

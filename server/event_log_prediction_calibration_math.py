@@ -146,7 +146,8 @@ def summary(rows,bins,minimum,outcome):
 
 def build(rows,settings,outcome):
     grouped=defaultdict(list)
-    for row in rows:grouped[group_key(row,settings.group_by)].append(row)
+    if settings.group_by!="none":
+        for row in rows:grouped[group_key(row,settings.group_by)].append(row)
     eligible=[(k,v) for k,v in grouped.items() if len(v)>=settings.minimum_cases]
     eligible.sort(key=lambda item:(-len(item[1]),str(item[0])))
     selected=eligible[:MAX_GROUPS]

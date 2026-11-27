@@ -78,3 +78,7 @@ Append /evidence and include the same settings plus evidence:
  historical backfills cannot occur. The current report is a point-in-time
  observation. All requests are bounded and dashboard-session-only, with
  no-store responses and one concurrent local calibration review.
+
+## Verification
+
+The new regressions include 160 exhaustive binary-label assignment oracle populations and 120 independent quantile-membership oracle populations, tie and boundary cases, discrete ECE minima, subgroup support, actual retained-log append and deletion, stale pins, strict input validation, dashboard authorization and real-browser evidence/download workflows. Native CI remains required.
