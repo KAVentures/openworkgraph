@@ -142,6 +142,9 @@ def metadata(p):
         elif provider=="hubspot":
             from . import hubspot_history_feed as hs
             ref=hs.source(cfg)["credential_env"]
+        elif provider=="workday":
+            from . import workday_raas_feed as wd
+            ref=wd.source(cfg)["credential_env"]
         elif provider=="netsuite":
             from . import netsuite_event_feed as ns
             ref=ns.source(cfg)["credential_env"]
