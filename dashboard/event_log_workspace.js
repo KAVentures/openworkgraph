@@ -3357,14 +3357,29 @@
         const review=button('Review failures','secondary');review.setAttribute('aria-label','Review failures for '+f.folder);review.disabled=!f.files_failed;
         const schedule=button('Run every day','secondary');schedule.setAttribute('aria-label','Run feed for '+f.folder+' every day');
         const remove=button('Delete feed','secondary');remove.setAttribute('aria-label','Delete feed for '+f.folder);
-        run.onclick=async()=>{clearPreview();run.disabled=true;out.replaceChildren(el('div','Reading the folder\u2026','muted'));
-          try{const r2=await (await api('/v1/event-logs/feeds/'+encodeURIComponent(f.feed_id)+'/run',{method:'POST',headers:{'X-OWG-Local-Storage-Confirmed':'true'}})).json();
-            out.replaceChildren(el('div',describe(r2)+(r2.events_added?' Analyse again to include them.':'')),...(r2.files||[]).filter(file=>file.outcome==='failed').map(file=>el('div',file.name+': '+file.error,'muted')));render(await getJSON(base));}
-          catch(error){out.replaceChildren(el('div',error.message,'muted'));run.disabled=false;}};
-        retry.onclick=async()=>{clearPreview();retry.disabled=true;out.replaceChildren(el('div','Retrying unchanged failed files…','muted'));
-          try{const r2=await (await api('/v1/event-logs/feeds/'+encodeURIComponent(f.feed_id)+'/retry-failed',{method:'POST',headers:{'X-OWG-Local-Storage-Confirmed':'true'}})).json();
-            out.replaceChildren(el('div',describe(r2)+' Only unchanged failed files were retried; new files are left for Run now.'+(!r2.files_appended&&!r2.files_failed?' No matching failed files were ready; they may have changed, been removed or still be settling.':'')+(r2.events_added?' Analyse again to include them.':'')),...(r2.files||[]).filter(file=>file.outcome==='failed').map(file=>el('div',file.name+': '+file.error,'muted')));render(await getJSON(base));}
-          catch(error){out.replaceChildren(el('div',error.message,'muted'));retry.disabled=false;}};
+        const holdFeedActions=()=>{
+          const controls=[previewButton,mappingButton,run,retry,review,schedule,remove];
+          const previous=controls.map(control=>control.disabled);
+          controls.forEach(control=>{control.disabled=true;});
+          clearPreview();failureTurn++;failures.replaceChildren();
+          return ()=>{if(generation===state.generation&&wrap.isConnected)controls.forEach((control,index)=>{control.disabled=previous[index];});};
+        };
+        async function runFeedOperation(suffix,pending,describeResult){
+          const restore=holdFeedActions();out.replaceChildren(el('div',pending,'muted'));
+          let result;
+          try{
+            result=await (await api('/v1/event-logs/feeds/'+encodeURIComponent(f.feed_id)+suffix,{method:'POST',headers:{'X-OWG-Local-Storage-Confirmed':'true'}})).json();
+            const updated=await getJSON(base);
+            if(generation!==state.generation||!wrap.isConnected)return;
+            render(updated);
+            out.replaceChildren(el('div',describeResult(result)),...(result.files||[]).filter(file=>file.outcome==='failed').map(file=>el('div',file.name+': '+file.error,'muted')));
+          }catch(error){if(generation===state.generation&&wrap.isConnected){
+            out.replaceChildren(el('div',result?describeResult(result)+' Feed list refresh failed: '+error.message:error.message,'muted'),
+              ...((result&&result.files)||[]).filter(file=>file.outcome==='failed').map(file=>el('div',file.name+': '+file.error,'muted')));
+          }}finally{restore();}
+        }
+        run.onclick=()=>runFeedOperation('/run','Reading the folder…',r2=>describe(r2)+(r2.events_added?' Analyse again to include them.':''));
+        retry.onclick=()=>runFeedOperation('/retry-failed','Retrying unchanged failed files…',r2=>describe(r2)+' Only unchanged failed files were retried; new files are left for Run now.'+(!r2.files_appended&&!r2.files_failed?' No matching failed files were ready; they may have changed, been removed or still be settling.':'')+(r2.events_added?' Analyse again to include them.':''));
         const failures=el('div');failures.setAttribute('role','status');let failureTurn=0;
         async function failurePage(after){
           const turn=++failureTurn;failures.replaceChildren(el('div','Loading failures…','muted'));

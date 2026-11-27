@@ -103,8 +103,14 @@ const path=require('node:path');
   const changed=JSON.parse(JSON.stringify(payload));changed.objects[1].relationships=[{objectId:'item1',qualifier:'contains'}];
   await load(changed);await page.locator('#owgEventLogAppend').click();await status('Added 0 new events');
   await page.locator('#owgEventLogCaseType').selectOption('order');await page.locator('#owgEventLogAnalyze').click();await page.locator('#owgObjectRules').waitFor();
+  // Reanalysis may list every retained type, including zero-event types.
+  // Explicitly construct the supplied order→item rule instead of assuming
+  // the first option is still order or the previous template is selected.
+  await page.locator('#owgObjectRuleTemplate').selectOption('supplied_object_cardinality');
+  await page.locator('#owgObjectRuleType').selectOption('order');
   await page.locator('#owgObjectRuleRelated').selectOption('item');await page.locator('#owgObjectRuleMin').fill('1');await page.locator('#owgObjectRuleMax').fill('2');
   await page.locator('#owgObjectRuleAdd').click();data=await check();
+  assert.equal(data.results[0].rule.object_type,'order');assert.equal(data.results[0].rule.related_type,'item');
   assert.equal(data.results[0].violating,0);assert.equal(data.supplied_relationship_basis.revision,1);assert.equal(data.supplied_relationship_basis.retained_relationships,5);
   assert.notEqual(data.supplied_relationship_basis.relationships_sha256,before);
   assert.match(await page.locator('#owgEventLogPick').textContent(),/1 events/);
