@@ -137,7 +137,7 @@ def main():
         if current.model_dump()!=snap.model_dump():
             raise SystemExit("retained snapshot changed; obtain new approval")
         print(json.dumps(publish(snap,gateway=os.environ["OWG_CONNECTOR_GATEWAY_URL"],
-            token=os.environ["OWG_CONNECTOR_WORKER_TOKEN"],organization=os.environ["OWG_CONNECTOR_ORGANIZATION"],
+            token=rest.resolve_secret("OWG_CONNECTOR_WORKER_TOKEN"),organization=os.environ["OWG_CONNECTOR_ORGANIZATION"],
             job=os.environ["OWG_CONNECTOR_JOB_ID"],expected_grant=args.grant)))
 
 
