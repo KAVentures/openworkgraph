@@ -5,6 +5,7 @@ from starlette.concurrency import run_in_threadpool
 from .analysis_publication_routes import ID, body, response
 from .analysis_portfolio import PortfolioRequest, review
 from .analysis_revision_comparisons import compare
+from .analysis_history_review import HistoryRequest, preview as history_preview, review as history_review
 
 
 def build_router(store, human):
@@ -27,5 +28,18 @@ def build_router(store, human):
             raise HTTPException(403, 'Missing analysis permission: org:analysis:read')
         parsed = await body(request, PortfolioRequest, max_bytes=8*1024)
         return await run_in_threadpool(response, review, store, principal, parsed)
+
+    @router.get("/v1/human/analyses/{view_id}/history-review")
+    async def preview_history(view_id: str = Path(pattern=ID), principal=Depends(human)):
+        if 'org:analysis:read' not in principal.scopes:
+            raise HTTPException(403, 'Missing analysis permission: org:analysis:read')
+        return await run_in_threadpool(response, history_preview, store, principal, view_id)
+
+    @router.post("/v1/human/analyses/{view_id}/history-review")
+    async def review_history(request: Request, view_id: str = Path(pattern=ID), principal=Depends(human)):
+        if 'org:analysis:read' not in principal.scopes:
+            raise HTTPException(403, 'Missing analysis permission: org:analysis:read')
+        parsed = await body(request, HistoryRequest, max_bytes=8*1024)
+        return await run_in_threadpool(response, history_review, store, principal, view_id, parsed)
 
     return router
