@@ -4,31 +4,13 @@ Quality preview is counts-only. Gated export atomically rechecks live
 publication pins and the exact quality report before disclosing event rows.
 The existing ordinary export remains available with its separate consent.
 """
-from pydantic import Field,StrictBool,StrictInt,model_validator
-from shared.connector_event_snapshot import Snapshot,Strict,DIGEST,digest,manifest_digest,MAX_EVENTS
-from shared.connector_publication_quality import summarize,evaluate
+from pydantic import Field,StrictBool,model_validator
+from shared.connector_event_snapshot import Snapshot,Strict,DIGEST,manifest_digest
+from shared.connector_quality_verification import Policy,SourceDeclaration,calculate,FORMAT
+from shared.connector_bundle_import import Bundle as PortableBundle,FORMAT as BUNDLE_FORMAT,MAPPING
 from .connector_event_publications import Pin,MAX_EXPORT_EVENTS
 from .connector_jobs import JobError
 from .connector_case_review import Export as CaseExport,sorted_pins
-
-FORMAT="openworkgraph.connector-publication-quality.v1"
-
-
-class Policy(Strict):
-    min_events:StrictInt|None=Field(default=None,ge=1,le=MAX_EVENTS)
-    min_cases:StrictInt|None=Field(default=None,ge=1,le=MAX_EVENTS)
-    max_singleton_case_rate_bps:StrictInt|None=Field(default=None,ge=0,le=10000)
-    max_single_activity_case_rate_bps:StrictInt|None=Field(default=None,ge=0,le=10000)
-    max_largest_activity_rate_bps:StrictInt|None=Field(default=None,ge=0,le=10000)
-    max_timestamp_tie_event_rate_bps:StrictInt|None=Field(default=None,ge=0,le=10000)
-    min_cases_eligible_for_reported_order:StrictInt|None=Field(default=None,ge=1,le=MAX_EVENTS)
-
-    @model_validator(mode="after")
-    def configured(self):
-        if not any(v is not None for v in self.model_dump().values()):
-            raise ValueError("at least one explicit evidence gate required")
-        return self
-
 
 class Review(Strict):
     snapshots:list[Pin]=Field(min_length=1,max_length=10)
@@ -76,33 +58,22 @@ def _load(store,c,org,spec):
 
 
 def _report(org,spec,loaded):
-    sources=[]
-    for pin,job,d,snap in loaded:
-        policy=spec.source_overrides.get(pin.job_id,spec.policy).model_dump()
-        m=snap.manifest
-        metrics=summarize([e.model_dump() for e in snap.events],day_precision=m.provider=="sap")
-        checks=evaluate(metrics,policy)
-        status="fail" if any(g["status"]=="fail" for g in checks) else (
-            "indeterminate" if any(g["status"]=="indeterminate" for g in checks) else "pass")
-        # No labels, case/event identities, source credentials or raw rows.
-        sources.append({**pin.model_dump(),"provider":m.provider,
-                        "window":{"since":m.since,"until":m.until,"change_checkpoint":m.checkpoint},
-                        "expires_at":d["expires_at"],"activity_mode":m.activity_mode,
-                        "policy_origin":"source_override" if pin.job_id in spec.source_overrides else "default",
-                        "policy":policy,"metrics":metrics,"gates":checks,"status":status})
-    summary={"sources":len(sources),"events":sum(x["metrics"]["events"] for x in sources),
-             "source_local_cases":sum(x["metrics"]["cases"] for x in sources),
-             "passing_sources":sum(x["status"]=="pass" for x in sources),
-             "failing_sources":sum(x["status"]=="fail" for x in sources),
-             "indeterminate_sources":sum(x["status"]=="indeterminate" for x in sources)}
-    report={"format":FORMAT,"organization_id":org,"summary":summary,"sources":sources,
-            "default_policy":spec.policy.model_dump(),
-            "expires_at":min(x["expires_at"] for x in sources),
-            "all_selected_sources_pass":all(x["status"]=="pass" for x in sources),
-            "provider_completeness_verified":False,"business_identity_verified":False,
-            "physical_occurrence_times_verified":False,"cross_source_identity_inferred":False,
-            "interpretation":"Thresholds apply to the selected disclosed sample only. Singleton cases and repeated labels may be legitimate. Reported timestamp ties are not verified simultaneous actions. SAP business dates do not establish occurrence order. Source-local cases are not distinct enterprise business cases."}
-    return {**report,"quality_sha256":digest(report)}
+    """Use the exact same quality contract as the offline verifier."""
+    manifests=[];events=[];declarations=[]
+    for pin,_,definition,snap in loaded:
+        manifests.append({"job_id":pin.job_id,"grant_id":pin.grant_id,
+                          "manifest":snap.manifest.model_dump(),"manifest_sha256":pin.manifest_sha256})
+        events.extend({"source_namespace":pin.job_id,**event.model_dump()} for event in snap.events)
+        declarations.append(SourceDeclaration(**pin.model_dump(),expires_at=definition["expires_at"],
+            policy_origin="source_override" if pin.job_id in spec.source_overrides else "default",
+            policy=spec.source_overrides.get(pin.job_id,spec.policy)))
+    try:
+        bundle=PortableBundle(format=BUNDLE_FORMAT,manifests=manifests,events=events,
+            event_count=len(events),cross_source_identity_verified=False,
+            provider_completeness_verified=False,mapping=MAPPING)
+        return calculate(org,spec.policy,declarations,bundle)
+    except ValueError:
+        raise JobError("retained_snapshot_integrity_failure") from None
 
 
 def _fresh(store,report):
