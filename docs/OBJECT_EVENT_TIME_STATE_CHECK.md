@@ -107,6 +107,12 @@ data are not stored in them.
 
 ## Analyze one exact object
 
+Use **Find an object ID** to search or browse objects linked to the selected
+activity, type, date window, optional event, and exact qualifier. Search is
+literal and case-sensitive. Results are ordered by ID, and subsequent pages
+are pinned to the append revision. Unlinked objects do not appear in this
+scoped lookup; an exact ID can also be entered directly.
+
 Optionally enter an exact object ID for the selected object type before running
 the check. Only events of the stored activity linked to that object (and the
 exact qualifier, if set) are included. The event bound applies after this
