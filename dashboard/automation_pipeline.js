@@ -1698,6 +1698,168 @@
               }catch(e){if(active())scenarioHost.replaceChildren(el('p',e.message));}
             };
             parts.push(launch,scenarioHost);
+            const investmentLaunch=button('Compare phased investment business cases','secondary');
+            investmentLaunch.id='owgInvestmentOpen';
+            const investmentHost=el('div');investmentHost.id='owgInvestmentResult';
+            let investmentGeneration=0;
+            investmentLaunch.onclick=async()=>{
+              const generationId=++investmentGeneration;
+              investmentHost.replaceChildren(el('p','Reading exact retained measurement inventory…','muted'));
+              const active=()=>generationId===investmentGeneration&&generation===detailGeneration&&investmentHost.isConnected;
+              const path='/v1/automation-pipeline/'+encodeURIComponent(idea.idea_id)+'/investment-case';
+              try{
+                const inv=await(await api(path+'/inventory')).json();
+                if(!active())return;
+                if(inv.idea_revision!==idea.revision)throw Error('Idea changed; reopen before evaluating.');
+                const status=el('p');status.id='owgInvestmentStatus';status.setAttribute('role','status');
+                const resultHost=el('div'),selectionHost=el('div'),designHost=el('div'),review=el('textarea');
+                resultHost.id='owgInvestmentReport';review.id='owgInvestmentReviewed';review.readOnly=true;review.rows=8;review.style.width='100%';
+                const labelled=(text,node)=>{const label=el('label',text+' ');label.append(node);return label;};
+                const numeric=(label,min,max,step='any')=>{const n=el('input');n.type='number';n.min=String(min);n.max=String(max);n.step=step;
+                  n.required=true;n.setAttribute('aria-label',label);return n;};
+                const currency=el('input');currency.maxLength=3;currency.placeholder='SEK';currency.setAttribute('aria-label','Investment currency');
+                const hourly=numeric('Declared labor hour value',0,1e12),discount=numeric('Monthly discount rate percent',0,100),
+                  horizon=numeric('Investment horizon months',1,60,'1');
+                const sensitivity=el('input');sensitivity.value='0,25,50,75,100';sensitivity.setAttribute('aria-label','Cash conversion sensitivity percentages');
+                const prepare=button('Prepare exact investment assumptions','secondary'),run=button('Evaluate phased business cases','secondary'),
+                  download=button('Download investment scenario JSON','secondary'),csv=button('Download monthly cash flows CSV','secondary');
+                prepare.id='owgInvestmentPrepare';run.id='owgInvestmentRun';download.id='owgInvestmentDownload';csv.id='owgInvestmentCsv';
+                let serial=0,draft=null,report=null;
+                const invalidate=()=>{serial++;draft=report=null;review.value='';run.disabled=download.disabled=csv.disabled=true;
+                  resultHost.replaceChildren();status.textContent='Review assumptions and prepare again.';};
+                const inputFields=el('div',null,'row');
+                inputFields.append(labelled('Currency',currency),labelled('Labor hour value',hourly),
+                  labelled('Monthly discount rate (%)',discount),labelled('Horizon months',horizon),
+                  labelled('Cash conversion sensitivity (%)',sensitivity));
+                const choices=[];
+                for(const m of inv.measurements){
+                  const check=el('input');check.type='checkbox';check.setAttribute('aria-label','Include '+m.period+' measurement '+m.start+' '+m.end);
+                  selectionHost.append(labelled(m.period+' · '+m.start+' to '+m.end+' · '+m.cases+' cases · '+m.source,check));
+                  choices.push({m,check});
+                }
+                const designs=[];
+                function addDesign(){
+                  if(designs.length>=4){status.textContent='At most four designs.';return;}
+                  const group=el('fieldset');group.append(el('legend','Investment design'));
+                  const name=el('input');name.maxLength=80;name.setAttribute('aria-label','Investment design name');
+                  const conversion=numeric('Cash conversion percent',0,100),initial=numeric('Initial cash cost',0,1e12);
+                  const phaseHost=el('div'),phases=[];
+                  const design={group,name,conversion,initial,phases};
+                  function addPhase(){
+                    if(phases.length>=12){status.textContent='At most 12 phases per design.';return;}
+                    const panel=el('fieldset');panel.append(el('legend','Monthly phase'));
+                    const start=numeric('Phase start month',1,60,'1'),end=numeric('Phase end month',1,60,'1'),
+                      cases=numeric('Phase monthly cases',0,1e8,'1'),effect=numeric('Retained effort effect percent',0,100),
+                      nonlabor=numeric('Nonlabor cash change per case',-1e12,1e12),fixed=numeric('Recurring fixed cash cost',0,1e12),
+                      oneTime=numeric('One-time cost at phase start',0,1e12);
+                    const row={panel,start,end,cases,effect,nonlabor,fixed,oneTime};
+                    const remove=button('Remove phase','secondary');remove.onclick=()=>{phases.splice(phases.indexOf(row),1);panel.remove();invalidate();};
+                    panel.append(labelled('Start month',start),labelled('End month (inclusive)',end),labelled('Monthly cases',cases),
+                      labelled('Retained effort effect (%)',effect),labelled('Nonlabor cash change per case (positive = reduction)',nonlabor),
+                      labelled('Recurring fixed cost per month',fixed),labelled('One-time cost at phase start',oneTime),remove);
+                    phases.push(row);phaseHost.append(panel);invalidate();
+                  }
+                  const add=button('Add monthly phase','secondary');add.onclick=addPhase;
+                  const remove=button('Remove design','secondary');remove.onclick=()=>{designs.splice(designs.indexOf(design),1);group.remove();invalidate();};
+                  group.append(labelled('Design name',name),labelled('Cash conversion of positive capacity value (%)',conversion),
+                    labelled('Initial cash cost at month zero',initial),phaseHost,add,remove);
+                  designs.push(design);designHost.append(group);addPhase();
+                }
+                const add=button('Add alternative investment design','secondary');add.onclick=addDesign;
+                for(const node of [inputFields,selectionHost,designHost]){
+                  node.addEventListener('input',invalidate);node.addEventListener('change',invalidate);
+                }
+                function read(n){
+                  if(n.value===''||!n.checkValidity()||!Number.isFinite(Number(n.value)))throw Error('Enter every numerical assumption explicitly, including zeros.');
+                  return Number(n.value);
+                }
+                prepare.onclick=()=>{
+                  invalidate();
+                  try{
+                    const measurement_ids=choices.filter(c=>c.check.checked).map(c=>c.m.measurement_id);
+                    if(!choices.some(c=>c.check.checked&&c.m.period==='baseline')||!choices.some(c=>c.check.checked&&c.m.period==='after'))throw Error('Select comparable baseline and after measurements.');
+                    if(!/^[A-Z]{3}$/.test(currency.value)||!designs.length)throw Error('Enter one uppercase currency and at least one design.');
+                    const shares=sensitivity.value.split(',').map(x=>{if(!x.trim()||!Number.isFinite(Number(x))||Number(x)<0||Number(x)>100)throw Error('Enter valid comma-separated percentages.');return Number(x)/100;});
+                    draft={snapshot_sha256:inv.snapshot_sha256,measurement_ids,currency:currency.value,
+                      labor_hour_value:read(hourly),monthly_discount_rate:read(discount)/100,horizon_months:read(horizon),
+                      conversion_sensitivity:shares,designs:designs.map(d=>{
+                        if(!d.name.value.trim()||!d.phases.length)throw Error('Every design needs a name and explicit monthly phases.');
+                        return {label:d.name.value.trim(),cash_conversion_share:read(d.conversion)/100,initial_cash_cost:read(d.initial),
+                          phases:d.phases.map(p=>({start_month:read(p.start),end_month:read(p.end),monthly_cases:read(p.cases),
+                            retained_effort_effect_share:read(p.effect)/100,nonlabor_cash_change_per_case:read(p.nonlabor),
+                            recurring_fixed_cash_cost:read(p.fixed),one_time_cash_cost_at_phase_start:read(p.oneTime)}))};
+                      })};
+                    review.value=JSON.stringify(draft,null,2);run.disabled=false;
+                    status.textContent='Review the exact assumptions, then evaluate. No financial record or implementation state will change.';
+                  }catch(error){status.textContent=error.message;}
+                };
+                function table(headers,rows){
+                  const wrap=el('div');wrap.style.cssText='max-width:100%;overflow-x:auto';
+                  const t=el('table'),h=el('thead'),hr=el('tr'),b=el('tbody');
+                  headers.forEach(x=>{const th=el('th',x);th.scope='col';hr.append(th);});h.append(hr);
+                  for(const row of rows){const tr=el('tr');row.forEach(x=>tr.append(el('td',x??'Not within horizon')));b.append(tr);}
+                  t.append(h,b);wrap.append(t);return wrap;
+                }
+                function exportFile(value,type,name){
+                  const url=URL.createObjectURL(new Blob([value],{type})),a=el('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
+                }
+                download.onclick=()=>{if(report&&active())exportFile(JSON.stringify(report,null,2),'application/json','owg-phased-investment.json');};
+                csv.onclick=()=>{
+                  if(!report||!active())return;
+                  const fields=['month','cases','released_hours','additional_hours','converted_positive_labor_value','unconverted_capacity_value',
+                    'additional_labor_cash_cost','nonlabor_cash_change','fixed_cash_cost','one_time_cash_cost','net_cash_flow','net_economic_value',
+                    'discounted_cash_flow','discounted_economic_value','cumulative_cash_flow','cumulative_discounted_cash_flow','cumulative_economic_value'];
+                  const quote=v=>'"'+String(v??'').replaceAll('"','""')+'"';
+                  const safeLabel=v=>/^[=+\-@\t\r\n]/.test(v)?"'"+v:v;
+                  const rows=[['design','currency',...fields],...report.designs.flatMap(d=>d.months.map(m=>[safeLabel(d.label),report.currency,...fields.map(k=>m[k])]))];
+                  exportFile(rows.map(r=>r.map(quote).join(',')).join('\r\n'),'text/csv','owg-phased-investment-months.csv');
+                };
+                run.onclick=async()=>{
+                  if(!draft)return;
+                  const n=++serial,body=draft;report=null;run.disabled=download.disabled=csv.disabled=true;resultHost.replaceChildren();
+                  status.textContent='Evaluating exact phased cash-flow scenarios…';
+                  try{
+                    const data=await post(path,body);
+                    if(!active()||n!==serial)return;
+                    if(data.snapshot_sha256!==inv.snapshot_sha256||data.idea_id!==idea.idea_id)throw Error('Unexpected measurement basis.');
+                    report=data;download.disabled=csv.disabled=false;
+                    const b=data.retained_effort_basis;
+                    resultHost.append(el('h5','Phased investment comparison'),
+                      el('p','Reported effort: '+b.baseline.minutes_per_case+' → '+b.after.minutes_per_case+
+                        ' minutes/case. '+data.selected_measurement_ids.length+' measurements included; '+data.excluded_measurement_ids.length+' excluded.'),
+                      el('p','Currency '+data.currency+' · first design is the explicit comparison baseline. Economic value includes released capacity; cash flow includes only declared cash conversion.','muted'),
+                      table(['Design','Cash NPV','Economic NPV','Peak cash funding','Released hours','Discounted cash sustained break-even month'],
+                        data.designs.map(d=>[d.label,d.cash_npv,d.economic_npv,d.peak_undiscounted_cash_funding_requirement,d.released_hours,
+                          d.discounted_cash_break_even.sustained_nonnegative_from_month])));
+                    for(const d of data.designs){
+                      const details=el('details');details.append(el('summary',d.label+' · monthly cash flow and sensitivity'));
+                      const s=d.cash_conversion_review;
+                      details.append(el('p','Cash NPV change vs first design: '+d.change_vs_first_design.cash_npv+
+                        ' · minimum conversion for nonnegative cash NPV: '+(s.minimum_cash_conversion_share_for_nonnegative_npv??'Not attainable')+
+                        ' (fraction). '+s.status.replaceAll('_',' ')+'.'),
+                        el('p','Unconverted released hours: '+d.unconverted_released_hours+'; additional hours: '+d.additional_hours+
+                          '. Initial investment and additional phase costs are included.'),
+                        table(['Cash conversion fraction','Cash NPV','Nonnegative'],s.sensitivity.map(x=>[x.cash_conversion_share,x.cash_npv,x.cash_npv_nonnegative?'Yes':'No'])),
+                        table(['Month','Cases','Released hours','Extra hours','Cash flow','Economic value','Cumulative cash','Discounted cumulative cash'],
+                          d.months.map(m=>[m.month,m.cases,m.released_hours,m.additional_hours,m.net_cash_flow,m.net_economic_value,
+                            m.cumulative_cash_flow,m.cumulative_discounted_cash_flow])),
+                        el('p','First discounted cash crossing: '+(d.discounted_cash_break_even.first_nonnegative_month??'none')+
+                          '; sustained crossing within horizon: '+(d.discounted_cash_break_even.sustained_nonnegative_from_month??'none')+
+                          '; later reversal: '+String(d.discounted_cash_break_even.returns_below_zero_after_first_crossing)+'.','muted'));
+                      resultHost.append(details);
+                    }
+                    resultHost.append(el('p',data.interpretation,'muted'));status.textContent='Conditional business cases evaluated; no actual cash savings verified.';
+                  }catch(error){if(active()&&n===serial)status.textContent=error.message;}
+                  finally{if(active()&&n===serial)run.disabled=false;}
+                };
+                addDesign();invalidate();
+                investmentHost.replaceChildren(el('h5','Phased investment business cases'),
+                  el('p','Select exact before/after measurements. Enter every monthly phase and alternative explicitly. The retained effort difference is not causal and no quality/adoption assessment is inferred. Cash flow and economic capacity value are separate.','muted'),
+                  selectionHost,inputFields,designHost,add,prepare,field('Exact reviewed investment assumptions',review),run,download,csv,status,resultHost);
+              }catch(error){if(active())investmentHost.replaceChildren(el('p',error.message));}
+            };
+            parts.push(investmentLaunch,investmentHost);
+
           }
           parts.push(el('p',r.interpretation,'muted'));host.replaceChildren(...parts);
         };
