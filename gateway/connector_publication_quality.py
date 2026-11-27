@@ -4,12 +4,12 @@ Quality preview is counts-only. Gated export atomically rechecks live
 publication pins and the exact quality report before disclosing event rows.
 The existing ordinary export remains available with its separate consent.
 """
-from typing import Literal
 from pydantic import Field,StrictBool,StrictInt,model_validator
 from shared.connector_event_snapshot import Snapshot,Strict,DIGEST,digest,manifest_digest,MAX_EVENTS
 from shared.connector_publication_quality import summarize,evaluate
 from .connector_event_publications import Pin,MAX_EXPORT_EVENTS
 from .connector_jobs import JobError
+from .connector_case_review import Export as CaseExport,sorted_pins
 
 FORMAT="openworkgraph.connector-publication-quality.v1"
 
@@ -151,3 +151,35 @@ def export(store,org,spec,principal):
                 "cross_source_identity_verified":False,"provider_completeness_verified":False,
                 "mapping":{"event_id_column":"event_id","case_column":"case_id","activity_column":"activity",
                            "timestamp_column":"observed_at","source_namespace_column":"source_namespace"}}
+
+
+class LinkedExport(CaseExport):
+    quality:Review
+    expected_quality_sha256:str=Field(pattern=DIGEST)
+    confirm_quality_gated_export:StrictBool
+
+    @model_validator(mode="after")
+    def identical_quality_scope(self):
+        if sorted_pins(self.snapshots)!=sorted_pins(self.quality.snapshots):
+            raise ValueError("quality and linkage must pin exactly the same publications")
+        return self
+
+
+def linked_export(reviewed,org,spec,principal):
+    """Gate the same reviewed linkage without an unlocked second transaction."""
+    if not spec.confirm_quality_gated_export or not spec.confirm_link_assertions or not spec.confirm_export:
+        raise JobError("explicit_quality_linkage_and_export_required",403)
+    store=reviewed.publications
+    with reviewed.jobs._tx(org) as c:
+        quality_loaded=_load(store,c,org,spec.quality)
+        quality_report=_report(org,spec.quality,quality_loaded)
+        if quality_report["quality_sha256"]!=spec.expected_quality_sha256:
+            raise JobError("quality_review_changed")
+        if not quality_report["all_selected_sources_pass"]:
+            raise JobError("publication_quality_gates_not_satisfied")
+        linkage_loaded=reviewed._read(c,org,spec)
+        result=reviewed._export_loaded(c,org,spec,principal,linkage_loaded)
+        _fresh(store,quality_report)
+        _audit(store,c,quality_loaded,principal,quality_report,"quality_gated_linked_exported")
+        _fresh(store,quality_report)
+        return {**result,"quality_review":quality_report}
