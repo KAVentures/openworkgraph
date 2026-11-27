@@ -243,6 +243,14 @@ const path=require('node:path');
   assert.equal(followup.packet.state,'completed_unverified');
   assert.equal(followup.source_remediation_verified,false);
   assert.equal(followup.external_execution_authorized,false);
+  await packet.getByText('Compare independently reviewed later evidence',{exact:true}).click();
+  await packet.getByText('Guided mapping — no JSON editing',{exact:true}).waitFor();
+  assert.ok(await packet.getByRole('button',{name:'Load eligible mapping candidates'}).isDisabled());
+  await packet.getByLabel('I approve inspecting the exact selected later and baseline publications and their activity catalogs.').check();
+  assert.ok(await packet.getByRole('button',{name:'Load eligible mapping candidates'}).isDisabled());
+  // Actual later-publication comparisons are exercised in the real
+  // Gateway store regression; the browser fixture has no later grants.
+
 
   await page.locator('#deleteConfirm').check();
   await page.locator('#delete').click();
