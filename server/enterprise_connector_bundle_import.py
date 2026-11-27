@@ -63,6 +63,12 @@ def _history_check(c,log_id,report):
     # A rotated profile or newly linked case scope requires a new log.
     if _pins(report)!=_pins(history[0]):
         raise FeedError("bundle_source_scope_changed_new_log_required")
+    prior_grants={(src["job_id"],src["grant_id"]):src["manifest_sha256"]
+                  for r in history for src in r["sources"]}
+    for src in report["sources"]:
+        prior=prior_grants.get((src["job_id"],src["grant_id"]))
+        if prior is not None and prior!=src["manifest_sha256"]:
+            raise FeedError("bundle_grant_manifest_conflict")
     return log,history
 
 
