@@ -213,6 +213,69 @@ def append(plan, document, ledger, actions, *, expected_plan_sha256,
     return _header(expected_plan_sha256,expected_schedule_sha256,events,history)
 
 
+def withdraw_remaining(plan, document, ledger, *, episode_id, declared_at_ms,
+                       expected_plan_sha256, expected_schedule_sha256, expected_ledger_sha256,
+                       confirmed):
+    """Stop remaining attempts for one episode, retaining completed history."""
+    _confirmed(confirmed)
+    states,orders,*_=replay(plan,document,ledger,expected_plan_sha256=expected_plan_sha256,
+                           expected_schedule_sha256=expected_schedule_sha256,
+                           expected_ledger_sha256=expected_ledger_sha256)
+    eid=cohort.token(episode_id)
+    if eid not in orders:
+        raise ValueError("unknown enrolled episode")
+    now=_stamp(declared_at_ms)
+    actions=[{"episode_id":eid,"arm":a,"action":"withdrawn","declared_at_ms":now}
+             for a in orders[eid]["arm_order"] if states[eid,a]["state"] not in TERMINAL]
+    if not actions:
+        raise ValueError("no remaining attempts to withdraw")
+    return append(plan,document,ledger,actions,expected_plan_sha256=expected_plan_sha256,
+                  expected_schedule_sha256=expected_schedule_sha256,
+                  expected_ledger_sha256=expected_ledger_sha256,confirmed=True)
+
+
+def coverage_without_material(plan, document, ledger, *, expected_plan_sha256,
+                              expected_schedule_sha256, expected_ledger_sha256, confirmed):
+    """Coverage-only fallback when truth/review material is unavailable.
+
+    No reviewed outcomes can be inferred from transport completion. Every
+    binary outcome remains unknown; this never calls the canonical scorer.
+    """
+    _confirmed(confirmed)
+    states,*_=replay(plan,document,ledger,expected_plan_sha256=expected_plan_sha256,
+                    expected_schedule_sha256=expected_schedule_sha256,
+                    expected_ledger_sha256=expected_ledger_sha256)
+    dispositions=[]
+    for (eid,arm),row in sorted(states.items()):
+        status={"completed":"review_unavailable","started":"other"}.get(row["state"],row["state"])
+        dispositions.append({"episode_id":eid,"arm":arm,"status":status})
+    coverage=cohort.inspect(plan,dispositions,expected_plan_sha256=expected_plan_sha256,confirmed=True)
+    body={"format":"owg.pilot-execution-coverage-without-material.v1",
+          "ledger_sha256":expected_ledger_sha256,"coverage":coverage,
+          "review_material_used":False,"canonical_scorer_invoked":False}
+    return {**body,"report_sha256":cohort.digest(body)}
+
+
+def _position_diagnostics(cells,orders):
+    grouped=defaultdict(list)
+    for row in cells:
+        order=orders[row["episode_id"]]
+        grouped[order["team_id"],order["model_id"]].append(row)
+    result=[]
+    for (team,model),rows in sorted(grouped.items()):
+        positions={}
+        for arm in ARMS:
+            positions[arm]=[]
+            for pos in range(1,4):
+                selected=[r for r in rows if r["arm"]==arm and r["position"]==pos]
+                positions[arm].append({"position":pos,"planned":len(selected),
+                    "started":sum("started_at_ms" in r for r in selected),
+                    "completed":sum(r["state"]=="completed" for r in selected),
+                    "terminal_noncompletion":sum(r["state"] in TERMINAL and r["state"]!="completed" for r in selected)})
+        result.append({"team_id":team,"model_id":model,"positions":positions})
+    return result
+
+
 def progress(plan, document, ledger, *, expected_plan_sha256, expected_schedule_sha256,
              expected_ledger_sha256, confirmed):
     _confirmed(confirmed)
@@ -231,6 +294,7 @@ def progress(plan, document, ledger, *, expected_plan_sha256, expected_schedule_
     body={"format":"owg.pilot-execution-progress.v1","ledger_sha256":expected_ledger_sha256,
           "plan_sha256":expected_plan_sha256,"schedule_sha256":expected_schedule_sha256,
           "enrolled":len(orders),"arm_counts":counts,"cells":cells,
+          "position_diagnostics":_position_diagnostics(cells,orders),
           "all_attempts_terminal":all(r["state"] in TERMINAL for r in cells),
           "all_attempts_completed":all(r["state"]=="completed" for r in cells),
           "session_freshness_verified":False,"transport_verified":False,
@@ -262,6 +326,11 @@ def main(argv=None):
     _arguments(a,ledger_required=True)
     a.add_argument("--actions",type=Path,required=True)
     _arguments(sub.add_parser("progress"),ledger_required=True)
+    _arguments(sub.add_parser("coverage"),ledger_required=True)
+    w=sub.add_parser("withdraw-remaining")
+    _arguments(w,ledger_required=True)
+    w.add_argument("--episode-id",required=True)
+    w.add_argument("--declared-at-ms",type=int,required=True)
     args=parser.parse_args(argv)
     try:
         plan=cohort._load(args.plan)
@@ -276,8 +345,15 @@ def main(argv=None):
             else:
                 ledger=cohort._load(args.ledger)
                 kw["expected_ledger_sha256"]=args.ledger_sha256
-                result=(append(plan,doc,ledger,cohort._load(args.actions),**kw)
-                        if args.command=="append" else progress(plan,doc,ledger,**kw))
+                if args.command=="append":
+                    result=append(plan,doc,ledger,cohort._load(args.actions),**kw)
+                elif args.command=="withdraw-remaining":
+                    result=withdraw_remaining(plan,doc,ledger,episode_id=args.episode_id,
+                                              declared_at_ms=args.declared_at_ms,**kw)
+                elif args.command=="coverage":
+                    result=coverage_without_material(plan,doc,ledger,**kw)
+                else:
+                    result=progress(plan,doc,ledger,**kw)
         cohort._write(args.out,result)
     except (ValueError,TypeError,OSError,RecursionError,OverflowError):
         parser.exit(2,"Pilot execution operation refused: invalid evidence, pin, or file access.\n")
