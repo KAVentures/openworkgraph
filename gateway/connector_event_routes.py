@@ -74,4 +74,39 @@ def install(app,jobs,admin):
         from .html_pages import render_page
         return render_page("connector_events.html")
 
+    from .connector_case_review import ReviewedCases, Catalog, Plan, Export, linked_csv, MAX_REQUEST
+    reviewed=ReviewedCases(store)
+    app.state.connector_case_review=reviewed
+
+    @router.post(base+"/{organization_id}/case-catalog")
+    async def case_catalog(organization_id:str,request:Request,authorization:str|None=Header(default=None)):
+        principal=owner(authorization,True)
+        return await reply(reviewed.catalog,organization_id,await parse(request,Catalog),principal)
+
+    @router.post(base+"/{organization_id}/case-review")
+    async def case_review(organization_id:str,request:Request,authorization:str|None=Header(default=None)):
+        principal=owner(authorization,True)
+        return await reply(reviewed.preview,organization_id,await parse(request,Plan,maximum=MAX_REQUEST),principal)
+
+    @router.post(base+"/{organization_id}/case-export")
+    async def case_export(organization_id:str,request:Request,authorization:str|None=Header(default=None)):
+        principal=owner(authorization,True)
+        result=await reply(reviewed.export,organization_id,await parse(request,Export,maximum=MAX_REQUEST),principal)
+        result.headers["Content-Disposition"]='attachment; filename="owg-reviewed-cross-source-cases.json"'
+        return result
+
+    @router.post(base+"/{organization_id}/case-export-csv")
+    async def case_export_csv(organization_id:str,request:Request,authorization:str|None=Header(default=None)):
+        principal=owner(authorization,True)
+        result=await reply(reviewed.export,organization_id,await parse(request,Export,maximum=MAX_REQUEST),principal)
+        import json
+        return Response(linked_csv(json.loads(result.body)),media_type="text/csv",
+                        headers={"Cache-Control":"no-store","Content-Disposition":'attachment; filename="owg-reviewed-cross-source-machine-import.csv"',
+                                 "X-Content-Type-Options":"nosniff"})
+
+    @router.get("/admin/connector-case-review",include_in_schema=False)
+    def case_page():
+        from .html_pages import render_page
+        return render_page("connector_case_review.html")
+
     app.include_router(router)
