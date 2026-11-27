@@ -80,6 +80,24 @@ def freeze(roster, *, confirmed):
     return {**body, "plan_sha256": digest(body)}
 
 
+def prepare(truth, assignments, *, confirmed):
+    """Build the frozen plan from existing canonical episode JSONL records."""
+    rows = _index(truth)
+    assigned = _index(assignments, ("episode_id","team_id","model_id","source_state_id"))
+    if not rows or set(rows)!=set(assigned):
+        raise ValueError("assignment must cover exact episode roster")
+    return freeze([{**assigned[k],"truth_sha256":digest(rows[k])} for k in rows],
+                  confirmed=confirmed)
+
+
+def disposition_template(plan, *, expected_plan_sha256, confirmed):
+    """Private worklist; all rows start explicitly not started."""
+    if confirmed is not True:
+        raise ValueError("explicit template confirmation required")
+    enrolled=_verify(plan,expected_plan_sha256)
+    return [{"episode_id":eid,"arm":a,"status":"not_started"} for eid in sorted(enrolled) for a in ARMS]
+
+
 def _verify(plan, expected):
     exact(plan, ("format", "episodes", "arms", "plan_sha256"))
     if (pin(expected) != plan["plan_sha256"] or
@@ -272,13 +290,24 @@ def main(argv=None):
     s.add_argument("--dispositions",type=Path,required=True)
     for arm in ARMS:
         s.add_argument("--"+arm,type=Path,required=True)
-    for cmd in (a,b,s):
+    p=sub.add_parser("prepare")
+    p.add_argument("--episodes",type=Path,required=True)
+    p.add_argument("--assignments",type=Path,required=True)
+    t=sub.add_parser("template")
+    t.add_argument("--plan",type=Path,required=True)
+    t.add_argument("--plan-sha256",required=True)
+    for cmd in (a,b,s,p,t):
         cmd.add_argument("--out",type=Path,required=True)
         cmd.add_argument("--confirm",action="store_true",required=True)
     args=parser.parse_args(argv)
     try:
         if args.command=="freeze":
             result=freeze(_load(args.roster),confirmed=args.confirm)
+        elif args.command=="prepare":
+            result=prepare(_load_jsonl(args.episodes),_load(args.assignments),confirmed=args.confirm)
+        elif args.command=="template":
+            result=disposition_template(_load(args.plan),expected_plan_sha256=args.plan_sha256,
+                                        confirmed=args.confirm)
         elif args.command=="inspect":
             result=inspect(_load(args.plan),_load(args.observations),
                            expected_plan_sha256=args.plan_sha256,confirmed=args.confirm)
