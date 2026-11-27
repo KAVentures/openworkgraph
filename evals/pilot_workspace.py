@@ -327,7 +327,7 @@ def coverage(path,*,expected_head_sha256):
     return {"head_sha256":state["head_sha256"],"coverage":result,"review_material_used":False}
 
 
-def reconcile(path,truth,batches,*,expected_head_sha256,confirmed):
+def reconcile(path,truth,batches,*,expected_head_sha256,confirmed,_observe=None):
     execution._confirmed(confirmed)
     state=status(path,expected_head_sha256=expected_head_sha256)
     cells=_validate(state)
@@ -351,7 +351,7 @@ def reconcile(path,truth,batches,*,expected_head_sha256,confirmed):
             dispositions.extend({"episode_id":x["episode_id"],"arm":x["arm"],"status":"review_pending"}
                                 for x in row["assignments"])
     result=blinded.reconcile(state["plan"],state["schedule"],state["ledger"],truth,batches,
-                             review_dispositions=dispositions,**_pins(state))
+                             review_dispositions=dispositions,_observe=_observe,**_pins(state))
     body={"format":"owg.local-pilot-reconciliation.v1","head_sha256":state["head_sha256"],
           "revision":state["revision"],"active_batches":len(active),"submitted_batches":len(submitted),
           "result":result,"current_head_at_finish_not_verified":True}

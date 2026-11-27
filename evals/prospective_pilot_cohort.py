@@ -191,7 +191,7 @@ def inspect(plan, observations, *, expected_plan_sha256, confirmed):
     return {**body,"coverage_sha256":digest(body)}
 
 
-def score(plan, truth, runs, dispositions, *, expected_plan_sha256, confirmed):
+def score(plan, truth, runs, dispositions, *, expected_plan_sha256, confirmed, _observe=None):
     """Bind actual submitted truth and reviewed runs to the frozen denominator.
 
     The canonical existing product-value scorer is invoked only on complete
@@ -226,6 +226,8 @@ def score(plan, truth, runs, dispositions, *, expected_plan_sha256, confirmed):
                                  "review_sha256":digest(run),
                                  **{k:reviewed[k] for k in OUTCOMES}})
     coverage = inspect(plan, observations,expected_plan_sha256=expected_plan_sha256,confirmed=True)
+    if _observe is not None:
+        _observe(observations, coverage)
     full = coverage["complete_coverage"]
     report = product_value.report(truth, *(runs[a] for a in ARMS)) if full else None
     body = {"format":"owg.prospective-pilot-score.v1","coverage":coverage,
