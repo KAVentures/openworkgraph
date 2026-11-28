@@ -10,16 +10,19 @@ export function mountImplementationPlanning(host,{getBasis,getBusy,post,lock,dow
   const prepare=button('Prepare planning worklist'),saveTemplate=button('Download blank planning worklist'),compare=button('Compare reviewed scenarios'),savePlan=button('Download reviewed assumptions'),saveReport=button('Download planning review');
   const confirm=el('input');confirm.type='checkbox';
   const status=el('p','Review a complete proposal batch before planning.');status.setAttribute('role','status');status.setAttribute('aria-live','polite');
-  const editor=el('div'),output=el('div');let template=null,result=null,rows=[],epoch=0;
+  const editor=el('div'),output=el('div'),portfolioOutput=el('div');let template=null,result=null,rows=[],epoch=0,portfolioResult=null;
+  const reconcilePortfolio=button('Reconcile with saved portfolio'),savePortfolio=button('Download portfolio reconciliation');
+  const portfolioStatus=el('p','Compare reviewed scenarios first.');portfolioStatus.setAttribute('role','status');portfolioStatus.setAttribute('aria-live','polite');
+  function clearPortfolio(){portfolioResult=null;portfolioOutput.replaceChildren();portfolioStatus.textContent='Refresh against the saved portfolio after scenario comparison.';}
   const hex=v=>typeof v==='string'&&/^[a-f0-9]{64}$/.test(v);
   function refresh(){
     const busy=getBusy(),b=getBasis();currency.disabled=busy;prepare.disabled=busy||!b||! /^[A-Z]{3}$/.test(currency.value.trim());
     saveTemplate.disabled=busy||!template;confirm.disabled=busy||!template;compare.disabled=busy||!template||!confirm.checked;
-    savePlan.disabled=saveReport.disabled=busy||!result;
+    savePlan.disabled=saveReport.disabled=busy||!result;reconcilePortfolio.disabled=busy||!result;savePortfolio.disabled=busy||!portfolioResult;
     for(const row of rows){row.enabled.disabled=busy;for(const n of row.controls)n.disabled=busy||!row.enabled.checked;}
   }
-  function invalidate(){epoch++;template=result=null;rows=[];confirm.checked=false;editor.replaceChildren();output.replaceChildren();status.textContent='Prepare a planning worklist from the current reviewed batch.';refresh();}
-  function edit(){epoch++;result=null;confirm.checked=false;output.replaceChildren();status.textContent='Assumptions changed. Review and confirm again.';refresh();}
+  function invalidate(){epoch++;template=result=null;clearPortfolio();rows=[];confirm.checked=false;editor.replaceChildren();output.replaceChildren();status.textContent='Prepare a planning worklist from the current reviewed batch.';refresh();}
+  function edit(){epoch++;result=null;clearPortfolio();confirm.checked=false;output.replaceChildren();status.textContent='Assumptions changed. Review and confirm again.';refresh();}
   currency.addEventListener('input',invalidate);confirm.addEventListener('change',refresh);
   function render(work,b){
     const original=JSON.parse(b.request.proposals_json);
@@ -55,7 +58,7 @@ export function mountImplementationPlanning(host,{getBasis,getBusy,post,lock,dow
     }catch(e){if(ticket===epoch){template=null;rows=[];editor.replaceChildren();status.textContent=e.message;}}finally{lock(false);refresh();}
   };
   compare.onclick=async()=>{
-    if(compare.disabled||!template)return;const t=template,ticket=++epoch;result=null;output.replaceChildren();confirm.checked=false;lock(true);
+    if(compare.disabled||!template)return;const t=template,ticket=++epoch;result=null;clearPortfolio();output.replaceChildren();confirm.checked=false;lock(true);
     try{
       const plan={...t.work,confirm_human_reviewed_assumptions:true,candidates:rows.map(row=>({...row.item,assessment:assumptions(row)}))};
       const r=await post('/v1/ai-opportunity-handoff/planning-compare',{...t.request,plan_json:JSON.stringify(plan)});if(ticket!==epoch)return;
@@ -73,8 +76,29 @@ export function mountImplementationPlanning(host,{getBasis,getBusy,post,lock,dow
       output.append(el('p',q.portfolio_total_reason),el('p',q.interpretation));result=r;status.textContent='Planning comparison complete: '+q.assessed_count+' assessed of '+q.distinct_reviewed_count+' distinct candidates; '+q.item_count+' returned items retained. Review SHA-256: '+q.planning_review_sha256+'.';
     }catch(e){if(ticket===epoch){output.replaceChildren();status.textContent=e.message;}}finally{lock(false);refresh();}
   };
+  reconcilePortfolio.onclick=async()=>{
+    if(reconcilePortfolio.disabled||!result||!template)return;
+    const t=template,selected=result,ticket=++epoch;clearPortfolio();lock(true);
+    try{
+      const r=await post('/v1/ai-opportunity-handoff/planning-portfolio',{...t.request,plan_json:selected.plan_json,planning_review_sha256:selected.planning_review_sha256});
+      if(ticket!==epoch)return;
+      if(r.format!=='openworkgraph.ai-implementation-portfolio-result.v1'||r.portfolio_written!==false||r.execution_authorized!==false||!hex(r.reconciliation_sha256)||typeof r.report_json!=='string')throw Error('Unexpected portfolio reconciliation response.');
+      const q=JSON.parse(r.report_json),expected=t.b.report.items;
+      if(q.format!=='openworkgraph.ai-implementation-portfolio-link.v1'||q.packet_sha256!==t.work.packet_sha256||q.batch_review_sha256!==t.work.batch_review_sha256||q.planning_review_sha256!==selected.planning_review_sha256||q.currency!==t.work.currency||q.reconciliation_sha256!==r.reconciliation_sha256||!hex(q.portfolio_lineage_snapshot_sha256)||q.portfolio_written!==false||q.execution_authorized!==false||q.savings_verified!==false||!Array.isArray(q.items)||q.items.length!==expected.length||q.item_count!==expected.length||q.matched_count!==q.items.filter(x=>x.mapping_status==='matched').length)throw Error('Unexpected portfolio reconciliation population.');
+      for(const [i,row] of q.items.entries()){
+        if(row.item_index!==expected[i].item_index||row.proposal_sha256!==expected[i].proposal_sha256||row.structural_status!==expected[i].status)throw Error('Portfolio item mismatch.');
+        const section=el('section');section.append(el('h4','Item '+(row.item_index+1)+' — '+row.mapping_status.replaceAll('_',' ')));
+        if(row.saved_idea){const a=row.saved_idea,d=row.dependency_comparison;section.append(el('p',a.idea_id+' · revision '+a.revision+' · '+a.state),el('p','Saved budget: '+(a.budget?String(a.budget.amount)+' '+a.budget.currency+' ('+a.budget.basis+')':'not recorded')+'; '+row.budget_comparison.replaceAll('_',' ')+'.'));
+          if(d)section.append(el('p','Missing links: '+(d.missing_saved_links.join(', ')||'none')+'; outside scenario: '+(d.saved_links_outside_scenario.join(', ')||'none')+'; unresolved items: '+(d.unresolved_candidate_indexes.map(x=>x+1).join(', ')||'none')+'.'));
+        }portfolioOutput.append(section);
+      }
+      portfolioOutput.append(el('p',q.interpretation));portfolioResult=r;
+      portfolioStatus.textContent='Portfolio reconciliation: '+q.matched_count+' matched saved ideas; '+q.item_count+' returned items retained. Snapshot only — refresh before separate decisions.';
+    }catch(e){if(ticket===epoch){clearPortfolio();portfolioStatus.textContent=e.message;}}finally{lock(false);refresh();}
+  };
+  savePortfolio.onclick=()=>{if(portfolioResult&&!getBusy())download('owg-portfolio-reconciliation.json','application/json',portfolioResult.report_json);};
   saveTemplate.onclick=()=>{if(template&&!getBusy())download('owg-planning-worklist.json','application/json',template.raw);};
   savePlan.onclick=()=>{if(result&&!getBusy())download('owg-planning-assumptions.json','application/json',result.plan_json);};
   saveReport.onclick=()=>{if(result&&!getBusy())download('owg-planning-review.json','application/json',result.report_json);};
-  const details=el('details');details.id='owgImplementationPlanning';details.append(el('summary','Compare implementation economics and dependencies'),el('p','Enter reviewed assumptions, not measured outcomes. Net minutes include review, supervision, rework and escalation; negative is allowed. Blank pairs are unknown. All costs use the same currency. First-year values assume twelve identical operating months. No rankings or combined savings are inferred.'),field('Planning currency code',currency),prepare,saveTemplate,editor,field('I reviewed these assumptions and uncertainties',confirm),compare,status,output,savePlan,saveReport);host.append(details);refresh();return {refresh,invalidate};
+  const details=el('details');details.id='owgImplementationPlanning';details.append(el('summary','Compare implementation economics and dependencies'),el('p','Enter reviewed assumptions, not measured outcomes. Net minutes include review, supervision, rework and escalation; negative is allowed. Blank pairs are unknown. All costs use the same currency. First-year values assume twelve identical operating months. No rankings or combined savings are inferred.'),field('Planning currency code',currency),prepare,saveTemplate,editor,field('I reviewed these assumptions and uncertainties',confirm),compare,status,output,savePlan,saveReport,reconcilePortfolio,portfolioStatus,portfolioOutput,savePortfolio);host.append(details);refresh();return {refresh,invalidate};
 }

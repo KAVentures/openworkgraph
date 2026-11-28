@@ -97,3 +97,7 @@ private bounded files.
 ```sh
 python -m pytest -q tests/test_ai_implementation_review.py tests/test_ai_implementation_batch.py tests/test_ai_implementation_planning.py
 ```
+
+## Reconcile a reviewed scenario with the saved portfolio
+
+After a successful planning comparison, select **Reconcile with saved portfolio**. This read-only request recomputes the original batch and planning pins, then reads the current saved local idea inventory. It matches only retained AI-proposal lineage (original packet, proposal, structural review, source reference and preview digest presence), not titles or manually typed source text. Missing, ambiguous and conflicting matches, refused items, duplicate items and unassessed candidates stay visible. A match shows the saved idea ID, revision, state and budget; the saved budget is compared to the candidate's declared one-time cost interval only in the same currency. Resolved dependency links, missing links, external saved links and unresolved candidates are shown separately. External saved links may be legitimate. Net human hours in the planning scenario are not the existing pipeline's gross eligible hours. No assessment is automatically copied or approved and the optimizer is not invoked. Download the canonical reconciliation report if needed; changes to the scenario invalidate it. Refresh the snapshot and independently review saved revisions before using the existing portfolio controls. The endpoint does not authorize actions or assert actual cost, feasibility or savings.
