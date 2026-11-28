@@ -16,7 +16,7 @@ export function mountAiOpportunityHandoff(host, post, onCreated, onStage){
   const controls=[sources,proposal,title,description],order=el('ol');
   let generation=0,basis=null,busy=false,orderedSources=[];
   let packetGeneration=0,preparedPacket=null;
-  let generatedResult=null,selectedGenerated=false,trialPanel=null,evidencePicker=null,batchPanel=null,batchProposal=null,compatPanel=null,compatProposal=null;
+  let generatedResult=null,selectedGenerated=false,trialPanel=null,evidencePicker=null,batchPanel=null,batchProposal=null,compatPanel=null,compatProposal=null,checkpointPanel=null;
   const budget=el('select');
   for(const [value,label] of [[131072,'128 KiB'],[524288,'512 KiB'],[2097152,'2 MiB'],[8388608,'8 MiB']]){
     const option=el('option',label);option.value=String(value);budget.append(option);
@@ -52,16 +52,7 @@ export function mountAiOpportunityHandoff(host, post, onCreated, onStage){
   downloadCompactGuide.onclick=()=>{
     if(!busy&&preparedPacket?.compact_download)downloadLocal('owg-ai-implementation-compact-instructions.txt','text/plain;charset=utf-8',preparedPacket.compact_download.instructions);
   };
-  prepare.onclick=async()=>{
-    if(busy)return;
-    invalidatePacket();const ticket=packetGeneration;lock(true);
-    packetStatus.textContent='Preparing selected evidence locally…';
-    try{
-      const files=orderedSources.slice(),maxBytes=Number(budget.value);
-      if(files.length<1||files.length>8)throw Error('Choose one to eight original evidence JSON files.');
-      if(files.reduce((n,f)=>n+f.size,0)>8*1024*1024)throw Error('Selected evidence exceeds 8 MiB.');
-      const response=await post('/v1/ai-opportunity-handoff/prepare-packet',{sources:await Promise.all(files.map(f=>f.text())),max_bytes:maxBytes});
-      if(ticket!==packetGeneration)return;
+  function validatePrepared(response,files,maxBytes){
       if(response.format!=='openworkgraph.ai-implementation-packet-preview.v1'||
         response.execution_authorized!==false||response.external_model_invoked!==false||
         response.external_sharing_authorized!==false||response.source_count!==files.length||
@@ -102,8 +93,23 @@ export function mountAiOpportunityHandoff(host, post, onCreated, onStage){
           decoded.original_packet_sha256!==response.packet_sha256||decoded.compact_sha256!==compact.compact_sha256)
           throw Error('Compact download does not match the original packet.');
       }
+  }
+  function acceptPrepared(response){
+    const compact=response.compaction,compactDownload=response.compact_download;
       preparedPacket=response;
       packetStatus.textContent='Packet ready: '+response.event_count+' events, '+response.coverage_gap_count+' coverage gaps, '+response.packet_bytes+' bytes. SHA-256: '+response.packet_sha256+'. Review before sharing with your chosen AI. No upload or inference occurred.'+(compact?(compact.available?' Optional compact representation saves '+compact.bytes_saved+' evidence bytes; token savings unmeasured.':' Compaction does not reduce evidence bytes.'):'')+(compactDownload?' Compact external handoff saves '+compactDownload.total_bytes_saved+' combined evidence/instruction bytes. Use the matching compact instructions; token savings and model quality remain unverified.':'');
+  }
+  prepare.onclick=async()=>{
+    if(busy)return;
+    invalidatePacket();const ticket=packetGeneration;lock(true);
+    packetStatus.textContent='Preparing selected evidence locally…';
+    try{
+      const files=orderedSources.slice(),maxBytes=Number(budget.value);
+      if(files.length<1||files.length>8)throw Error('Choose one to eight original evidence JSON files.');
+      if(files.reduce((n,f)=>n+f.size,0)>8*1024*1024)throw Error('Selected evidence exceeds 8 MiB.');
+      const response=await post('/v1/ai-opportunity-handoff/prepare-packet',{sources:await Promise.all(files.map(f=>f.text())),max_bytes:maxBytes});
+      if(ticket!==packetGeneration)return;
+      validatePrepared(response,files,maxBytes);acceptPrepared(response);
     }catch(error){if(ticket===packetGeneration)packetStatus.textContent=error.message;}
     finally{lock(false);}
   };
@@ -224,7 +230,7 @@ export function mountAiOpportunityHandoff(host, post, onCreated, onStage){
     busy=value;for(const n of controls)n.disabled=value;preview.disabled=value;
     budget.disabled=prepare.disabled=value;downloadPacket.disabled=downloadGuide.disabled=value||!preparedPacket;
     downloadCompact.disabled=downloadCompactGuide.disabled=value||!preparedPacket?.compact_download;
-    confirmation.disabled=value||!basis;commit.disabled=value||!basis||!confirmation.checked;stage.disabled=value||!basis||typeof onStage!=='function';renderOrder();refreshLocal();evidencePicker?.refresh();batchPanel?.refresh();compatPanel?.refresh();
+    confirmation.disabled=value||!basis;commit.disabled=value||!basis||!confirmation.checked;stage.disabled=value||!basis||typeof onStage!=='function';renderOrder();refreshLocal();evidencePicker?.refresh();batchPanel?.refresh();compatPanel?.refresh();checkpointPanel?.refresh();
   }
   preview.onclick=async()=>{
     if(busy)return;
@@ -277,13 +283,13 @@ export function mountAiOpportunityHandoff(host, post, onCreated, onStage){
     field('Model evidence representation',contextMode),field('Request JSON-object mode',localJsonMode),field('I authorize sending the selected evidence to this configured loopback model service',localConfirm),
     generate,localStatus,field('Generated proposal (unverified interpretation)',generatedText),useGenerated,saveProposal,saveReceipt,trialHost);
   refreshLocal();
-  const evidencePickerHost=el('div'),batchHost=el('div'),compatHost=el('div');
+  const evidencePickerHost=el('div'),batchHost=el('div'),compatHost=el('div'),checkpointHost=el('div');
   const details=el('details');details.id='owgAiOpportunityHandoff';
   details.append(el('summary','Add an external AI proposal to the implementation portfolio'),
     el('p','Preparation and review stay on the local OWG server. The optional local model request sends selected evidence only when explicitly confirmed. Only your entered idea and structural lineage are retained by the pipeline. Nothing is approved or executed.'),
     evidencePickerHost,field('Original workflow evidence JSON files (ordered as in the portable packet)',sources),order,
     el('p','Prepare a packet using the same ordered evidence below, or use an existing exact packet. The byte budget is not a token count. A too-small budget refuses rather than drops events. Download and inspect the files, then share only through an authorized local or cloud AI environment.'),
-    field('Context byte budget',budget),prepare,packetStatus,downloadPacket,downloadGuide,
+    field('Context byte budget',budget),prepare,packetStatus,downloadPacket,downloadGuide,checkpointHost,
     el('p','Optional compact external handoff: download both matching files, inspect locally and share only with an authorized AI. Compact format is reversible, not redaction.'),downloadCompact,downloadCompactGuide,localSection,batchHost,compatHost,
     field('External AI proposal JSON',proposal),field('Human-reviewed opportunity title',title),
     field('Human-reviewed opportunity details',description),preview,status,summary,
@@ -319,6 +325,24 @@ export function mountAiOpportunityHandoff(host, post, onCreated, onStage){
       onClear:()=>{if(compatProposal!==null){compatProposal=null;invalidate();}}
     });
   }).catch(()=>{compatHost.textContent='Earlier proposal compatibility unavailable; individual import remains available.';});
+  import('/ai-implementation-checkpoint.js').then(module=>{
+    checkpointPanel=module.mountImplementationCheckpoint(checkpointHost,{
+      getState:()=>({busy,packet:preparedPacket,files:orderedSources.slice(),reviewed:basis}),
+      post,lock,download:downloadLocal,onRestore:({checkpoint:c,packet})=>{
+        const files=c.sources.map((raw,i)=>new File([raw],'restored-evidence-'+(i+1)+'.json',{type:'application/json'}));
+        validatePrepared(packet,files,c.max_bytes);
+        const transfer=new DataTransfer();
+        if(c.draft)transfer.items.add(new File([c.draft.proposal],'restored-proposal.json',{type:'application/json'}));
+        // All remote verification and local packet checks happen before replacing inputs.
+        sources.value='';orderedSources=files;proposal.files=transfer.files;
+        selectedGenerated=false;batchProposal=compatProposal=null;
+        title.value=c.draft?.title??'';description.value=c.draft?.description??'';
+        budget.value=String(c.max_bytes);
+        invalidate();invalidatePacket();acceptPrepared(packet);renderOrder();
+        status.textContent=c.draft?'Restored draft inputs. Review exact proposal again; no confirmation restored.':'Restored original evidence. Select an AI proposal to review.';
+      }
+    });
+  }).catch(()=>{checkpointHost.textContent='Checkpoint unavailable; original file import remains available.';});
   import('/ai-context-trial.js').then(module=>{
     trialPanel=module.mountContextTrial(trialHost,{
       getState:()=>({busy,packet:preparedPacket,files:orderedSources.slice(),

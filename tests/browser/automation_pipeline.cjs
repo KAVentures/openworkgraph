@@ -67,6 +67,40 @@ const path=require('node:path');
      assert(await handoff.getByRole('button',{name:'Create unassessed idea',exact:true}).isDisabled());
      await panel.locator(':scope > summary').click();await original.setInputFiles([]);
    }
+   // A local checkpoint resumes the exact prepared source and reviewed draft,
+   // but never restores a confirmation or a prepared skill.
+   {
+     const original=handoff.getByLabel('Original workflow evidence JSON files (ordered as in the portable packet)',{exact:true});
+     const prop=handoff.getByLabel('External AI proposal JSON',{exact:true});
+     const title=handoff.getByLabel('Human-reviewed opportunity title',{exact:true});
+     const review=handoff.getByRole('button',{name:'Review exact proposal',exact:true});
+     const create=handoff.getByRole('button',{name:'Create unassessed idea',exact:true});
+     await original.setInputFiles({name:'checkpoint-source.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(fixture.source))});
+     await handoff.getByRole('button',{name:'Prepare evidence packet',exact:true}).click();
+     await handoff.getByText('Packet ready:',{exact:false}).waitFor();
+     await prop.setInputFiles({name:'checkpoint-proposal.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(fixture.proposal))});
+     await title.fill('Checkpoint candidate');await review.click();
+     await handoff.getByText('Structural review passed.',{exact:false}).waitFor();
+     const checkpoint=handoff.locator('#owgImplementationCheckpoint');await checkpoint.locator(':scope > summary').click();
+     const [d]=await Promise.all([page.waitForEvent('download'),checkpoint.getByRole('button',{name:'Download local workflow checkpoint',exact:true}).click()]);
+     const raw=await fs.readFile(await d.path(),'utf8'),saved=JSON.parse(raw);
+     assert.equal(saved.draft.title,'Checkpoint candidate');assert.equal(saved.packet_sha256,fixture.proposal.packet_sha256);
+     await original.setInputFiles([]);await prop.setInputFiles([]);await title.fill('Do not replace on error');
+     const file=checkpoint.getByLabel('Local workflow checkpoint JSON',{exact:true});
+     const confirm=checkpoint.getByLabel('Replace the current evidence and draft inputs with this checkpoint',{exact:true});
+     const restore=checkpoint.getByRole('button',{name:'Restore checkpoint inputs',exact:true});
+     await file.setInputFiles({name:'tampered.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify({...saved,packet_sha256:'0'.repeat(64)}))});
+     assert(await restore.isDisabled());await confirm.check();await restore.click();
+     await checkpoint.getByText('Original evidence packet changed; cannot resume.',{exact:true}).waitFor();
+     assert.equal(await title.inputValue(),'Do not replace on error');
+     await file.setInputFiles({name:'checkpoint.json',mimeType:'application/json',buffer:Buffer.from(raw)});
+     await confirm.check();await restore.click();
+     await checkpoint.getByText('Checkpoint restored.',{exact:false}).waitFor();
+     assert.equal(await title.inputValue(),'Checkpoint candidate');assert(await create.isDisabled());
+     assert(await handoff.getByRole('button',{name:'Start new shadow skill draft from reviewed proposal',exact:true}).isDisabled());
+     await review.click();await handoff.getByText('Structural review passed.',{exact:false}).waitFor();assert(await create.isDisabled());
+     await checkpoint.locator(':scope > summary').click();await original.setInputFiles([]);await prop.setInputFiles([]);
+   }
    // Direct selection uses original observed-run evidence GET responses. Intercept
    // just those two reads with an exact contract fixture; preparation is real API.
    const picker=handoff.locator('#owgImplementationEvidencePicker');
