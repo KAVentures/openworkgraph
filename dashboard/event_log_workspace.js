@@ -12912,7 +12912,7 @@
       ...r.page.rows.map(x=>[x.log_id,x.rule_id,x.status,x.trigger_at,x.clear_at,x.elapsed_seconds,x.ambiguous_at,x.ambiguous_trigger_count,x.ambiguous_clear_count,r.review_sha256])]);
     function clearEpisodes(){episodeTurn++;episodeReport=null;episodeOutput.replaceChildren();episodeDownload.enable(false);episodeRun.disabled=false;}
     for(const c of [episodeStart,episodeEnd])c.addEventListener('input',clearEpisodes);
-    async function loadEpisodes(offset=0,pinned=false){
+    async function loadEpisodes(offset=0,pinned=false,sourcePin=null){
       const old=episodeReport,t=++episodeTurn;
       const live=()=>generation===state.generation&&t===episodeTurn;
       episodeReport=null;episodeDownload.enable(false);episodeRun.disabled=true;
@@ -12922,7 +12922,7 @@
         const params=new URLSearchParams({start_date:episodeStart.value,end_date:episodeEnd.value,status:episodeFilter.value,offset:String(offset),limit:'50'});
         if(episodeLog.value)params.set('log_id',episodeLog.value);
         if(episodeRule.value)params.set('rule_id',episodeRule.value);
-        if(pinned&&old)params.set('expected_review_sha256',old.review_sha256);
+        if(sourcePin)params.set('expected_review_sha256',sourcePin);else if(pinned&&old)params.set('expected_review_sha256',old.review_sha256);
         const r=await getJSON('/v1/event-logs/signal-episode-review?'+params);
         if(!live())return;
         episodeReport=r;
@@ -12954,6 +12954,8 @@
     episodeFilter.onchange=()=>{if(episodeReport)loadEpisodes(0,true);else clearEpisodes();};
     episodePanel.append(el('p','Read only retained evaluated changes in a UTC window (end exclusive). Elapsed time is not outage duration. JSON/CSV downloads contain the current evidence page.','muted'),
       field('UTC start date',episodeStart),field('UTC end date (exclusive)',episodeEnd),field('Evidence status',episodeFilter),field('Filter by exact log ID (optional)',episodeLog),field('Filter by exact rule ID (optional)',episodeRule),episodeClearScope,episodeRun,episodeOutput,episodeDownload.node);
+    const ruleHistoryHost=el('div');episodePanel.append(ruleHistoryHost);
+    import('/signal-rule-history.js').then(m=>{if(ruleHistoryHost.isConnected&&generation===state.generation)m.mount(ruleHistoryHost,{getJSON,isCurrent:()=>generation===state.generation,focusRule:(row,report)=>{episodeStart.value=report.start_date_utc;episodeEnd.value=report.end_date_utc_exclusive;episodeFilter.value='all';episodeLog.value=row.log_id;episodeRule.value=row.rule_id;clearEpisodes();loadEpisodes(0,false,report.source_episode_review_sha256);episodeOutput.scrollIntoView({block:'nearest'});}});}).catch(()=>{if(ruleHistoryHost.isConnected)ruleHistoryHost.textContent='Rule history unavailable; existing episode review remains available.';});
     const allControls=el('div',null,'actions');allControls.append(allFilter,allRefresh,allPrevious,allNext);
     box.append(row,previewStatus,previewEvidence,message,rules,evaluate,out,reviewHeading,reviewNote,reviewRefresh,inbox,
       deliveryPanel,transitionHeading,transitionNote,transitionRefresh,transitionPrevious,transitionNext,transitionStatus,transitionResults,
