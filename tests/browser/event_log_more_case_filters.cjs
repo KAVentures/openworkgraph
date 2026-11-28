@@ -77,8 +77,21 @@ const path=require('node:path');
    assert.equal(s.body.cases,2);
    assert.equal(s.body.cohort.started_from,'2024-02-01T00:00:00Z');
    assert.equal(s.body.cohort.started_before,'2024-03-01T00:00:00Z');
-   page.once('dialog',dialog=>dialog.accept());
-   await page.getByRole('button',{name:'Update saved filter Finished in January from active filter'}).click();
+   // Hold the refreshed list after the server commits the update. Old actions
+   // must not remain usable and success must not be announced prematurely.
+   const filterListUrl=/\/filter-sets(?:\?.*)?$/;
+   let releaseFilterList;const filterListHeld=new Promise(resolve=>{releaseFilterList=resolve;});
+   await page.route(filterListUrl,async route=>{
+     if(route.request().method()==='GET')await filterListHeld;
+     await route.continue();
+   });
+   try{
+     page.once('dialog',dialog=>dialog.accept());
+     await Promise.all([page.waitForRequest(req=>req.method()==='GET'&&filterListUrl.test(req.url())),
+       page.getByRole('button',{name:'Update saved filter Finished in January from active filter'}).click()]);
+     assert.equal(await page.getByRole('button',{name:'Preview saved filter Finished in January'}).isDisabled(),true);
+     assert.equal(await page.locator('#owgFilterSetStatus').textContent(),'Updating saved filter…');
+   }finally{releaseFilterList();await page.unroute(filterListUrl);}
    await page.locator('#owgFilterSetStatus').getByText('Updated "Finished in January" from the active filter.').waitFor();
    await page.getByRole('button',{name:'Preview saved filter Finished in January'}).click();
    await page.locator('#owgFilterSetPreview').getByText('2 matching cases in case.',{exact:true}).waitFor();

@@ -49,7 +49,17 @@ const path=require('node:path');
    await page.locator('#owgFolderFeedResult').filter({hasText:'synthetic temporary ingestion failure'}).waitFor();
    const retry=page.locator('#owgFolderFeedList').getByRole('button',{name:'Retry failed files for '+exports,exact:true});
    await page.waitForFunction(folder=>[...document.querySelectorAll('#owgFolderFeedList button')].some(b=>b.getAttribute('aria-label')==='Retry failed files for '+folder&&!b.disabled),exports);
-   await page.locator('#owgFolderFeedList').getByRole('button',{name:'Run feed for '+exports,exact:true}).click();
+   // Hold the list refresh after the second run. Failure review must not open
+   // on a stale row that will disappear when the refreshed list is rendered.
+   const feedListUrl=/\/event-logs\/[^/]+\/feeds(?:\?.*)?$/;
+   let releaseFeedList;const feedListHeld=new Promise(resolve=>{releaseFeedList=resolve;});
+   await page.route(feedListUrl,async route=>{if(route.request().method()==='GET')await feedListHeld;await route.continue();});
+   try{
+     await Promise.all([page.waitForRequest(req=>req.method()==='GET'&&feedListUrl.test(req.url())),
+       page.locator('#owgFolderFeedList').getByRole('button',{name:'Run feed for '+exports,exact:true}).click()]);
+     assert.equal(await page.locator('#owgFolderFeedList').getByRole('button',{name:'Review failures for '+exports,exact:true}).isDisabled(),true);
+     assert.match(await page.locator('#owgFolderFeedResult').textContent(),/Reading the folder/);
+   }finally{releaseFeedList();await page.unroute(feedListUrl);}
    await page.locator('#owgFolderFeedResult').filter({hasText:'1 previously failed (use Retry failed files)'}).waitFor();
    await fs.unlink(path.join(scratch,'fail-append'));
    await fs.writeFile(path.join(exports,'orders-2.csv'),'case,activity,time\nc5,Receive,2024-03-06T08:00:00Z\nc5,Pay,2024-03-06T09:00:00Z\n');await fs.utimes(path.join(exports,'orders-2.csv'),old,old);

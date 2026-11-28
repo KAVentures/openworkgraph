@@ -2692,7 +2692,11 @@
         update.disabled=!filterOn();
         update.onclick=async()=>{
           if(!window.confirm('Replace the saved filter “'+set.name+'” with the current active filter?'))return;
-          update.disabled=true;list.inert=true;preview.replaceChildren();
+          const actionsToHold=[use,showCases,exportButton,del];
+          const previousDisabled=actionsToHold.map(control=>control.disabled);
+          update.disabled=true;list.inert=true;
+          actionsToHold.forEach(control=>{control.disabled=true;});
+          preview.replaceChildren();
           message.textContent='Updating saved filter…';
           try{
             const body={name:set.name,cohort:globalCohort(),case_type:state.caseType||null,
@@ -2701,9 +2705,16 @@
               method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
             if(generation!==state.generation)return;
             await refresh();
-            if(generation===state.generation)message.textContent='Updated "'+set.name+'" from the active filter.';
-          }catch(error){if(generation===state.generation){message.textContent=error.message;await refresh();}}
-          finally{list.inert=false;if(generation===state.generation&&update.isConnected)update.disabled=!filterOn();}
+            if(generation!==state.generation)return;
+            message.textContent='Updated "'+set.name+'" from the active filter.';
+          }catch(error){if(generation===state.generation){
+            message.textContent=error.message;
+            try{await refresh();}catch(refreshError){message.textContent=error.message+'; refresh failed: '+refreshError.message;}
+          }}
+          finally{list.inert=false;if(generation===state.generation&&update.isConnected){
+            update.disabled=!filterOn();
+            actionsToHold.forEach((control,index)=>{control.disabled=previousDisabled[index];});
+          }}
         };
         const del=button('Delete','secondary');del.setAttribute('aria-label','Delete saved filter '+set.name);
         del.onclick=async()=>{try{await api(base()+'/'+encodeURIComponent(set.set_id)+'/delete',{method:'POST'});message.textContent='Saved filter deleted.';await refresh();}catch(error){message.textContent=error.message;}};
@@ -3346,14 +3357,29 @@
         const review=button('Review failures','secondary');review.setAttribute('aria-label','Review failures for '+f.folder);review.disabled=!f.files_failed;
         const schedule=button('Run every day','secondary');schedule.setAttribute('aria-label','Run feed for '+f.folder+' every day');
         const remove=button('Delete feed','secondary');remove.setAttribute('aria-label','Delete feed for '+f.folder);
-        run.onclick=async()=>{clearPreview();run.disabled=true;out.replaceChildren(el('div','Reading the folder\u2026','muted'));
-          try{const r2=await (await api('/v1/event-logs/feeds/'+encodeURIComponent(f.feed_id)+'/run',{method:'POST',headers:{'X-OWG-Local-Storage-Confirmed':'true'}})).json();
-            out.replaceChildren(el('div',describe(r2)+(r2.events_added?' Analyse again to include them.':'')),...(r2.files||[]).filter(file=>file.outcome==='failed').map(file=>el('div',file.name+': '+file.error,'muted')));render(await getJSON(base));}
-          catch(error){out.replaceChildren(el('div',error.message,'muted'));run.disabled=false;}};
-        retry.onclick=async()=>{clearPreview();retry.disabled=true;out.replaceChildren(el('div','Retrying unchanged failed files…','muted'));
-          try{const r2=await (await api('/v1/event-logs/feeds/'+encodeURIComponent(f.feed_id)+'/retry-failed',{method:'POST',headers:{'X-OWG-Local-Storage-Confirmed':'true'}})).json();
-            out.replaceChildren(el('div',describe(r2)+' Only unchanged failed files were retried; new files are left for Run now.'+(!r2.files_appended&&!r2.files_failed?' No matching failed files were ready; they may have changed, been removed or still be settling.':'')+(r2.events_added?' Analyse again to include them.':'')),...(r2.files||[]).filter(file=>file.outcome==='failed').map(file=>el('div',file.name+': '+file.error,'muted')));render(await getJSON(base));}
-          catch(error){out.replaceChildren(el('div',error.message,'muted'));retry.disabled=false;}};
+        const holdFeedActions=()=>{
+          const controls=[previewButton,mappingButton,run,retry,review,schedule,remove];
+          const previous=controls.map(control=>control.disabled);
+          controls.forEach(control=>{control.disabled=true;});
+          clearPreview();failureTurn++;failures.replaceChildren();
+          return ()=>{if(generation===state.generation&&wrap.isConnected)controls.forEach((control,index)=>{control.disabled=previous[index];});};
+        };
+        async function runFeedOperation(suffix,pending,describeResult){
+          const restore=holdFeedActions();out.replaceChildren(el('div',pending,'muted'));
+          let result;
+          try{
+            result=await (await api('/v1/event-logs/feeds/'+encodeURIComponent(f.feed_id)+suffix,{method:'POST',headers:{'X-OWG-Local-Storage-Confirmed':'true'}})).json();
+            const updated=await getJSON(base);
+            if(generation!==state.generation||!wrap.isConnected)return;
+            render(updated);
+            out.replaceChildren(el('div',describeResult(result)),...(result.files||[]).filter(file=>file.outcome==='failed').map(file=>el('div',file.name+': '+file.error,'muted')));
+          }catch(error){if(generation===state.generation&&wrap.isConnected){
+            out.replaceChildren(el('div',result?describeResult(result)+' Feed list refresh failed: '+error.message:error.message,'muted'),
+              ...((result&&result.files)||[]).filter(file=>file.outcome==='failed').map(file=>el('div',file.name+': '+file.error,'muted')));
+          }}finally{restore();}
+        }
+        run.onclick=()=>runFeedOperation('/run','Reading the folder…',r2=>describe(r2)+(r2.events_added?' Analyse again to include them.':''));
+        retry.onclick=()=>runFeedOperation('/retry-failed','Retrying unchanged failed files…',r2=>describe(r2)+' Only unchanged failed files were retried; new files are left for Run now.'+(!r2.files_appended&&!r2.files_failed?' No matching failed files were ready; they may have changed, been removed or still be settling.':'')+(r2.events_added?' Analyse again to include them.':''));
         const failures=el('div');failures.setAttribute('role','status');let failureTurn=0;
         async function failurePage(after){
           const turn=++failureTurn;failures.replaceChildren(el('div','Loading failures…','muted'));
