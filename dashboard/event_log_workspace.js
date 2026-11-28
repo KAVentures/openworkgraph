@@ -2143,7 +2143,7 @@
       if(caseType!==undefined)url.searchParams.set('case_type',caseType);
       return url.pathname+url.search;
     };
-    const filters=cohortFields(prefix+'Filter','Select complete cases',activityNames);
+    const filters=cohortFields(prefix+'Filter','Select complete cases',activityNames,{exactActivity:false,caseType:options.caseType});
     const exactActivity=input(prefix+'ExactActivity','text','Exact activity label (optional)');exactActivity.maxLength=400;
     const activityPicker=filters.node.querySelector('#'+prefix+'FilterActivity');
     const activityLookup=activityLabelLookup(exactActivity,{id:part=>prefix+'Activity'+part,
@@ -2792,12 +2792,14 @@
       spec.attribute_range=r;}
     return spec;
   }
-  function cohortFields(prefix,legend,activityNames){
+  function cohortFields(prefix,legend,activityNames,options={}){
     const box=document.createElement('fieldset');box.id=prefix;box.style.cssText='border:1px solid var(--line,#ccc);border-radius:6px;padding:8px;margin-top:8px';
     box.appendChild(el('legend',legend));
     const label=input(prefix+'Label','text','Name');label.maxLength=80;
     const from=input(prefix+'From','date'),before=input(prefix+'Before','date');
-    const resource=input(prefix+'Resource','text','any');
+    const resource=input(prefix+'Resource','text','Exact resource label (optional)');resource.maxLength=400;resource.autocomplete='off';
+    const resourceLookup=activityLabelLookup(resource,{id:part=>prefix+'Resource'+part,subject:'resource in '+legend,kind:'resource',caseType:options.caseType});
+    resource.addEventListener('input',resourceLookup.reset);
     const activity=select(prefix+'Activity',[['','any'],...activityNames.slice(0,500).map(a=>[a,a])]);
     const attribute=input(prefix+'Attribute','text','name=value');
     const eventAttribute=input(prefix+'EventAttribute','text','name=value');eventAttribute.title='Cases with at least one event carrying this value, such as a column kept from a CSV import';
@@ -2806,11 +2808,31 @@
     const rangeMin=input(prefix+'RangeMin','number','from');rangeMin.step='any';
     const rangeMax=input(prefix+'RangeMax','number','below');rangeMax.step='any';
     const row=el('div',null,'row');row.style.alignItems='end';
-    row.append(field('Name',label),field('Started from (UTC)',from),field('Started before (UTC)',before),field('Resource',resource),field('Contains activity',activity),field('Case attribute',attribute),field('Event attribute',eventAttribute),field('Tagged',tag));
+    row.append(field('Name',label),field('Started from (UTC)',from),field('Started before (UTC)',before),field('Resource',resource),resourceLookup.wrap,field('Contains activity',activity),field('Case attribute',attribute),field('Event attribute',eventAttribute),field('Tagged',tag));
+    let exactActivity=null;
+    if(options.exactActivity!==false){
+      exactActivity=input(prefix+'ExactActivity','text','Exact activity label (optional)');exactActivity.maxLength=400;
+      const lookup=activityLabelLookup(exactActivity,{id:part=>prefix+'Activity'+part,subject:'activity in '+legend});
+      exactActivity.addEventListener('input',lookup.reset);
+      activity.addEventListener('change',()=>{exactActivity.value='';lookup.reset();});
+      row.append(field('Exact activity',exactActivity),lookup.wrap);
+      box.appendChild(el('div','An exact activity overrides the suggestion and is matched literally.','muted'));
+    }
     const rangeRow=el('div',null,'row');rangeRow.style.alignItems='end';
     rangeRow.append(field('Numeric case attribute',rangeName),field('From (inclusive)',rangeMin),field('Below (exclusive)',rangeMax));
     box.append(row,rangeRow);
-    return {node:box,read:()=>cohortSpec({label:label.value,from:from.value,before:before.value,resource:resource.value,activity:activity.value,attribute:attribute.value,eventAttribute:eventAttribute.value,tag:tag.value,rangeName:rangeName.value,rangeMin:rangeMin.value,rangeMax:rangeMax.value})};
+    return {node:box,read:()=>{
+      const spec=cohortSpec({label:label.value,from:from.value,before:before.value,resource:resource.value,activity:activity.value,attribute:attribute.value,eventAttribute:eventAttribute.value,tag:tag.value,rangeName:rangeName.value,rangeMin:rangeMin.value,rangeMax:rangeMax.value});
+      if(resource.value){
+        if(Array.from(resource.value).length>200)throw new Error('Resource labels must have at most 200 characters.');
+        spec.resource=resource.value;
+      }
+      if(exactActivity&&exactActivity.value){
+        if(Array.from(exactActivity.value).length>200)throw new Error('Activity labels must have at most 200 characters.');
+        spec.activity=exactActivity.value;
+      }
+      return spec;
+    }};
   }
   function variantCoverageSection(activityNames){
     const box=section('Variant coverage');
@@ -6296,7 +6318,12 @@
       ['automation_rate',k.automation?k.automation.automation_rate:''],[],['week_starting','cases','median_throughput_seconds'],
       ...(k.completed_per_week||[]).map(w=>[w.week_starting,w.cases,w.median_throughput_seconds])]);
     const out=el('div');box.append(row,filter.node,out,exports.node);
+    let revision=0;
+    const invalidate=()=>{revision++;last=null;exports.enable(false);out.replaceChildren();};
+    for(const node of [row,filter.node]){node.addEventListener('input',invalidate);node.addEventListener('change',invalidate);}
     run.onclick=async()=>{
+      const ticket=++revision,generation=state.generation;
+      const current=()=>ticket===revision&&generation===state.generation&&box.isConnected;
       try{
         const params={...filter.read()};delete params.label;const hours=Number(sla.value);
         if(sla.value&&hours>0)params.sla_seconds=String(Math.round(hours*3600));
@@ -6307,10 +6334,11 @@
             params.automation_resource=resources;
           }else params.automation_resources=bots.value;
         }
-        const k=await getJSON(logPath('kpis',params));const t=k.throughput_seconds||{};last=k;exports.enable(true);
+        const k=await getJSON(logPath('kpis',params));if(!current())return;
+        const t=k.throughput_seconds||{};last=k;exports.enable(true);
         out.replaceChildren(table(['Cases','Throughput p50','p90','p95','Rework rate','SLA breach rate','Automation rate'],[[Number(k.cases).toLocaleString(),duration(t.p50),duration(t.p90),duration(t.p95),pct(k.rework_rate),k.sla?pct(k.sla.breach_rate):'—',k.automation?pct(k.automation.automation_rate):'—']]),
           el('div','Rework means a case repeats an activity. Automation rate counts events by the resources you listed.','muted'));
-      }catch(error){last=null;exports.enable(false);out.replaceChildren(el('div',error.message,'muted'));}
+      }catch(error){if(current()){last=null;exports.enable(false);out.replaceChildren(el('div',error.message,'muted'));}}
     };
     return box;
   }
