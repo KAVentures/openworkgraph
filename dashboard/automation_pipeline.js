@@ -1046,6 +1046,8 @@
               }
             }
             output.append(el('p',data.interpretation,'muted'));
+            if(data.status==='evaluated'&&!data.blockers.length){const deadlineHost=el('div');output.append(deadlineHost);
+              import('/deadline-schedule-ui.js').then(m=>{if(deadlineHost.isConnected&&active()&&n===version&&report===data)m.mount(deadlineHost,{report:data,isCurrent:()=>deadlineHost.isConnected&&active()&&n===version&&report===data});}).catch(()=>{if(deadlineHost.isConnected)deadlineHost.textContent='Deadline review unavailable; the original resource schedule remains available.';});}
           }catch(error){if(active()&&n===version)status.textContent=error.message;}
           finally{if(active()&&n===version)run.disabled=false;}
         };
