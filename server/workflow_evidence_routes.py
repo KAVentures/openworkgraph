@@ -1325,6 +1325,46 @@ async def clarify_process_design(request: Request, workflow_id: str = Query(patt
     return JSONResponse(result, headers={'Cache-Control': 'no-store'})
 
 
+@app.post('/v1/process-catalog/clarify/effective-timeline')
+async def review_effective_policy_timeline(request: Request, workflow_id: str = Query(pattern=_PROCESS_ID),
+                                           revision: int = Query(ge=1)) -> Response:
+    from shared.process_effective_policy import Timeline, timeline
+    from .local_source_routes import _require_dashboard
+    from starlette.concurrency import run_in_threadpool
+    _require_dashboard(request)
+    try:
+        body = Timeline.model_validate(await _process_json(request, maximum=1536 * 1024))
+    except (ValidationError, ValueError):
+        raise HTTPException(422, 'invalid bounded effective policy timeline') from None
+    record = _catalog_record(workflow_id, revision)
+    try:
+        result = await run_in_threadpool(timeline, record, body)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from None
+    _require_dashboard(request)
+    return JSONResponse(result, headers={'Cache-Control': 'no-store'})
+
+
+@app.post('/v1/process-catalog/clarify/effective-date-review')
+async def review_effective_policy_date(request: Request, workflow_id: str = Query(pattern=_PROCESS_ID),
+                                       revision: int = Query(ge=1)) -> Response:
+    from shared.process_effective_policy import Review, review
+    from .local_source_routes import _require_dashboard
+    from starlette.concurrency import run_in_threadpool
+    _require_dashboard(request)
+    try:
+        body = Review.model_validate(await _process_json(request, maximum=1536 * 1024))
+    except (ValidationError, ValueError):
+        raise HTTPException(422, 'invalid bounded effective policy date review') from None
+    record = _catalog_record(workflow_id, revision)
+    try:
+        result = await run_in_threadpool(review, record, body)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from None
+    _require_dashboard(request)
+    return JSONResponse(result, headers={'Cache-Control': 'no-store'})
+
+
 @app.post('/v1/process-catalog/clarify/source-revision-review')
 async def review_clarification_sources(request: Request, workflow_id: str = Query(pattern=_PROCESS_ID),
                                        revision: int = Query(ge=1)) -> Response:

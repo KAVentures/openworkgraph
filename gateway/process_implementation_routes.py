@@ -23,6 +23,15 @@ def add_routes(router,store,human,body,response):
         await run_in_threadpool(response,plans.opportunities.preflight,p,workflow_id)
         return await run_in_threadpool(response,plans.save_baseline,p,workflow_id,await body(request,SaveBaseline,maximum=64*1024))
 
+    @router.get(base+'/history')
+    def history(workflow_id:str=Path(pattern=ID),p=Depends(human)):
+        return response(plans.history_inventory,p,workflow_id)
+
+    @router.post(base+'/history/compare')
+    async def compare_history(request:Request,workflow_id:str=Path(pattern=ID),p=Depends(human)):
+        from shared.process_implementation_history import ReviewRequest
+        return await run_in_threadpool(response,plans.history_review,p,workflow_id,await body(request,ReviewRequest,maximum=4096))
+
     @router.post(base+'/reports')
     async def reports(request:Request,workflow_id:str=Path(pattern=ID),p=Depends(human)):
         await run_in_threadpool(response,plans.opportunities.preflight,p,workflow_id)

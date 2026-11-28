@@ -261,6 +261,26 @@ const path=require('node:path');
    await page.locator('#owgPetriTreeText').fill('O()');
    await page.locator('#owgPetriTreeRun').click();
    await page.locator('#owgPetriStatus').filter({hasText:'unexpected text'}).waitFor();
+   // Direct BPMN replay: the same strict sequence, retaining conversion provenance.
+   const bpmnNodes='<startEvent id="start"/>'+labels.map((name,i)=>'<task id="b'+i+'" name="'+name+'"/>').join('')+'<endEvent id="end"/>';
+   const bpmnPath=['start',...labels.map((_,i)=>'b'+i),'end'];
+   const bpmnFlows=bpmnPath.slice(1).map((target,i)=>'<sequenceFlow id="flow'+i+'" sourceRef="'+bpmnPath[i]+'" targetRef="'+target+'"/>').join('');
+   const bpmn='<definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL"><process id="orders">'+bpmnNodes+bpmnFlows+'</process></definitions>';
+   await page.locator('#owgPetriFile').setInputFiles({name:'orders.bpmn',mimeType:'application/xml',buffer:Buffer.from(bpmn)});
+   await page.locator('#owgPetriRun').click();
+   await page.locator('#owgPetriStatus').filter({hasText:'on orders.bpmn (BPMN control flow): 24 of 30 cases'}).waitFor();
+   await page.locator('#owgPetriBpmnConversion').getByText('BPMN conversion evidence',{exact:true}).waitFor();
+   const [bpmnDownload]=await Promise.all([page.waitForEvent('download'),page.getByRole('button',{name:'Download BPMN conversion evidence (JSON)',exact:true}).click()]);
+   const conversion=JSON.parse(await fs.readFile(await bpmnDownload.path(),'utf8'));
+   assert.equal(conversion.process_id,'orders');
+   assert.equal(Object.keys(conversion.node_transition_ids).length,6);
+   assert.equal(Object.keys(conversion.flow_place_ids).length,5);
+   const [pnmlDownload]=await Promise.all([page.waitForEvent('download'),page.getByRole('button',{name:'Download converted PNML',exact:true}).click()]);
+   assert.equal(await fs.readFile(await pnmlDownload.path(),'utf8'),conversion.pnml);
+   await page.locator('#owgPetriFile').setInputFiles({name:'unsupported.bpmn',mimeType:'application/xml',buffer:Buffer.from(bpmn.replace('<startEvent id="start"/>','<startEvent id="start"><timerEventDefinition/></startEvent>'))});
+   assert.equal(await page.locator('#owgPetriBpmnConversion').textContent(),'');
+   await page.locator('#owgPetriRun').click();
+   await page.locator('#owgPetriStatus').filter({hasText:'unsupported task, gateway or event semantics'}).waitFor();
    // The most common path (Register, Check, Pay, Close; 24 of 30 cases) as the reference model.
    await page.locator('#owgPetriHappy').click();
    await page.locator('#owgPetriStatus').filter({hasText:'on the most common path (followed by 80% of cases): 24 of 30 cases'}).waitFor();

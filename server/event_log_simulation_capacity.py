@@ -16,6 +16,7 @@ from typing import Any
 
 from . import event_log_simulation as sim
 from . import event_log_capacity_decision as decision
+from . import event_log_service_levels as service
 from .event_log_workspace import EventLogWorkspaceError
 
 FORMAT = "openworkgraph.simulation-capacity-grid.v1"
@@ -82,7 +83,7 @@ def _activities(value: Any) -> dict:
 
 
 def normalize(spec: Any) -> dict:
-    if not isinstance(spec, dict) or not TOP_FIELDS <= set(spec) or set(spec)-TOP_FIELDS-{"decision_review"} or spec["format"] != FORMAT:
+    if not isinstance(spec, dict) or not TOP_FIELDS <= set(spec) or set(spec)-TOP_FIELDS-{"decision_review","service_review"} or spec["format"] != FORMAT:
         raise EventLogWorkspaceError("Provide a capacity grid format, baseline, designs, demand rates, replications and target")
     baseline = spec["baseline"]
     if not isinstance(baseline, dict) or set(baseline) - BASE_FIELDS:
@@ -128,6 +129,8 @@ def normalize(spec: Any) -> dict:
                        "minimum_completion_share": _number(target["minimum_completion_share"], .01, 1, "target completion share")}}
     if "decision_review" in spec:
         normalized["decision_review"] = decision.normalize(spec["decision_review"],rates,normalized["target"]["minimum_completion_share"])
+    if "service_review" in spec:
+        normalized["service_review"] = service.normalize(spec["service_review"])
     return normalized
 
 
@@ -308,8 +311,10 @@ def run_grid(log_id: str, spec: Any, case_type: str | None = None) -> dict:
                            packet["baseline"]["seed"] + packet["replications"]))
         target = packet["target"]
         cells = []
+        service_cells = []
         for label, rate, model in planned:
             runs = []
+            service_runs = []
             for seed in seeds:
                 samples: list[float] = []
                 try:
@@ -318,10 +323,15 @@ def run_grid(log_id: str, spec: Any, case_type: str | None = None) -> dict:
                     if isinstance(exc, ValueError) and "out of range" not in str(exc):
                         raise
                     raise EventLogWorkspaceError("A grid run exceeds the supported simulation time range") from None
-                runs.append(summarize_run(result, samples, target["cycle_time_minutes"] * 60, seed))
+                run=summarize_run(result, samples, target["cycle_time_minutes"] * 60, seed)
+                runs.append(run)
+                if "service_review" in packet:
+                    service_runs.append(service.summarize(run,samples,packet["service_review"]))
             cell=summarize_cell(label, rate, runs, target["minimum_completion_share"])
             cell["effective_resource_basis"]=decision.effective_basis(model)
             cells.append(cell)
+            if service_runs:
+                service_cells.append(service.cell(label,rate,service_runs,packet["service_review"]))
         calibration = {k: base[k] for k in ("arrivals_per_hour", "paths", "paths_cover_cases_share",
                        "activities", "observed_cases", "calibrated_cases", "excluded_case_reasons",
                        "limits", "arrival_rate_basis") if k in base}
@@ -339,6 +349,8 @@ def run_grid(log_id: str, spec: Any, case_type: str | None = None) -> dict:
                 "assumptions": ASSUMPTIONS}
         if costs is not None:
             report["decision_review"] = decision.review(cells,costs,packet["decision_review"],target["minimum_completion_share"])
+        if service_cells:
+            report["service_review"] = service.compare(service_cells,packet["service_review"])
         return report
     finally:
         _GUARD.release()
