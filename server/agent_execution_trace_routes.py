@@ -128,3 +128,6 @@ def get_local_browser_ai_runs(
             limit=limit, evidence_limit=evidence_limit, execution_id=execution_id,
             since=since,
         )
+
+from .native_shadow_review_routes import router as _native_shadow_review_router
+router.include_router(_native_shadow_review_router)
