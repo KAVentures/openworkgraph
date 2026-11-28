@@ -78,6 +78,29 @@ def test_per_log_limit_is_enforced(monkeypatch):
     assert len(saved.listing(log)['checks'])==1
 
 
+def test_portable_template_preview_checks_destination_without_saving():
+    source=load()
+    packet={'format':saved.TEMPLATE_FORMAT,'name':'  Review  ','definition':{
+        'activity':'Pay','object_type':'order','attribute':'status','expected_value':'approved','event_qualifier':''}}
+    preview=saved.preview_template(source,packet)
+    assert preview['name']=='Review' and preview['definition']['event_qualifier']==''
+    assert all(preview['label_checks'].values()) and preview['log_revision']==0
+    assert saved.listing(source)['checks']==[]
+    destination_doc={'objectTypes':[],'eventTypes':[],
+        'objects':[{'id':'o','type':'purchase','attributes':[{'name':'status','time':'1970-01-01T00:00:00Z','value':'approved'}]}],
+        'events':[{'id':'e','type':'Ship','time':'2024-01-01T00:00:00Z','relationships':[{'objectId':'o','qualifier':''}]}]}
+    dest=workspace.import_log(BytesIO(json.dumps(destination_doc).encode()),name='dest',source_format='ocel')['log_id']
+    missing=saved.preview_template(dest,packet)
+    assert not any(missing['label_checks'].values()) and saved.listing(dest)['checks']==[]
+    unrestricted={**packet,'definition':{k:v for k,v in packet['definition'].items() if k!='event_qualifier'}}
+    assert saved.preview_template(source,unrestricted)['label_checks']['qualified_activity_type_link_present'] is None
+    exact={**packet,'definition':{**packet['definition'],'expected_value':'line\r\nbreak'}}
+    assert saved.preview_template(source,exact)['definition']['expected_value']=='line\r\nbreak'
+    for invalid in ({**packet,'event_id':'private'}, {**packet,'format':'wrong'},
+                    {**packet,'definition':{**packet['definition'],'results':[]}}):
+        with pytest.raises(workspace.EventLogWorkspaceError):saved.preview_template(source,invalid)
+
+
 @pytest.mark.parametrize('payload',[
     {'name':'x','definition':{**definition(),'status':'unknown'}},
     {'name':'x','definition':{**definition(),'offset':1}},
@@ -108,6 +131,13 @@ with TestClient(app) as c:
     assert r.status_code==200 and r.headers['cache-control']=='no-store',r.text
     key=r.json()['check_id'];assert c.get(url+'/'+key,headers=h).json()['definition']['event_qualifier']==''
     assert c.post(url,content=b'{"name":"one","name":"two"}',headers={**h,'content-type':'application/json'}).status_code==422
+    preview_url='/v1/event-logs/'+log+'/object-state-check/template/preview'
+    packet={'format':'openworkgraph.object-state-check.v1',**payload}
+    assert c.post(preview_url,json=packet,headers=bearer).status_code in (401,403)
+    preview=c.post(preview_url,json=packet,headers=h)
+    assert preview.status_code==200 and preview.headers['cache-control']=='no-store',preview.text
+    assert c.post(preview_url,content=b'{"format":"one","format":"two"}',headers={**h,'content-type':'application/json'}).status_code==422
+    assert c.post(preview_url,content=b' '+b'x'*65536,headers={**h,'content-type':'application/json'}).status_code==413
     assert c.put(url+'/'+key,json={**payload,'expected_revision':1},headers=h).json()['revision']==2
     assert c.delete(url+'/'+key,params={'expected_revision':1},headers=h).status_code==422
     assert c.delete(url+'/'+key,params={'expected_revision':2},headers=h).status_code==200
