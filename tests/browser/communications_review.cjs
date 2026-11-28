@@ -124,6 +124,25 @@ const path=require('node:path');
    assert.equal(quality.evaluation.without_detected_overlap.holdout_examples,overlap.no_detected_overlap);
    assert(Object.values(quality.holdout_language_gates).every(g=>g.evaluation_basis==='holdout_without_detected_lexical_overlap'));
 
+   await page.locator('#owgCommsPairedEvaluation').click();
+   const paired=page.locator('#owgCommsPairedEvaluationResult');
+   await paired.getByRole('heading',{name:'Paired classifier evaluation'}).waitFor({timeout:60000});
+   await paired.getByLabel('Holdout subset',{exact:true}).selectOption('all_holdout');
+   const sensitivity=paired.locator('#owgCommsLabelSensitivity');
+   await sensitivity.locator('summary').click();
+   await sensitivity.locator('#owgCommsLabelBudget').fill('1000');
+   assert.ok(await sensitivity.locator('#owgCommsLabelRun').isDisabled());
+   await sensitivity.locator('#owgCommsLabelConfirm').check();await sensitivity.locator('#owgCommsLabelRun').click();
+   await sensitivity.getByRole('heading',{name:'Exact annotation sensitivity'}).waitFor();
+   const [labelReview]=await Promise.all([page.waitForEvent('download'),sensitivity.locator('#owgCommsLabelDownload').click()]);
+   const labelReport=JSON.parse(await fs.readFile(await labelReview.path(),'utf8'));
+   assert.equal(labelReport.error_budget_basis_points,1000);assert.equal(labelReport.predictions_changed,false);
+   assert.equal(labelReport.reviewed_messages,overlap.holdout_examples);
+   for(const row of labelReport.per_intent){assert.equal(row.max_label_flips,Math.floor(row.label_decisions/10));assert.ok(row.lower_net_correct<=row.observed_net_correct&&row.upper_net_correct>=row.observed_net_correct);}
+   assert.equal(labelReport.pooled_intent_label_cells.label_decisions,labelReport.reviewed_messages*labelReport.declared_intents);
+   await sensitivity.locator('#owgCommsLabelBudget').fill('0');assert.ok(await sensitivity.locator('#owgCommsLabelDownload').isDisabled());
+   await paired.getByLabel('Holdout language',{exact:true}).selectOption('sv');
+   assert.ok(await paired.locator('#owgCommsLabelDownload').isDisabled());
    // Use the learned model for an analysis; reports stay aggregate.
    await page.locator('#owgCommsFile').setInputFiles({name:'tickets.csv',mimeType:'text/csv',buffer:Buffer.from(rows.join('\n'))});
    await page.waitForFunction(()=>document.querySelectorAll('#owgCommsTextColumns input').length===2);

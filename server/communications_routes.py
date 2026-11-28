@@ -361,6 +361,10 @@ def get_intent_model(request: Request):
     return _review_call(review.model_status, _intent_names())
 
 
+from .communications_label_sensitivity_routes import router as label_sensitivity_router
+router.include_router(label_sensitivity_router)
+
+
 @router.get("/v1/communications/review/paired-evaluation")
 async def get_paired_intent_evaluation(request: Request):
     """Compare both methods on the same retained, reviewed holdout."""

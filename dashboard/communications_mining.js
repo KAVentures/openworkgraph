@@ -354,6 +354,9 @@
               table(['Intent','Keyword correct','Learned correct','Keyword coverage','Learned coverage','Keyword recall','Learned recall','Learned only correct','Keyword only correct'],rows),
               table(['Keyword result','Learned result','Messages'],pair.transitions.map(t=>[t.keyword,t.learned,t.count])),
               el('p','Accuracy uses all cases, with abstentions not counted as correct. Recall counts positive abstentions in the denominator. Untrained intents are abstentions.','muted'),...reliabilityView);
+            const sensitivityHost=el('div'),selectedSubset=subset.value,selectedLanguage=select.value;
+            body.append(sensitivityHost);
+            import('/communications-label-sensitivity-ui.js').then(m=>{if(sensitivityHost.isConnected&&active())m.mount(sensitivityHost,{data,subset:selectedSubset,language:selectedLanguage,isCurrent:()=>sensitivityHost.isConnected&&active()&&subset.value===selectedSubset&&select.value===selectedLanguage});}).catch(()=>{if(sensitivityHost.isConnected)sensitivityHost.textContent='Annotation sensitivity unavailable; paired evaluation remains available.';});
           }
           select.onchange=draw;subset.onchange=draw;draw();
           const download=button('Download aggregate comparison JSON','secondary');
