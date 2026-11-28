@@ -226,4 +226,6 @@ def build_process_router(store: OrganizationProcessStore, human) -> APIRouter:
     project_routes(router,store,human,_body,_response)
     from .process_lineage_routes import add_routes as lineage_routes
     lineage_routes(router,store,human,_body,_response)
+    from .process_procurement_routes import add_routes as procurement_routes
+    procurement_routes(router,store,human,_body,_response)
     return router

@@ -553,6 +553,8 @@ class OrganizationProcessStore:
             erase_measurements(self,conn,p.organization_id,workflow_id)
             from .process_opportunity_review import erase as erase_opportunity
             erase_opportunity(self,conn,p.organization_id,workflow_id)
+            from .process_procurement import erase as erase_procurement
+            erase_procurement(self,conn,p.organization_id,workflow_id)
             cursor = self.db._execute(conn, 'DELETE FROM workflow_knowledge WHERE owner = ? AND workflow_id = ?', (namespace(p.organization_id), workflow_id))
             for table in ('gateway_process_reviews', 'gateway_process_authors', 'gateway_process_members', 'gateway_shared_processes'):
                 self.db._execute(conn, f'DELETE FROM {table} WHERE organization_id = ? AND workflow_id = ?', (p.organization_id, workflow_id))
