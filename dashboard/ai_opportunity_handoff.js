@@ -23,12 +23,13 @@ export function mountAiOpportunityHandoff(host, post, onCreated, onStage){
   }
   budget.value='524288';
   const prepare=el('button','Prepare evidence packet'),downloadPacket=el('button','Download evidence packet'),downloadGuide=el('button','Download AI instructions');
-  prepare.type=downloadPacket.type=downloadGuide.type='button';
-  downloadPacket.disabled=downloadGuide.disabled=true;
+  const downloadCompact=el('button','Download compact evidence packet'),downloadCompactGuide=el('button','Download compact AI instructions');
+  prepare.type=downloadPacket.type=downloadGuide.type=downloadCompact.type=downloadCompactGuide.type='button';
+  downloadPacket.disabled=downloadGuide.disabled=downloadCompact.disabled=downloadCompactGuide.disabled=true;
   const packetStatus=el('div','Choose original evidence files and a context byte budget. Nothing is sent to an AI.');
   packetStatus.setAttribute('role','status');packetStatus.setAttribute('aria-live','polite');
   function invalidatePacket(){
-    packetGeneration++;preparedPacket=null;downloadPacket.disabled=downloadGuide.disabled=true;
+    packetGeneration++;preparedPacket=null;downloadPacket.disabled=downloadGuide.disabled=downloadCompact.disabled=downloadCompactGuide.disabled=true;
     contextMode.value='original';clearLocal();
     packetStatus.textContent='Evidence selection or budget changed. Prepare a new packet.';
   }
@@ -44,6 +45,12 @@ export function mountAiOpportunityHandoff(host, post, onCreated, onStage){
   };
   downloadGuide.onclick=()=>{
     if(!busy&&preparedPacket)downloadLocal('owg-ai-implementation-instructions.txt','text/plain;charset=utf-8',preparedPacket.instructions);
+  };
+  downloadCompact.onclick=()=>{
+    if(!busy&&preparedPacket?.compact_download)downloadLocal('owg-implementation-evidence-compact.json','application/json',preparedPacket.compact_download.packet_json);
+  };
+  downloadCompactGuide.onclick=()=>{
+    if(!busy&&preparedPacket?.compact_download)downloadLocal('owg-ai-implementation-compact-instructions.txt','text/plain;charset=utf-8',preparedPacket.compact_download.instructions);
   };
   prepare.onclick=async()=>{
     if(busy)return;
@@ -78,8 +85,25 @@ export function mountAiOpportunityHandoff(host, post, onCreated, onStage){
           compact.available!==(compact.bytes_saved>0)||compact.token_savings_measured!==false)
           throw Error('Unexpected compaction preview.');
       }else if(compact!==null)throw Error('Unexpected compaction scope.');
+      const compactDownload=response.compact_download;
+      if(compactDownload!==null){
+        const bytes=s=>new TextEncoder().encode(s).length;
+        if(!compact?.available||!compactDownload||typeof compactDownload.packet_json!=='string'||
+          typeof compactDownload.instructions!=='string'||compactDownload.instructions.length>16000||
+          compactDownload.token_savings_verified!==false||compactDownload.model_quality_equivalence_verified!==false||
+          compactDownload.external_sharing_authorized!==false||
+          bytes(compactDownload.packet_json)!==compact.compact_bytes||
+          compactDownload.original_total_bytes!==response.packet_bytes+bytes(response.instructions)||
+          compactDownload.compact_total_bytes!==compact.compact_bytes+bytes(compactDownload.instructions)||
+          compactDownload.total_bytes_saved!==compactDownload.original_total_bytes-compactDownload.compact_total_bytes||
+          compactDownload.total_bytes_saved<=0)throw Error('Unexpected compact download.');
+        const decoded=JSON.parse(compactDownload.packet_json);
+        if(decoded.format!=='openworkgraph.ai-implementation-evidence-compact.v1'||
+          decoded.original_packet_sha256!==response.packet_sha256||decoded.compact_sha256!==compact.compact_sha256)
+          throw Error('Compact download does not match the original packet.');
+      }
       preparedPacket=response;
-      packetStatus.textContent='Packet ready: '+response.event_count+' events, '+response.coverage_gap_count+' coverage gaps, '+response.packet_bytes+' bytes. SHA-256: '+response.packet_sha256+'. Review before sharing with your chosen AI. No upload or inference occurred.'+(compact?(compact.available?' Optional compact representation saves '+compact.bytes_saved+' evidence bytes; token savings unmeasured.':' Compaction does not reduce evidence bytes.'):'');
+      packetStatus.textContent='Packet ready: '+response.event_count+' events, '+response.coverage_gap_count+' coverage gaps, '+response.packet_bytes+' bytes. SHA-256: '+response.packet_sha256+'. Review before sharing with your chosen AI. No upload or inference occurred.'+(compact?(compact.available?' Optional compact representation saves '+compact.bytes_saved+' evidence bytes; token savings unmeasured.':' Compaction does not reduce evidence bytes.'):'')+(compactDownload?' Compact external handoff saves '+compactDownload.total_bytes_saved+' combined evidence/instruction bytes. Use the matching compact instructions; token savings and model quality remain unverified.':'');
     }catch(error){if(ticket===packetGeneration)packetStatus.textContent=error.message;}
     finally{lock(false);}
   };
@@ -198,6 +222,7 @@ export function mountAiOpportunityHandoff(host, post, onCreated, onStage){
   function lock(value){
     busy=value;for(const n of controls)n.disabled=value;preview.disabled=value;
     budget.disabled=prepare.disabled=value;downloadPacket.disabled=downloadGuide.disabled=value||!preparedPacket;
+    downloadCompact.disabled=downloadCompactGuide.disabled=value||!preparedPacket?.compact_download;
     confirmation.disabled=value||!basis;commit.disabled=value||!basis||!confirmation.checked;stage.disabled=value||!basis||typeof onStage!=='function';renderOrder();refreshLocal();
   }
   preview.onclick=async()=>{
@@ -255,7 +280,8 @@ export function mountAiOpportunityHandoff(host, post, onCreated, onStage){
     el('p','Preparation and review stay on the local OWG server. The optional local model request sends selected evidence only when explicitly confirmed. Only your entered idea and structural lineage are retained by the pipeline. Nothing is approved or executed.'),
     field('Original workflow evidence JSON files (ordered as in the portable packet)',sources),order,
     el('p','Prepare a packet using the same ordered evidence below, or use an existing exact packet. The byte budget is not a token count. A too-small budget refuses rather than drops events. Download and inspect the files, then share only through an authorized local or cloud AI environment.'),
-    field('Context byte budget',budget),prepare,packetStatus,downloadPacket,downloadGuide,localSection,
+    field('Context byte budget',budget),prepare,packetStatus,downloadPacket,downloadGuide,
+    el('p','Optional compact external handoff: download both matching files, inspect locally and share only with an authorized AI. Compact format is reversible, not redaction.'),downloadCompact,downloadCompactGuide,localSection,
     field('External AI proposal JSON',proposal),field('Human-reviewed opportunity title',title),
     field('Human-reviewed opportunity details',description),preview,status,summary,
     ...(typeof onStage==='function'?[el('p','Starting a new shadow skill draft replaces any unfinished skill draft. The skill still requires its own human review and confirmation.'),stage]:[]),
