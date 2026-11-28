@@ -34,7 +34,7 @@ const path=require('node:path');
    const portable=spawnSync(python,['-c',"import sys,json;sys.path.insert(0,'tests');from test_ai_implementation_review import proposal;from test_ai_implementation_compact_inference import repetitive_sources;s=repetitive_sources();print(json.dumps({'source':s[0],'proposal':proposal(s)}))"],{encoding:'utf8'});
    assert.equal(portable.status,0,portable.stderr);
    const fixture=JSON.parse(portable.stdout),handoff=page.locator('#owgAiOpportunityHandoff');
-   await handoff.locator('summary').click();
+   await handoff.locator(':scope > summary').click();
    // Direct selection uses original observed-run evidence GET responses. Intercept
    // just those two reads with an exact contract fixture; preparation is real API.
    const picker=handoff.locator('#owgImplementationEvidencePicker');
@@ -111,7 +111,7 @@ const path=require('node:path');
    await handoff.getByText('Packet ready:',{exact:false}).waitFor();
    // A shared packet supports multiple proposals; retain invalid and duplicate items.
    {
-     const batch=handoff.locator('#owgImplementationBatch');await batch.locator('summary').click();
+     const batch=handoff.locator('#owgImplementationBatch');await batch.locator(':scope > summary').click();
      const bad=structuredClone(fixture.proposal);bad.outcome.evidence_refs=['invented'];
      const distinct=structuredClone(fixture.proposal);distinct.title='Second implementation candidate';
      const proposals=[fixture.proposal,bad,distinct,fixture.proposal,null,bad];
@@ -125,7 +125,7 @@ const path=require('node:path');
      const [reportFile]=await Promise.all([page.waitForEvent('download'),batch.getByRole('button',{name:'Download complete batch review',exact:true}).click()]);
      const batchReport=JSON.parse(await fs.readFile(await reportFile.path(),'utf8'));
      assert.equal(batchReport.item_count,6);assert.equal(batchReport.portfolio_written,false);
-     const planning=batch.locator('#owgImplementationPlanning');await planning.locator('summary').click();
+     const planning=batch.locator('#owgImplementationPlanning');await planning.locator(':scope > summary').click();
      const preparePlan=planning.getByRole('button',{name:'Prepare planning worklist',exact:true});
      assert(await preparePlan.isDisabled());
      await planning.getByLabel('Planning currency code',{exact:true}).fill('SEK');await preparePlan.click();
@@ -157,7 +157,7 @@ const path=require('node:path');
      await planning.getByLabel('Cases per month — low (item 1)',{exact:true}).fill('70');
      assert(await comparePlan.isDisabled());assert(await planning.getByRole('button',{name:'Download planning review',exact:true}).isDisabled());
      assert(await reconcile.isDisabled());assert(await planning.getByRole('button',{name:'Download portfolio reconciliation',exact:true}).isDisabled());
-     await planning.locator('summary').click();
+     await planning.locator(':scope > summary').click();
      await batch.getByRole('button',{name:'Use item 3 for individual review',exact:true}).click();
      await batch.getByText('Item 3 transferred to individual review.',{exact:false}).waitFor();
      await handoff.getByLabel('Human-reviewed opportunity title',{exact:true}).fill('Reviewed second candidate');
@@ -169,7 +169,7 @@ const path=require('node:path');
      assert(await batch.getByRole('button',{name:'Download complete batch review',exact:true}).isDisabled());
      assert(await preparePlan.isDisabled());assert.equal(await planning.getByLabel('Assess item 1',{exact:true}).count(),0);
      assert(await handoff.getByRole('button',{name:'Create unassessed idea',exact:true}).isDisabled());
-     await batch.locator('summary').click();
+     await batch.locator(':scope > summary').click();
    }
    // Exercise actual dashboard -> local HTTP model -> cited proposal -> review.
    const modelAnswer={...fixture.proposal,author_model:'local-test:1'};let localCalls=0;
@@ -186,7 +186,7 @@ const path=require('node:path');
    });
    await new Promise((resolve,reject)=>{modelServer.once('error',reject);modelServer.listen(0,'127.0.0.1',resolve);});
    try{
-     const local=handoff.locator('#owgLocalImplementationModel');await local.locator('summary').click();
+     const local=handoff.locator('#owgLocalImplementationModel');await local.locator(':scope > summary').click();
      await local.getByLabel('Local model ID',{exact:true}).fill('local-test:1');
      await local.getByLabel('Local model port',{exact:true}).fill(String(modelServer.address().port));
      const gen=local.getByRole('button',{name:'Generate with local model',exact:true});
@@ -285,7 +285,7 @@ const path=require('node:path');
    assert.equal(imported.length,1);assert.equal(imported[0].state,'idea');assert.equal(imported[0].assessment,null);
    assert.equal(imported[0].execution_authorized,false);assert.equal(imported[0].ai_proposal_handoff.structural_review_only,true);
    await page.evaluate(async id=>{const r=await fetch('/v1/automation-pipeline/'+id+'/delete',{method:'POST'});if(!r.ok)throw Error(await r.text());},imported[0].idea_id);
-   await handoff.locator('summary').click();
+   await handoff.locator(':scope > summary').click();
    await page.locator('#owgPipelineRefresh').click();
    await page.locator('#owgPipelineCounts').filter({hasText:'No ideas yet.'}).waitFor();
 
@@ -1261,6 +1261,27 @@ with zipfile.ZipFile(sys.argv[1]) as z:
    await page.getByRole('button',{name:'Reconcile original downloaded check',exact:true}).click();
    await page.getByText('document does not match a retained export for this project',{exact:false}).waitFor();
    assert.equal(sourceDownloads,1);
+   // Reconcile a complete declared cohort using the actual unknown receipt and a missing case.
+   const cohortPanel=page.locator('#owgProjectSourceCohort');
+   await cohortPanel.locator(':scope > summary').click();
+   await cohortPanel.getByRole('button',{name:'Load confirmed project expectations',exact:true}).click();
+   await cohortPanel.getByLabel('Declared case ID',{exact:true}).fill('case_1');
+   await cohortPanel.getByLabel('Case observed record reference',{exact:true}).fill(sourceB);
+   await cohortPanel.getByLabel('Original case source-check document (optional)',{exact:true}).setInputFiles({name:'original.json',mimeType:'application/json',buffer:checkBytes});
+   await cohortPanel.getByRole('button',{name:'Add declared source-check case',exact:true}).click();
+   await cohortPanel.getByText('case_1 ·', {exact:false}).first().waitFor();
+   await cohortPanel.getByLabel('Declared case ID',{exact:true}).fill('case_2');
+   await cohortPanel.getByRole('button',{name:'Add declared source-check case',exact:true}).click();
+   await cohortPanel.getByRole('button',{name:'Reconcile declared cohort',exact:true}).click();
+   await cohortPanel.getByText('2 declared cases · 0 historical operations reported verified · 1 not established · 1 missing documents',{exact:true}).waitFor();
+   const [cohortDownload]=await Promise.all([page.waitForEvent('download'),cohortPanel.getByRole('button',{name:'Download cohort review JSON',exact:true}).click()]);
+   const cohortReport=JSON.parse(await fs.readFile(await cohortDownload.path(),'utf8'));
+   assert.equal(cohortReport.business_outcomes_verified,false);assert.equal(cohortReport.case_association_verified,false);
+   assert.equal(cohortReport.cases[0].document_sha256,checkHistory.exports[0].document_sha256);
+   assert(!JSON.stringify(cohortReport).includes(sourceB));
+   await cohortPanel.getByRole('button',{name:'Remove case_2',exact:true}).click();
+   assert(await cohortPanel.getByRole('button',{name:'Download cohort review JSON',exact:true}).isDisabled());
+   await cohortPanel.locator(':scope > summary').click();
    const sourceAudit=await page.evaluate(async()=>window.axe.run(document.querySelector('#owgPipelineCard'),{
      runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21a','wcag21aa']},resultTypes:['violations']}));
    assert.deepEqual(sourceAudit.violations.map(v=>v.id),[]);
