@@ -9317,12 +9317,33 @@
     const box=section('Check against a Petri net');box.id='owgPetri';
     const netsBase=()=>'/v1/event-logs/'+encodeURIComponent(state.logId)+'/reference-nets';
     box.appendChild(el('div','Replay the recorded cases on a Petri net from ProM, PM4Py, Apromore or another tool (a .pnml file), or on the net discovered here. Tokens that are missing or left behind show where the cases and the net disagree. The file is read for this check and not stored.','muted'));
-    const file=input('owgPetriFile','file');file.accept='.pnml,.ptml,application/xml,text/xml';
+    const file=input('owgPetriFile','file');file.accept='.pnml,.ptml,.bpmn,application/xml,text/xml';
+    const bpmnConversion=el('div');bpmnConversion.id='owgPetriBpmnConversion';
+    let conversionEpoch=0;
+    const clearBpmnConversion=()=>{conversionEpoch++;bpmnConversion.replaceChildren();};
+    const bpmnProcess=select('owgPetriBpmnProcess',[['','Automatic (single process only)']]);
+    const bpmnInspect=button('List BPMN processes','secondary');bpmnInspect.id='owgPetriBpmnInspect';
+    const bpmnPicker=el('div',null,'row');bpmnPicker.append(field('BPMN process ID',bpmnProcess),bpmnInspect);show(bpmnPicker,false);
+    const resetBpmnPicker=()=>{clearBpmnConversion();bpmnProcess.replaceChildren(new Option('Automatic (single process only)',''));show(bpmnPicker,/\.bpmn$/i.test(file.files?.[0]?.name||''));};
+    file.addEventListener('change',resetBpmnPicker);bpmnProcess.onchange=clearBpmnConversion;
+    bpmnInspect.onclick=async()=>{
+      const chosen=file.files?.[0],epoch=++conversionEpoch;
+      if(!chosen||!/\.bpmn$/i.test(chosen.name))return;
+      bpmnConversion.replaceChildren();bpmnInspect.disabled=true;
+      try{
+        if(chosen.size>2*1024*1024)throw new Error('The BPMN file is larger than 2 MB.');
+        const r=await (await api('/v1/event-logs/bpmn-processes',{method:'POST',headers:{'Content-Type':'application/xml'},body:await chosen.arrayBuffer()})).json();
+        if(epoch!==conversionEpoch||sectionGeneration!==state.generation||file.files?.[0]!==chosen)return;
+        bpmnProcess.replaceChildren(new Option('Automatic (single process only)',''),...r.processes.map(p=>new Option(p.name+' ['+p.id+']',p.id)));
+        statusLine.textContent=r.processes.length+' process definitions found. '+(r.processes.length>1?'Select the exact process to replay.':'Select the process or use automatic selection.');
+      }catch(error){if(epoch===conversionEpoch&&sectionGeneration===state.generation)statusLine.textContent=error.message;}
+      finally{bpmnInspect.disabled=false;}
+    };
     const run=button('Replay on this net','secondary');run.id='owgPetriRun';
     const own=button('Replay on the discovered net','secondary');own.id='owgPetriDiscovered';
     const happy=button('Check against the most common path','secondary');happy.id='owgPetriHappy';
     const align=button('Explain each case step by step','secondary');align.id='owgPetriAlign';align.disabled=true;
-    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Petri net (.pnml) or process tree (.ptml)',file),run,own,happy,align);
+    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Petri net (.pnml), process tree (.ptml) or supported BPMN (.bpmn)',file),run,own,happy,align);
     const statusLine=el('div',null,'muted');statusLine.id='owgPetriStatus';statusLine.setAttribute('role','status');statusLine.setAttribute('aria-live','polite');
     const out=el('div');out.id='owgPetriResults';
     const aligned=el('div');aligned.id='owgPetriAlignResults';
@@ -9344,7 +9365,7 @@
         await replay(converted.pnml,'the pasted process tree');
       }catch(error){statusLine.textContent=error.message;}
     };
-    box.append(row,treeRow,statusLine,out,aligned,alertRow,alertMessage);
+    box.append(row,bpmnPicker,treeRow,statusLine,bpmnConversion,out,aligned,alertRow,alertMessage);
     // Reference nets saved with this log: keep the net just checked, or check again against a saved one.
     const savedPick=select('owgPetriSaved',[]);const savedRun=button('Replay on saved net','secondary');savedRun.id='owgPetriSavedRun';
     const savedDelete=button('Delete saved net','secondary');savedDelete.id='owgPetriSavedDelete';
@@ -9849,9 +9870,40 @@
       finally{soundBusy=false;soundRun.disabled=!lastNet||lastNet.generation!==state.generation;}
     };
 
+    const auditBox=document.createElement('details');auditBox.append(el('summary','Exact completed-trace membership audit'),el('div','Unlike token fitness, this check explores every reachable marking consistent with each selected trace until it proves membership, proves nonmembership, or reaches a limit.','muted'));
+    const auditRun=button('Audit exact trace membership','secondary');auditRun.id='owgPetriAuditRun';auditRun.disabled=true;
+    const auditStatus=el('div',null,'muted');auditStatus.id='owgPetriAuditStatus';auditStatus.setAttribute('role','status');auditStatus.setAttribute('aria-live','polite');
+    const auditOut=el('div');auditOut.id='owgPetriAuditResults';auditBox.append(auditRun,auditStatus,auditOut);box.appendChild(auditBox);
+    let auditBusy=false;
+    const syncAudit=()=>{auditRun.disabled=auditBusy||!lastNet||lastNet.generation!==state.generation;};
+    const clearAudit=()=>{auditStatus.textContent='';auditOut.replaceChildren();auditRun.disabled=true;};
+    auditRun.onclick=async()=>{
+      const net=lastNet;if(!net||auditBusy||net.generation!==state.generation)return;
+      const current=()=>lastNet===net&&state.generation===net.generation;
+      auditBusy=true;syncAudit();auditOut.replaceChildren();auditStatus.textContent='Exploring trace membership…';
+      try{
+        const r=await (await api(logPath('petri-trace-audit',{}),{method:'POST',headers:{'Content-Type':'application/xml'},body:net.body})).json();
+        if(!current())return;
+        const c=r.counts;
+        auditStatus.textContent=c.accepted+' accepted · '+c.rejected+' rejected · '+c.inconclusive+' inconclusive · '+r.cases_excluded+' excluded';
+        if(r.accepted_fraction_bounds) auditOut.appendChild(el('div','Accepted share of all selected cases: '+pct(r.accepted_fraction_bounds.lower)+'–'+pct(r.accepted_fraction_bounds.upper)+'.','muted'));
+        const tbl=table(['Trace','Cases','Status','Observed prefix length'],r.variants.map(v=>[v.path.join(' → '),String(v.cases),v.status,v.longest_prefix===null?'—':String(v.longest_prefix)]));auditOut.appendChild(tbl);
+        for(const v of r.variants.filter(v=>v.status!=='accepted').slice(0,20)){
+          const inspect=button('Inspect '+v.status+' cases on '+v.path.join(' → '),'secondary');
+          inspect.onclick=()=>{if(current())inspection.variant(v.variant_id,null,net.cohort,'Exact trace audit: '+v.status);};auditOut.appendChild(inspect);
+        }
+        auditOut.appendChild(el('div',r.caveat,'muted'));
+        const dl=button('Download exact trace audit (JSON)','secondary');dl.onclick=()=>{
+          if(!current())return;
+          const url=URL.createObjectURL(new Blob([JSON.stringify(r,null,2)],{type:'application/json'}));const link=document.createElement('a');link.href=url;link.download='petri-trace-audit-'+r.pnml_sha256.slice(0,12)+'.json';document.body.appendChild(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
+        };auditOut.appendChild(dl);
+      }catch(error){if(current())auditStatus.textContent=error.message;}
+      finally{auditBusy=false;syncAudit();}
+    };
     const replay=async(body,label)=>{
       if(sectionGeneration!==state.generation||run.disabled)return;
       const generation=sectionGeneration,cohort=globalCohort();
+      clearBpmnConversion();clearAudit();
       run.disabled=own.disabled=happy.disabled=align.disabled=alertSave.disabled=true;aligned.replaceChildren();alertMessage.textContent='';lastNet=null;clearSound();statusLine.textContent='Replaying on '+label+'…';out.replaceChildren();
       try{
         const r=await (await api(logPath('petri-net-replay',{}),{method:'POST',headers:{'Content-Type':'application/xml'},body})).json();
@@ -9880,7 +9932,7 @@
           ])));out.appendChild(more);}
         out.appendChild(el('div',r.caveat,'muted'));
       }catch(error){statusLine.textContent=error.message;}
-      finally{run.disabled=own.disabled=happy.disabled=false;align.disabled=alertSave.disabled=saveRun.disabled=!lastNet;soundRun.disabled=!lastNet||soundBusy;}};
+      finally{run.disabled=own.disabled=happy.disabled=false;align.disabled=alertSave.disabled=saveRun.disabled=!lastNet;soundRun.disabled=!lastNet||soundBusy;syncAudit();}};
     alertSave.onclick=async()=>{
       if(!lastNet)return;
       if(lastNet.body.length>60000){alertMessage.textContent='This net is too large to keep with a signal (over 60,000 characters).';return;}
@@ -9967,8 +10019,29 @@
             finally{why.disabled=false;}};}
       }catch(error){status.textContent=error.message;}
       finally{run.disabled=own.disabled=false;align.disabled=!lastNet;}};
-    run.onclick=async()=>{const chosen=file.files&&file.files[0];if(!chosen){statusLine.textContent='Choose a .pnml file first.';return;}
+    run.onclick=async()=>{const chosen=file.files&&file.files[0];if(!chosen){statusLine.textContent='Choose a .pnml, .ptml or .bpmn file first.';return;}
       if(chosen.size>2*1024*1024){statusLine.textContent='The Petri net file is larger than 2 MB.';return;}
+      if(/\.bpmn$/i.test(chosen.name)){
+        const epoch=++conversionEpoch;bpmnConversion.replaceChildren();
+        try{
+          statusLine.textContent='Converting supported BPMN control flow…';
+          const selected=bpmnProcess.value;
+          const converted=await (await api('/v1/event-logs/bpmn-to-pnml'+(selected?'?process_id='+encodeURIComponent(selected):''),{method:'POST',headers:{'Content-Type':'application/xml'},body:await chosen.arrayBuffer()})).json();
+          if(epoch!==conversionEpoch||sectionGeneration!==state.generation||file.files?.[0]!==chosen)return;
+          const label=chosen.name+' (BPMN control flow)';
+          await replay(converted.pnml,label);
+          if(conversionEpoch!==epoch+1||sectionGeneration!==state.generation||lastNet?.body!==converted.pnml||lastNet?.label!==label)return;
+          bpmnConversion.append(el('h4','BPMN conversion evidence'),el('div',converted.nodes+' BPMN nodes · '+converted.sequence_flows+' sequence flows · '+Object.keys(converted.parallel_pairs).length+' paired parallel regions · '+(converted.subprocess_boundary_instances||[]).length+' embedded subprocesses · '+Object.keys(converted.call_boundaries||{}).length+' expanded calls · '+(converted.multi_instance_activities||[]).length+' multi-instance activities. '+converted.caveat,'muted'));
+          const download=(name,data,mime)=>{
+            const url=URL.createObjectURL(new Blob([data],{type:mime}));
+            const link=document.createElement('a');link.href=url;link.download=name;document.body.appendChild(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
+          };
+          const pnmlDownload=button('Download converted PNML','secondary');pnmlDownload.onclick=()=>{if(conversionEpoch===epoch+1)download('converted-'+converted.pnml_sha256.slice(0,12)+'.pnml',converted.pnml,'application/xml');};
+          const mappingDownload=button('Download BPMN conversion evidence (JSON)','secondary');mappingDownload.onclick=()=>{if(conversionEpoch===epoch+1)download('bpmn-conversion-'+converted.bpmn_sha256.slice(0,12)+'.json',JSON.stringify(converted,null,2),'application/json');};
+          bpmnConversion.append(pnmlDownload,mappingDownload);
+        }catch(error){if(epoch===conversionEpoch&&sectionGeneration===state.generation)statusLine.textContent=error.message;}
+        return;
+      }
       // A process tree from PM4Py or ProM is converted to its workflow net first, then replayed as usual.
       if(/\.ptml$/i.test(chosen.name)){
         try{

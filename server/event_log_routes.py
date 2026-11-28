@@ -615,6 +615,40 @@ async def event_log_petri_language_comparison(request: Request):
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
+@router.post("/v1/event-logs/bpmn-processes")
+async def inspect_bpmn_replay_processes(request: Request):
+    """List independent process identities without asserting conversion support."""
+    from . import event_log_bpmn_replay_import as importer
+    _require_dashboard(request)
+    data = bytearray()
+    async for chunk in request.stream():
+        if len(data) + len(chunk) > importer.MAX_BYTES:
+            raise HTTPException(413, "the BPMN file is larger than 2 MB")
+        data.extend(chunk)
+    try:
+        result = await run_in_threadpool(importer.inspect_processes, bytes(data))
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+@router.post("/v1/event-logs/bpmn-to-pnml")
+async def convert_bpmn_replay_model(request: Request, process_id: str | None = Query(default=None, max_length=200)):
+    """Convert supported BPMN control flow to an ordinary PNML net. Nothing is stored."""
+    from . import event_log_bpmn_replay_import as importer
+    _require_dashboard(request)
+    data = bytearray()
+    async for chunk in request.stream():
+        if len(data) + len(chunk) > importer.MAX_BYTES:
+            raise HTTPException(413, "the BPMN file is larger than 2 MB")
+        data.extend(chunk)
+    try:
+        result = await run_in_threadpool(importer.to_pnml, bytes(data), process_id)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
 @router.post("/v1/event-logs/ptml-to-pnml")
 async def convert_ptml_process_tree(request: Request):
     """Convert a PTML process tree (ProM, PM4Py) to a PNML workflow net for replay. Nothing is stored."""
@@ -1773,6 +1807,25 @@ async def event_log_petri_net_replay(request: Request, log_id: str,
             raise HTTPException(413, "the Petri net file is larger than 2 MB")
     try:
         result = await run_in_threadpool(petri.replay, log_id, bytes(body), case_type, cohort=cohort)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+@router.post("/v1/event-logs/{log_id}/petri-trace-audit")
+async def event_log_petri_trace_audit(request: Request, log_id: str,
+                                      case_type: str | None = Query(default=None, max_length=200),
+                                      cohort: dict[str, Any] = Depends(_case_filter)):
+    """Audit retained trace membership without greedy token repair or model storage."""
+    from . import event_log_petri_trace_audit as audit
+    _require_dashboard(request)
+    body = bytearray()
+    async for chunk in request.stream():
+        if len(body) + len(chunk) > audit.replay.MAX_BYTES:
+            raise HTTPException(413, "the Petri net file is larger than 2 MB")
+        body.extend(chunk)
+    try:
+        result = await run_in_threadpool(audit.audit, log_id, bytes(body), case_type, cohort=cohort)
     except workspace.EventLogWorkspaceError as exc:
         raise HTTPException(422, str(exc)) from None
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
