@@ -11,6 +11,7 @@ from starlette.concurrency import run_in_threadpool
 from shared import ai_opportunity_handoff as handoff
 from shared import ai_implementation_packet as packet_handoff
 from shared import ai_implementation_local_handoff as local_handoff
+from shared import ai_implementation_trial_handoff as trial_handoff
 from . import automation_pipeline as pipeline
 from .local_auth import dashboard_session_valid
 
@@ -18,6 +19,7 @@ router = APIRouter()
 MAX_BYTES = 8 * 1024 * 1024
 _LOCAL_MODEL_SLOT = Lock()
 SCRIPT = Path(__file__).resolve().parents[1] / "dashboard" / "ai_opportunity_handoff.js"
+TRIAL_SCRIPT = SCRIPT.with_name("ai_context_trial.js")
 
 
 def _require_dashboard(request):
@@ -76,6 +78,11 @@ def script():
     return FileResponse(SCRIPT, media_type="application/javascript")
 
 
+@router.get("/ai-context-trial.js")
+def trial_script():
+    return FileResponse(TRIAL_SCRIPT, media_type="application/javascript")
+
+
 @router.post("/v1/ai-opportunity-handoff/prepare-packet")
 async def prepare_packet(request: Request):
     payload = await _body(request)
@@ -121,6 +128,38 @@ async def generate_local(request: Request):
         result = await run_in_threadpool(_generate_local, {**payload, "sources": [_decode(s) for s in sources]}, request)
     except (ValueError, TypeError, KeyError, AttributeError, RecursionError, OverflowError, OSError, http.client.HTTPException):
         raise HTTPException(422, "Local model proposal refused; check the current evidence, model service, budget or response. No retry or cloud fallback occurred.") from None
+    _require_dashboard(request)
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+def _run_context_trial(payload, request):
+    _require_dashboard(request)
+    if not _LOCAL_MODEL_SLOT.acquire(blocking=False):
+        raise HTTPException(409, "A local model request is already in progress")
+    try:
+        # Both calls have been explicitly authorized as one trial. Keep the
+        # shared slot until both attempts finish, including on client disconnect.
+        _require_dashboard(request)
+        return trial_handoff.run(payload)
+    finally:
+        _LOCAL_MODEL_SLOT.release()
+
+
+@router.post("/v1/ai-opportunity-handoff/context-trial")
+async def context_trial(request: Request):
+    payload = await _body(request)
+    _require_dashboard(request)
+    if not isinstance(payload, dict) or set(payload) != trial_handoff.FIELDS:
+        raise HTTPException(422, "Exact paired context experiment request required")
+    sources = payload["sources"]
+    if not isinstance(sources, list) or not 1 <= len(sources) <= 8 or not all(isinstance(s, str) for s in sources):
+        raise HTTPException(422, "Select one to eight original evidence JSON files")
+    if payload["confirm_two_requests"] is not True:
+        raise HTTPException(422, "Explicit confirmation of both model requests required")
+    try:
+        result = await run_in_threadpool(_run_context_trial, {**payload, "sources": [_decode(s) for s in sources]}, request)
+    except (ValueError, TypeError, KeyError, AttributeError, RecursionError, OverflowError, OSError, http.client.HTTPException):
+        raise HTTPException(422, "Paired context experiment refused; inspect evidence, settings and service. No automatic retry or fallback.") from None
     _require_dashboard(request)
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 

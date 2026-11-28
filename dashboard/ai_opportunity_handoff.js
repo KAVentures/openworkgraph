@@ -16,7 +16,7 @@ export function mountAiOpportunityHandoff(host, post, onCreated, onStage){
   const controls=[sources,proposal,title,description],order=el('ol');
   let generation=0,basis=null,busy=false,orderedSources=[];
   let packetGeneration=0,preparedPacket=null;
-  let generatedResult=null,selectedGenerated=false;
+  let generatedResult=null,selectedGenerated=false,trialPanel=null;
   const budget=el('select');
   for(const [value,label] of [[131072,'128 KiB'],[524288,'512 KiB'],[2097152,'2 MiB'],[8388608,'8 MiB']]){
     const option=el('option',label);option.value=String(value);budget.append(option);
@@ -30,7 +30,7 @@ export function mountAiOpportunityHandoff(host, post, onCreated, onStage){
   packetStatus.setAttribute('role','status');packetStatus.setAttribute('aria-live','polite');
   function invalidatePacket(){
     packetGeneration++;preparedPacket=null;downloadPacket.disabled=downloadGuide.disabled=downloadCompact.disabled=downloadCompactGuide.disabled=true;
-    contextMode.value='original';clearLocal();
+    contextMode.value='original';clearLocal();trialPanel?.invalidate();
     packetStatus.textContent='Evidence selection or budget changed. Prepare a new packet.';
   }
   budget.addEventListener('change',invalidatePacket);
@@ -137,6 +137,7 @@ export function mountAiOpportunityHandoff(host, post, onCreated, onStage){
     contextMode.options[1].disabled=preparedPacket?.compaction?.available!==true;
     generate.disabled=busy||!localReady();
     useGenerated.disabled=saveProposal.disabled=saveReceipt.disabled=busy||!generatedResult;
+    trialPanel?.refresh();
   }
   function clearLocal(){
     const wasSelected=selectedGenerated;
@@ -146,7 +147,7 @@ export function mountAiOpportunityHandoff(host, post, onCreated, onStage){
     if(wasSelected)invalidate();
     refreshLocal();
   }
-  for(const n of [localModel,localPort,localTokens,localJsonMode])n.addEventListener('input',clearLocal);
+  for(const n of [localModel,localPort,localTokens,localJsonMode])n.addEventListener('input',()=>{clearLocal();trialPanel?.invalidate();});
   contextMode.addEventListener('change',clearLocal);
   localConfirm.addEventListener('change',refreshLocal);
   useGenerated.onclick=()=>{
@@ -268,12 +269,13 @@ export function mountAiOpportunityHandoff(host, post, onCreated, onStage){
     }catch(error){status.textContent=error.message;}
     finally{lock(false);}
   };
+  const trialHost=el('div');
   const localSection=el('details');localSection.id='owgLocalImplementationModel';
   localSection.append(el('summary','Optional: generate a draft with your local model'),
     el('p','Prepare a packet of at most 512 KiB. OWG makes one request to the configured port on the OWG server’s IPv4 loopback, not necessarily the browser machine. A loopback service may proxy or retain data; verify the service, egress and permissions first. No remote fallback.'),
     field('Local model ID',localModel),field('Local model port',localPort),field('Maximum output tokens',localTokens),
     field('Model evidence representation',contextMode),field('Request JSON-object mode',localJsonMode),field('I authorize sending the selected evidence to this configured loopback model service',localConfirm),
-    generate,localStatus,field('Generated proposal (unverified interpretation)',generatedText),useGenerated,saveProposal,saveReceipt);
+    generate,localStatus,field('Generated proposal (unverified interpretation)',generatedText),useGenerated,saveProposal,saveReceipt,trialHost);
   refreshLocal();
   const details=el('details');details.id='owgAiOpportunityHandoff';
   details.append(el('summary','Add an external AI proposal to the implementation portfolio'),
@@ -287,4 +289,11 @@ export function mountAiOpportunityHandoff(host, post, onCreated, onStage){
     ...(typeof onStage==='function'?[el('p','Starting a new shadow skill draft replaces any unfinished skill draft. The skill still requires its own human review and confirmation.'),stage]:[]),
     field('I reviewed the original proposal and want to create an unassessed idea only',confirmation),commit);
   host.append(details);
+  import('/ai-context-trial.js').then(module=>{
+    trialPanel=module.mountContextTrial(trialHost,{
+      getState:()=>({busy,packet:preparedPacket,files:orderedSources.slice(),
+        settings:{model:localModel.value,port:Number(localPort.value),max_output_tokens:Number(localTokens.value),json_mode:localJsonMode.checked}}),
+      post,lock,download:downloadLocal
+    });
+  }).catch(()=>{trialHost.textContent='Paired context experiment unavailable.';});
 }
