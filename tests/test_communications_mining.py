@@ -176,6 +176,22 @@ with TestClient(app) as client:
         "Cancellation": (8, 1.0), "outbound reply": (8, None)}
     assert "_events" not in data and "event_log" not in data and report.headers["cache-control"] == "no-store"
     assert "Please cancel" not in report.text
+    assert "response_episodes" not in data
+    ep=query+"&response_cutoff=2024-02-10T00:00:00Z&response_deadlines=30,60,120"
+    assert client.post(ep,content=body,headers=headers).status_code==403
+    result=client.post(ep,content=body,headers=confirmed)
+    assert result.status_code==200,result.text
+    assert result.headers["cache-control"]=="no-store"
+    episode=result.json()["response_episodes"]
+    assert episode["overall"]["episodes"]==8 and episode["overall"]["observed_reply_episodes"]==8
+    assert episode["overall"]["deadlines"][0]["counts"]["observed_after_deadline"]==8
+    assert episode["overall"]["deadlines"][1]["counts"]["observed_within_deadline"]==8
+    assert episode["workload"]["overall"]["episode_wait_seconds"]==8*3600
+    assert not episode["thread_identifiers_returned"] and "event_log" not in result.json()
+    assert client.post(query+"&response_deadlines=60",content=body,headers=confirmed).status_code==422
+    assert client.post(query+"&response_cutoff=2024-02-10T00:00:00Z&response_deadlines=60,60",content=body,headers=confirmed).status_code==422
+    assert client.post(ep.replace("&direction_column=direction",""),content=body,headers=confirmed).status_code==422
+    assert not [p for p in os.listdir(DATA_DIR) if p.startswith("owg-comms-")]
     assert not [p for p in os.listdir(DATA_DIR) if p.startswith("owg-comms-")]
     assert client.post(query + "&save_event_log=true", content=body, headers=confirmed).status_code == 403
     saved = client.post(query + "&save_event_log=true&name=Tickets", content=body,

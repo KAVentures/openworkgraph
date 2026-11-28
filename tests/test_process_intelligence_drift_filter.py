@@ -27,5 +27,5 @@ def test_drift_within_one_group_finds_that_groups_change():
     eu = sharing.drift(log_id, case_filter={"event_attribute": "region=EU"})
     us = sharing.drift(log_id, case_filter={"event_attribute": "region=US"})
     assert eu["change_points"] and not us["change_points"]
-    with pytest.raises(workspace.EventLogWorkspaceError):
-        sharing.drift(log_id, case_filter={"case_ids": ["m1c0"]})
+    with pytest.raises(workspace.EventLogWorkspaceError, match="fewer than 5 cases"):
+        sharing.drift(log_id, case_filter={"started_before": "2024-01-02T00:00:00Z"})

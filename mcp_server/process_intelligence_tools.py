@@ -1257,11 +1257,13 @@ def register_process_intelligence_tools(mcp: Any, runtime_module: Any) -> None:
 
     @mcp.tool(annotations=_READ_ONLY)
     def get_process_batching(log_id: str, gap_seconds: int = 60, min_batch_size: int = 3, by_resource: bool = True,
-                             case_type: str | None = None) -> dict[str, Any]:
+                             case_type: str | None = None,
+                             case_filter: dict[str, Any] | None = None) -> dict[str, Any]:
         """Batch processing in a shared log: per activity, the share of events done in batches (events of one
         activity by one resource within gap_seconds, at least min_batch_size of them), batch sizes, whether batches
         are simultaneous or sequential, and how long cases waited before a batched event compared with an unbatched
-        one. Batches are inferred from timestamps; resources are only counted, never named. Aggregates only.
+        one. Batches are inferred from timestamps; resources are only counted, never named. case_filter (the same keys
+        as insight cohorts) limits it to one group of at least 5 cases. Aggregates only.
         """
         if isinstance(gap_seconds, bool) or not isinstance(gap_seconds, int) or not 0 <= gap_seconds <= 86_400:
             raise ToolError("gap_seconds must be 0 to 86400")
@@ -1269,9 +1271,14 @@ def register_process_intelligence_tools(mcp: Any, runtime_module: Any) -> None:
             raise ToolError("min_batch_size must be 2 to 1000")
         if not isinstance(by_resource, bool):
             raise ToolError("by_resource must be true or false")
-        return _get("get_process_batching", f"/v1/process-intelligence/{_log(log_id)}/batching",
-                    {"gap_seconds": gap_seconds, "min_batch_size": min_batch_size,
-                     "by_resource": "true" if by_resource else "false", "case_type": case_type})
+        params: dict[str, Any] = {"gap_seconds": gap_seconds, "min_batch_size": min_batch_size,
+                                  "by_resource": "true" if by_resource else "false", "case_type": case_type}
+        if case_filter is not None:
+            if not isinstance(case_filter, dict) or not case_filter:
+                raise ToolError("case_filter must be a non-empty object")
+            import json as _json
+            params["case_filter"] = _json.dumps(case_filter, separators=(",", ":"))
+        return _get("get_process_batching", f"/v1/process-intelligence/{_log(log_id)}/batching", params)
 
     @mcp.tool(annotations=_READ_ONLY)
     def get_process_handovers(log_id: str, limit: int = 50, case_type: str | None = None,

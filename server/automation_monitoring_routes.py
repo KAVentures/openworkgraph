@@ -165,6 +165,18 @@ async def compare_run_evidence(request: Request):
     return await _respond(evidence.compare, spec)
 
 
+@router.post("/v1/automation-monitoring/deployments/{deployment_id}/recovery-patterns")
+async def review_recovery_patterns(request: Request, deployment_id: str):
+    from . import automation_recovery_patterns as recovery
+    from .event_log_routes import _json_body
+    _require_dashboard(request)
+    spec=await _json_body(request,"retained recovery patterns",strict=True,limit=16384)
+    _require_dashboard(request)
+    result=await _respond(recovery.review,deployment_id,spec)
+    _require_dashboard(request)
+    return result
+
+
 @router.post("/v1/automation-monitoring/deployments/{deployment_id}/step-reliability")
 async def review_step_reliability(request: Request, deployment_id: str):
     from . import automation_step_reliability as reliability

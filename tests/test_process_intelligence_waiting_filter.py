@@ -24,5 +24,5 @@ def test_waiting_times_within_one_group():
     eu = sharing.waiting_times(log_id, case_filter={"event_attribute": "region=EU"})
     review = {a["activity"]: a for a in eu["activities"]}["Review"]
     assert review["processing"]["median_seconds"] == 3600
-    with pytest.raises(workspace.EventLogWorkspaceError):
-        sharing.waiting_times(log_id, case_filter={"case_ids": ["c0"]})
+    with pytest.raises(workspace.EventLogWorkspaceError, match="fewer than 5 cases"):
+        sharing.waiting_times(log_id, case_filter={"event_attribute": "region=UNKNOWN"})
