@@ -41,3 +41,11 @@ def test_agent_funnel_and_next_steps_withhold_rare_step_timings():
     steps = {s["activity"]: s for s in sharing.next_steps(log_id, ["Receive"])["next"]}
     assert steps["Fix"]["hours_from_previous"]["median"] is None
     assert steps["Pay"]["hours_from_previous"]["median"] is not None
+
+    filtered = sharing.next_steps(log_id, ["Receive"],
+                                  case_filter={"started_before": "2024-03-10T00:00:00Z"})
+    assert filtered["cases"] == 9
+    filtered_steps = {s["activity"]: s for s in filtered["next"]}
+    assert filtered_steps["Fix"]["cases"] == 1
+    assert filtered_steps["Fix"]["hours_from_previous"]["median"] is None
+    assert filtered_steps["Pay"]["hours_from_previous"]["median"] is not None

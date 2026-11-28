@@ -835,12 +835,14 @@ def register_process_intelligence_tools(mcp: Any, runtime_module: Any) -> None:
     @mcp.tool(annotations=_READ_ONLY)
     def get_process_due_dates(log_id: str, activity: str, due_attribute: str | None = None,
                               due_days: float | None = None, early_days: float | None = None,
-                              case_type: str | None = None) -> dict[str, Any]:
+                              case_type: str | None = None,
+                              case_filter: dict[str, Any] | None = None) -> dict[str, Any]:
         """Due-date adherence in a shared log: whether `activity` (e.g. a payment or shipment) happened by each
         case's due date, taken from a case or event attribute (`due_attribute`) or a fixed number of days after
         the case started (`due_days`); give exactly one. Returns on-time, early (with `early_days`), late and
         still-open (overdue or not yet due) counts, days late, and a trend by due month. Case IDs of the latest
-        late cases only for logs shared at the cases level. Says how often deadlines were met, not why.
+        late cases only for logs shared at the cases level. Says how often deadlines were met, not why. Optional
+        case_filter (see openworkgraph://process-case-filter) measures one group of at least 5 cases.
         """
         if not isinstance(activity, str) or not activity:
             raise ToolError("activity must name an activity")
@@ -849,26 +851,38 @@ def register_process_intelligence_tools(mcp: Any, runtime_module: Any) -> None:
         for name, value in (("due_days", due_days), ("early_days", early_days)):
             if value is not None and (isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0):
                 raise ToolError(f"{name} must be a positive number of days")
-        return _get("get_process_due_dates", f"/v1/process-intelligence/{_log(log_id)}/due-dates",
-                    {"due_activity": activity, "due_attribute": due_attribute, "due_days": due_days,
-                     "early_days": early_days, "case_type": case_type})
+        params: dict[str, Any] = {"due_activity": activity, "due_attribute": due_attribute, "due_days": due_days,
+                                  "early_days": early_days, "case_type": case_type}
+        if case_filter is not None:
+            if not isinstance(case_filter, dict) or not case_filter:
+                raise ToolError("case_filter must be a non-empty object")
+            import json as _json
+            params["case_filter"] = _json.dumps(case_filter, separators=(",", ":"))
+        return _get("get_process_due_dates", f"/v1/process-intelligence/{_log(log_id)}/due-dates", params)
 
     @mcp.tool(annotations=_READ_ONLY)
     def get_process_next_steps(log_id: str, steps: list[str] | None = None, anchor: str = "start",
-                               case_type: str | None = None) -> dict[str, Any]:
+                               case_type: str | None = None,
+                               case_filter: dict[str, Any] | None = None) -> dict[str, Any]:
         """Walk a shared log's process one step at a time: after `steps` (empty = the start of the cases), which
         activities come next, in how many cases, the hours from the last step to each (median, p90) and from each
         to the case end, and how many cases end there. anchor="start" means cases that begin with `steps`;
         anchor="anywhere" finds the first place the steps occur one right after another. Call again with a next
-        step appended to go deeper. Order and timing only, not why cases branch. Aggregates only.
+        step appended to go deeper. Order and timing only, not why cases branch. Aggregates only. Optional
+        case_filter walks one group of at least 5 cases.
         """
         steps = steps or []
         if not isinstance(steps, list) or len(steps) > 30 or any(not isinstance(s, str) or not s for s in steps):
             raise ToolError("steps must be up to 30 activity names")
         if anchor not in ("start", "anywhere"):
             raise ToolError("anchor must be start or anywhere")
-        return _get("get_process_next_steps", f"/v1/process-intelligence/{_log(log_id)}/next-steps",
-                    {"step": steps, "anchor": anchor, "case_type": case_type})
+        params: dict[str, Any] = {"step": steps, "anchor": anchor, "case_type": case_type}
+        if case_filter is not None:
+            if not isinstance(case_filter, dict) or not case_filter:
+                raise ToolError("case_filter must be a non-empty object")
+            import json as _json
+            params["case_filter"] = _json.dumps(case_filter, separators=(",", ":"))
+        return _get("get_process_next_steps", f"/v1/process-intelligence/{_log(log_id)}/next-steps", params)
 
     @mcp.tool(annotations=_READ_ONLY)
     def get_process_insights(log_id: str, sla_hours: float | None = None, limit: int = 8,
@@ -1025,18 +1039,25 @@ def register_process_intelligence_tools(mcp: Any, runtime_module: Any) -> None:
 
     @mcp.tool(annotations=_READ_ONLY)
     def get_process_duration_distribution(log_id: str, cutoffs_hours: list[float] | None = None,
-                                          case_type: str | None = None) -> dict[str, Any]:
+                                          case_type: str | None = None,
+                                          case_filter: dict[str, Any] | None = None) -> dict[str, Any]:
         """How case durations of a shared log are spread: the number and share of cases in each band between the
         given cut-offs (default 1 h, 4 h, 1 day, 3 days) and the median, p90 and p95 duration. Elapsed time between
-        first and last event, not work time. Aggregates only.
+        first and last event, not work time. case_filter (the same keys as insight cohorts) limits it to one group of
+        at least 5 cases. Aggregates only.
         """
         hours = list(cutoffs_hours or [1, 4, 24, 72])
         if not 1 <= len(hours) <= 10 or any(isinstance(h, bool) or not isinstance(h, (int, float)) or h <= 0 for h in hours):
             raise ToolError("cutoffs_hours must be 1 to 10 positive numbers")
         seconds = sorted({int(round(h * 3600)) for h in hours})
+        params: dict[str, Any] = {"cutoffs_seconds": ",".join(str(s) for s in seconds), "case_type": case_type}
+        if case_filter is not None:
+            if not isinstance(case_filter, dict) or not case_filter:
+                raise ToolError("case_filter must be a non-empty object")
+            import json as _json
+            params["case_filter"] = _json.dumps(case_filter, separators=(",", ":"))
         return _get("get_process_duration_distribution",
-                    f"/v1/process-intelligence/{_log(log_id)}/duration-distribution",
-                    {"cutoffs_seconds": ",".join(str(s) for s in seconds), "case_type": case_type})
+                    f"/v1/process-intelligence/{_log(log_id)}/duration-distribution", params)
 
     @mcp.tool(annotations=_READ_ONLY)
     def get_process_time_patterns(log_id: str, time_zone: str = "UTC", activity: str | None = None,
@@ -1136,13 +1157,15 @@ def register_process_intelligence_tools(mcp: Any, runtime_module: Any) -> None:
 
     @mcp.tool(annotations=_READ_ONLY)
     def get_process_waiting_times(log_id: str, case_type: str | None = None,
-                                  working_calendar: dict[str, Any] | None = None) -> dict[str, Any]:
+                                  working_calendar: dict[str, Any] | None = None,
+                                  case_filter: dict[str, Any] | None = None) -> dict[str, Any]:
         """Processing and waiting time per activity of a shared log, when the log records when work on an activity
         started and completed (lifecycle start/complete or an end-time attribute): how long each activity is
         worked on and how long cases wait before it. Says so when the log has no such data. Optionally give a
         working_calendar to also measure in working time, for example {"timezone": "Europe/Berlin", "hours":
         {"mon": [["09:00", "17:00"]], "tue": [["09:00", "17:00"]]}, "holidays": ["2025-12-25"]} (days not listed
-        are closed). Aggregates only.
+        are closed). case_filter (the same keys as insight cohorts) limits it to one group of at least 5 cases.
+        Aggregates only.
         """
         params: dict[str, Any] = {"case_type": case_type}
         if working_calendar is not None:
@@ -1150,21 +1173,32 @@ def register_process_intelligence_tools(mcp: Any, runtime_module: Any) -> None:
                 raise ToolError("working_calendar must be an object with timezone, hours and optional holidays")
             import json as _json
             params["working_calendar"] = _json.dumps(working_calendar, separators=(",", ":"))
+        if case_filter is not None:
+            if not isinstance(case_filter, dict) or not case_filter:
+                raise ToolError("case_filter must be a non-empty object")
+            import json as _json
+            params["case_filter"] = _json.dumps(case_filter, separators=(",", ":"))
         return _get("get_process_waiting_times", f"/v1/process-intelligence/{_log(log_id)}/waiting-times", params)
 
     @mcp.tool(annotations=_READ_ONLY)
-    def get_process_drift(log_id: str, window: str = "month", case_type: str | None = None) -> dict[str, Any]:
+    def get_process_drift(log_id: str, window: str = "month", case_type: str | None = None,
+                          case_filter: dict[str, Any] | None = None) -> dict[str, Any]:
         """When the way cases of a shared log run changed (concept drift): cases grouped by start week or month,
         adjacent windows compared on their paths with a permutation test, and for each change point the paths whose
         share moved most and each window's median duration. A change may also come from how events are recorded.
         owner_change_markers lists the owner's dated notes on the timeline (label and date) with the change points
-        each falls near, to help explain a change.
-        Aggregates only.
+        each falls near, to help explain a change. case_filter (the same keys as insight cohorts) looks for changes
+        within one group of at least 5 cases. Aggregates only.
         """
         if window not in ("week", "month"):
             raise ToolError("window must be week or month")
-        return _get("get_process_drift", f"/v1/process-intelligence/{_log(log_id)}/drift",
-                    {"window": window, "case_type": case_type})
+        params: dict[str, Any] = {"window": window, "case_type": case_type}
+        if case_filter is not None:
+            if not isinstance(case_filter, dict) or not case_filter:
+                raise ToolError("case_filter must be a non-empty object")
+            import json as _json
+            params["case_filter"] = _json.dumps(case_filter, separators=(",", ":"))
+        return _get("get_process_drift", f"/v1/process-intelligence/{_log(log_id)}/drift", params)
 
     @mcp.tool(annotations=_READ_ONLY)
     def get_stuck_process_cases(log_id: str, limit: int = 25, case_type: str | None = None,
