@@ -182,6 +182,12 @@
       import('/native-shadow-review.js').then(m=>m.mountNativeShadowReview(host))
         .catch(()=>{host.textContent='Native shadow review unavailable.';});
     }
+    if(traceHost&&!document.getElementById('owgNativeShadowRosterHost')){
+      const host=document.createElement('div');host.id='owgNativeShadowRosterHost';
+      traceHost.parentNode.insertBefore(host,traceHost);
+      import('/native-shadow-roster.js').then(m=>m.mountNativeShadowRoster(host))
+        .catch(()=>{host.textContent='Native shadow test roster unavailable.';});
+    }
     document.querySelector('#tab-agents')?.addEventListener('click',()=>setTimeout(()=>refresh(true),0));
     document.querySelector('#agentRefreshButton')?.addEventListener('click',()=>setTimeout(()=>refresh(true),30));
     const observer=new MutationObserver(()=>{
