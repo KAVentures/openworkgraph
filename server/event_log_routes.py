@@ -2559,6 +2559,36 @@ async def event_log_object_constraint_violations(request: Request, log_id: str):
     return await run_in_threadpool(_respond, object_constraints.violations, log_id, spec)
 
 
+@router.post("/v1/event-logs/{log_id}/object-constraints/violations/export")
+async def export_event_log_object_constraint_violations(request: Request, log_id: str):
+    _require_dashboard(request)
+    spec = await _json_body(request, "object rule evidence export", strict=True)
+
+    def prepare():
+        handle = tempfile.NamedTemporaryFile("w", encoding="utf-8", newline="", suffix=".review.csv",
+                                             dir=str(DATA_DIR), delete=False)
+        try:
+            with handle:
+                meta = object_constraints.export_violations(log_id, spec, handle)
+        except BaseException:
+            os.unlink(handle.name)
+            raise
+        return handle.name, meta
+
+    try:
+        filename, meta = await run_in_threadpool(prepare)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    try:
+        _require_dashboard(request)
+    except BaseException:
+        os.unlink(filename)
+        raise
+    return FileResponse(filename, media_type="text/csv", filename=f"{log_id}-object-rule-violations.review.csv",
+                        headers={"Cache-Control": "no-store", "X-OWG-Rows": str(meta["violations"])},
+                        background=BackgroundTask(os.unlink, filename))
+
+
 @router.post("/v1/event-logs/{log_id}/object-process-model/discovery")
 async def event_log_object_process_model_discovery(request: Request, log_id: str):
     _require_dashboard(request)
