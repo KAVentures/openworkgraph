@@ -16,7 +16,7 @@ permissions:
 jobs:
   isolated-recovery:
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     services:
       source:
@@ -48,14 +48,14 @@ jobs:
           python-version: "3.11"
       - name: Install Gateway and development dependencies
         run: python -m pip install -e ".[dev,gateway]"
-      - name: Ensure compatible native PostgreSQL clients
+      - name: Ensure PostgreSQL 16 clients match both service containers
         run: |
-          if ! command -v pg_dump || ! command -v pg_restore; then
-            sudo apt-get update
-            sudo apt-get install -y postgresql-client
-          fi
-          pg_dump --version
-          pg_restore --version
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client-16
+          export PATH="/usr/lib/postgresql/16/bin:$PATH"
+          pg_dump --version | grep -E '^pg_dump \(PostgreSQL\) 16\.'
+          pg_restore --version | grep -E '^pg_restore \(PostgreSQL\) 16\.'
+          echo "/usr/lib/postgresql/16/bin" >> "$GITHUB_PATH"
       - name: Test archive validation and real isolated recovery
         env:
           OWG_BACKUP_TEST_SOURCE_URL: postgresql://fixture:synthetic-source-password@127.0.0.1:5432/owg_backup_fixture?sslmode=disable
