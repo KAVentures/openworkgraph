@@ -6,6 +6,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from shared import ocel_topology as core
+from shared import ocel_directed_topology as directed_core
 from shared.event_log_formats import _exact_key
 from . import event_log_relationship_comparison as comparison
 from . import event_log_object_relationships as relationships
@@ -21,7 +22,7 @@ class Review(BaseModel):
     snapshot: comparison.Pin
     confirm: Literal[True]
     qualifier: str | None = Field(default=None,max_length=80)
-    view: Literal["components","objects","bridges"] = "components"
+    view: Literal["components","objects","bridges","directed_components","directed_members"] = "components"
     offset: int = Field(default=0,ge=0,le=MAX_OBJECTS)
     limit: int = Field(default=50,ge=1,le=100)
     expected_review_sha256: str | None = Field(default=None,pattern=r"^[a-f0-9]{64}$")
@@ -74,8 +75,9 @@ def review(log_id, payload):
             assertions=conn.execute(sql+" ORDER BY 1,2,3",params).fetchall()
         finally:
             conn.close()
+    directed=spec.view in {"directed_components","directed_members"}
     try:
-        graph=core.analyze(objects,assertions)
+        graph=(directed_core if directed else core).analyze(objects,assertions)
     except ValueError as exc:
         raise workspace.EventLogWorkspaceError(str(exc)) from None
     rows=graph[spec.view]
@@ -84,12 +86,16 @@ def review(log_id, payload):
         "qualifier":spec.qualifier,"view":spec.view,"counts":graph["counts"],
         "offset":spec.offset,"matching_rows":len(rows),"rows":page,
         "next_offset":spec.offset+len(page) if page and spec.offset+len(page)<len(rows) else None,
-        "complete_selected_retained_graph":True,"undirected_projection":True,
+        "complete_selected_retained_graph":True,"undirected_projection":not directed,
         "all_retained_objects_in_scope":True,"independently_verified":False,
         "case_membership_inferred":False,"historical_validity_known":False,
         "operational_impact_verified":False,"source_reads_performed":False,"execution_authorized":False,
-        "interpretation":[
+        "interpretation":([
+            "Direction is preserved as supplied. A strong component contains mutually reachable objects. Multiple qualifiers on the same ordered endpoints collapse into one directed pair, but literal assertion counts remain separate.",
+            "A cyclic component contains multiple mutually reachable objects or a literal self loop. Source and sink describe the acyclic graph of strong components, not actual business origins or outcomes. Isolated objects are both source and sink.",
+            "All retained objects remain in scope, including isolates. Incoming and outgoing neighbor counts exclude self loops. The static graph does not establish temporal order, causality, case identity, source completeness or operational impact.",
+            "The exact retained snapshot is pinned. The report is read-only and no provider or business action occurs."] if directed else [
             "All retained objects remain in the population, including isolates and objects with no matching assertions. Directed assertions between distinct endpoints collapse into one undirected projected pair. Self assertions are counted but do not connect objects.",
             "A bridge pair requires removing every selected assertion between its endpoints, in either direction. A single-assertion bridge has exactly one such assertion. An articulation object removes that object and its incident pairs; disconnected surviving-pair counts exclude the removed object.",
             "Disconnected pair counts are unordered formerly connected object pairs separated by one hypothetical removal, not operational loss, causal impact or a recommendation to change a relationship. No real-world relationship, valid time, case identity or source completeness is verified.",
-            "The exact retained snapshot is pinned before reading the complete selected graph. The report is read-only and no provider or business action occurs."]}
+            "The exact retained snapshot is pinned before reading the complete selected graph. The report is read-only and no provider or business action occurs."])}

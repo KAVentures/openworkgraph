@@ -52,6 +52,8 @@
     }catch(error){if(n===generation){pin=null;$('status').textContent=error.message;controls();}}
   }
   const definitions={
+    directed_components:[['Component ID','component_id'],['Objects','objects'],['Object types','object_types'],['Cyclic','cyclic'],['Self-loop objects','self_loop_objects'],['Internal directed pairs','internal_directed_pairs'],['Internal assertions','internal_literal_assertions'],['Outgoing assertions','outgoing_literal_assertions'],['Predecessor groups','predecessor_components'],['Successor groups','successor_components'],['Source group','source_component'],['Sink group','sink_component']],
+    directed_members:[['Component ID','component_id'],['Object ID','object_id'],['Object type','object_type'],['Group objects','component_objects'],['Cyclic group','cyclic_component'],['Incoming neighbors','incoming_neighbors'],['Outgoing neighbors','outgoing_neighbors'],['Self loop','self_loop']],
     components:[['Component ID','component_id'],['Objects','objects'],['Projected pairs','projected_pairs'],['Assertions','literal_assertions'],['Self assertions','self_assertions'],['Articulation objects','articulation_objects'],['Bridge pairs','bridge_pairs']],
     objects:[['Object ID','object_id'],['Object type','object_type'],['Component ID','component_id'],['Component objects','component_objects'],['Remaining components','remaining_components'],['Part sizes (objects × multiplicity)','part_size_counts'],['Disconnected surviving pairs','disconnected_surviving_pairs'],['Distinct neighbors','degree']],
     bridges:[['Left ID','left_id'],['Right ID','right_id'],['Left type','left_type'],['Right type','right_type'],['Component ID','component_id'],['Component objects','component_objects'],['Part sizes','part_sizes'],['Disconnected pairs','disconnected_pairs'],['Assertions in pair','assertions_in_pair'],['Left → right','left_to_right'],['Right → left','right_to_left'],['Single assertion bridge','single_assertion_bridge']]
@@ -60,7 +62,7 @@
   function render(r){
     $('counts').replaceChildren(...Object.entries(r.counts).map(([k,v])=>{const tr=el('tr'),th=el('th',k.replaceAll('_',' '));th.scope='row';tr.append(th,el('td',v));return tr;}));
     const cols=definitions[r.view];
-    $('evidence').textContent=({components:'Weak components',objects:'Articulation objects',bridges:'Bridge endpoint pairs'})[r.view];
+    $('evidence').textContent=({components:'Weak components',objects:'Articulation objects',bridges:'Bridge endpoint pairs',directed_components:'Directed strong components and cycles',directed_members:'Directed component object members'})[r.view];
     $('headers').replaceChildren(...cols.map(([name])=>{const th=el('th',name);th.scope='col';return th;}));
     $('rows').replaceChildren(...r.rows.map(row=>{const tr=el('tr');cols.forEach(([,key],i)=>{const td=el(i?'td':'th',display(key,row[key]));if(!i)td.scope='row';tr.append(td);});return tr;}));
     $('page').textContent=r.matching_rows+' matching rows · offset '+r.offset+' · exact review '+r.review_sha256;
@@ -73,7 +75,7 @@
     report=null;busy=true;$('results').hidden=true;controls();$('status').textContent='Reviewing complete selected retained graph…';
     try{const r=await api('/v1/event-logs/'+id+'/object-relationships/topology',{snapshot,confirm:true,qualifier,view,offset,limit:50,...(expected?{expected_review_sha256:expected}:{})});
       if(n!==generation||id!==$('log').value||qualifier!==scope()||view!==$('view').value)return;
-      if(r.format!=='openworkgraph.ocel-topology-review.v1'||r.snapshot.log_id!==id||JSON.stringify(exactPin(r.snapshot))!==JSON.stringify(snapshot)||r.qualifier!==qualifier||r.view!==view||r.execution_authorized!==false||expected&&r.review_sha256!==expected)throw Error('Unexpected topology review basis.');
+      if(r.format!=='openworkgraph.ocel-topology-review.v1'||r.snapshot.log_id!==id||JSON.stringify(exactPin(r.snapshot))!==JSON.stringify(snapshot)||r.qualifier!==qualifier||r.view!==view||r.undirected_projection!==!view.startsWith('directed_')||r.execution_authorized!==false||expected&&r.review_sha256!==expected)throw Error('Unexpected topology review basis.');
       report=r;render(r);$('status').textContent='Complete retained graph reviewed. No source or relationship was changed.';
     }catch(error){if(n===generation){report=null;$('status').textContent=error.message;}}
     finally{if(n===generation){busy=false;controls();}}
