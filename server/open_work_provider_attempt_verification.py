@@ -89,6 +89,9 @@ def verify_provider_attempt(
         return {**unknown, "reason": "incomplete_or_unauthenticated"}
     if payload.get("account") != account or payload.get("object_id") != object_id:
         return {**unknown, "reason": "source_scope_mismatch"}
+    # Measure freshness after network I/O, not at the start of a slow read.
+    if now is None:
+        current = datetime.now(timezone.utc)
     checked = _utc(payload.get("checked_at"))
     # A provider snapshot dated in the future is not evidence of a completed
     # recheck. Permit only a small clock skew; never accept an arbitrarily

@@ -93,6 +93,48 @@ const {tmpdir}=require('node:os'),path=require('node:path');
   await panel.locator('#owgCatalogClarifyAddDocument').click();
   assert.equal(await texts.count(),5);
   assert.equal(await panel.locator('#owgCatalogClarifyAddDocument').isDisabled(),true);
+  // Effective dates are a separate temporary review. The previous ordinary
+  // clarification decision remains unchanged and is not imported.
+  const effective=panel.locator('#owgEffectivePolicyPanel');
+  await effective.locator('summary').first().click();
+  await effective.getByLabel('Timeline start date',{exact:true}).fill('2024-01-01');
+  await effective.getByLabel('Timeline end date exclusive',{exact:true}).fill('2024-02-01');
+  await effective.getByLabel('Policy family identifier',{exact:true}).fill('refund');
+  await effective.getByLabel('Policy family label',{exact:true}).fill('Refund policy');
+  await effective.getByLabel('Policy version identifier',{exact:true}).fill('old');
+  await effective.getByLabel('Version family identifier',{exact:true}).fill('refund');
+  await effective.getByLabel('Version document title',{exact:true}).fill('Old refund policy');
+  await effective.getByLabel('Version effective from',{exact:true}).fill('2024-01-01');
+  await effective.getByLabel('Version effective until exclusive',{exact:true}).fill('2024-01-15');
+  await effective.getByLabel('Exact version source text',{exact:true}).fill('A refund amount above 500 EUR must get manager approval.');
+  await effective.getByRole('button',{name:'Add policy version',exact:true}).click();
+  await effective.getByLabel('Policy version identifier',{exact:true}).nth(1).fill('new');
+  await effective.getByLabel('Version family identifier',{exact:true}).nth(1).fill('refund');
+  await effective.getByLabel('Version document title',{exact:true}).nth(1).fill('New refund policy');
+  await effective.getByLabel('Version effective from',{exact:true}).nth(1).fill('2024-01-15');
+  await effective.getByLabel('Exact version source text',{exact:true}).nth(1).fill('A refund amount above 1000 EUR must get manager approval.');
+  await effective.getByRole('button',{name:'Prepare effective policy timeline',exact:true}).click();
+  const timeline=effective.locator('#owgEffectivePolicyTimeline');
+  await timeline.getByText('31 days · 31 resolved · 0 incomplete · 0 ambiguous.',{exact:true}).waitFor();
+  await effective.getByLabel('Policy review date',{exact:true}).fill('2024-01-15');
+  await effective.getByLabel('Optional previous review date',{exact:true}).fill('2024-01-14');
+  await effective.getByRole('button',{name:'Review effective policies on date',exact:true}).click();
+  const dated=effective.locator('#owgEffectivePolicyDateReview');
+  await dated.getByText('Policy review for 2024-01-15',{exact:true}).waitFor();
+  await dated.getByText(/1 added and 1 removed indexed statement occurrences/).waitFor();
+  assert.match(await dated.textContent(),/New refund policy/);
+  const oldLedger=await page.evaluate(async id=>(await(await fetch('/v1/process-catalog/clarify/decisions?workflow_id='+id)).json()).decisions,wid);
+  assert.ok(oldLedger.some(d=>JSON.stringify(d)===JSON.stringify(decisions[0]))); // original decision is intact
+  // Edit an interval and verify stale date-review results disappear.
+  await effective.getByLabel('Version effective from',{exact:true}).nth(1).fill('2024-01-14');
+  assert.equal(await dated.textContent(),'');
+  await effective.getByRole('button',{name:'Prepare effective policy timeline',exact:true}).click();
+  await timeline.getByText('31 days · 30 resolved · 0 incomplete · 1 ambiguous.',{exact:true}).waitFor();
+  await effective.getByLabel('Policy review date',{exact:true}).fill('2024-01-14');
+  await effective.getByRole('button',{name:'Review effective policies on date',exact:true}).click();
+  await dated.getByText(/unresolved policy coverage/).waitFor();
+  assert.equal(await dated.getByRole('button',{name:'Load selected versions into ordinary clarification'}).count(),0);
+  await effective.locator('summary').first().click();
   const axe=await fs.readFile(require.resolve('axe-core/axe.min.js'),'utf8');
   await page.addScriptTag({content:axe});
   const violations=await page.evaluate(async()=>{

@@ -83,3 +83,7 @@ bad types, terminal retirement, capacity, atomic deletion and authenticated
 HTTP validation. The existing monitoring browser acceptance additionally
 creates an actual pilot review, checks the artifact requirement and confirms
 that history remains visible.
+
+
+For exact retained issue sequences, episode accounting and run-level evidence,
+see [Run recovery-pattern intelligence](AUTOMATION_RECOVERY_PATTERNS.md).

@@ -98,6 +98,39 @@ class ImplementationPlans:
             details={'workflow_id':wid,'revision':result['artifact']['revision'] if result['artifact'] else 0})
         return result
 
+    def history_records(self,c,p,wid):
+        meta=self.store._meta(c,p,wid)
+        self.opportunities.permissions(c,p,wid,meta)
+        rows=self.q(c,'SELECT revision,payload FROM workflow_knowledge WHERE owner=? AND workflow_id=? ORDER BY revision',(namespace(p.organization_id),wid)).fetchall()
+        if not rows:raise Error('No saved implementation plan',404)
+        if len(rows)>MAX_REVISIONS or [int(row[0]) for row in rows]!=list(range(1,len(rows)+1)):
+            raise Error('Implementation plan history is incomplete or oversized')
+        return meta,[self.decode(row,p.organization_id,wid) for row in rows]
+
+    def history_inventory(self,p,wid):
+        from shared.process_implementation_history import FORMAT,history_pin,ref
+        with self.catalog.reading(p) as c:
+            meta,records=self.history_records(c,p,wid)
+            result={'format':FORMAT,'root_workflow_id':wid,'access_revision':meta['access_revision'],
+                'history_sha256':history_pin(records,wid,meta['access_revision']),
+                'latest_revision':records[-1]['revision'],'revisions':[dict(ref(r),saved_at=r['saved_at']) for r in records]}
+        self.db.audit(organization_id=p.organization_id,principal_id=p.audit_id,action='process.implementation_plan.history.read',
+            details={'workflow_id':wid,'revision_count':len(records)})
+        return result
+
+    def history_review(self,p,wid,request):
+        from shared.process_implementation_history import build
+        with self.catalog.reading(p) as c:
+            meta,records=self.history_records(c,p,wid)
+            latest=records[-1]
+            source=self.source(c,p,wid,latest['baseline'],latest['review']) if request.after_revision==latest['revision'] else None
+            try:result=build(records,wid,meta['access_revision'],request,source)
+            except ValueError as exc:raise Error(str(exc),409) from None
+        result['checked_at']=_now()
+        self.db.audit(organization_id=p.organization_id,principal_id=p.audit_id,action='process.implementation_plan.history.compared',
+            details={'workflow_id':wid,'before_revision':request.before_revision,'after_revision':request.after_revision})
+        return result
+
     def append(self,c,p,wid,saved,revision,action):
         if revision>=MAX_REVISIONS:raise Error('Implementation plans retain at most fifty revisions; nothing was pruned')
         raw=saved.model_dump(mode='json');digest=content_digest(raw)
