@@ -81,6 +81,27 @@ requires fresh confirmation. The manual external AI file import remains
 available. No idea is created by generation, and all existing review and
 confirmation gates still apply.
 
+## Optional compact evidence transport
+
+For prepared packets with a selected budget of at most 512 KiB, OWG reports
+the exact original and compact evidence byte sizes. The local model defaults to
+the original format. Choose **Lossless compact evidence (experimental)** only
+when the preview saves bytes, then explicitly confirm another request. OWG
+reconstructs the exact original canonical packet before sending the compact
+representation. The model receives resolution instructions and must cite the
+original scoped occurrence references and packet digest; all proposals still
+undergo the same review against original source evidence. No automatic fallback
+or additional model request occurs. Changing the representation clears the prior
+draft and confirmation.
+
+Download the receipt for each representation when comparing them on the same
+source, model and settings. It includes original/transmitted context bytes,
+actual request/response sizes, endpoint-reported tokens, latency, context digest,
+output-token bound and JSON mode. Byte savings are not token savings, and neither
+structural citation validation nor equal evidence establishes equal model quality.
+Use independent held-out assessment before selecting compact mode in production.
+The original packet and cloud/manual handoff remain unchanged.
+
 ## Verification
 
 Focused pure handoff tests cover exact pinning, stale previews,

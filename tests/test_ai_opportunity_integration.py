@@ -62,6 +62,7 @@ from fastapi.testclient import TestClient
 from server.secure_app import app
 from server import local_auth
 from test_ai_opportunity_integration import draft
+from test_ai_implementation_review import proposal
 data=draft()
 data["sources"]=[json.dumps(s) for s in data["sources"]]
 data["proposal"]=json.dumps(data["proposal"])
@@ -108,7 +109,7 @@ with TestClient(app) as client:
     try:
         req={"sources":data["sources"],"expected_packet_sha256":prepared["packet_sha256"],"max_bytes":131072,
              "model":"local-test:1","port":listener.server_port,"max_output_tokens":4096,"json_mode":False,"confirm_local_inference":True}
-        for change in ({"confirm_local_inference":False},{"expected_packet_sha256":"0"*64},{"port":0}):
+        for change in ({"confirm_local_inference":False},{"expected_packet_sha256":"0"*64},{"port":0},{"context_representation":"compact"},{"context_representation":"invalid"}):
             assert client.post(base+"/generate-local",json={**req,**change},headers=owner).status_code==422
         assert not calls
         generated=client.post(base+"/generate-local",json=req,headers=owner)
@@ -121,6 +122,19 @@ with TestClient(app) as client:
         returned=client.post(base+"/preview",json={**data,"proposal":value["proposal_json"]},headers=owner)
         assert returned.status_code==200,returned.text
         assert returned.json()["lineage"]["proposal_sha256"]==value["receipt"]["proposal_sha256"]
+        from test_ai_implementation_compact_inference import repetitive_sources
+        sources=repetitive_sources()
+        compact_req={"sources":[json.dumps(s) for s in sources],"max_bytes":131072}
+        prepared2=client.post(base+"/prepare-packet",json=compact_req,headers=owner).json()
+        assert prepared2["compaction"]["available"] is True
+        answer=proposal(sources)
+        answer["author_model"]="local-test:1"
+        result2=client.post(base+"/generate-local",json={**req,**compact_req,"expected_packet_sha256":prepared2["packet_sha256"],"context_representation":"compact"},headers=owner)
+        assert result2.status_code==200,result2.text
+        receipt2=result2.json()["receipt"]
+        assert receipt2["compact_sha256"]==prepared2["compaction"]["compact_sha256"]
+        assert receipt2["transmitted_context_bytes"]==prepared2["compaction"]["compact_bytes"]
+        assert len(calls)==2 and json.loads(calls[-1]["messages"][1]["content"])["original_packet_sha256"]==prepared2["packet_sha256"]
     finally:
         listener.shutdown()
         listener.server_close()
