@@ -99,6 +99,15 @@ const path=require('node:path');
    await page.locator('#owgConcurrencyCapacity').fill('2');
    assert.ok(await page.locator('#owgConcurrencyDownload').isDisabled());
    assert.equal(await page.locator('#owgConcurrencyResult').textContent(),'');
+   await page.locator('#owgConcurrencyView').selectOption('uncertainty');
+   const [boundsResponse]=await Promise.all([page.waitForResponse(r=>r.url().endsWith('/run-concurrency')),page.locator('#owgConcurrencyRun').click()]);
+   assert.equal(boundsResponse.status(),200,await boundsResponse.text());
+   const boundsReport=await boundsResponse.json();
+   assert.equal(boundsReport.uncertainty_summary.unresolved_records,0);
+   assert.equal(boundsReport.uncertainty_summary.peak_lower_runs,5);
+   assert.equal(boundsReport.uncertainty_summary.peak_upper_runs,5);
+   await page.getByRole('table',{name:'Conditional envelope intervals'}).waitFor();
+
    await page.locator('#owgMonitorRecoveryPatterns').click();
    await page.locator('#owgRecoveryStart').fill(report.runs[0].started_at.slice(0,10));
    const recoveryEnd=new Date(Math.max(...report.runs.map(r=>Date.parse(r.started_at)))+86400000).toISOString().slice(0,10);

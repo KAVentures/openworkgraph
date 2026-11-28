@@ -8,7 +8,7 @@ export function mount(host,{api,dep,isCurrent}){
     hash=input('text','owgConcurrencySpec'),unknown=input('checkbox','owgConcurrencyUnknown'),capacity=input('number','owgConcurrencyCapacity');
   hash.maxLength=64;capacity.min='1';capacity.max='10000';capacity.step='1';
   const view=el('select');view.id='owgConcurrencyView';
-  for(const [key,name] of [['segments','Constant measured concurrency intervals'],['runs','Overlapping run evidence'],['excluded','Excluded retained records']]){const opt=el('option',name);opt.value=key;view.append(opt);}
+  for(const [key,name] of [['segments','Constant measured concurrency intervals'],['runs','Overlapping run evidence'],['excluded','Excluded retained records'],['uncertainty','Conditional concurrency uncertainty']]){const opt=el('option',name);opt.value=key;view.append(opt);}
   const run=button('Review retained run concurrency'),prev=button('Previous concurrency page'),next=button('Next concurrency page'),save=button('Download concurrency page JSON');
   run.id='owgConcurrencyRun';save.id='owgConcurrencyDownload';
   const status=el('p');status.id='owgConcurrencyStatus';status.setAttribute('role','status');
@@ -30,7 +30,12 @@ export function mount(host,{api,dep,isCurrent}){
       table('Concurrency totals',['Measure','Value'],Object.entries(s).map(([k,v])=>[k.replace(/_us$/,' seconds').replaceAll('_',' '),k.endsWith('_us')?seconds(v):v])),
       table('Concurrency duration histogram',['Concurrent measured runs','Seconds'],r.histogram.map(x=>[x.concurrent_runs,seconds(x.duration_us)])),
       el('p',r.matching_rows+' matching rows · offset '+r.offset+' · exact interval review '+r.review_sha256));
-    if(r.view==='segments')output.append(table('Constant concurrency intervals',['Start seconds from UTC window start','End exclusive seconds','Concurrent runs'],r.rows.map(x=>[seconds(x.start_us),seconds(x.end_us),x.concurrent_runs])));
+    if(r.view==='uncertainty'){
+      const u=r.uncertainty_summary;
+      output.append(el('h4','Conditional concurrency bounds'),el('p',u.unresolved_records+' selected unresolved records. The upper envelope is hypothetical, not verified live activity.'),
+        table('Conditional envelope totals',['Measure','Value'],Object.entries(u).map(([k,v])=>[k.replace(/_us$/,' seconds').replaceAll('_',' '),k.endsWith('_us')?seconds(v):v])),
+        table('Conditional envelope intervals',['Start seconds','End exclusive seconds','Lower runs','Upper runs','Threshold classification'],r.rows.map(x=>[seconds(x.start_us),seconds(x.end_us),x.lower_runs,x.upper_runs,x.capacity_state.replaceAll('_',' ')])));
+    }else if(r.view==='segments')output.append(table('Constant concurrency intervals',['Start seconds from UTC window start','End exclusive seconds','Concurrent runs'],r.rows.map(x=>[seconds(x.start_us),seconds(x.end_us),x.concurrent_runs])));
     else if(r.view==='runs')output.append(table('Measured run overlap evidence',['Run ID','Reported start UTC','Reported finish UTC','Status','Clipped start seconds','Clipped end seconds','Overlapping peers'],r.rows.map(x=>[x.run_id,x.started_at,x.finished_at,x.status,seconds(x.clipped_start_us),seconds(x.clipped_end_us),x.overlapping_run_count])));
     else output.append(table('Excluded retained interval evidence',['Run ID','Reported start UTC','Reported finish UTC','Status','Reason'],r.rows.map(x=>[x.run_id,x.started_at,x.finished_at,x.status,x.reason])));
     output.append(...r.interpretation.map(x=>el('p',x)));
@@ -43,7 +48,7 @@ export function mount(host,{api,dep,isCurrent}){
       const payload={start_date:start.value,end_date:end.value,reported_spec_sha256:unknown.checked?null:hash.value,capacity:Number(capacity.value),view:view.value,offset,limit:50,...(pin?{expected_review_sha256:pin}:{})};
       const r=await api('/v1/automation-monitoring/deployments/'+encodeURIComponent(dep)+'/run-concurrency',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
       if(!live(n))return;
-      if(r.format!=='openworkgraph.automation-run-concurrency.v1'||r.deployment_id!==dep||r.execution_authorized!==false||pin&&pin!==r.review_sha256)throw Error('Unexpected retained interval review.');
+      if(r.format!=='openworkgraph.automation-run-concurrency.v1'||r.deployment_id!==dep||r.view!==payload.view||r.start_date!==payload.start_date||r.end_date_exclusive!==payload.end_date||r.reported_spec_sha256!==payload.reported_spec_sha256||r.capacity!==payload.capacity||r.execution_authorized!==false||pin&&pin!==r.review_sha256)throw Error('Unexpected retained interval review.');
       report=r;render(r);status.textContent='Retained concurrency reviewed. Live capacity and utilization are not verified.';
     }catch(error){if(live(n)){report=null;output.replaceChildren();status.textContent=error.message;}}
     finally{if(live(n)){busy=false;controls();}}
