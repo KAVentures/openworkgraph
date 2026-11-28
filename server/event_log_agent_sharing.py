@@ -1746,7 +1746,34 @@ def drift(log_id: str, case_type: str | None = None, window: str = "month") -> d
     from . import event_log_drift as dr
     if window not in ("week", "month"):
         raise EventLogWorkspaceError("window must be week or month")
-    return {**dr.drift(log_id, case_type, window=window), "format": FORMAT, "log_id": log_id}
+    result = dr.drift(log_id, case_type, window=window)
+    return {**result, "owner_change_markers": _markers_near(log_id, result.get("change_points") or [], window),
+            "format": FORMAT, "log_id": log_id}
+
+
+def _markers_near(log_id: str, change_points: list[dict[str, Any]], window: str) -> list[dict[str, Any]]:
+    """The owner's dated change markers (label and date only, never the note), each with the change points whose
+    before/after windows contain it, so an agent can relate a detected change to a change the owner recorded."""
+    from datetime import date, timedelta
+    from . import event_log_change_markers as cm
+    span = timedelta(days=7 if window == "week" else 31)
+
+    def start(label: Any) -> date | None:
+        try:
+            return date.fromisoformat(str(label)[:10])
+        except ValueError:
+            return None
+    out = []
+    for marker in cm.markers(log_id)["markers"]:
+        at = start(marker["marked_at"])
+        near = []
+        for point in change_points:
+            before, after = start(point.get("before")), start(point.get("after"))
+            if at and before and after and before <= at < after + span:
+                near.append({"before": point["before"], "after": point["after"]})
+        out.append({"label": marker["label"], "marked_at": marker["marked_at"], "within_log": marker["within_log"],
+                    "near_change_points": near})
+    return out
 
 
 def stuck_cases(log_id: str, case_type: str | None = None, limit: int = 25,

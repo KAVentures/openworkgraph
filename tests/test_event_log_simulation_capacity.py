@@ -223,6 +223,13 @@ with TestClient(app) as c:
     assert report["format"]==REPORT_FORMAT and len(report["cells"])==4
     assert response.headers["cache-control"]=="no-store"
     assert not report["execution_authorized"]
+    extended={**body,"service_review":{"targets":[{"label":"Standard","cycle_time_minutes":240,"minimum_completion_share":.9}],
+                                      "inverse_completion_shares":[.5,.9]}}
+    response=c.post(path,headers=auth,json=extended)
+    assert response.status_code==200,response.text
+    assert response.json()["service_review"]["single_simulation_per_original_grid_run"]
+    assert response.headers["cache-control"]=="no-store"
+    assert c.post(path,headers=bearer,json=extended).status_code in (401,403)
     assert c.post(path,headers=auth,json={**body,"replications":1}).status_code==422
     assert c.post(path,headers={**auth,"Content-Type":"application/json"},content=b"{}"+b" "*70000).status_code==413
     assert c.post(path,headers={**auth,"Content-Type":"application/json"},content=b'{"format":"a","format":"b"}').status_code==422
@@ -345,3 +352,146 @@ def test_shared_pool_cost_is_counted_once_per_resource():
     assert [d["staffed_hour_cost_decimal"] for d in result["designs"]]==["125","250"]
     assert [len(d["cost_basis"]) for d in result["designs"]]==[1,1]
     assert all(d["cost_basis"][0]["kind"]=="shared_pool" for d in result["designs"])
+
+
+def service_settings():
+    return {"targets":[{"label":"Fast","cycle_time_minutes":30,"minimum_completion_share":.5},
+                       {"label":"Standard","cycle_time_minutes":240,"minimum_completion_share":.9}],
+            "inverse_completion_shares":[.5,.9,1]}
+
+
+def test_multi_service_grid_reuses_each_simulation_and_calibration(monkeypatch):
+    log=fixture_log()
+    spec=proposal()
+    base=capacity.run_grid(log,spec)
+    spec["service_review"]=service_settings()
+    cal,simulate=sim.calibrate,sim.simulate
+    calls={"calibrate":0,"simulate":0}
+    def counted_cal(*args,**kwargs):
+        calls["calibrate"]+=1
+        return cal(*args,**kwargs)
+    def counted_run(*args,**kwargs):
+        calls["simulate"]+=1
+        return simulate(*args,**kwargs)
+    monkeypatch.setattr(sim,"calibrate",counted_cal)
+    monkeypatch.setattr(sim,"simulate",counted_run)
+    report=capacity.run_grid(log,spec)
+    assert calls=={"calibrate":1,"simulate":12}
+    assert report["cells"]==base["cells"]
+    assert report["simulated_cases"]==base["simulated_cases"]
+    assert report["paired_comparisons"]==base["paired_comparisons"]
+    review=report["service_review"]
+    assert review["single_simulation_per_original_grid_run"]
+    assert not review["observed_sla_verified"]
+    assert len(review["cells"])==4
+    for cell,original in zip(review["cells"],report["cells"]):
+        for run,source in zip(cell["runs"],original["runs"]):
+            assert run["arrivals"]==source["post_warmup_arrivals"]
+            for target in run["targets"]:
+                assert target["on_time"]+target["known_misses"]+target["unresolved"]==run["arrivals"]
+            assert run["targets"][1]["on_time"]==source["completed_on_time"]
+            assert run["targets"][1]["share_lower"]==source["target_share_lower"]
+            assert run["targets"][0]["on_time"]<=run["targets"][1]["on_time"]
+    assert capacity.run_grid(log,report["inputs"])==report
+
+
+def test_exact_share_boundary_and_inverse_unknown_abandonment():
+    from server import event_log_service_levels as service
+    assert service.required_count(.07,100)==7
+    assert service.required_count(.58,50)==29
+    assert service.required_count(.91,10)==10
+    samples=[0,5,10,20,20]
+    # Ten arrivals: five finished, two abandoned, three unknown.
+    assert service.inverse(samples,10,3,.2)["minimum_possible_seconds"]==0
+    assert service.inverse(samples,10,3,.5)["minimum_possible_seconds"]==5
+    assert service.inverse(samples,10,3,.5)["minimum_guaranteed_seconds"]==20
+    assert service.inverse(samples,10,3,.8)["minimum_possible_seconds"]==20
+    assert service.inverse(samples,10,3,.8)["minimum_guaranteed_seconds"] is None
+    assert service.inverse(samples,10,3,.9)["minimum_possible_seconds"] is None
+    assert service.classify(7,0,7,False)=="met"
+    assert service.classify(7,0,7,True)=="overloaded"
+    assert service.classify(6,0,7,False)=="known_miss"
+    assert service.classify(6,1,7,False)=="indeterminate"
+
+
+def test_inverse_deadlines_and_target_bounds_against_independent_enumeration():
+    from itertools import product
+    from fractions import Fraction
+    import random
+    from server import event_log_service_levels as service
+    rng=random.Random(920)
+    for _ in range(120):
+        n=rng.randint(1,8)
+        unknown=rng.randint(0,min(3,n))
+        completed=rng.randint(0,n-unknown)
+        abandoned=n-unknown-completed
+        durations=sorted(rng.randint(0,5)*60 for _ in range(completed))
+        share=Fraction(rng.randint(1,10),10)
+        need=next(k for k in range(n+1) if Fraction(k,n)>=share)
+        settings=service.normalize({"targets":[{"label":"Test","cycle_time_minutes":2,"minimum_completion_share":float(share)}],
+                                    "inverse_completion_shares":[float(share)]})
+        run={"seed":17,"post_warmup_arrivals":n,"completed":completed,"abandoned":abandoned,
+             "unresolved":unknown,"overloaded":False}
+        actual=service.summarize(run,durations,settings)
+        # Unknown completions can have any duration or never complete.
+        possibilities=list(product([0,60,120,180,240,300,None],repeat=unknown))
+        hits=[];thresholds=[]
+        for values in possibilities:
+            all_finished=sorted(durations+[v for v in values if v is not None])
+            hits.append(sum(t<=120 for t in all_finished))
+            thresholds.append(all_finished[need-1] if len(all_finished)>=need else None)
+        target=actual["targets"][0];inverse=actual["inverse_deadlines"][0]
+        assert target["on_time"]==min(hits)
+        assert target["on_time"]+unknown==max(hits)
+        finite=[v for v in thresholds if v is not None]
+        assert inverse["minimum_possible_seconds"]==(min(finite) if finite else None)
+        assert inverse["minimum_guaranteed_seconds"]==(max(finite) if all(v is not None for v in thresholds) else None)
+        assert target["required_completions"]==need
+        expected="met" if min(hits)>=need else "known_miss" if max(hits)<need else "indeterminate"
+        assert target["status"]==expected
+
+
+def test_service_joint_envelope_and_pairwise_dominance_with_tradeoffs():
+    from server import event_log_service_levels as service
+    settings=service.normalize(service_settings())
+    def cell(label,rate,samples,unknown=0,overload=False):
+        runs=[]
+        for seed in (1,2):
+            run={"seed":seed,"post_warmup_arrivals":10,"completed":len(samples),
+                 "abandoned":10-len(samples)-unknown,"unresolved":unknown,"overloaded":overload}
+            runs.append(service.summarize(run,samples,settings))
+        return service.cell(label,rate,runs,settings)
+    cells=[cell("A",1,[100]*5+[20000]*5),cell("A",2,[100]*10),
+           cell("B",1,[100]*10),cell("B",2,[100]*10,overload=True),
+           cell("C",1,[100]*5+[20000]*5),cell("C",2,[100]*5,unknown=5)]
+    r=service.compare(cells,settings)
+    a,b,c=r["joint_operating_envelopes"]
+    assert a["jointly_passing_tested_rates"]==[2] and a["nonmonotonic_tested_pattern"]
+    assert b["jointly_passing_tested_rates"]==[1]
+    assert c["jointly_passing_tested_rates"]==[]
+    ab=[p for p in r["pairwise_service_comparisons"] if p["left_design"]=="A" and p["right_design"]=="B"]
+    assert ab[0]["direction"]=="right_weakly_dominates_all_targets"
+    assert ab[1]["direction"]=="overload_prevents_dominance"
+    assert cells[-1]["joint_status"]=="indeterminate"
+    assert cells[-1]["inverse_deadlines"][1]["minimum_guaranteed_deadline_across_all_runs_seconds"] is None
+    assert cells[-1]["inverse_deadlines"][1]["minimum_possible_deadline_across_all_runs_seconds"]==100
+
+
+@pytest.mark.parametrize("change",[
+    lambda s:s.update(targets=[]),
+    lambda s:s.update(targets=s["targets"]*5),
+    lambda s:s["targets"][1].update(label="fast"),
+    lambda s:s["targets"][0].update(cycle_time_minutes=True),
+    lambda s:s["targets"][0].update(minimum_completion_share=float("nan")),
+    lambda s:s["targets"][0].update(extra=True),
+    lambda s:s.update(inverse_completion_shares=[.5,.5]),
+    lambda s:s.update(inverse_completion_shares=[0]),
+    lambda s:s.update(inverse_completion_shares=[True]),
+    lambda s:s.update(unknown=True),
+])
+def test_bad_service_settings_fail_before_calibration(change,monkeypatch):
+    spec=proposal();spec["service_review"]=service_settings()
+    change(spec["service_review"])
+    monkeypatch.setattr(sim,"calibrate",lambda *a,**k:pytest.fail("invalid inputs calibrated"))
+    with pytest.raises(workspace.EventLogWorkspaceError):
+        capacity.run_grid("not-read",spec)
