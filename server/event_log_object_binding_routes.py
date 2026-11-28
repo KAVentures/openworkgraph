@@ -5,7 +5,8 @@ import os
 import tempfile
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import Path as PathParam
 from fastapi.responses import FileResponse
 from starlette.background import BackgroundTask
 from starlette.concurrency import run_in_threadpool
@@ -65,6 +66,47 @@ async def object_state_check_labels(request: Request, log_id: str):
     spec = await _json_body(request, "object state label lookup", strict=True, limit=16384)
     _require_dashboard(request)
     return await run_in_threadpool(_respond, labels.search, log_id, spec)
+
+
+@router.get("/v1/event-logs/{log_id}/object-state-check/saved")
+def list_saved_object_state_checks(request: Request, log_id: str):
+    from . import event_log_object_state_saved as saved
+    _require_dashboard(request)
+    return _respond(saved.listing, log_id)
+
+
+@router.post("/v1/event-logs/{log_id}/object-state-check/saved")
+async def save_object_state_check(request: Request, log_id: str):
+    from . import event_log_object_state_saved as saved
+    _require_dashboard(request)
+    spec = await _json_body(request, "saved object state check", strict=True, limit=16384)
+    _require_dashboard(request)
+    return await run_in_threadpool(_respond, saved.save, log_id, spec)
+
+
+@router.get("/v1/event-logs/{log_id}/object-state-check/saved/{check_id}")
+def get_saved_object_state_check(request: Request, log_id: str, check_id: str = PathParam(min_length=1, max_length=80)):
+    from . import event_log_object_state_saved as saved
+    _require_dashboard(request)
+    return _respond(saved.get, log_id, check_id)
+
+
+@router.put("/v1/event-logs/{log_id}/object-state-check/saved/{check_id}")
+async def update_saved_object_state_check(request: Request, log_id: str, check_id: str = PathParam(min_length=1, max_length=80)):
+    from . import event_log_object_state_saved as saved
+    _require_dashboard(request)
+    spec = await _json_body(request, "saved object state check", strict=True, limit=16384)
+    _require_dashboard(request)
+    return await run_in_threadpool(_respond, saved.update, log_id, check_id, spec)
+
+
+@router.delete("/v1/event-logs/{log_id}/object-state-check/saved/{check_id}")
+def delete_saved_object_state_check(request: Request, log_id: str,
+        check_id: str = PathParam(min_length=1, max_length=80),
+        expected_revision: int = Query(ge=1, le=2_147_483_647)):
+    from . import event_log_object_state_saved as saved
+    _require_dashboard(request)
+    return _respond(saved.delete, log_id, check_id, expected_revision)
 
 
 @router.post("/v1/event-logs/{log_id}/object-state-check/export")

@@ -22,7 +22,7 @@ def fixture():
     values=[{'name':'status','time':'1970-01-01T00:00:00Z','value':''}]
     values.extend({'name':'status','time':(datetime(2024,1,1,tzinfo=timezone.utc)+timedelta(minutes=n)).isoformat(),
                    'value':f'v{n:03}'} for n in range(110))
-    values.extend([{'name':'status','time':'2024-02-01T00:00:00Z','value':'line\nbreak'},
+    values.extend([{'name':'status','time':'2024-02-01T00:00:00Z','value':'line\r\nbreak'},
                    {'name':'odd\nname','time':'1970-01-01T00:00:00Z','value':'x'}])
     objects=[{'id':'order1','type':'order','attributes':values},
              {'id':'item1','type':'item','attributes':[{'name':'status','time':'1970-01-01T00:00:00Z','value':'other type'}]}]
@@ -65,7 +65,7 @@ def test_attribute_value_qualifier_lookup_preserves_empty_cursor_and_scope():
     first=labels.search(log,{'kind':'value','object_type':'order','attribute':'status','limit':1})
     assert first['labels']==[''] and first['next_after']==''
     second=labels.search(log,{'kind':'value','object_type':'order','attribute':'status','limit':1,'after':'','expected_revision':first['revision']})
-    assert second['labels']==['line\nbreak']
+    assert second['labels']==['line\r\nbreak']
     assert labels.search(log,{'kind':'value','object_type':'item','attribute':'status'})['labels']==['other type']
     assert labels.search(log,{'kind':'qualifier','object_type':'order'})['labels']==['','payer']
     assert labels.search(log,{'kind':'qualifier','object_type':'item'})['labels']==['item']

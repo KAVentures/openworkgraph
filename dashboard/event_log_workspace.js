@@ -4243,6 +4243,10 @@
     const attribute=input('owgObjectStateAttribute','text','Exact attribute name');attribute.maxLength=400;
     const operator=select('owgObjectStateOperator',[['eq','Equals'],['ne','Does not equal']]);
     const value=el('textarea');value.id='owgObjectStateValue';value.rows=2;value.placeholder='Exact recorded value';value.maxLength=8192;
+    const valueNote=el('p','The selected value contains carriage returns. Its exact stored text is preserved until you edit it.','muted');show(valueNote,false);
+    let preservedValue=null;
+    const rememberValue=raw=>{preservedValue={raw,display:value.value};show(valueNote,raw!==value.value);};
+    value.addEventListener('input',()=>{preservedValue=null;show(valueNote,false);});
     const quantifier=select('owgObjectStateQuantifier',[['all','All linked objects'],['any','Any linked object']]);
     const exact=input('owgObjectStateExactQualifier','checkbox'),qualifier=input('owgObjectStateQualifier','text','Exact qualifier');qualifier.maxLength=160;
     const qualifierField=field('Qualifier (empty is a valid exact label)',qualifier);show(qualifierField,false);
@@ -4281,7 +4285,7 @@
         finally{if(active(ticket)){find.disabled=more.disabled=false;updateUse();}}
       }
       find.onclick=()=>{reset();load(null);};more.onclick=()=>{if(nextAfter!==null)load(nextAfter);};
-      use.onclick=()=>{if(choices.selectedIndex<0)return;const index=Number(choices.value);if(!checkable[index])return;target.value=items[index];target.dispatchEvent(new Event('input',{bubbles:true}));target.focus();};
+      use.onclick=()=>{if(choices.selectedIndex<0)return;const index=Number(choices.value);if(!checkable[index])return;const selected=items[index];target.value=selected;target.dispatchEvent(new Event('input',{bubbles:true}));if(kind==='value')rememberValue(selected);target.focus();};
       target.addEventListener('input',reset);
       wrap.addEventListener('input',event=>event.stopPropagation());wrap.addEventListener('change',event=>event.stopPropagation());
       return {wrap,reset};
@@ -4295,7 +4299,11 @@
     qualifierField.append(qualifierLookup.wrap);
     const run=button('Check recorded state');run.id='owgObjectStateRun';
     const form=el('div',null,'row');form.style.alignItems='end';
-    form.append(field('Stored activity',activity),activityLookup.wrap,field('Object type',objectType),field('Attribute',attribute),attributeLookup.wrap,field('Comparison',operator),field('Expected value (empty is allowed)',value),valueLookup.wrap,field('Match',quantifier),field('Match an exact event-link qualifier',exact),qualifierField,run);
+    form.append(field('Stored activity',activity),activityLookup.wrap,field('Object type',objectType),field('Attribute',attribute),attributeLookup.wrap,field('Comparison',operator),field('Expected value (empty is allowed)',value),valueNote,valueLookup.wrap,field('Match',quantifier),field('Match an exact event-link qualifier',exact),qualifierField,run);
+    const savedPick=select('owgObjectStateSaved',[]),savedName=input('owgObjectStateSavedName','text','Name this check');savedName.maxLength=120;
+    const savedLoad=button('Load saved check','secondary'),savedRefresh=button('Refresh saved checks','secondary'),savedCreate=button('Save as new check','secondary'),savedUpdate=button('Update loaded check','secondary'),savedDelete=button('Delete loaded check','secondary');
+    const savedRow=el('div',null,'row');savedRow.style.alignItems='end';savedRow.append(field('Saved state checks',savedPick),savedLoad,savedRefresh,field('Saved check name',savedName),savedCreate,savedUpdate,savedDelete);
+    const savedStatus=el('div',null,'muted');savedStatus.id='owgObjectStateSavedStatus';savedStatus.setAttribute('role','status');
     const notice=el('div',null,'muted');notice.id='owgObjectStateStatus';notice.setAttribute('role','status');
     const summary=el('div');summary.id='owgObjectStateSummary';
     const resultFilter=select('owgObjectStateResultFilter',[['','All results'],['matched','Matched'],['not_matched','Not matched'],['unknown','Unknown'],['no_linked_object','No linked object']]);
@@ -4307,11 +4315,11 @@
     exportBar.append(el('p','Downloads cover the entire selected result status and include event or object IDs and recorded values. Formula-like cells are escaped for spreadsheet review.','muted'),exportEvents,exportObjects,exportStatus);show(exportBar,false);
     const results=el('div');results.id='owgObjectStateResults';
     const witness=el('div');witness.id='owgObjectStateWitness';
-    box.append(form,notice,summary,resultControls,exportBar,results,witness);
+    box.append(form,el('p','Saved checks are stored locally with this log and can include exact recorded values. Loading one does not run it.','muted'),savedRow,savedStatus,notice,summary,resultControls,exportBar,results,witness);
     const generation=state.generation,logId=state.logId,base='/v1/event-logs/'+encodeURIComponent(logId)+'/object-state-check';
-    let turn=0,witnessTurn=0,exportTurn=0,settings=null,revision=null,offset=0,following=null;
+    let turn=0,witnessTurn=0,exportTurn=0,formVersion=0,settings=null,revision=null,offset=0,following=null;
     const current=t=>generation===state.generation&&box.isConnected&&t===turn;
-    const clear=()=>{++turn;++exportTurn;settings=null;revision=null;offset=0;following=null;run.disabled=false;notice.textContent='';exportStatus.textContent='';summary.replaceChildren();results.replaceChildren();witness.replaceChildren();show(resultControls,false);show(exportBar,false);};
+    const clear=()=>{++turn;++exportTurn;++formVersion;settings=null;revision=null;offset=0;following=null;run.disabled=false;notice.textContent='';exportStatus.textContent='';summary.replaceChildren();results.replaceChildren();witness.replaceChildren();show(resultControls,false);show(exportBar,false);};
     form.addEventListener('input',clear);form.addEventListener('change',clear);
     exact.addEventListener('change',()=>show(qualifierField,exact.checked));
     const statusLabel={matched:'Matched',not_matched:'Not matched',unknown:'Unknown',no_linked_object:'No linked object',missing_history:'No timed history',before_first_value:'Before first value',ambiguous_value:'Conflicting values'};
@@ -4320,11 +4328,71 @@
         if(!entry.value.trim())throw new Error('Enter '+name.toLowerCase()+'.');
         if(Array.from(entry.value).length>200)throw new Error(name+' must have at most 200 characters.');
       }
-      if(Array.from(value.value).length>4096)throw new Error('Expected value must have at most 4,096 characters.');
+      const exactValue=preservedValue&&preservedValue.display===value.value?preservedValue.raw:value.value;
+      if(Array.from(exactValue).length>4096)throw new Error('Expected value must have at most 4,096 characters.');
       if(exact.checked&&Array.from(qualifier.value).length>80)throw new Error('Qualifier must have at most 80 characters.');
-      return {activity:activity.value,object_type:objectType.value,attribute:attribute.value,expected_value:value.value,
+      return {activity:activity.value,object_type:objectType.value,attribute:attribute.value,expected_value:exactValue,
         operator:operator.value,quantifier:quantifier.value,...(exact.checked?{event_qualifier:qualifier.value}:{})};
     };
+    let savedTurn=0,savedBusy=false,loadedSaved=null;
+    const savedCurrent=t=>generation===state.generation&&logId===state.logId&&box.isConnected&&t===savedTurn;
+    const syncSaved=()=>{savedPick.disabled=savedRefresh.disabled=savedBusy;savedLoad.disabled=savedBusy||!savedPick.value;savedCreate.disabled=savedBusy;
+      savedUpdate.disabled=savedDelete.disabled=savedBusy||!loadedSaved||savedPick.value!==loadedSaved.check_id;};
+    async function refreshSaved(ticket,preferred){
+      const result=await getJSON(base+'/saved');if(!savedCurrent(ticket))return;
+      setOptions(savedPick,[['','Choose a saved check'],...result.checks.map(item=>[item.check_id,item.name+' · revision '+item.revision])]);
+      if(preferred&&result.checks.some(item=>item.check_id===preferred))savedPick.value=preferred;
+    }
+    savedPick.onchange=()=>{loadedSaved=null;savedStatus.textContent='';syncSaved();};
+    savedRefresh.onclick=async()=>{
+      const selected=savedPick.value,ticket=++savedTurn;loadedSaved=null;savedBusy=true;syncSaved();savedStatus.textContent='Refreshing saved checks…';
+      try{await refreshSaved(ticket,selected);if(savedCurrent(ticket))savedStatus.textContent='Saved checks refreshed; load a check to edit it.';}
+      catch(error){if(savedCurrent(ticket))savedStatus.textContent=error.message;}
+      finally{if(savedCurrent(ticket)){savedBusy=false;syncSaved();}}
+    };
+    savedLoad.onclick=async()=>{
+      const selected=savedPick.value,startVersion=formVersion,startName=savedName.value,ticket=++savedTurn;
+      if(!selected)return;savedBusy=true;syncSaved();savedStatus.textContent='Loading saved check…';
+      try{
+        const result=await getJSON(base+'/saved/'+encodeURIComponent(selected));if(!savedCurrent(ticket))return;
+        if(formVersion!==startVersion||savedName.value!==startName){savedStatus.textContent='The form changed while loading; load the saved check again.';return;}
+        const d=result.definition;clear();activityLookup.reset();attributeLookup.reset();valueLookup.reset();qualifierLookup.reset();
+        if(![...objectType.options].some(option=>option.value===d.object_type)){const option=el('option',JSON.stringify(d.object_type)+' (not currently present)');option.value=d.object_type;objectType.appendChild(option);}
+        activity.value=d.activity;objectType.value=d.object_type;attribute.value=d.attribute;value.value=d.expected_value;rememberValue(d.expected_value);
+        operator.value=d.operator;quantifier.value=d.quantifier;exact.checked=Object.hasOwn(d,'event_qualifier');qualifier.value=d.event_qualifier??'';show(qualifierField,exact.checked);
+        savedName.value=result.name;loadedSaved={check_id:result.check_id,revision:result.revision};
+        savedStatus.textContent='Loaded revision '+result.revision+'. Run the check to review current data.';
+      }catch(error){if(savedCurrent(ticket))savedStatus.textContent=error.message;}
+      finally{if(savedCurrent(ticket)){savedBusy=false;syncSaved();}}
+    };
+    async function writeSaved(update){
+      let definition;try{definition=read();if(!savedName.value.trim())throw new Error('Enter a saved check name.');}catch(error){savedStatus.textContent=error.message;return;}
+      if(update&&(!loadedSaved||savedPick.value!==loadedSaved.check_id))return;
+      const ticket=++savedTurn,startVersion=formVersion,startName=savedName.value,prior=loadedSaved;
+      const payload={name:savedName.value,definition,...(update?{expected_revision:prior.revision}:{})};
+      savedBusy=true;syncSaved();savedStatus.textContent='Saving check…';
+      let completed=null;
+      try{
+        const endpoint=base+'/saved'+(update?'/'+encodeURIComponent(prior.check_id):'');
+        const result=await (await api(endpoint,{method:update?'PUT':'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)})).json();
+        if(!savedCurrent(ticket))return;completed=result;loadedSaved={check_id:result.check_id,revision:result.revision};
+        await refreshSaved(ticket,result.check_id);if(!savedCurrent(ticket))return;
+        savedStatus.textContent='Saved revision '+result.revision+'.'+(formVersion!==startVersion||savedName.value!==startName?' The current form changed while saving.':'');
+      }catch(error){if(savedCurrent(ticket))savedStatus.textContent=completed?'Saved revision '+completed.revision+', but the list could not be refreshed: '+error.message:error.message;}
+      finally{if(savedCurrent(ticket)){savedBusy=false;syncSaved();}}
+    }
+    savedCreate.onclick=()=>writeSaved(false);savedUpdate.onclick=()=>writeSaved(true);
+    savedDelete.onclick=async()=>{
+      if(!loadedSaved||savedPick.value!==loadedSaved.check_id||!window.confirm('Delete the loaded saved state check?'))return;
+      const prior=loadedSaved,ticket=++savedTurn;savedBusy=true;syncSaved();savedStatus.textContent='Deleting saved check…';
+      let completed=false;
+      try{
+        await api(base+'/saved/'+encodeURIComponent(prior.check_id)+'?expected_revision='+encodeURIComponent(prior.revision),{method:'DELETE'});
+        if(!savedCurrent(ticket))return;completed=true;loadedSaved=null;await refreshSaved(ticket,'');if(savedCurrent(ticket))savedStatus.textContent='Deleted saved check.';
+      }catch(error){if(savedCurrent(ticket))savedStatus.textContent=completed?'Deleted the saved check, but the list could not be refreshed: '+error.message:error.message;}
+      finally{if(savedCurrent(ticket)){savedBusy=false;syncSaved();}}
+    };
+    {const ticket=++savedTurn;savedBusy=true;syncSaved();refreshSaved(ticket,'').catch(error=>{if(savedCurrent(ticket))savedStatus.textContent=error.message;}).finally(()=>{if(savedCurrent(ticket)){savedBusy=false;syncSaved();}});}
     function inspectWitnesses(item,spec,filter,basis,reviewTurn){
       const ticket=++witnessTurn,active=()=>current(reviewTurn)&&ticket===witnessTurn;
       const heading=el('h4','Object evidence for event '+item.event_id);heading.tabIndex=-1;
