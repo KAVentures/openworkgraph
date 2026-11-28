@@ -16,7 +16,7 @@ export function mountAiOpportunityHandoff(host, post, onCreated, onStage){
   const controls=[sources,proposal,title,description],order=el('ol');
   let generation=0,basis=null,busy=false,orderedSources=[];
   let packetGeneration=0,preparedPacket=null;
-  let generatedResult=null,selectedGenerated=false,trialPanel=null,evidencePicker=null;
+  let generatedResult=null,selectedGenerated=false,trialPanel=null,evidencePicker=null,batchPanel=null,batchProposal=null;
   const budget=el('select');
   for(const [value,label] of [[131072,'128 KiB'],[524288,'512 KiB'],[2097152,'2 MiB'],[8388608,'8 MiB']]){
     const option=el('option',label);option.value=String(value);budget.append(option);
@@ -30,7 +30,7 @@ export function mountAiOpportunityHandoff(host, post, onCreated, onStage){
   packetStatus.setAttribute('role','status');packetStatus.setAttribute('aria-live','polite');
   function invalidatePacket(){
     packetGeneration++;preparedPacket=null;downloadPacket.disabled=downloadGuide.disabled=downloadCompact.disabled=downloadCompactGuide.disabled=true;
-    contextMode.value='original';clearLocal();trialPanel?.invalidate();
+    contextMode.value='original';clearLocal();trialPanel?.invalidate();batchPanel?.invalidate();
     packetStatus.textContent='Evidence selection or budget changed. Prepare a new packet.';
   }
   budget.addEventListener('change',invalidatePacket);
@@ -152,7 +152,7 @@ export function mountAiOpportunityHandoff(host, post, onCreated, onStage){
   localConfirm.addEventListener('change',refreshLocal);
   useGenerated.onclick=()=>{
     if(busy||!generatedResult)return;
-    proposal.value='';selectedGenerated=true;invalidate();
+    proposal.value='';batchProposal=null;selectedGenerated=true;invalidate();
     status.textContent='Generated proposal selected. Enter human-reviewed idea details and review exact proposal.';
   };
   saveProposal.onclick=()=>{if(!busy&&generatedResult)downloadLocal('owg-local-model-proposal.json','application/json',generatedResult.proposal_json);};
@@ -217,20 +217,20 @@ export function mountAiOpportunityHandoff(host, post, onCreated, onStage){
     summary.textContent='';status.textContent='Inputs changed. Review the exact proposal again.';
   }
   sources.addEventListener('change',()=>{orderedSources=Array.from(sources.files||[]);invalidate();invalidatePacket();renderOrder();});
-  proposal.addEventListener('input',()=>{selectedGenerated=false;invalidate();});
+  proposal.addEventListener('input',()=>{selectedGenerated=false;batchProposal=null;invalidate();});
   for(const n of [title,description])n.addEventListener('input',invalidate);
   confirmation.addEventListener('change',()=>{commit.disabled=busy||!basis||!confirmation.checked;});
   function lock(value){
     busy=value;for(const n of controls)n.disabled=value;preview.disabled=value;
     budget.disabled=prepare.disabled=value;downloadPacket.disabled=downloadGuide.disabled=value||!preparedPacket;
     downloadCompact.disabled=downloadCompactGuide.disabled=value||!preparedPacket?.compact_download;
-    confirmation.disabled=value||!basis;commit.disabled=value||!basis||!confirmation.checked;stage.disabled=value||!basis||typeof onStage!=='function';renderOrder();refreshLocal();evidencePicker?.refresh();
+    confirmation.disabled=value||!basis;commit.disabled=value||!basis||!confirmation.checked;stage.disabled=value||!basis||typeof onStage!=='function';renderOrder();refreshLocal();evidencePicker?.refresh();batchPanel?.refresh();
   }
   preview.onclick=async()=>{
     if(busy)return;
     invalidate();const ticket=generation;lock(true);
     try{
-      const files=orderedSources.slice(),proposed=proposal.files?.[0],localText=selectedGenerated&&generatedResult?generatedResult.proposal_json:null;
+      const files=orderedSources.slice(),proposed=proposal.files?.[0],localText=batchProposal||(selectedGenerated&&generatedResult?generatedResult.proposal_json:null);
       if(files.length<1||files.length>8||(!proposed&&!localText)||!title.value.trim())throw Error('Choose one to eight evidence JSON files, one proposal and a title.');
       const proposalSize=localText?new TextEncoder().encode(localText).length:proposed.size;
       if(files.reduce((n,f)=>n+f.size,proposalSize)>8*1024*1024)throw Error('Selected files exceed 8 MiB.');
@@ -277,14 +277,14 @@ export function mountAiOpportunityHandoff(host, post, onCreated, onStage){
     field('Model evidence representation',contextMode),field('Request JSON-object mode',localJsonMode),field('I authorize sending the selected evidence to this configured loopback model service',localConfirm),
     generate,localStatus,field('Generated proposal (unverified interpretation)',generatedText),useGenerated,saveProposal,saveReceipt,trialHost);
   refreshLocal();
-  const evidencePickerHost=el('div');
+  const evidencePickerHost=el('div'),batchHost=el('div');
   const details=el('details');details.id='owgAiOpportunityHandoff';
   details.append(el('summary','Add an external AI proposal to the implementation portfolio'),
     el('p','Preparation and review stay on the local OWG server. The optional local model request sends selected evidence only when explicitly confirmed. Only your entered idea and structural lineage are retained by the pipeline. Nothing is approved or executed.'),
     evidencePickerHost,field('Original workflow evidence JSON files (ordered as in the portable packet)',sources),order,
     el('p','Prepare a packet using the same ordered evidence below, or use an existing exact packet. The byte budget is not a token count. A too-small budget refuses rather than drops events. Download and inspect the files, then share only through an authorized local or cloud AI environment.'),
     field('Context byte budget',budget),prepare,packetStatus,downloadPacket,downloadGuide,
-    el('p','Optional compact external handoff: download both matching files, inspect locally and share only with an authorized AI. Compact format is reversible, not redaction.'),downloadCompact,downloadCompactGuide,localSection,
+    el('p','Optional compact external handoff: download both matching files, inspect locally and share only with an authorized AI. Compact format is reversible, not redaction.'),downloadCompact,downloadCompactGuide,localSection,batchHost,
     field('External AI proposal JSON',proposal),field('Human-reviewed opportunity title',title),
     field('Human-reviewed opportunity details',description),preview,status,summary,
     ...(typeof onStage==='function'?[el('p','Starting a new shadow skill draft replaces any unfinished skill draft. The skill still requires its own human review and confirmation.'),stage]:[]),
@@ -297,6 +297,17 @@ export function mountAiOpportunityHandoff(host, post, onCreated, onStage){
       }
     });
   }).catch(()=>{evidencePickerHost.textContent='Direct local evidence selection unavailable; original file import remains available.';});
+  import('/ai-implementation-batch.js').then(module=>{
+    batchPanel=module.mountImplementationBatch(batchHost,{
+      getState:()=>({busy,packet:preparedPacket,files:orderedSources.slice()}),post,lock,download:downloadLocal,
+      onSelected:raw=>{
+        proposal.value='';selectedGenerated=false;batchProposal=raw;
+        title.value='';description.value='';invalidate();
+        status.textContent='Batch proposal selected. Enter human-reviewed idea details and review exact proposal.';
+      },
+      onClear:()=>{if(batchProposal!==null){batchProposal=null;invalidate();}}
+    });
+  }).catch(()=>{batchHost.textContent='Batch review unavailable; individual proposal import remains available.';});
   import('/ai-context-trial.js').then(module=>{
     trialPanel=module.mountContextTrial(trialHost,{
       getState:()=>({busy,packet:preparedPacket,files:orderedSources.slice(),

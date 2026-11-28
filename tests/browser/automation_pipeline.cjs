@@ -109,6 +109,34 @@ const path=require('node:path');
    assert(await packetDownload.isDisabled());assert(await compactButton.isDisabled());assert(await compactGuideButton.isDisabled());
    await prepButton.click();
    await handoff.getByText('Packet ready:',{exact:false}).waitFor();
+   // A shared packet supports multiple proposals; retain invalid and duplicate items.
+   {
+     const batch=handoff.locator('#owgImplementationBatch');await batch.locator('summary').click();
+     const bad=structuredClone(fixture.proposal);bad.outcome.evidence_refs=['invented'];
+     const distinct=structuredClone(fixture.proposal);distinct.title='Second implementation candidate';
+     const proposals=[fixture.proposal,bad,distinct,fixture.proposal,null,bad];
+     const batchFile=batch.getByLabel('Returned proposal array JSON (2 MiB max)',{exact:true});
+     const reviewBatch=batch.getByRole('button',{name:'Review complete proposal batch',exact:true});
+     assert(await reviewBatch.isDisabled());
+     await batchFile.setInputFiles({name:'batch.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(proposals))});
+     await reviewBatch.click();await batch.getByText('Batch review complete: 2 distinct structurally reviewed, 2 refused, 2 exact duplicates.',{exact:false}).waitFor();
+     assert.equal(await batch.getByRole('button',{name:'Use item 2 for individual review',exact:true}).count(),0);
+     assert.equal(await batch.getByRole('button',{name:'Use item 4 for individual review',exact:true}).count(),0);
+     const [reportFile]=await Promise.all([page.waitForEvent('download'),batch.getByRole('button',{name:'Download complete batch review',exact:true}).click()]);
+     const batchReport=JSON.parse(await fs.readFile(await reportFile.path(),'utf8'));
+     assert.equal(batchReport.item_count,6);assert.equal(batchReport.portfolio_written,false);
+     await batch.getByRole('button',{name:'Use item 3 for individual review',exact:true}).click();
+     await batch.getByText('Item 3 transferred to individual review.',{exact:false}).waitFor();
+     await handoff.getByLabel('Human-reviewed opportunity title',{exact:true}).fill('Reviewed second candidate');
+     await handoff.getByRole('button',{name:'Review exact proposal',exact:true}).click();
+     await handoff.getByText('Structural review passed.',{exact:false}).waitFor();
+     assert((await handoff.textContent()).includes(batchReport.items[2].proposal_sha256));
+     assert(await handoff.getByRole('button',{name:'Create unassessed idea',exact:true}).isDisabled());
+     await batchFile.setInputFiles({name:'changed.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(proposals.slice().reverse()))});
+     assert(await batch.getByRole('button',{name:'Download complete batch review',exact:true}).isDisabled());
+     assert(await handoff.getByRole('button',{name:'Create unassessed idea',exact:true}).isDisabled());
+     await batch.locator('summary').click();
+   }
    // Exercise actual dashboard -> local HTTP model -> cited proposal -> review.
    const modelAnswer={...fixture.proposal,author_model:'local-test:1'};let localCalls=0;
    const modelServer=createServer((req,res)=>{
