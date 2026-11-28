@@ -51,6 +51,16 @@ def automation_pipeline_script() -> FileResponse:
     return FileResponse(_SCRIPT, media_type="application/javascript")
 
 
+@router.get("/ai-implementation-campaign.js")
+def campaign_script() -> FileResponse:
+    return FileResponse(_SCRIPT.with_name("ai_implementation_campaign.js"), media_type="application/javascript")
+
+
+@router.get("/ai-implementation-campaign-outcomes.js")
+def campaign_outcomes_script() -> FileResponse:
+    return FileResponse(_SCRIPT.with_name("ai_implementation_campaign_outcomes.js"), media_type="application/javascript")
+
+
 @router.get("/v1/automation-pipeline")
 def list_pipeline(request: Request, state: str | None = Query(default=None, max_length=20)):
     _require_dashboard(request)
@@ -379,3 +389,13 @@ def delete_measurement(request: Request, idea_id: str, measurement_id: str):
     from . import automation_benefits
     _require_dashboard(request)
     return _benefit(automation_benefits.delete, idea_id, measurement_id)
+
+from .project_source_cohort_routes import router as _source_cohort_router
+router.include_router(_source_cohort_router)
+
+# Additive local external-AI opportunity handoff.
+from .ai_opportunity_routes import router as _ai_opportunity_router
+router.include_router(_ai_opportunity_router)
+
+from .native_skill_download_routes import router as _native_skill_router
+router.include_router(_native_skill_router)

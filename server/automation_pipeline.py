@@ -196,10 +196,23 @@ def create_from_process(payload: Any) -> dict[str, Any]:
     return _create(idea, ref.model_dump())
 
 
-def _create(idea: NewIdea, process_reference: dict[str, Any] | None = None) -> dict[str, Any]:
+def create_from_ai_review(idea: dict[str, Any], lineage: dict[str, Any]) -> dict[str, Any]:
+    """Internal handoff only; the authenticated caller recomputes the exact review."""
+    return _create(_validate(NewIdea, idea), ai_proposal_handoff=lineage)
+
+
+def _create(idea: NewIdea, process_reference: dict[str, Any] | None = None,
+            *, ai_proposal_handoff: dict[str, Any] | None = None) -> dict[str, Any]:
     if not idea.title.strip():
         raise PipelineError("title must not be blank")
     with _LOCK, closing(_connect()) as conn, conn:
+        if ai_proposal_handoff is not None:
+            # Serialize the duplicate check and insertion across local processes.
+            conn.execute("BEGIN IMMEDIATE")
+            for (raw,) in conn.execute("SELECT body FROM ideas"):
+                existing = json.loads(raw).get("ai_proposal_handoff")
+                if existing and existing.get("packet_sha256") == ai_proposal_handoff["packet_sha256"] and existing.get("proposal_sha256") == ai_proposal_handoff["proposal_sha256"]:
+                    raise PipelineError("AI proposal already recorded in the pipeline")
         if conn.execute("SELECT count(*) FROM ideas").fetchone()[0] >= MAX_IDEAS:
             raise PipelineError(f"the pipeline holds at most {MAX_IDEAS} ideas; delete some first")
         idea_id, now = "idea_" + secrets.token_hex(8), _now()
@@ -207,6 +220,8 @@ def _create(idea: NewIdea, process_reference: dict[str, Any] | None = None) -> d
         body = idea.model_dump()
         if process_reference is not None:
             body["process_reference"] = process_reference
+        if ai_proposal_handoff is not None:
+            body["ai_proposal_handoff"] = ai_proposal_handoff
         conn.execute("INSERT INTO ideas VALUES (?, ?, ?, 1, 'idea', ?, NULL, ?)",
                      [idea_id, now, now, json.dumps(body), json.dumps(history)])
         return _public(_get(conn, idea_id))

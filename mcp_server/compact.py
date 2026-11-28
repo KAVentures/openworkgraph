@@ -1166,6 +1166,8 @@ def get_task_context(
     section_limit: int = 3,
     max_steps_per_run: int = 16,
     max_evidence_refs_per_item: int = 2,
+    knowledge_refs: list[dict[str, Any]] | None = None,
+    case_record_ref: str | None = None,
 ) -> dict[str, Any]:
     """Return one read-only organizational context bundle for a task.
 
@@ -1173,9 +1175,18 @@ def get_task_context(
     for a canonical human family such as email.reply. current_steps/after_step are
     structural step inputs used to bound observed context; they do not become
     policy, permission, or a causal claim.
+    Optional knowledge_refs selects up to three exact reviewed workflow ID,
+    revision and content_sha256 references from get_workflow_knowledge. This
+    adds separately labeled context, not policy or verified applicability.
+    Optional case_record_ref selects one exact previously observed owg:r:
+    record for separate retained case observations when experimental Open Work
+    tools are enabled. No provider refresh or outcome verification is performed;
+    use the existing optional verification tool separately if appropriate.
     """
     name = "get_task_context"
     core._begin(name)
+    refs = secure_runtime.validate_task_knowledge(knowledge_refs)
+    case_ref = secure_runtime.validate_task_case(case_record_ref)
     result = _history_get("/v1/task-context", {
         "family_key": family_key,
         "task_family": task_family,
@@ -1188,6 +1199,13 @@ def get_task_context(
         "max_steps_per_run": min(max(1, int(max_steps_per_run)), 24),
         "max_evidence_refs_per_item": min(max(0, int(max_evidence_refs_per_item)), 4),
     })
+    if case_ref:
+        knowledge = secure_runtime.read_task_knowledge(refs) if refs else None
+        case = secure_runtime.read_task_case(case_ref)
+        return secure_runtime._finish_task_context(name, result, knowledge=knowledge, case=case)
+    if refs:
+        companion = secure_runtime.read_task_knowledge(refs)
+        return secure_runtime._finish_task_context(name, result, knowledge=companion)
     return secure_runtime._finish_task_context(name, result)
 
 

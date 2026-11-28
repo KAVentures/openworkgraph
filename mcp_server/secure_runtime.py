@@ -11,6 +11,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 
 from server.local_auth import ensure_api_token
 from . import main as core
+from . import task_knowledge_companion, task_case_companion
 
 API_URL = os.getenv("WORKFLOW_OBSERVER_API", "http://127.0.0.1:8787").rstrip("/")
 _TASK_CONTEXT_PROVENANCE_KEY = "_openworkgraph_task_context_provenance"
@@ -108,7 +109,44 @@ def _snapshot_sha256(value: dict[str, Any]) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
-def _finish_task_context(tool_name: str, source_result: dict[str, Any]) -> dict[str, Any]:
+def validate_task_knowledge(refs):
+    try:
+        return task_knowledge_companion.validate(refs)
+    except ValueError as exc:
+        raise ToolError(str(exc)) from exc
+
+
+def read_task_knowledge(refs):
+    try:
+        return task_knowledge_companion.read(refs, secure_get)
+    except (ValueError, TypeError, KeyError, RecursionError, OverflowError) as exc:
+        raise ToolError("Selected reviewed knowledge could not be retrieved at the exact references. Reload the shortlist or select fewer records.") from exc
+
+
+def validate_task_case(ref):
+    try:
+        selected = task_case_companion.validate(ref)
+    except ValueError as exc:
+        raise ToolError(str(exc)) from exc
+    if selected:
+        from server.open_work_mcp_settings import experimental_tools_enabled
+        if not experimental_tools_enabled():
+            raise ToolError("Open Work experimental tools are switched off.")
+    return selected
+
+
+def read_task_case(ref):
+    selected = validate_task_case(ref)
+    try:
+        result = task_case_companion.read(selected, secure_get)
+    except (ValueError, TypeError, KeyError, RecursionError, OverflowError) as exc:
+        raise ToolError("Selected case observations could not be retrieved at the exact reference.") from exc
+    validate_task_case(selected)
+    return result
+
+
+def _finish_task_context(tool_name: str, source_result: dict[str, Any], *, knowledge: dict[str, Any] | None = None,
+                         case: dict[str, Any] | None = None) -> dict[str, Any]:
     """Protect task context, fingerprint both representations, then audit exactly what is returned.
 
     The source fingerprint identifies the exact local `/v1/task-context` response
@@ -118,6 +156,12 @@ def _finish_task_context(tool_name: str, source_result: dict[str, Any]) -> dict[
     """
     source_sha256 = _snapshot_sha256(source_result)
     protected = core.protect_observed_payload(source_result)
+    if knowledge is not None:
+        # Keep reviewed content under its own existing trust boundary. The original
+        # task API fingerprint still covers only source_result, never this sidecar.
+        protected["reviewed_knowledge_companion"] = core.protect_reviewed_knowledge_payload(knowledge)
+    if case is not None:
+        protected["observed_case_companion"] = core.protect_observed_payload(case)
     detail = detail_level()
     if detail:
         protected["detail_level"] = detail
@@ -216,6 +260,8 @@ def get_task_context(
     section_limit: int = 3,
     max_steps_per_run: int = 16,
     max_evidence_refs_per_item: int = 2,
+    knowledge_refs: list[dict[str, Any]] | None = None,
+    case_record_ref: str | None = None,
 ) -> dict[str, Any]:
     """Return one read-only organizational context bundle for a task.
 
@@ -229,9 +275,18 @@ def get_task_context(
     The returned MCP copy preserves the normal prompt-injection protection and
     adds source/protected snapshot fingerprints. These fingerprints establish
     representation provenance only; they do not attest model consumption or use.
+    Optional knowledge_refs selects up to three exact reviewed workflow ID,
+    revision and content_sha256 references from get_workflow_knowledge. This
+    adds separately labeled context, not policy or verified applicability.
+    Optional case_record_ref selects one exact previously observed owg:r:
+    record for separate retained case observations when experimental Open Work
+    tools are enabled. No provider refresh or outcome verification is performed;
+    use the existing optional verification tool separately if appropriate.
     """
     name = "get_task_context"
     core._begin(name)
+    refs = validate_task_knowledge(knowledge_refs)
+    case_ref = validate_task_case(case_record_ref)
     result = secure_get("/v1/task-context", {
         "family_key": family_key,
         "task_family": task_family,
@@ -244,6 +299,13 @@ def get_task_context(
         "max_steps_per_run": min(max(1, int(max_steps_per_run)), 24),
         "max_evidence_refs_per_item": min(max(0, int(max_evidence_refs_per_item)), 4),
     })
+    if case_ref:
+        knowledge = read_task_knowledge(refs) if refs else None
+        case = read_task_case(case_ref)
+        return _finish_task_context(name, result, knowledge=knowledge, case=case)
+    if refs:
+        companion = read_task_knowledge(refs)
+        return _finish_task_context(name, result, knowledge=companion)
     return _finish_task_context(name, result)
 
 
