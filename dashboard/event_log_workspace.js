@@ -348,7 +348,7 @@
       const valid=!active||(eventId.value&&!!sourceNamespace.value!==!!sourceColumn.value&&!(caseNamespace.value&&caseColumn.value)&&!keep.checked);
       const ready=!readingColumns&&(!csv||columnsReady)&&file.files&&file.files[0]&&valid;
       importButton.disabled=savingImport||!(ready&&consent.checked&&name.value.trim());
-      appendButton.disabled=savingImport||!(ready&&consent.checked&&state.logId);
+      appendButton.disabled=savingImport||!(ready&&consent.checked&&state.logId&&!state.logs.find(log=>log.log_id===state.logId)?.observed_execution_snapshot);
       previewImport.disabled=!(csv&&ready&&!previewBusy);show(previewPanel,csv);
       show(mapping,csv);show(identity,csv);show(identityFields,active);
       standardOffsetField.hidden=csv||!(file.files&&file.files[0]);};
@@ -708,7 +708,8 @@
       const target=state.logs.find(log=>log.log_id===state.logId);
       if(target)void saveSelectedFile(target);
     };
-    pick.onchange=()=>{selectLog(pick.value);refreshImport();};
+    pick.onchange=()=>{++state.refresh;selectLog(pick.value);refreshImport();};
+    pick.addEventListener('owg-saved-log-selected',refreshImport);
     caseType.onchange=()=>{state.generation++;state.caseType=caseType.value;state.follows=[];state.attr={};state.caseActivity='';results.replaceChildren();};
     analyze.onclick=()=>analyse().catch(error=>status(error.message));
     const relationshipExportNote=()=>{const log=state.logs.find(l=>l.log_id===state.logId);return log&&log.object_relationships&&!['ocel','ocelxml','ocelsqlite'].includes(exportFormat.value)?' This format omits supplied object relationships; OCEL JSON/XML preserve the retained assertions.':'';};
@@ -1512,6 +1513,13 @@
     if(summary.activity_mapping){const m=summary.activity_mapping;const note=el('div','Activities are grouped by the mapping “'+m.name+'”: '+Number(m.events_relabeled).toLocaleString()+' events relabelled'+(m.repeats_collapsed?', '+Number(m.repeats_collapsed).toLocaleString()+' consecutive repeats collapsed':'')+'. The stored events are unchanged; remove the mapping under Group activities to see the original activities.','note');note.id='owgActivityMappingNotice';overview.appendChild(note);}
     if(summary.hidden_activities){const h=summary.hidden_activities;const note=el('div','Hidden activities left out: '+h.activities.join(', ')+' ('+Number(h.events_hidden).toLocaleString()+' events'+(h.cases_with_only_hidden_events?'; '+Number(h.cases_with_only_hidden_events).toLocaleString()+' cases had only hidden events and are not shown':'')+'). The stored events are unchanged; use Show all activities under Hide activities to include them.','note');note.id='owgHiddenActivitiesNotice';overview.appendChild(note);}
     results.appendChild(overview);
+    // Original source provenance is independent of active case filters and
+    // analysis mappings. Source rechecks are explicit, never automatic.
+    if(summary.log?.observed_execution_snapshot&&window.owgObservedExecutionLog?.renderSource){
+      const logId=state.logId;
+      window.owgObservedExecutionLog.renderSource(overview,summary.log,
+        ()=>generation===state.generation&&state.logId===logId);
+    }
     results.appendChild(insightSection(inspection));
     results.appendChild(activityMappingSection());
     results.appendChild(hiddenActivitiesSection());
@@ -2222,6 +2230,12 @@
           shown+=result.events.length;offset=result.next_offset;
           progress.textContent='Showing '+shown+' of '+result.total_events+' events. '+result.timestamp_ties+' equal-timestamp events. '+result.ordering;
           rows.appendChild(table(['Activity','Timestamp (UTC)','Resource label','Event ID'],result.events.map(e=>[e.activity,e.timestamp,e.resource||'(missing)',e.event_id])));
+          const sourceLog=state.logs.find(log=>log.log_id===state.logId);
+          if(sourceLog?.observed_execution_snapshot&&result.case_notion==='case'&&window.owgObservedExecutionLog?.renderObservationCheck){
+            const sourceId=state.logId;
+            window.owgObservedExecutionLog.renderObservationCheck(rows,sourceLog,caseId,result.events,
+              ()=>current()&&ticket===opening&&state.logId===sourceId);
+          }
           more.disabled=offset===null;show(more,offset!==null);
         }catch(error){if(current()&&ticket===opening)progress.textContent=error.message;}
       }
@@ -7815,7 +7829,7 @@
       const generation=state.generation;
       try{
         run.disabled=true;out.replaceChildren();statusLine.textContent='Discovering…';
-        const r=await getJSON(logPath('model-discovery',{noise:String(Number(noise.value)/100),activities:String(Number(acts.value)/100)}));
+        const r=await getJSON(logPath('model-discovery',{noise:String(Number(noise.value)/100),activities:String(Number(acts.value)/100),pin_projection:'true'}));
         if(generation!==state.generation)return;
         const q=r.quality,kinds=r.process_model.activities.map(a=>a.kind);
         const count=kind=>kinds.filter(k=>k===kind).length;
@@ -7826,21 +7840,26 @@
         if(r.simplifications.length){const list=el('ul');r.simplifications.forEach(n=>list.appendChild(el('li',n)));out.appendChild(list);}
         const excluded=q.cases_excluded_trace_length+q.cases_excluded_variant_limit;
         out.appendChild(el('div',r.interpretation+(excluded?' '+Number(excluded).toLocaleString()+' cases with very long or rare paths were left out of discovery.':''),'muted'));
+        const pin=r.effective_input;
+        const pinned=pin?.format==='openworkgraph.discovery-projection.v1'&&/^[a-f0-9]{64}$/.test(pin.sha256||'')&&
+          Number.isSafeInteger(pin.events)&&pin.events>=0&&pin.cases===q.cases_total;
+        out.appendChild(el('div',pinned?'Pinned effective discovery input: '+pin.cases+' cases, '+pin.events+' case-event rows. SHA-256 '+pin.sha256+'. Recording will refuse changes to this exact projection.':'Exact effective input fingerprint unavailable; rediscover before recording.','muted'));
         out.appendChild(el('div','Recording a source snapshot keeps its digests, selected filters, settings and coverage counts with this imported log; no graph or case copies. The snapshot is deleted with the log. Review and save the graph separately.','muted'));
-        const draft=button('Record source snapshot and review draft');draft.id='owgDiscoveryDraft';
+        const draft=button('Record source snapshot and review draft');draft.id='owgDiscoveryDraft';draft.disabled=!pinned;
         draft.onclick=async()=>{
           try{
+            if(!pinned)throw new Error('Discover again before recording an exact source.');
             if(!window.owgProcessCatalog?.draftDiscovered)throw new Error('Process catalog unavailable. Reopen the local dashboard.');
             draft.disabled=true;statusLine.textContent='Recording current discovery source metadata…';
             const saved=await (await api('/v1/event-logs/'+encodeURIComponent(r.log.log_id)+'/model-discovery-draft',{
               method:'POST',headers:{'Content-Type':'application/json','X-OWG-Local-Storage-Confirmed':'true'},
-              body:JSON.stringify({expected_model_sha256:r.process_model_sha256,case_type:r.case_notion,
+              body:JSON.stringify({expected_model_sha256:r.process_model_sha256,expected_projection_sha256:pin.sha256,case_type:r.case_notion,
                 noise:r.settings.noise,activities:r.settings.activities,cohort:r.cohort})})).json();
             if(generation!==state.generation)return;
             if(window.owgProcessCatalog.draftDiscovered({model:saved.process_model,logName:(saved.log&&saved.log.name)||'',sourceReference:saved.source_snapshot.reference}))statusLine.textContent='Source snapshot recorded. Opened in the process catalog as an unsaved draft.';
             else statusLine.textContent='Source snapshot recorded; existing catalog draft kept.';
           }catch(error){if(generation===state.generation)statusLine.textContent=error.message;}
-          finally{draft.disabled=false;}
+          finally{draft.disabled=!pinned;}
         };
         out.appendChild(draft);
         const tree=button('Download process tree (PTML)','secondary');tree.id='owgDiscoveryPtml';
@@ -14073,6 +14092,183 @@
         (p.previous_window_coverage_after===null?'.':' and '+pct(p.previous_window_coverage_after)+' of the window before.'):null};
   }
 
-  window.__owgEventLogModel={simBatch,simPriorities,objectModelArcs,objectModelText,visitRows,simUncertainty,uncertaintyRows,objectRule,attributeChangeSummary,measuredMinutes,validationText,flatteningSummary,simArrivals,simPool,simCalendar,caseMetric,refactorMetricGraph,savedMetricBundle,stageComparisonMetrics,activityComparisonMetrics,activityShareMetrics,metricText,reasonText,followSpec,followText,mergeActiveCohort,tokenAt,dotLayout,treeOutline,predictionSpec,complianceRule,analysisSpec,analysisDraft,signalRule,newCaseChange,detectFormat,csvHeader,parsePaths,duration,cohortSpec,toCSV,parseWeightedPaths,formatWeightedPaths,packMapping,packGuess,packReportRows,monitoringRows,impactSpec,impactRows};
+  // Called only by explicit local snapshot handoff. Never load another log
+  // if the requested retained ID has disappeared or a newer selection wins.
+  let discoveryInspectionGeneration=0;
+  function matchingDiscoveryInspection(result,basis,page){
+    const sha=value=>typeof value==='string'&&/^[a-f0-9]{64}$/.test(value);
+    const count=n=>Number.isSafeInteger(n)&&n>=0;
+    const input=value=>value?.format==='openworkgraph.discovery-projection.v1'&&sha(value.sha256)&&
+      count(value.events)&&count(value.cases)&&value.cases<=value.events;
+    if(!result||result.format!=='openworkgraph.discovery-selection-inspection.v1'||
+      result.reference!==basis.reference||result.workflow_id!==basis.workflow_id||result.revision!==basis.revision||
+      result.process_sha256!==basis.content_sha256||!/^log_[a-f0-9]{16}$/.test(result.log_id||'')||
+      (basis.log_id&&result.log_id!==basis.log_id)||!sha(result.selection_sha256)||
+      !result.selection||typeof result.selection.case_notion!=='string'||
+      !result.selection.cohort||!result.selection.settings||
+      !input(result.current_effective_input)||
+      !(result.original_effective_input===null||input(result.original_effective_input))||
+      result.historical_rows_retained!==false||result.raw_source_fingerprint_rechecked!==false||
+      result.business_case_identity_verified!==false||result.business_outcomes_verified!==false||
+      result.execution_authorized!==false||!Number.isFinite(Date.parse(result.checked_at)))return false;
+    const current=result.current_effective_input,original=result.original_effective_input;
+    const drift=result.case_drift;
+    if(!drift||!['complete','not_recorded','current_work_budget_exceeded','unavailable'].includes(drift.status))return false;
+    const complete=drift.status==='complete';
+    if(complete&&(!original||!['added','removed','modified','unchanged','original_cases','current_cases'].every(key=>count(drift[key]))||
+      drift.original_cases!==original.cases||drift.current_cases!==current.cases||
+      drift.removed+drift.modified+drift.unchanged!==drift.original_cases||
+      drift.added+drift.modified+drift.unchanged!==drift.current_cases||drift.removed_case_ids_retained!==false))return false;
+    const caseStatus=row=>complete?['added','modified','unchanged'].includes(row.comparison_status):row.comparison_status==='unknown';
+    if(page.expected_projection_sha256&&current.sha256!==page.expected_projection_sha256)return false;
+    if(result.effective_input_status!==(original===null?'not_recorded':
+      original.sha256===current.sha256&&original.events===current.events&&original.cases===current.cases?'matches':'changed'))return false;
+    if(page.case_id!==undefined){
+      return result.mode==='events'&&result.case_id===page.case_id&&result.offset===page.offset&&caseStatus(result)&&
+        count(result.total_events)&&result.total_events>0&&result.total_events<=current.events&&
+        Array.isArray(result.events)&&result.events.length<=page.limit&&
+        result.events.every(row=>typeof row.event_id==='string'&&typeof row.activity==='string'&&Number.isFinite(Date.parse(row.timestamp)))&&
+        (result.next_offset===null?result.offset+result.events.length>=result.total_events:
+          result.events.length>0&&result.next_offset===result.offset+result.events.length&&result.next_offset<result.total_events);
+    }
+    const filter=page.case_status||'all';
+    if(filter!=='all'&&(!complete||!['added','modified','unchanged'].includes(filter)))return false;
+    const matching=filter==='all'?current.cases:drift[filter];
+    return result.mode==='cases'&&result.case_status===filter&&result.matching_cases===matching&&Array.isArray(result.cases)&&result.cases.length<=page.limit&&result.cases.length<=matching&&
+      new Set(result.cases.map(row=>row.case_id)).size===result.cases.length&&
+      result.cases.every(row=>typeof row.case_id==='string'&&row.case_id.length>0&&count(row.events)&&row.events>0&&
+        count(row.timestamp_ties)&&row.timestamp_ties<row.events&&caseStatus(row)&&(filter==='all'||row.comparison_status===filter)&&typeof row.elapsed_seconds==='number'&&Number.isFinite(row.elapsed_seconds)&&row.elapsed_seconds>=0)&&
+      (result.next_after===null||(result.cases.length===page.limit&&result.next_after===result.cases.at(-1).case_id));
+  }
+
+  async function openDiscoverySelection(basis){
+    if(!basis||typeof basis.workflow_id!=='string'||!/^[-a-zA-Z0-9_]{1,80}$/.test(basis.workflow_id)||
+      !Number.isSafeInteger(basis.revision)||basis.revision<1||!(/^[a-f0-9]{64}$/).test(basis.content_sha256||'')||
+      !/^urn:openworkgraph:local-log-discovery:[a-f0-9]{64}$/.test(basis.reference||'')||
+      (basis.log_id!==undefined&&!/^log_[a-f0-9]{16}$/.test(basis.log_id)))throw Error('Invalid saved discovery source reference.');
+    basis={...basis};
+    const workspace=document.getElementById('owgEventLogCard');
+    if(!workspace)throw Error('Local event-log workspace unavailable.');
+    const generation=++discoveryInspectionGeneration;
+    let panel=document.getElementById('owgDiscoverySourceInspection');
+    if(!panel){panel=section('Exact discovery cohort inspection');panel.id='owgDiscoverySourceInspection';workspace.appendChild(panel);}
+    panel.replaceChildren(el('h3','Exact discovery cohort inspection'));
+    panel.style.overflowWrap='anywhere';
+    panel.appendChild(el('p','Saved process revision '+basis.revision+' · '+basis.workflow_id+'. This view is separate from the ordinary workspace filters and never changes the saved process or source log.','muted'));
+    const message=el('p');message.setAttribute('role','status');
+    const scope=el('div'),caseList=el('div'),eventList=el('div');
+    const refresh=button('Reopen exact selection','secondary'),close=button('Close source inspection','secondary');
+    const controls=el('div',null,'row');controls.append(refresh,close);panel.append(controls,message,scope,caseList,eventList);
+    const current=()=>generation===discoveryInspectionGeneration&&panel.isConnected;
+    let digest=null,caseTurn=0,eventTurn=0,caseFilter='all';
+    async function query(page){
+      const body={reference:basis.reference,expected_process_sha256:basis.content_sha256,...page};
+      const result=await (await api('/v1/event-log-discovery/inspect-selection?'+new URLSearchParams({workflow_id:basis.workflow_id,revision:String(basis.revision)}),
+        {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).json();
+      if(!matchingDiscoveryInspection(result,basis,page))throw Error('Source inspection response does not match the saved selection.');
+      return result;
+    }
+    const reset=error=>{++caseTurn;++eventTurn;digest=null;scope.replaceChildren();caseList.replaceChildren();eventList.replaceChildren();message.textContent=String(error.message||error)+' Reopen the selection to continue.';};
+    const caseStatusLabel=value=>({added:'Added to selection',modified:'Projection modified',unchanged:'Unchanged projection',unknown:'Unknown'})[value]||'Unknown';
+    function showScope(result){
+      const names={matches:'The effective input matches the recorded projection.',changed:'The effective input changed. The cases below are the current result of the original filter, not reconstructed historical cases.',not_recorded:'This older snapshot did not retain an effective-input digest. Historical membership cannot be established.'};
+      const text=el('pre',JSON.stringify(result.selection,null,2));text.style.cssText='white-space:pre-wrap;overflow-wrap:anywhere';
+      scope.replaceChildren(el('p',names[result.effective_input_status]),
+        table(['Effective input','Cases','Case-event rows','SHA-256'],[
+          ['At recording',result.original_effective_input?.cases??'Unknown',result.original_effective_input?.events??'Unknown',result.original_effective_input?.sha256??'Not recorded'],
+          ['Current',result.current_effective_input.cases,result.current_effective_input.events,result.current_effective_input.sha256]]),text,
+        el('p','Checked '+result.checked_at+'. Raw source fingerprint not rechecked here. Equal timestamps use a stable event-ID tie break, not proof of order.','muted'));
+      const drift=result.case_drift;
+      if(drift.status==='complete'){
+        scope.appendChild(table(['Case projection comparison','Count'],[
+          ['Added to current selection',drift.added],['Removed from selection',drift.removed],
+          ['Modified projected rows',drift.modified],['Unchanged projected rows',drift.unchanged]]));
+        scope.appendChild(el('p','Complete bounded fingerprint comparison. Removed case keys were not retained and cannot be reconstructed. Case changes can reflect filters, mappings or source changes, not business outcomes.','muted'));
+      }else scope.appendChild(el('p',drift.status==='current_work_budget_exceeded'?
+        'Current selection exceeds the complete case-comparison budget. No partial case differences are reported.':
+        'An original complete case-fingerprint index is unavailable. Case-level differences are unknown.','muted'));
+
+    }
+    async function loadCases(after=null,initial=false){
+      const turn=++caseTurn;++eventTurn;eventList.replaceChildren();caseList.replaceChildren();refresh.disabled=true;
+      message.textContent='Checking exact current discovery selection…';
+      if(initial)caseFilter='all';
+      const page={limit:30,case_status:caseFilter,...(initial?{}:{expected_projection_sha256:digest}),...(after===null?{}:{after})};
+      try{
+        const result=await query(page);
+        if(!current()||turn!==caseTurn)return;
+        digest=result.current_effective_input.sha256;showScope(result);
+        message.textContent=caseFilter==='all'?'Current selected cases: '+result.current_effective_input.cases+'. Showing '+result.cases.length+' on this page.':
+          'Matching '+caseFilter+' cases: '+result.matching_cases+'. Showing '+result.cases.length+' on this page.';
+        const rows=result.cases.map(row=>{
+          const open=button(row.case_id,'secondary');open.style.cssText='max-width:100%;overflow-wrap:anywhere;white-space:normal';
+          open.setAttribute('aria-label','Inspect exact selected case '+row.case_id);
+          open.onclick=()=>loadEvents(row.case_id,0);
+          return [open,row.events,duration(row.elapsed_seconds),row.timestamp_ties,caseStatusLabel(row.comparison_status)];
+        });
+        const first=button('First selected case page','secondary'),next=button('Next selected case page','secondary');
+        first.disabled=after===null;next.disabled=result.next_after===null;
+        first.onclick=()=>loadCases();next.onclick=()=>loadCases(result.next_after);
+        const filter=select('owgDiscoveryCaseDriftFilter',[['all','All current cases'],['added','Added'],['modified','Modified'],['unchanged','Unchanged']]);
+        filter.value=caseFilter;filter.disabled=result.case_drift.status!=='complete';
+        filter.onchange=()=>{caseFilter=filter.value;loadCases(null);};
+        caseList.replaceChildren(field('Case projection change',filter),
+          table(['Supplied case key','Projected events','Elapsed time','Equal-timestamp events','Original comparison'],rows),first,next);
+      }catch(error){if(current()&&turn===caseTurn)reset(error);}
+      finally{if(current())refresh.disabled=false;}
+    }
+    async function loadEvents(caseId,offset){
+      if(!digest)return;
+      const turn=++eventTurn,checkedDigest=digest;
+      eventList.replaceChildren(el('p','Checking selected case…','muted'));
+      try{
+        const result=await query({limit:100,case_id:caseId,offset,expected_projection_sha256:checkedDigest});
+        if(!current()||turn!==eventTurn||checkedDigest!==digest)return;
+        const first=button('First selected event page','secondary'),next=button('Next selected event page','secondary');
+        first.disabled=offset===0;next.disabled=result.next_offset===null;
+        first.onclick=()=>loadEvents(caseId,0);next.onclick=()=>loadEvents(caseId,result.next_offset);
+        eventList.replaceChildren(el('h4','Selected case '+caseId),
+          el('p','Showing '+result.events.length+' of '+result.total_events+' effective events at offset '+offset+'. '+caseStatusLabel(result.comparison_status)+'.'),
+          table(['Event ID','Effective activity','Timestamp (UTC)'],result.events.map(row=>[row.event_id,row.activity,row.timestamp])),first,next);
+        // Reuse the existing exact original-observation drill-down, if the
+        // selected source is an observed execution snapshot.
+        const sourceLog={log_id:result.log_id,observed_execution_snapshot:result.observed_execution_snapshot};
+        if(sourceLog.observed_execution_snapshot?.manifest_available===true&&window.owgObservedExecutionLog?.renderObservationCheck)
+          window.owgObservedExecutionLog.renderObservationCheck(eventList,sourceLog,caseId,result.events,
+            ()=>current()&&turn===eventTurn&&digest===checkedDigest);
+      }catch(error){if(current()&&turn===eventTurn)reset(error);}
+    }
+    refresh.onclick=()=>loadCases(null,true);
+    close.onclick=()=>{++discoveryInspectionGeneration;panel.remove();};
+    document.querySelector('[role=tab][data-tab=evidence]')?.click();
+    panel.scrollIntoView({block:'start'});
+    await loadCases(null,true);
+    return current()&&digest!==null;
+  }
+
+  window.owgEventLogWorkspace=Object.freeze({
+    openDiscoverySelection,
+    async openSaved(logId){
+      if(typeof logId!=='string'||!/^log_[a-f0-9]{16}$/.test(logId))throw Error('Invalid event-log reference.');
+      const pick=document.getElementById('owgEventLogPick');
+      if(!pick)throw Error('Event-log workspace not available.');
+      const generation=state.generation,request=++state.refresh;
+      const data=await getJSON('/v1/event-logs');
+      if(request!==state.refresh||generation!==state.generation)throw Error('Event-log selection changed.');
+      const logs=Array.isArray(data.logs)?data.logs:[];
+      if(!logs.some(log=>log.log_id===logId))throw Error('The requested event log is no longer retained.');
+      state.logs=logs;
+      setOptions(pick,logs.map(log=>[log.log_id,log.name+' · '+Number(log.events).toLocaleString()+' events']));
+      show(document.getElementById('owgEventLogManage'),true);
+      pick.value=logId;
+      const pending=selectLog(logId),selectedGeneration=state.generation;
+      pick.dispatchEvent(new Event('owg-saved-log-selected'));
+      await pending;
+      if(request!==state.refresh||selectedGeneration!==state.generation||state.logId!==logId||pick.value!==logId)throw Error('Event-log selection changed.');
+      status('Opened saved workflow snapshot. Select Analyse to explore the retained observations.');
+      return true;
+    }
+  });
+  window.__owgEventLogModel={matchingDiscoveryInspection,simBatch,simPriorities,objectModelArcs,objectModelText,visitRows,simUncertainty,uncertaintyRows,objectRule,attributeChangeSummary,measuredMinutes,validationText,flatteningSummary,simArrivals,simPool,simCalendar,caseMetric,refactorMetricGraph,savedMetricBundle,stageComparisonMetrics,activityComparisonMetrics,activityShareMetrics,metricText,reasonText,followSpec,followText,mergeActiveCohort,tokenAt,dotLayout,treeOutline,predictionSpec,complianceRule,analysisSpec,analysisDraft,signalRule,newCaseChange,detectFormat,csvHeader,parsePaths,duration,cohortSpec,toCSV,parseWeightedPaths,formatWeightedPaths,packMapping,packGuess,packReportRows,monitoringRows,impactSpec,impactRows};
   if(typeof document!=='undefined'&&document.addEventListener)document.addEventListener('DOMContentLoaded',build);
 })();

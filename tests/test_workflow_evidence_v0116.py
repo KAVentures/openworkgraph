@@ -124,6 +124,12 @@ def test_evidence_bundle_preserves_provenance_without_inventing_payloads(monkeyp
 
     assert bundle["provenance"]["source"] == "canonical_local_event_store"
     assert bundle["canonical_evidence_included"] is True
+    coverage = bundle["timing"]["per_execution_foreground_coverage"]["runs"][0]
+    assert coverage["execution_id"] == "execution:aaaaaaaaaaaaaaaa"
+    assert coverage["foreground_union_seconds"] == 30
+    assert coverage["uncovered_window_seconds"] == 270
+    assert coverage["observed_event_count"] == 3
+    assert coverage["coverage_complete"] is False
     returned = bundle["canonical_evidence"][0]
     assert returned["execution_id"] == "execution:aaaaaaaaaaaaaaaa"
     assert all(event["untrusted_observed_data"] is True for event in returned["events"])
@@ -378,3 +384,65 @@ def test_filter_and_counter_consistency_for_candidate_clusters(monkeypatch):
     assert result["families_total"] == len(result["families"])
     assert result["families"][0]["surface_labels"]["surface:gmail"] == "Gmail"
     assert result["families"][0]["high_support_display_steps"][0] in {"Gmail", "GitHub"}
+
+
+def test_clipboard_reused_tokens_link_to_preceding_source_only():
+    from server import workflow_evidence as module
+
+    def event(identifier, time, action, app, session="s", actor="human", device="device"):
+        row = _event(identifier, session, f"2026-10-01T10:00:{time:02d}Z",
+                     f"clipboard_{action}", app,
+                     metadata={"clipboard_transfer_id": "reused", "action": action})
+        row.update(actor_id=actor, device_id=device)
+        return row
+
+    rows = [
+        event("unmatched", 1, "paste", "Slack"),
+        event("a", 2, "copy", "Gmail"),
+        event("b", 3, "paste", "Salesforce"),
+        event("c", 4, "cut", "Google Sheets"),
+        event("d", 5, "paste", "GitHub"),
+        event("e", 6, "paste", "Jira"),
+        event("other-session", 7, "paste", "Slack", session="other"),
+        event("other-device", 8, "paste", "Slack", device="other"),
+        event("other-actor", 9, "paste", "Slack", actor="other"),
+        event("f", 10, "copy", "Gmail"),
+        event("tied-paste", 10, "paste", "Slack"),
+        event("g", 11, "paste", "GitHub"),
+        event("tie-a", 12, "copy", "Gmail"),
+        event("tie-b", 12, "copy", "Slack"),
+        event("ambiguous", 13, "paste", "Jira"),
+    ]
+    # Input ordering must not change directional linkage.
+    pairs = {(a["event_id"], b["event_id"])
+             for a, b in module._directional_clipboard_pairs(reversed(rows))}
+    assert pairs == {("a", "b"), ("c", "d"), ("c", "e"), ("f", "g")}
+    summary = module._clipboard_transfers({"execution:aaaaaaaaaaaaaaaa": rows})
+    assert sum(row["observed_transfer_count"] for row in summary) == 4
+    assert all(row["clipboard_contents_observed"] is False for row in summary)
+
+
+def test_clipboard_rank_and_bundle_agree_on_direction_and_capture_scope():
+    from server import workflow_evidence as module
+
+    def event(identifier, at, kind, app, session="s"):
+        return _event(identifier, session, f"2026-10-01T10:00:{at:02d}Z",
+                      f"clipboard_{kind}", app,
+                      metadata={"clipboard_transfer_id": "token", "action": kind})
+
+    run = _execution("execution:aaaaaaaaaaaaaaaa", "s", ["surface:gmail", "surface:slack"])
+    run["_session_ids"] = ["s", "other"]
+    for rows in [
+        [event("p", 1, "paste", "Slack"), event("c", 2, "copy", "Gmail")],
+        [event("c", 1, "copy", "Gmail"), event("p", 1, "paste", "Slack")],
+        [event("c", 1, "copy", "Gmail"), event("p", 2, "paste", "Slack", "other")],
+        [event("c", 1, "copy", "Gmail"), event("p", 2, "paste", "Slack", "")],
+    ]:
+        module._rank_clipboard_evidence(rows, [run])
+        assert run["cross_surface_clipboard_observed"] is False
+        assert module._clipboard_transfers({run["execution_id"]: rows}) == []
+
+    rows = [event("c", 1, "copy", "Gmail"), event("p", 2, "paste", "Slack")]
+    module._rank_clipboard_evidence(rows, [run])
+    assert run["cross_surface_clipboard_observed"] is True
+    assert len(module._clipboard_transfers({run["execution_id"]: rows})) == 1

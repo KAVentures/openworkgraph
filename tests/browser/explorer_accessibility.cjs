@@ -91,12 +91,83 @@ const path=require('node:path');
      comparedEvidenceIds=new URL(route.request().url()).searchParams.get('execution_ids');
      return route.fulfill({status:200,contentType:'application/json',
        body:JSON.stringify({selector:{execution_ids:['execution:compare_right'],selected_execution_count:1},
-         structural_alignment:{high_support_steps:[]},provenance:{source_limit_reached:false}})});
+         structural_alignment:{high_support_steps:[]},executions:[{execution_id:'execution:compare_right',actor_kind:'human',duration_seconds:12,steps:['action:open','action:review','action:open'],outcome_status:'unknown'}],timing:{per_execution_foreground_coverage:{format:'openworkgraph.execution-foreground-coverage.v1',
+           uncovered_time_is_unknown:true,distinct_surface_overlaps_are_unattributed:true,active_labor_or_waiting_measured:false,
+           runs:[{execution_id:'execution:compare_right',actor_kind:'human',status:'observed_bounded_coverage',
+             observed_event_count:4,window_seconds:12,foreground_union_seconds:8,uncovered_window_seconds:4,
+             overlapping_distinct_surface_seconds:1,surface_rows:[{surface:'surface:gmail',exclusive_foreground_seconds:7}],
+             surface_rows_omitted:0,exclusive_other_surface_seconds:0,foreground_span_count:2,invalid_span_count:0}]}},provenance:{source_limit_reached:false}})});
    });
    const inspectB=page.getByRole('button',{name:'Inspect variant B evidence',exact:true});
    await inspectB.focus();await page.keyboard.press('Enter');
-   await page.locator('#owgExplorerEvidence h4').waitFor();
+   await page.locator('#owgExplorerEvidence').getByRole('heading',{level:4,name:/^Evidence for /}).waitFor();
    assert.equal(comparedEvidenceIds,'execution:compare_right','comparison drilldown must select only lane B refs');
+   const runMatrix=page.locator('#owgExplorerRunMatrix');
+   await runMatrix.waitFor();
+   assert.match(await runMatrix.textContent(),/Run 1 · execution:compare_right/);
+   const occurrences=runMatrix.getByRole('table',{name:'Projected step occurrence matrix'});
+   assert.deepEqual(await occurrences.locator('tbody tr').first().locator('td').allTextContents(),['1/1','2']);
+   const coverage=runMatrix.getByRole('table',{name:'Foreground time coverage'});
+   assert.deepEqual(await coverage.locator('tbody tr').first().locator('td').allTextContents(),['Run 1','4','12','8','4','1']);
+   assert.match(await runMatrix.locator('#owgExplorerForegroundCoverage').textContent(),/7 s exclusively attributed/);
+   assert.equal(await runMatrix.locator('#owgExplorerSurfaceRoutes').count(),1);
+   assert.equal(await runMatrix.locator('#owgExplorerAutomationReview').count(),1);
+   const projectedPaths=runMatrix.locator('#owgExplorerProjectedPaths');
+   await projectedPaths.waitFor();
+   assert.match(await projectedPaths.textContent(),/1 supporting selected execution references/);
+   const draftSelected=projectedPaths.getByRole('button',{name:'Draft selected path in process catalog'});
+   assert.equal(await draftSelected.isDisabled(),true);
+   await page.evaluate(()=>{
+     window.__owgOriginalDraftObserved=window.owgProcessCatalog.draftObserved;
+     window.owgProcessCatalog.draftObserved=source=>{window.__owgCapturedProjectedDraft=source;return true;};
+   });
+   await projectedPaths.getByRole('checkbox',{name:/I reviewed this selected projected path/}).check();
+   await draftSelected.click();
+   const captured=await page.evaluate(()=>{
+     const result=window.__owgCapturedProjectedDraft;
+     window.owgProcessCatalog.draftObserved=window.__owgOriginalDraftObserved;
+     delete window.__owgOriginalDraftObserved;
+     delete window.__owgCapturedProjectedDraft;
+     return result;
+   });
+   assert.deepEqual(captured,{path:['open','review','open'],count:1,
+     basis:'selected_observed_variant',evidenceRefs:['execution:compare_right']});
+   assert.equal(await draftSelected.isDisabled(),true);
+   const planning=projectedPaths.getByRole('group',{name:'Prepare selected path for an AI agent'});
+   const copyPlanning=planning.getByRole('button',{name:'Copy selected-path agent planning request'});
+   assert.equal(await copyPlanning.isDisabled(),true);
+   await planning.getByLabel('Business goal').fill('Resolve case');
+   await planning.getByLabel('Authoritative source or tool').fill('Case API');
+   await planning.getByLabel('Decision rules, exceptions or unknowns').fill('Ask about exceptions');
+   await planning.getByLabel('Independent outcome check').fill('Read back status');
+   await planning.getByRole('checkbox').check();
+   assert.equal(await copyPlanning.isEnabled(),true);
+   await planning.getByLabel('Business goal').fill('Resolve selected case');
+   assert.equal(await copyPlanning.isDisabled(),true);
+   await audit(page,'#owgWorkflowExplorer','Selected execution workbench');
+   await page.unroute('**/v1/workflow-evidence?*');
+   await page.route('**/v1/workflow-evidence?*',route=>{
+     const params=new URL(route.request().url()).searchParams;
+     assert.equal(params.get('execution_ids'),'execution:compare_right');
+     assert.equal(params.get('include_canonical_evidence'),'true');
+     assert.equal(params.get('max_runs'),'1');
+     return route.fulfill({status:200,contentType:'application/json',
+       body:JSON.stringify({selector:{execution_ids:['execution:compare_right'],selected_execution_count:1},
+         provenance:{source_limit_reached:false},canonical_evidence_included:true,
+         canonical_evidence:[{execution_id:'execution:compare_right',observed_event_count:2,returned_event_count:1,
+           events_truncated:true,event_membership_basis:'inferred_time_and_session_window',nearby_events_may_be_unrelated:true,
+           events:[{event_ref:'event:aaaaaaaaaaaaaaaa',observed_at:'2026-10-01T10:00:00Z',event_type:'browser_click',
+             app:'Browser',window_title:'PRIVATE TITLE',metadata:{value:'PRIVATE CONTENT'}}]}]})});
+   });
+   await page.getByRole('button',{name:'Load selected run events',exact:true}).click();
+   const chronology=page.getByRole('table',{name:'Selected run event chronology'});
+   await chronology.waitFor();
+   assert.match(await chronology.textContent(),/browser_click/);
+   assert.doesNotMatch(await runMatrix.textContent(),/PRIVATE TITLE|PRIVATE CONTENT/);
+   assert.match(await runMatrix.textContent(),/1 of 2 retained events/);
+   await audit(page,'#owgWorkflowExplorer','Selected run chronology');
+
+
    assert.equal(await page.locator('#owgExplorerHandoffPanel').count(),0,'switching lanes revokes old handoff review');
    assert.match(await page.locator('#owgExplorerStepInfo').textContent(),/Variant 2 selected from comparison/);
    await page.getByRole('button',{name:'Review safe agent handoff',exact:true}).click();
@@ -122,7 +193,7 @@ const path=require('node:path');
    await compare.click();
    assert.match(await page.locator('#owgExplorerCompareResult').textContent(),/Exact structural comparison unavailable/);
    assert.equal(await page.locator('#owgExplorerCompareResult tbody tr').count(),0);
-   assert.equal(evidenceReads,readsBeforeCompare+1,'refused comparison must not request evidence');
+   assert.equal(evidenceReads,readsBeforeCompare+2,'refused comparison must not request evidence');
    assert.equal(writes,0,'comparison and evidence inspection must never write to workflow APIs');
    await audit(page,'#owgWorkflowExplorer','Clipped variant comparison refusal');
    // Every focusable control must be reachable by Tab and have a visible accessible name.
@@ -274,7 +345,7 @@ const path=require('node:path');
        structural_alignment:{high_support_steps:[]},provenance:{source_limit_reached:false}})
    }));
    await page.getByRole('button',{name:'Review selected examples',exact:true}).click();
-   await page.locator('#owgExplorerEvidence h4').waitFor();
+   await page.locator('#owgExplorerEvidence').getByRole('heading',{level:4,name:/^Evidence for /}).waitFor();
    await page.getByRole('button',{name:'Review safe agent handoff',exact:true}).click();
    await page.locator('#owgExplorerHandoffConfirmed').check();
    assert.equal(await copyShadow.isDisabled(),true,'a successful HTTP response with unrelated refs is not inspected support');
@@ -285,7 +356,7 @@ const path=require('node:path');
        structural_alignment:{high_support_steps:[]},provenance:{source_limit_reached:false}})
    }));
    await page.getByRole('button',{name:'Review selected examples',exact:true}).click();
-   await page.locator('#owgExplorerEvidence h4').waitFor();
+   await page.locator('#owgExplorerEvidence').getByRole('heading',{level:4,name:/^Evidence for /}).waitFor();
    await page.getByRole('button',{name:'Review safe agent handoff',exact:true}).click();
    assert.equal(await copyShadow.isDisabled(),true,'explicit confirmation remains required after support inspection');
    await page.locator('#owgExplorerHandoffConfirmed').check();
@@ -567,7 +638,7 @@ const path=require('node:path');
    });
    await page.locator('#owgExplorerDetail svg g[role=button]').first().click();
    await page.getByRole('button',{name:'Review selected examples',exact:true}).click();
-   await page.locator('#owgExplorerEvidence h4').waitFor();
+   await page.locator('#owgExplorerEvidence').getByRole('heading',{level:4,name:/^Evidence for /}).waitFor();
    await page.getByRole('button',{name:'Review safe agent handoff',exact:true}).click();
    const imported=page.locator('#owgExplorerPlanImport');
    const importMessage=page.locator('#owgExplorerPlanImportStatus');
@@ -690,7 +761,7 @@ const path=require('node:path');
      body:JSON.stringify(designResponse(['execution:unrelated']))
    }));
    await page.getByRole('button',{name:'Review selected examples',exact:true}).click();
-   await page.locator('#owgExplorerEvidence h4').waitFor();
+   await page.locator('#owgExplorerEvidence').getByRole('heading',{level:4,name:/^Evidence for /}).waitFor();
    assert.equal(await page.locator('#owgExplorerDesignPanel').count(),0,'new inspection revokes design review');
    await openDesign.click();
    assert.match(await page.locator('#owgExplorerDesignStatus').textContent(),/does not exactly match/);
@@ -701,7 +772,7 @@ const path=require('node:path');
      body:JSON.stringify(designResponse(['execution:design_ref'],true))
    }));
    await page.getByRole('button',{name:'Review selected examples',exact:true}).click();
-   await page.locator('#owgExplorerEvidence h4').waitFor();
+   await page.locator('#owgExplorerEvidence').getByRole('heading',{level:4,name:/^Evidence for /}).waitFor();
    await openDesign.click();
    assert.match(await page.locator('#owgExplorerDesignStatus').textContent(),/Source limit or truncation/);
    assert.equal(await continueDesign.isDisabled(),true);
@@ -711,7 +782,7 @@ const path=require('node:path');
      body:JSON.stringify(designResponse(['execution:design_ref']))
    }));
    await page.getByRole('button',{name:'Review selected examples',exact:true}).click();
-   await page.locator('#owgExplorerEvidence h4').waitFor();
+   await page.locator('#owgExplorerEvidence').getByRole('heading',{level:4,name:/^Evidence for /}).waitFor();
    await openDesign.click();
    assert.equal(await continueDesign.isDisabled(),true,'current evidence still requires human confirmation');
    assert.match(await page.locator('#owgExplorerDesignPanel').textContent(),/Source identity, total coverage/);
@@ -776,7 +847,7 @@ const path=require('node:path');
    assert.equal(await continueDesign.isDisabled(),true,'matching checkpoint never restores approval');
    await audit(page,'#owgWorkflowExplorer','Reopened unapproved design checkpoint');
    await page.getByRole('button',{name:'Review selected examples',exact:true}).click();
-   await page.locator('#owgExplorerEvidence h4').waitFor();
+   await page.locator('#owgExplorerEvidence').getByRole('heading',{level:4,name:/^Evidence for /}).waitFor();
    await openDesign.click();
    assert.equal(await continueDesign.isDisabled(),true,'fresh inspection still needs new review');
    await page.locator('#owgExplorerDesignConfirmed').check();
@@ -1022,9 +1093,120 @@ const path=require('node:path');
    await period.selectOption('7');
    assert.equal(await page.locator('#owgExplorerHandoffPanel').count(),0,'period change invalidates reviewed copy and JSON download');
    assert.equal(writes,0,'handoff flow never writes to workflow APIs');
+   await page.locator('#owgExplorerRanking').selectOption('navigation');
+   await page.locator('#owgExplorerMinRuns').selectOption('5');
+   await page.locator('#owgExplorerMultiApp').check();
+   assert.equal(await page.locator('#owgExplorerCandidates button').count(),0);
+   assert.match(await page.locator('#owgExplorerStatus').textContent(),/Discovery settings changed/);
+   let discoveryParams;
+   await page.route('**/v1/workflow-evidence/families?*',route=>{
+     discoveryParams=new URL(route.request().url()).searchParams;
+     return route.fulfill({status:200,contentType:'application/json',
+       body:JSON.stringify({candidate_clusters:[],total:0,source_limit_reached:false})});
+   });
+   await open.click();
+   await page.locator('#owgExplorerStatus').filter({hasText:'candidate groups shown'}).waitFor();
+   assert.equal(discoveryParams.get('rank_by_navigation'),'true');
+   assert.equal(discoveryParams.get('rank_by_quality'),'false');
+   assert.equal(discoveryParams.get('min_runs'),'5');
+   assert.equal(discoveryParams.get('require_multi_surface'),'true');
+   await page.unroute('**/v1/workflow-evidence/families?*');
    await page.setViewportSize({width:390,height:844});
    assert.equal(await page.evaluate(()=>document.body.scrollWidth>window.innerWidth),false);
-   assert.equal(writes,0);assert.deepEqual(errors,[]);
+   assert.equal(writes,0);
+   // Separate synthetic snapshot acceptance: storage is explicit and
+   // the exact retained log opens without retargeting another dataset.
+   const snapshots=await browser.newPage();
+   snapshots.on('pageerror',error=>errors.push(error.message));
+   const execution='execution:aaaaaaaaaaaaaaaa',logId='log_bbbbbbbbbbbbbbbb',digest='a'.repeat(64);
+   const originalScope={execution_ids:[execution],since:'2026-11-01T00:00:00Z'};
+   let previewCalls=0,saveCalls=0,sourceCalls=0,recheckCalls=0,lastPreview=null;
+   const metadata={manifest_available:true,snapshot_sha256:digest,original_case_count:1,original_event_count:2,
+     timestamp_tie_groups:0,business_case_identity_verified:false,capture_complete:false,independent_retention:true};
+   const log={log_id:logId,name:'Observed executions - Workflow selection',events:2,objects:1,observed_execution_snapshot:metadata};
+   const asJSON=(route,body)=>route.fulfill({status:200,contentType:'application/json',body:JSON.stringify(body)});
+   const report=scope=>({format:'openworkgraph.observed-execution-log.v1',snapshot_sha256:digest,
+     scope,case_count:1,event_count:2,timestamp_tie_groups:0,
+     cases:[{execution_id:execution,actor_kind:'human',events:2,timestamp_tie_groups:0,membership_basis:'inferred_time_session'}],
+     business_case_identity_verified:false,business_outcomes_verified:false,capture_complete:false,
+     sensor_observations_not_deduplicated_actions:true,source_limit_reached:false});
+   try{
+     await snapshots.route('**/v1/workflow-evidence?*',route=>{
+       const q=new URL(route.request().url()).searchParams;
+       assert.equal(q.get('execution_ids'),execution);
+       assert.equal(q.get('since'),originalScope.since);
+       return asJSON(route,{selector:{execution_ids:[execution],selected_execution_count:1},
+         structural_alignment:{high_support_steps:[]},executions:[{execution_id:execution,actor_kind:'human',
+           duration_seconds:12,steps:['surface:gmail','action:click','action:submit'],outcome_status:'unknown'}],
+         provenance:{source_limit_reached:false}});
+     });
+     await snapshots.route('**/v1/workflow-evidence/event-log/preview',route=>{
+       previewCalls++;const scope=route.request().postDataJSON();
+       assert.deepEqual(scope.execution_ids,[execution]);assert.equal(scope.since,originalScope.since);
+       lastPreview=report(scope);return asJSON(route,lastPreview);
+     });
+     await snapshots.route('**/v1/workflow-evidence/event-log/create',route=>{
+       saveCalls++;const body=route.request().postDataJSON();
+       assert.equal(route.request().headers()['x-owg-local-storage-confirmed'],'true');
+       assert.deepEqual(body.selection,lastPreview.scope);assert.equal(body.expected_sha256,digest);
+       return asJSON(route,{...lastPreview,log_id:logId,name:log.name,stored_independent_snapshot:true,existing_snapshot_reused:false});
+     });
+     await snapshots.route('**/v1/event-logs',route=>asJSON(route,{logs:[log],limit:50}));
+     await snapshots.route('**/v1/event-logs/'+logId+'/object-types',route=>asJSON(route,{object_types:[{object_type:'case',objects:1}]}));
+     await snapshots.route('**/v1/workflow-evidence/event-log/source?*',route=>{
+       sourceCalls++;assert.equal(new URL(route.request().url()).searchParams.get('log_id'),logId);
+       return asJSON(route,{...lastPreview,log_id:logId,name:log.name,stored_event_count:2,
+         stored_independent_snapshot:true,source_history_rechecked:false});
+     });
+     await snapshots.route('**/v1/workflow-evidence/event-log/recheck',route=>{
+       recheckCalls++;assert.deepEqual(route.request().postDataJSON(),{log_id:logId});
+       return asJSON(route,{format:'openworkgraph.observed-execution-log-recheck.v1',log_id:logId,
+         original_snapshot_sha256:digest,current_projection_sha256:null,checked_at:'2026-11-24T06:00:00Z',
+         status:'source_unavailable',stored_log_changed:false,capture_complete:false,
+         business_case_identity_verified:false,business_outcomes_verified:false});
+     });
+     await snapshots.goto(base+'/#session='+session);
+     await snapshots.locator('[role=tab][data-tab=overview]').click();
+     await snapshots.evaluate(({execution,since})=>window.owgWorkflowExplorer.inspectSnapshotExecution({executionId:execution,window:{since}}),
+       {execution,since:originalScope.since});
+     const section=snapshots.locator('#owgExplorerExecutionLog');
+     await section.waitFor();
+     const create=section.getByRole('button',{name:'Create saved event log'});
+     const preview=section.getByRole('button',{name:'Preview execution event log'});
+     const consent=section.getByRole('checkbox',{name:/Store this reviewed independent copy/});
+     assert.equal(await create.isDisabled(),true);assert.equal(saveCalls,0);
+     await preview.click();await section.getByText('Preview ready.',{exact:false}).waitFor();
+     await consent.check();assert.equal(await create.isEnabled(),true);
+     await section.getByLabel('Structural observations').selectOption('actions_and_navigation');
+     assert.equal(await create.isDisabled(),true);
+     await preview.click();await section.getByText('Preview ready.',{exact:false}).waitFor();
+     assert.equal(previewCalls,2);assert.equal(lastPreview.scope.projection,'actions_and_navigation');
+     await consent.check();await create.click();
+     await section.getByRole('button',{name:'Open created event log'}).waitFor();
+     assert.equal(saveCalls,1);
+     await audit(snapshots,'#owgExplorerExecutionLog','Reviewed execution snapshot');
+     await section.getByRole('button',{name:'Open created event log'}).click();
+     await snapshots.locator('#owgEventLogStatus').filter({hasText:'Opened saved workflow snapshot'}).waitFor();
+     assert.equal(await snapshots.locator('#owgEventLogPick').inputValue(),logId);
+     await snapshots.evaluate(log=>{
+       const parent=document.createElement('div');parent.id='owgSourceFixture';document.getElementById('owgEventLogCard').appendChild(parent);
+       window.owgObservedExecutionLog.renderSource(parent,log,()=>true);
+     },log);
+     const origin=snapshots.locator('#owgObservedSnapshotSource');
+     assert.equal(sourceCalls,0);assert.equal(recheckCalls,0);
+     await origin.getByRole('button',{name:'Show original execution references'}).click();
+     await origin.getByText('Original manifest loaded.',{exact:false}).waitFor();
+     assert.equal(sourceCalls,1);assert.equal(recheckCalls,0);
+     await origin.getByRole('button',{name:'Recheck retained source'}).click();
+     await origin.getByText('Original source is unavailable',{exact:false}).waitFor();
+     assert.equal(recheckCalls,1);
+     await audit(snapshots,'#owgObservedSnapshotSource','Original snapshot provenance');
+     await origin.getByRole('button',{name:'Inspect retained source execution'}).click();
+     await snapshots.locator('#owgExplorerEvidence').getByRole('heading',{level:4,name:/^Evidence for /}).waitFor();
+     assert.match(await snapshots.locator('#owgExplorerStatus').textContent(),/Original saved snapshot scope/);
+     assert.equal(saveCalls,1);
+   }finally{await snapshots.close();}
+   assert.deepEqual(errors,[]);
    console.log('Explorer accessibility acceptance passed: WCAG 2.1 A/AA axe audit of candidates and selected step, keyboard-only open/select/inspect, named and tabbable controls, mobile width, no writes.');
  }finally{
    if(browser)await browser.close();server.kill('SIGTERM');

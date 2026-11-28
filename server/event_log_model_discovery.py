@@ -46,7 +46,9 @@ _CHOICE_OPS = {"xor", "loop"}
 
 def discover(log_id: str, case_type: str | None = None, *, noise: float = 0.2, activities: float = 1.0,
              cohort: dict[str, Any] | None = None, _record_snapshot: bool = False,
-             _expected_model_sha256: str | None = None) -> dict[str, Any]:
+             _expected_model_sha256: str | None = None,
+             _pin_projection: bool = False,
+             _expected_projection_sha256: str | None = None) -> dict[str, Any]:
     if not 0 <= float(noise) < 1:
         raise workspace.EventLogWorkspaceError("noise must be a share from 0 up to (not including) 1")
     if not 0 < float(activities) <= 1:
@@ -115,9 +117,11 @@ def discover(log_id: str, case_type: str | None = None, *, noise: float = 0.2, a
                                "Infrequent behaviour below the noise filter is left out."),
         }
         result['process_model_sha256'] = provenance.model_digest(model)
+        if _pin_projection or _record_snapshot:
+            result["effective_input"] = provenance.projected_input(conn)
         if _record_snapshot:
             result['source_snapshot'] = provenance.retain(conn, log_id, workspace._case_type(conn, log_id, case_type),
-                                                         result, _expected_model_sha256)
+                                                         result, _expected_model_sha256, _expected_projection_sha256)
         return result
     return workspace._query(log_id, case_type, run)
 

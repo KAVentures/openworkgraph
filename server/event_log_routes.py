@@ -3710,9 +3710,10 @@ async def event_log_conformance(request: Request, log_id: str,
 def event_log_model_discovery(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
                               noise: float = Query(default=0.2, ge=0, lt=1),
                               activities: float = Query(default=1.0, gt=0, le=1),
+                              pin_projection: bool = Query(default=False),
         cohort: dict[str, Any] = Depends(_case_filter)):
     _require_dashboard(request)
-    return _respond(model_discovery.discover, log_id, case_type, noise=noise, activities=activities, cohort=cohort)
+    return _respond(model_discovery.discover, log_id, case_type, noise=noise, activities=activities, cohort=cohort, _pin_projection=pin_projection)
 
 
 @router.get("/v1/event-logs/{log_id}/model-discovery.ptml")
@@ -3787,6 +3788,38 @@ async def event_log_discovery_draft(request: Request, log_id: str):
         raise HTTPException(403, 'Confirm local retention of discovery snapshot metadata')
     return await run_in_threadpool(_respond, discovery_provenance.record_draft, log_id,
                                    await _json_body(request, 'discovery snapshot'))
+
+
+@router.post("/v1/event-log-discovery/rediscover")
+async def rediscover_saved_process_selection(request: Request,
+                                             workflow_id: str = Query(pattern=r"^[a-zA-Z0-9_-]{1,80}$"),
+                                             revision: int = Query(ge=1),
+                                             retain: bool = Query(default=False)):
+    _require_dashboard(request)
+    if retain and request.headers.get("x-owg-local-storage-confirmed") != "true":
+        raise HTTPException(403, "Confirm local retention of refreshed discovery snapshot metadata")
+    from .local_process_catalog import catalog
+    try:
+        record = catalog.get(workflow_id, revision)
+    except LookupError:
+        raise HTTPException(404, "Process revision unavailable") from None
+    payload = await _json_body(request, "exact rediscovery", strict=True, limit=8192)
+    return await run_in_threadpool(_respond, discovery_provenance.rediscover_saved_selection,
+                                   record, payload, retain_snapshot=retain)
+
+
+@router.post("/v1/event-log-discovery/inspect-selection")
+async def inspect_discovery_selection(request: Request,
+                                      workflow_id: str = Query(pattern=r"^[a-zA-Z0-9_-]{1,80}$"),
+                                      revision: int = Query(ge=1)):
+    _require_dashboard(request)
+    from .local_process_catalog import catalog
+    try:
+        record = catalog.get(workflow_id, revision)
+    except LookupError:
+        raise HTTPException(404, "Process revision unavailable") from None
+    payload = await _json_body(request, "exact discovery selection", strict=True, limit=8192)
+    return await run_in_threadpool(_respond, discovery_provenance.inspect_selection, record, payload)
 
 
 @router.get('/v1/event-log-discovery/process-origin')

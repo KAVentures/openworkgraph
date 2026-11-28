@@ -42,6 +42,7 @@ from . import event_log_source_identity as source_identity
 from . import event_log_object_relationships as object_relationships
 from . import event_log_timestamp_formats as timestamp_formats
 from . import event_log_same_source as same_source
+from . import observed_execution_log_sources as observed_sources
 
 
 def _remember_missing_pandas() -> None:
@@ -187,6 +188,9 @@ CREATE TABLE IF NOT EXISTS log_expiry (
 """
 
 _SCHEMA += source_identity.SCHEMA + object_relationships.SCHEMA
+# Stored structural snapshots keep independent source provenance.
+_SCHEMA += observed_sources.SCHEMA
+
 # Dated notes on a log's timeline (event_log_change_markers), such as "Automation went live".
 _SCHEMA += """
 CREATE TABLE IF NOT EXISTS change_markers (
@@ -267,6 +271,7 @@ def _check_log(conn: duckdb.DuckDBPyConnection, log_id: str) -> dict[str, Any]:
     identity=source_identity.description(conn,log_id)
     if identity:result['source_identity']=identity
     result.update(object_relationships.metadata(conn,log_id))
+    result.update(observed_sources.metadata(conn, log_id))
     return result
 
 
@@ -686,7 +691,11 @@ def append_log(log_id: str, source: IO[bytes], *, source_format: str,
         folder = Path(tmp)
         conn = _connect()
         try:
-            _check_log(conn, log_id)
+            info = _check_log(conn, log_id)
+            if info.get("observed_execution_snapshot"):
+                raise EventLogWorkspaceError(
+                    "Observed execution snapshots preserve their original rows. Create a new event log for additional observations."
+                )
             object_relationships.validate_index(conn,log_id)
             upload = _receive(source, folder)
             conn.execute("BEGIN")
@@ -953,7 +962,7 @@ def delete_log(log_id: str, *, only_if_expired_at: datetime | None = None) -> di
                 from .event_log_agent_access import erase as erase_agent_access
                 erase_agent_access(conn, log_id)
                 for table in ("object_relationships", "event_source_keys", "event_source_namespaces", "discovery_snapshots", "log_appends", "log_quality", "quarantine", "quarantine_decisions", "filter_sets", "object_rule_sets",
-                              "domain_pack_installs", "cohort_metric_definitions", "metric_definitions", "saved_analyses", "signal_snoozes", "signal_reviews", "signal_transitions", "signal_rules", "reference_nets", "case_tags", "case_attribute_upload_changes", "case_attribute_uploads", "event_log_agent_shares", "event_log_agent_tag_grants", "event_log_agent_run_sources", "cost_models", "activity_notes", "event_objects", "events", "objects",
+                              "domain_pack_installs", "cohort_metric_definitions", "metric_definitions", "saved_analyses", "signal_snoozes", "signal_reviews", "signal_transitions", "signal_rules", "reference_nets", "case_tags", "case_attribute_upload_changes", "case_attribute_uploads", "event_log_agent_shares", "event_log_agent_tag_grants", "event_log_agent_run_sources", "observed_execution_log_sources", "cost_models", "activity_notes", "event_objects", "events", "objects",
                               "object_attribute_values",
                               "logs"):
                     conn.execute(f"DELETE FROM {table} WHERE log_id = ?", [log_id])
