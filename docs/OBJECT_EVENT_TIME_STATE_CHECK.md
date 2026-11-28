@@ -105,6 +105,19 @@ be read, updated with `expected_revision`, or deleted with an
 only check settings; result filters, page offsets, results and source event
 data are not stored in them.
 
+## Review outcomes over time
+
+After a check, **Outcome timeline** groups matching events by UTC day, week
+(Monday start), or month. Counts use the current date, status, and exact event
+filters and are pinned to the reviewed append revision. Only non-empty periods
+are displayed. The timeline recomputes the bounded analysis, and more than 1,000
+non-empty periods is refused with a prompt to choose a larger period or window.
+It does not establish source completeness or policy compliance.
+
+The owner-only endpoint is `POST
+/v1/event-logs/{log_id}/object-state-check/timeline`; it accepts the check
+settings, `expected_revision`, `bucket`, and bounded `offset` and `limit`.
+
 ## Find a specific event in a result
 
 After running a check, apply an exact event ID to narrow the displayed result
