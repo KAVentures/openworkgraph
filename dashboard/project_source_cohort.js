@@ -8,6 +8,7 @@ export function mountProjectSourceCohort(host,{api,base,revision,expectations,is
   resource.placeholder='owg:r:… or empty when unknown';resource.maxLength=38;resource.autocomplete='off';
   file.type='file';file.accept='.json,application/json';
   const add=button('Add declared source-check case'),run=button('Reconcile declared cohort'),save=button('Download cohort review JSON');
+  const saveDeclaration=button('Download private cohort declaration JSON');
   const list=el('ul'),result=el('div'),status=el('p','Declare all intended cases, including missing documents.');
   status.setAttribute('role','status');status.setAttribute('aria-live','polite');
   let cases=[],report=null,busy=false,generation=0;
@@ -17,7 +18,7 @@ export function mountProjectSourceCohort(host,{api,base,revision,expectations,is
   function refresh(){
     caseId.disabled=resource.disabled=file.disabled=expectation.disabled=busy;
     add.disabled=busy||!projectSelect.value||!expectation.options.length||cases.length>=25;
-    run.disabled=busy||!projectSelect.value||!cases.length;save.disabled=busy||!report;
+    run.disabled=busy||!projectSelect.value||!cases.length;save.disabled=busy||!report;saveDeclaration.disabled=busy||!cases.length;
     list.replaceChildren();
     for(const entry of cases){
       const row=el('li',entry.case.case_id+' · '+entry.case.expected_operation+' · '+(entry.case.document_sha256?'original document selected':'missing document')+' ');
@@ -80,15 +81,16 @@ export function mountProjectSourceCohort(host,{api,base,revision,expectations,is
       report=value;status.textContent='Cohort reviewed. Historical source state is not a verified business outcome.';
     }catch(e){if(ticket===generation&&isCurrent())status.textContent=e.message;}finally{busy=false;refresh();}
   };
-  save.onclick=()=>{
-    if(!report||busy||!isCurrent())return;
-    const url=URL.createObjectURL(new Blob([JSON.stringify(report,null,2)],{type:'application/json'})),a=el('a');
-    a.href=url;a.download='owg-source-check-cohort-review.json';document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
-  };
+  function download(name,value){
+    const url=URL.createObjectURL(new Blob([JSON.stringify(value,null,2)],{type:'application/json'})),a=el('a');
+    a.href=url;a.download=name;document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
+  }
+  save.onclick=()=>{if(report&&!busy&&isCurrent())download('owg-source-check-cohort-review.json',report);};
+  saveDeclaration.onclick=()=>{if(cases.length&&!busy&&isCurrent())download('owg-private-source-cohort-declaration.json',{expected_idea_revision:revision,cases:cases.map(x=>x.case)});};
   details.append(el('summary','Reconcile source checks for a declared test cohort'),
     el('p','One confirmed terminal operation per case, up to 25 cases. Add missing cases too. Original files are checked against retained export hashes; no provider is contacted. This does not establish cohort completeness, case association or business outcomes.'),
     update,field('Declared case ID',caseId),field('Case terminal expectation',expectation),
     field('Case observed record reference',resource),field('Original case source-check document (optional)',file),
-    add,list,run,status,result,save);
+    add,list,saveDeclaration,run,status,result,save);
   host.append(details);refresh();
 }
