@@ -2750,6 +2750,33 @@ async def event_log_object_process_model_conformance(request: Request, log_id: s
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
+@router.get("/synchronized-object-replay")
+def synchronized_object_replay_page():
+    from pathlib import Path
+    return FileResponse(Path(__file__).resolve().parents[1] / "dashboard" / "synchronized_object_replay.html",
+        media_type="text/html", headers={"Cache-Control":"no-store", "X-Content-Type-Options":"nosniff",
+        "Content-Security-Policy":"default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"})
+
+
+@router.get("/synchronized-object-replay.js")
+def synchronized_object_replay_script():
+    from pathlib import Path
+    return FileResponse(Path(__file__).resolve().parents[1] / "dashboard" / "synchronized_object_replay.js",
+                        media_type="application/javascript", headers={"Cache-Control":"no-store", "X-Content-Type-Options":"nosniff"})
+
+
+@router.post("/v1/event-logs/{log_id}/object-process-model/synchronized-replay")
+async def event_log_synchronized_object_replay(request: Request, log_id: str):
+    """Atomic retained event membership replay with exact pinned evidence."""
+    from . import event_log_synchronized_object_replay as synchronized
+    _require_dashboard(request)
+    spec = await _json_body(request, "synchronized object replay", strict=True,
+                            limit=object_process_model.MAX_REQUEST_BYTES + 4096)
+    result = await run_in_threadpool(_respond, synchronized.review, log_id, spec)
+    _require_dashboard(request)
+    return result
+
+
 @router.post("/v1/event-logs/{log_id}/object-process-model/conformance/lifecycle-review")
 async def event_log_object_lifecycle_review(request: Request, log_id: str):
     """Review exact lifecycle replay populations and their retained event evidence."""
