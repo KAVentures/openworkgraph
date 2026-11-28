@@ -34,7 +34,8 @@ jobs:
         run: |
           python -m pytest --noconftest -q tests/test_prospective_pilot_cohort.py tests/test_pilot_execution.py tests/test_pilot_blinded_batches.py tests/test_pilot_workspace.py tests/test_pilot_reviewer_package.py tests/test_product_value_eval.py
   offline-reviewer-browser:
-    runs-on: ubuntu-latest
+    # Playwright 1.56 does not support Ubuntu 26.04.
+    runs-on: ubuntu-24.04
     timeout-minutes: 12
     steps:
       - uses: actions/checkout@v4
