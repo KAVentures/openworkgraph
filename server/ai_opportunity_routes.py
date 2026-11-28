@@ -22,6 +22,8 @@ from .ai_implementation_planning_routes import router as _planning_router
 router.include_router(_planning_router)
 from .ai_implementation_portfolio_routes import router as _portfolio_link_router
 router.include_router(_portfolio_link_router)
+from .ai_implementation_portfolio_handoff_routes import router as _portfolio_handoff_router
+router.include_router(_portfolio_handoff_router)
 MAX_BYTES = 8 * 1024 * 1024
 _LOCAL_MODEL_SLOT = Lock()
 SCRIPT = Path(__file__).resolve().parents[1] / "dashboard" / "ai_opportunity_handoff.js"
@@ -93,6 +95,11 @@ def trial_script():
 @router.get("/ai-implementation-evidence-picker.js")
 def evidence_picker_script():
     return FileResponse(EVIDENCE_PICKER_SCRIPT, media_type="application/javascript")
+
+
+@router.get("/ai-implementation-portfolio-handoff.js")
+def portfolio_handoff_script():
+    return FileResponse(SCRIPT.with_name("ai_implementation_portfolio_handoff.js"), media_type="application/javascript")
 
 
 @router.post("/v1/ai-opportunity-handoff/prepare-packet")

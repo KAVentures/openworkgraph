@@ -1,4 +1,4 @@
-/* Explicit scenario assumptions; no ranking, portfolio writes or rollout. */
+/* Explicit scenario assumptions and separately confirmed single-idea planning handoff. */
 export function mountImplementationPlanning(host,{getBasis,getBusy,post,lock,download}){
   const el=(tag,text)=>{const n=document.createElement(tag);if(text!==undefined)n.textContent=text;return n;};
   const field=(label,node)=>{const n=el('label',label+' ');n.style.display='block';n.append(node);return n;};
@@ -10,16 +10,17 @@ export function mountImplementationPlanning(host,{getBasis,getBusy,post,lock,dow
   const prepare=button('Prepare planning worklist'),saveTemplate=button('Download blank planning worklist'),compare=button('Compare reviewed scenarios'),savePlan=button('Download reviewed assumptions'),saveReport=button('Download planning review');
   const confirm=el('input');confirm.type='checkbox';
   const status=el('p','Review a complete proposal batch before planning.');status.setAttribute('role','status');status.setAttribute('aria-live','polite');
-  const editor=el('div'),output=el('div'),portfolioOutput=el('div');let template=null,result=null,rows=[],epoch=0,portfolioResult=null;
+  const editor=el('div'),output=el('div'),portfolioOutput=el('div');let template=null,result=null,rows=[],epoch=0,portfolioResult=null,handoffPanel=null;
   const reconcilePortfolio=button('Reconcile with saved portfolio'),savePortfolio=button('Download portfolio reconciliation');
   const portfolioStatus=el('p','Compare reviewed scenarios first.');portfolioStatus.setAttribute('role','status');portfolioStatus.setAttribute('aria-live','polite');
-  function clearPortfolio(){portfolioResult=null;portfolioOutput.replaceChildren();portfolioStatus.textContent='Refresh against the saved portfolio after scenario comparison.';}
+  function clearPortfolio(){portfolioResult=null;portfolioOutput.replaceChildren();portfolioStatus.textContent='Refresh against the saved portfolio after scenario comparison.';handoffPanel?.invalidate();}
   const hex=v=>typeof v==='string'&&/^[a-f0-9]{64}$/.test(v);
   function refresh(){
     const busy=getBusy(),b=getBasis();currency.disabled=busy;prepare.disabled=busy||!b||! /^[A-Z]{3}$/.test(currency.value.trim());
     saveTemplate.disabled=busy||!template;confirm.disabled=busy||!template;compare.disabled=busy||!template||!confirm.checked;
     savePlan.disabled=saveReport.disabled=busy||!result;reconcilePortfolio.disabled=busy||!result;savePortfolio.disabled=busy||!portfolioResult;
     for(const row of rows){row.enabled.disabled=busy;for(const n of row.controls)n.disabled=busy||!row.enabled.checked;}
+    handoffPanel?.refresh();
   }
   function invalidate(){epoch++;template=result=null;clearPortfolio();rows=[];confirm.checked=false;editor.replaceChildren();output.replaceChildren();status.textContent='Prepare a planning worklist from the current reviewed batch.';refresh();}
   function edit(){epoch++;result=null;clearPortfolio();confirm.checked=false;output.replaceChildren();status.textContent='Assumptions changed. Review and confirm again.';refresh();}
@@ -100,5 +101,16 @@ export function mountImplementationPlanning(host,{getBasis,getBusy,post,lock,dow
   saveTemplate.onclick=()=>{if(template&&!getBusy())download('owg-planning-worklist.json','application/json',template.raw);};
   savePlan.onclick=()=>{if(result&&!getBusy())download('owg-planning-assumptions.json','application/json',result.plan_json);};
   saveReport.onclick=()=>{if(result&&!getBusy())download('owg-planning-review.json','application/json',result.report_json);};
-  const details=el('details');details.id='owgImplementationPlanning';details.append(el('summary','Compare implementation economics and dependencies'),el('p','Enter reviewed assumptions, not measured outcomes. Net minutes include review, supervision, rework and escalation; negative is allowed. Blank pairs are unknown. All costs use the same currency. First-year values assume twelve identical operating months. No rankings or combined savings are inferred.'),field('Planning currency code',currency),prepare,saveTemplate,editor,field('I reviewed these assumptions and uncertainties',confirm),compare,status,output,savePlan,saveReport,reconcilePortfolio,portfolioStatus,portfolioOutput,savePortfolio);host.append(details);refresh();return {refresh,invalidate};
+  const handoffHost=el('div');
+  const details=el('details');details.id='owgImplementationPlanning';details.append(el('summary','Compare implementation economics and dependencies'),el('p','Enter reviewed assumptions, not measured outcomes. Net minutes include review, supervision, rework and escalation; negative is allowed. Blank pairs are unknown. All costs use the same currency. First-year values assume twelve identical operating months. No rankings or combined savings are inferred.'),field('Planning currency code',currency),prepare,saveTemplate,editor,field('I reviewed these assumptions and uncertainties',confirm),compare,status,output,savePlan,saveReport,reconcilePortfolio,portfolioStatus,portfolioOutput,savePortfolio,handoffHost);host.append(details);refresh();
+  import('/ai-implementation-portfolio-handoff.js').then(module=>{
+    handoffPanel=module.mountPortfolioPlanningHandoff(handoffHost,{
+      getBasis:()=>portfolioResult&&result&&template?{
+        request:{...template.request,plan_json:result.plan_json,planning_review_sha256:result.planning_review_sha256},
+        report:JSON.parse(portfolioResult.report_json)
+      }:null,getBusy,post,lock,
+      onSaved:()=>{clearPortfolio();portfolioStatus.textContent='Planning saved. Reconcile again to inspect the new revision; refresh the existing portfolio view before further decisions.';refresh();}
+    });
+  }).catch(()=>{handoffHost.textContent='Planning handoff unavailable; existing portfolio controls remain available.';});
+  return {refresh,invalidate};
 }
