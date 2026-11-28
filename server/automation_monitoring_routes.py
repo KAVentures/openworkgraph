@@ -67,6 +67,16 @@ async def get_deployment_portfolio(request: Request, recent_days: int = Query(de
     return await _respond(deployment_portfolio.portfolio, recent_days=recent_days)
 
 
+@router.post("/v1/automation-monitoring/rollout-review")
+async def rollout_review(request: Request):
+    from . import automation_rollout_review as rollout
+    from .event_log_routes import _json_body
+    _require_dashboard(request)
+    spec = await _json_body(request, "version rollout evidence review", strict=True, limit=16384)
+    _require_dashboard(request)
+    return await _respond(rollout.review, spec)
+
+
 @router.get("/v1/automation-monitoring/deployments")
 async def list_deployments(request: Request):
     _require_dashboard(request)
