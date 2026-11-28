@@ -1,5 +1,6 @@
 /* Deadline-first review is browser-local over the already reviewed result. */
 import '/deadline-schedule.js';
+import '/deadline-windows.js';
 export function mount(host,{report,isCurrent}){
   const el=(tag,text)=>{const n=document.createElement(tag);if(text!==undefined)n.textContent=String(text);return n;};
   const button=text=>{const n=el('button',text);n.type='button';n.className='secondary';return n;};
@@ -29,6 +30,34 @@ export function mount(host,{report,isCurrent}){
     for(const text of head){const th=el('th',text);th.scope='col';hr.append(th);}h.append(hr);
     for(const row of rows){const tr=el('tr');row.forEach((v,i)=>{const c=el(i?'td':'th',v??'—');if(!i)c.scope='row';tr.append(c);});b.append(tr);}t.append(h,b);wrap.append(t);return wrap;
   }
+  const windowPanel=el('details');windowPanel.id='owgDependencyDeadlineWindows';
+  windowPanel.append(el('summary','Review dependency deadline windows'),el('p','Find upstream deadline constraints and impossible release/dependency windows before considering limited resources.'));
+  const windowRun=button('Analyze dependency deadline windows'),windowSave=button('Download dependency windows JSON');
+  windowRun.id='owgDependencyWindowsRun';windowSave.disabled=true;
+  const windowStatus=el('p');windowStatus.setAttribute('role','status');
+  const windowOutput=el('div');let windowResult=null;
+  const name=k=>k===null?'—':titles.get(k)||k;
+  const names=ids=>ids.map(name).join(' → ');
+  windowRun.onclick=()=>{
+    if(!isCurrent()||!host.isConnected)return;
+    windowResult=null;windowSave.disabled=true;windowOutput.replaceChildren();
+    try{
+      const data=globalThis.OWGDeadlineWindows.analyze(engine.prepare(report));
+      if(!isCurrent()||!host.isConnected)return;
+      windowOutput.append(el('h4','Release and dependency windows'),
+        el('p',data.all_deadlines_feasible_without_resources?'All declared deadlines are feasible with unlimited resources; actual resource feasibility is separate.':'Impossible even with unlimited resources: '+data.impossible_deadline_idea_ids.map(name).join(', ')),
+        table('Dependency deadline windows',['Opportunity','Earliest start','Earliest finish exclusive','Own deadline','Latest start','Slack days','Controlling deadline','Earliest-start witness','Deadline path','Window status'],data.rows.map(x=>[
+          name(x.idea_id),x.earliest_start_day,x.earliest_finish_day_exclusive,x.own_deadline_day,x.latest_start_for_reachable_deadlines,x.dependency_slack_days,
+          x.controlling_deadline_idea_id===null?'—':name(x.controlling_deadline_idea_id)+' · day '+x.controlling_deadline_day,names(x.earliest_start_witness),names(x.deadline_path),
+          x.precedence_window_infeasible?'Infeasible':x.dependency_slack_days===null?'No reachable deadline':x.dependency_slack_days===0?'Zero slack':'Positive slack'])));
+      for(const s of data.scenarios){const detail=el('details');detail.append(el('summary',s.label+' original schedule start margins'),
+        table(s.label+' start margins',['Opportunity','Original start day','Margin to dependency deadline'],s.rows.map(x=>[name(x.idea_id),x.original_start_day,x.original_start_margin_days])));windowOutput.append(detail);}
+      windowOutput.append(el('p',data.interpretation));
+      windowResult=data;windowSave.disabled=false;windowStatus.textContent='Dependency deadline windows reviewed. No saved plan changed.';
+    }catch(error){windowStatus.textContent=error.message;}
+  };
+  windowSave.onclick=()=>{if(!windowResult||!isCurrent()||!host.isConnected)return;const url=URL.createObjectURL(new Blob([JSON.stringify(windowResult,null,2)],{type:'application/json'})),a=el('a');a.href=url;a.download='owg-dependency-deadline-windows.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);};
+  windowPanel.append(windowRun,windowSave,windowStatus,windowOutput);
   function render(r){
     output.replaceChildren(el('h4','Deadline-first capacity comparison'),el('p','Objective triples are weighted misses / weighted late days / makespan days, in that exact priority order. Compare only under the declared assumptions.'),
       table('Deadline optimization summary',['Design','Original objective','Deadline-first objective','Lower bound (lexicographic)','Proof','All deadlines'],r.scenarios.map(s=>[
@@ -57,5 +86,5 @@ export function mount(host,{report,isCurrent}){
     finally{if(n===serial&&host.isConnected&&isCurrent()){busy=false;controls();}}
   };
   save.onclick=()=>{if(!result||busy||!isCurrent())return;const url=URL.createObjectURL(new Blob([JSON.stringify(result,null,2)],{type:'application/json'})),a=el('a');a.href=url;a.download='owg-deadline-first-schedule.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);};
-  panel.append(fields,confirmLabel,run,save,status,output);host.replaceChildren(panel);invalidate();
+  panel.append(windowPanel,fields,confirmLabel,run,save,status,output);host.replaceChildren(panel);invalidate();
 }
