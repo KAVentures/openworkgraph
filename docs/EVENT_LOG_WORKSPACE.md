@@ -3999,6 +3999,13 @@ separately. Labels match exactly, including commas and whitespace. The saved
 rule lists the completion labels used when checking whether a case is open.
 Changing the draft selection clears its preview; saving does not evaluate it.
 
+### Correcting case notes
+
+Use **Edit** beside a case note to correct its text, then save or cancel. The
+original creation time and case association stay the same. If another view has
+changed the note since editing began, saving is refused; reload the note to
+review the current text. Notes remain local and excluded from AI sharing.
+
 ### Reusing activity groupings across logs
 
 Under **Group activities**, download a saved mapping as JSON. In another log,

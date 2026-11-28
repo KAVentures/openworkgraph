@@ -1304,6 +1304,21 @@ async def event_log_add_case_note(request: Request, log_id: str, compact: bool =
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
+@router.post("/v1/event-logs/{log_id}/case-notes/{note_id}/update")
+async def event_log_update_case_note(request: Request, log_id: str, note_id: str):
+    from . import event_log_case_notes as case_notes
+    _require_dashboard(request)
+    spec = await _json_body(request, "case note update", strict=True, limit=16384)
+    try:
+        result = await run_in_threadpool(case_notes.update, log_id, note_id, spec)
+    except case_notes.NoteConflict as exc:
+        raise HTTPException(409, str(exc)) from None
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    _require_dashboard(request)
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
 @router.post("/v1/event-logs/{log_id}/case-notes/{note_id}/delete")
 async def event_log_delete_case_note(request: Request, log_id: str, note_id: str, compact: bool = Query(default=False)):
     from . import event_log_case_notes as case_notes
