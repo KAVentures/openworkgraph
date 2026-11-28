@@ -19,6 +19,8 @@ from . import event_log_workspace as workspace
 from .local_auth import dashboard_session_valid
 
 router = APIRouter()
+from .automation_incident_batch_routes import router as incident_batch_router
+router.include_router(incident_batch_router)
 _SCRIPT = Path(__file__).resolve().parents[1] / "dashboard" / "automation_monitoring.js"
 
 

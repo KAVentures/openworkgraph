@@ -260,7 +260,9 @@
         }
         list.appendChild(box);
       });
-      body.replaceChildren(el('div','Showing '+visible.length+' of '+data.incidents.length+' incidents in scope · '+data.counts.open+' open · '+data.counts.acknowledged+' acknowledged · '+data.counts.resolved+' resolved. Counts reflect the selected scope before filters. Triage is version-checked; nothing is re-run or replayed.','muted'),visible.length?list:el('div','No incidents match these filters.','muted'));
+      const batchHost=el('div');
+      body.replaceChildren(el('div','Showing '+visible.length+' of '+data.incidents.length+' incidents in scope · '+data.counts.open+' open · '+data.counts.acknowledged+' acknowledged · '+data.counts.resolved+' resolved. Counts reflect the selected scope before filters. Triage is version-checked; nothing is re-run or replayed.','muted'),batchHost,visible.length?list:el('div','No incidents match these filters.','muted'));
+      if(visible.some(i=>i.status==='open'))import('/automation-incident-batch.js').then(m=>{if(batchHost.isConnected&&version===incidentVersion&&pick.value===selected)m.mount(batchHost,{incidents:visible,api,refresh:refreshList,deploymentName:id=>deployments.find(d=>d.deployment_id===id)?.name});}).catch(()=>{if(batchHost.isConnected)batchHost.textContent='Batch acknowledgement unavailable; individual incident review remains available.';});
       }
       const reload=button('Refresh incidents','secondary');reload.id='owgMonitorIncidentRefresh';reload.onclick=refreshList;
       incidentHost.replaceChildren(el('h3','Incidents'),controls,reload,body);draw();
