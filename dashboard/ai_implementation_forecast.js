@@ -8,9 +8,14 @@ export function mountImplementationForecast(host,{getBasis,getBusy,post,lock,dow
   const checks=Object.fromEntries(keys.map(([k])=>{const n=el('input');n.type='checkbox';return [k,n];}));
   const run=button('Compare forecast with retained quality-benefit scenario'),save=button('Download forecast review');
   const status=el('p','Reconcile an implemented candidate with the saved portfolio first.');status.setAttribute('role','status');status.setAttribute('aria-live','polite');
-  const output=el('div');let snapshot=null,result=null,epoch=0;
+  const output=el('div');let snapshot=null,result=null,epoch=0,forecastRequest=null,feedback=null,revision=null;
+  const prepareFeedback=button('Prepare improvement feedback'),saveFeedback=button('Download improvement feedback'),reviewRevision=button('Review proposed revision'),saveRevision=button('Download revision review');
+  const revisionFile=el('input');revisionFile.type='file';revisionFile.accept='.json,application/json';
+  const improvementStatus=el('p','Complete a forecast review before preparing feedback.');improvementStatus.setAttribute('role','status');improvementStatus.setAttribute('aria-live','polite');
+  const revisionOutput=el('div');
+  function clearImprovement(){forecastRequest=feedback=revision=null;revisionFile.value='';revisionOutput.replaceChildren();improvementStatus.textContent='Complete a forecast review before preparing feedback.';}
   const hex=v=>typeof v==='string'&&/^[0-9a-f]{64}$/.test(v);
-  function clear(){epoch++;result=null;output.replaceChildren();}
+  function clear(){epoch++;result=null;output.replaceChildren();clearImprovement();}
   function invalidate(){clear();snapshot=null;file.value='';note.value='';for(const n of Object.values(checks))n.checked=false;status.textContent='Refresh the saved portfolio before comparing outcomes.';refresh();}
   function refresh(){
     const b=getBasis(),busy=getBusy(),pin=b?.report.reconciliation_sha256??null;
@@ -22,6 +27,8 @@ export function mountImplementationForecast(host,{getBasis,getBusy,post,lock,dow
     }
     for(const n of [pick,file,note,...Object.values(checks)])n.disabled=busy||!b;
     run.disabled=busy||!b||!pick.value||!file.files?.[0]||!note.value.trim();save.disabled=busy||!result;
+    prepareFeedback.disabled=busy||!forecastRequest;saveFeedback.disabled=busy||!feedback;
+    revisionFile.disabled=busy||!feedback;reviewRevision.disabled=busy||!feedback||!revisionFile.files?.[0];saveRevision.disabled=busy||!revision;
   }
   pick.addEventListener('change',()=>{file.value='';note.value='';for(const n of Object.values(checks))n.checked=false;clear();status.textContent='Candidate changed. Select its exact quality-benefit export.';refresh();});
   for(const n of [file,note,...Object.values(checks)])n.addEventListener('input',()=>{clear();status.textContent='Inputs changed. Recompute the forecast review.';refresh();});
@@ -33,7 +40,8 @@ export function mountImplementationForecast(host,{getBasis,getBusy,post,lock,dow
       const raw=new TextDecoder('utf-8',{fatal:true,ignoreBOM:true}).decode(await f.arrayBuffer()),doc=JSON.parse(raw);
       if(doc.format!=='openworkgraph.quality-adjusted-benefit-scenario.v1'||doc.idea_id!==row.saved_idea.idea_id||doc.idea_revision!==row.saved_idea.revision)throw Error('Quality export must match the selected saved idea revision.');
       const comparability={...Object.fromEntries(keys.map(([k])=>[k,checks[k].checked])),basis_note:note.value};
-      const r=await post('/v1/ai-opportunity-handoff/planning-forecast-review',{...b.request,reconciliation_sha256:b.report.reconciliation_sha256,item_index:index,quality_report_json:raw,comparability});
+      const req={...b.request,reconciliation_sha256:b.report.reconciliation_sha256,item_index:index,quality_report_json:raw,comparability};
+      const r=await post('/v1/ai-opportunity-handoff/planning-forecast-review',req);
       if(ticket!==epoch)return;
       if(r.format!=='openworkgraph.ai-implementation-forecast-result.v1'||r.portfolio_written!==false||r.execution_authorized!==false||!hex(r.forecast_review_sha256)||typeof r.report_json!=='string')throw Error('Unexpected forecast result.');
       const q=JSON.parse(r.report_json),names=['monthly_case_volume','eligible_share','monthly_net_human_hours','monthly_incremental_nonlabor_cost','capacity_value_per_hour','one_time_implementation_cost','monthly_conditional_net_value'];
@@ -43,9 +51,39 @@ export function mountImplementationForecast(host,{getBasis,getBusy,post,lock,dow
       output.append(el('h4','Quality and adoption gates'),el('p',q.all_declared_gates_met?'All declared gates met; not proof of quality.':'Not all declared gates met.'),el('p','Whole-population quality threshold: '+q.whole_population_quality_threshold_status+'.'));
       for(const g of q.review_gates)output.append(el('p',g.gate+' — '+g.status));
       output.append(el('p',q.selected_measurement_ids.length+' selected and '+q.excluded_measurement_ids.length+' excluded measurement periods. '+q.interpretation));
-      result=r;status.textContent='Forecast review complete. Review SHA-256: '+r.forecast_review_sha256+'.';
+      result=r;forecastRequest={...req,forecast_review_sha256:r.forecast_review_sha256};status.textContent='Forecast review complete. Review SHA-256: '+r.forecast_review_sha256+'.';
     }catch(e){if(ticket===epoch){output.replaceChildren();status.textContent=e.message;}}finally{lock(false);refresh();}
   };
   save.onclick=()=>{if(result&&!getBusy())download('owg-forecast-review.json','application/json',result.report_json);};
-  const details=el('details');details.id='owgImplementationForecast';details.append(el('summary','Compare implementation forecast with retained results'),el('p','For an implemented idea, first download Scenario JSON from its existing quality and adoption panel. Select the matching original export here. Check only definitions and scope you have independently reviewed as comparable; unchecked comparisons stay explicitly unresolved. No verified financial or business-outcome claim.'),field('Implemented candidate',pick),field('Original quality-benefit scenario JSON',file),...keys.map(([k,label])=>field('Comparable: '+label,checks[k])),field('Comparability basis and uncertainty',note),run,status,output,save);host.append(details);refresh();return {refresh,invalidate};
+  prepareFeedback.onclick=async()=>{
+    if(prepareFeedback.disabled||!forecastRequest||!result)return;
+    const request=forecastRequest,forecast=JSON.parse(result.report_json),ticket=++epoch;
+    feedback=revision=null;revisionFile.value='';revisionOutput.replaceChildren();lock(true);
+    improvementStatus.textContent='Recomputing retained results and original proposal for the feedback packet.';
+    try{
+      const r=await post('/v1/ai-opportunity-handoff/improvement-feedback',request);if(ticket!==epoch)return;
+      if(r.format!=='openworkgraph.ai-implementation-improvement-feedback-result.v1'||r.portfolio_written!==false||r.execution_authorized!==false||!hex(r.feedback_sha256)||typeof r.feedback_json!=='string')throw Error('Unexpected improvement feedback response.');
+      const q=JSON.parse(r.feedback_json);
+      if(q.format!=='openworkgraph.ai-implementation-improvement-feedback.v1'||q.feedback_sha256!==r.feedback_sha256||q.packet_sha256!==forecast.packet_sha256||q.original_proposal_sha256!==forecast.proposal_sha256||q.forecast_review_sha256!==forecast.forecast_review_sha256||q.original_evidence_required!==true||q.human_review_required!==true||['external_sharing_authorized','execution_authorized','portfolio_written','business_outcomes_verified','savings_verified'].some(k=>q[k]!==false))throw Error('Unexpected feedback lineage or claims.');
+      feedback=r;improvementStatus.textContent='Feedback prepared. Review the downloaded file locally before sharing it with an authorized AI alongside the original evidence. Feedback SHA-256: '+r.feedback_sha256+'.';
+    }catch(e){if(ticket===epoch)improvementStatus.textContent=e.message;}finally{lock(false);refresh();}
+  };
+  saveFeedback.onclick=()=>{if(feedback&&!getBusy())download('owg-improvement-feedback.json','application/json',feedback.feedback_json);};
+  revisionFile.addEventListener('change',()=>{epoch++;revision=null;revisionOutput.replaceChildren();improvementStatus.textContent='Review the new revision against the exact feedback.';refresh();});
+  reviewRevision.onclick=async()=>{
+    const f=revisionFile.files?.[0];if(reviewRevision.disabled||!feedback||!forecastRequest||!f)return;
+    const request=forecastRequest,pinned=feedback,ticket=++epoch;revision=null;revisionOutput.replaceChildren();lock(true);
+    try{
+      if(!f.size||f.size>512*1024)throw Error('Select one revised proposal of at most 512 KiB.');
+      const raw=new TextDecoder('utf-8',{fatal:true,ignoreBOM:true}).decode(await f.arrayBuffer());
+      const r=await post('/v1/ai-opportunity-handoff/improvement-revision',{...request,feedback_sha256:pinned.feedback_sha256,revised_proposal_json:raw});if(ticket!==epoch)return;
+      if(r.format!=='openworkgraph.ai-implementation-improvement-review-result.v1'||r.portfolio_written!==false||r.execution_authorized!==false||!hex(r.revision_review_sha256)||typeof r.report_json!=='string')throw Error('Unexpected revision response.');
+      const q=JSON.parse(r.report_json),original=JSON.parse(pinned.feedback_json);
+      if(q.format!=='openworkgraph.ai-implementation-improvement-review.v1'||q.revision_review_sha256!==r.revision_review_sha256||q.feedback_sha256!==pinned.feedback_sha256||q.packet_sha256!==original.packet_sha256||q.original_proposal_sha256!==original.original_proposal_sha256||!hex(q.revised_proposal_sha256)||q.structural_review?.proposal_sha256!==q.revised_proposal_sha256||q.human_review_required!==true||['improvement_verified','policy_preservation_verified','semantic_correctness_verified','portfolio_written','workflow_replaced','execution_authorized','external_sharing_authorized'].some(k=>q[k]!==false)||!Array.isArray(q.changed_fields))throw Error('Unexpected revision lineage or claims.');
+      revisionOutput.append(el('p','Changed fields: '+q.changed_fields.join(', ')),el('p','Original questions removed: '+q.removed_question_count+'; original approval requirements removed: '+q.removed_approval_requirement_count+'. Inspect each removal.'),el('p','Structural review only. No verified improvement or workflow replacement. Use the existing individual review, shadow testing and approval path for the original revised file.'));
+      revision=r;improvementStatus.textContent='Revision structurally reviewed. Review SHA-256: '+r.revision_review_sha256+'.';
+    }catch(e){if(ticket===epoch){revisionOutput.replaceChildren();improvementStatus.textContent=e.message;}}finally{lock(false);refresh();}
+  };
+  saveRevision.onclick=()=>{if(revision&&!getBusy())download('owg-improvement-revision-review.json','application/json',revision.report_json);};
+  const details=el('details');details.id='owgImplementationForecast';details.append(el('summary','Compare implementation forecast with retained results'),el('p','For an implemented idea, first download Scenario JSON from its existing quality and adoption panel. Select the matching original export here. Check only definitions and scope you have independently reviewed as comparable; unchecked comparisons stay explicitly unresolved. No verified financial or business-outcome claim.'),field('Implemented candidate',pick),field('Original quality-benefit scenario JSON',file),...keys.map(([k,label])=>field('Comparable: '+label,checks[k])),field('Comparability basis and uncertainty',note),run,status,output,save,el('h4','Improve the implementation with external AI'),el('p','The feedback contains the original proposal and conditional comparisons, not raw logs. It may still be sensitive. No automatic external sharing or AI request.'),prepareFeedback,saveFeedback,field('Revised proposal JSON',revisionFile),reviewRevision,improvementStatus,revisionOutput,saveRevision);host.append(details);refresh();return {refresh,invalidate};
 }
