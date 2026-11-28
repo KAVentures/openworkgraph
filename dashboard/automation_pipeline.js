@@ -1229,6 +1229,15 @@
     };
     card.append(row,resumeSection,auditSection,tools,planningFilters,status,counts,portfolioButton,portfolioHost,budgetScenarioButton,budgetScenarioHost,benefitOverlapButton,benefitOverlapHost,benefitReadinessButton,benefitReadinessHost,dependencyScheduleButton,dependencyScheduleHost,capacityButton,capacityHost,viewCount,list,comparison,detail);
     panel.appendChild(card);
+    let campaignPanel=null;
+    const campaignHost=el('div');card.insertBefore(campaignHost,portfolioButton);
+    import('/ai-implementation-campaign.js').then(module=>{
+      campaignPanel=module.mountImplementationCampaign(campaignHost,{
+        loadIdeas:async()=>{const r=await (await api('/v1/automation-pipeline')).json();return r.ideas;},
+        openIdea:id=>show(id),
+        download:(name,body)=>{const url=URL.createObjectURL(new Blob([body],{type:'application/json'}));const a=el('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}
+      });
+    }).catch(()=>{campaignHost.textContent='Implementation campaign unavailable; existing portfolio remains available.';});
     const aiHandoffHost=el('div');card.insertBefore(aiHandoffHost,row);
     const nativeSkillHost=el('div');card.insertBefore(nativeSkillHost,row);
     const nativeSkillReady=import('/native-skill-download.js')
@@ -1646,6 +1655,7 @@
     }
 
     async function refresh(){
+      campaignPanel?.invalidate();
       clearCumulative('Portfolio review cleared; explicitly check again after the list refresh.');
       capacityGeneration++;if(capacityHost.childNodes.length)capacityHost.replaceChildren(el('p','Resource plan cleared; reload the portfolio before preparing another scenario.','muted'));
       if(dependencyScheduleHost.childNodes.length)dependencyScheduleHost.replaceChildren(el('p','Dependency review cleared; run it again after the portfolio refresh.','muted'));
