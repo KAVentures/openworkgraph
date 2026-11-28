@@ -9,8 +9,8 @@ get_workflow_knowledge(query="invoice approval", limit=10)
 get_workflow_knowledge(summary_only=true, limit=20)
 ```
 
-Discovery reads the existing authorized latest-record inventory (at most
-100 records). All case-folded literal query terms must occur somewhere in
+Discovery reads one page of the existing authorized latest-record inventory
+(up to 100 records per request; set scan_limit to reduce local read size). All case-folded literal query terms must occur somewhere in
 the returned workflow ID, title, process goal or procedure. Up to eight
 terms and 200 query characters are supported. This is deterministic
 navigation, not semantic matching, ranking, or a full catalog index. The
@@ -20,7 +20,11 @@ matching snippets are added to the shortlist. The underlying local MCP
 service still reads the bounded inventory through the existing API.
 
 The response distinguishes source inventory truncation and shortlist
-truncation. Absence of a match is not proof of absence. For relevant
+truncation. Follow next_after with the same query and optional scan_limit to
+continue, including after a zero-match page. When matches are truncated the
+cursor resumes after the last returned match, not the last scanned record.
+Pages are separate reads rather than an atomic snapshot; new or modified
+records can change search results. Absence of a match is not proof of absence. For relevant
 candidates, call the original `get_workflow_knowledge(workflow_id=...)`
 without discovery arguments and inspect the returned revision and digest.
 The shortlist digest is a reference, not independently verified content.
@@ -36,7 +40,7 @@ its own stronger local digest checks; this MCP mode does not produce that
 exact companion. No change to cloud gateway or public plugin contracts
 is made by this increment.
 
-Run `python -m pytest -q tests/test_knowledge_discovery.py tests/test_knowledge_discovery_registration.py`.
+Run `python -m pytest -q tests/test_knowledge_discovery.py tests/test_knowledge_discovery_page.py tests/test_knowledge_discovery_registration.py`.
 The pure helper tests are independent of MCP installation. The registration
 test exercises the actual registration function using substituted transport
 and authorization, not a live installed connector. Full local MCP transport
