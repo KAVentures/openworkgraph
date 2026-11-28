@@ -902,6 +902,166 @@
         root.replaceChildren(heading,description,controls,frontierControls,query,options,run,download,status,out);
       }catch(e){if(active())root.replaceChildren(el('p',e.message,'muted'));}
     };
+    const capacityButton=button('Plan resource-constrained implementation','secondary');
+    capacityButton.id='owgPipelineResourceSchedule';
+    const capacityHost=el('div');capacityHost.id='owgPipelineResourceScheduleResult';
+    let capacityGeneration=0;
+    capacityButton.onclick=async()=>{
+      const generation=++capacityGeneration, root=el('section');capacityHost.replaceChildren(root);
+      const active=()=>generation===capacityGeneration&&root.isConnected;
+      root.append(el('p','Loading exact opportunity revisions…','muted'));
+      try{
+        const inv=await(await api('/v1/automation-pipeline/resource-schedule/inventory')).json();
+        if(!active())return;
+        const chosen=new Map(), options=el('div'), output=el('div'), status=el('p');
+        status.setAttribute('role','status');
+        const find=input('owgCapacityFind','search','Find opportunities');
+        find.setAttribute('aria-label','Find implementation opportunities');
+        const pools=el('textarea');pools.id='owgCapacityPools';pools.rows=3;pools.style.width='100%';
+        pools.placeholder='{"engineering":2,"operations":1}';
+        const alternatives=el('textarea');alternatives.id='owgCapacityAlternatives';alternatives.rows=3;alternatives.style.width='100%';
+        alternatives.value='[]';
+        const prepare=button('Prepare reviewed capacity input','secondary'),run=button('Evaluate implementation schedules','secondary'),
+          save=button('Download schedule report','secondary');
+        prepare.id='owgCapacityPrepare';run.id='owgCapacityRun';save.id='owgCapacityDownload';
+        const reviewed=el('textarea');reviewed.id='owgCapacityReviewed';reviewed.readOnly=true;reviewed.rows=9;reviewed.style.width='100%';
+        run.disabled=save.disabled=true;
+        let version=0, draft=null, report=null;
+        function invalidate(){
+          version++;draft=report=null;reviewed.value='';run.disabled=save.disabled=true;output.replaceChildren();
+          status.textContent='Review assumptions and prepare the exact input again.';
+        }
+        const label=(title,node)=>{const wrapper=el('label',title+' ');wrapper.append(node);return wrapper;};
+        const number=(name,min,max,value='')=>{
+          const node=el('input');node.type='number';node.min=String(min);node.max=String(max);node.step='1';
+          node.value=value;node.setAttribute('aria-label',name);node.oninput=invalidate;return node;
+        };
+        function drawChoices(){
+          options.replaceChildren();
+          const term=find.value.toLowerCase(), eligible=inv.ideas.filter(i=>['idea','assessing','approved','on_hold'].includes(i.state));
+          const matches=eligible.filter(i=>(i.title+' '+i.idea_id).toLowerCase().includes(term));
+          options.append(el('p',matches.length+' matching opportunities; showing up to 100. Selected: '+[...chosen.values()].filter(x=>x.check.checked).length+'.','muted'));
+          for(const idea of matches.slice(0,100)){
+            let c=chosen.get(idea.idea_id);
+            if(!c){
+              const check=el('input');check.type='checkbox';check.setAttribute('aria-label','Schedule '+idea.title);
+              const pool=el('input');pool.type='text';pool.maxLength=40;pool.placeholder='engineering';
+              pool.setAttribute('aria-label','Resource pool for '+idea.title);pool.oninput=invalidate;
+              const duration=number('Duration days for '+idea.title,1,180),units=number('Resource units for '+idea.title,1,50),
+                release=number('Release day for '+idea.title,0,730,'0'),deadline=number('Deadline day for '+idea.title,1,730);
+              const controls=[pool,duration,units,release,deadline];controls.forEach(node=>node.disabled=true);
+              check.onchange=()=>{controls.forEach(node=>node.disabled=!check.checked);invalidate();};
+              c={idea,check,pool,duration,units,release,deadline};chosen.set(idea.idea_id,c);
+            }
+            const box=el('fieldset');box.append(el('legend',idea.title),label('Include opportunity',c.check),
+              el('p',idea.idea_id+' · revision '+idea.revision+' · '+idea.state+' · declared team '+(idea.team||'none'),'muted'),
+              label('Resource pool',c.pool),label('Duration days',c.duration),label('Units throughout task',c.units),
+              label('Earliest start day',c.release),label('Deadline day (optional)',c.deadline));
+            if(idea.depends_on.length)box.append(el('p','Prerequisites: '+idea.depends_on.map(id=>inv.ideas.find(i=>i.idea_id===id)?.title||id).join('; '),'muted'));
+            options.append(box);
+          }
+        }
+        find.oninput=drawChoices;pools.oninput=alternatives.oninput=invalidate;drawChoices();
+        prepare.onclick=()=>{
+          invalidate();
+          try{
+            const selected=[...chosen.values()].filter(c=>c.check.checked);
+            if(!selected.length||selected.length>30)throw Error('Select 1–30 opportunities and include every unfinished prerequisite.');
+            const integer=(node,name,optional=false)=>{
+              if(!node.value){if(optional)return null;throw Error('Enter '+name+' for each selected opportunity.');}
+              const value=Number(node.value);
+              if(!Number.isInteger(value)||value<Number(node.min)||value>Number(node.max))throw Error('Invalid '+name+'.');
+              return value;
+            };
+            const tasks=selected.map(c=>{
+              if(!/^[A-Za-z0-9][A-Za-z0-9_-]{0,39}$/.test(c.pool.value))throw Error('Enter an exact pool identifier for each selected opportunity.');
+              return {idea_id:c.idea.idea_id,revision:c.idea.revision,pool:c.pool.value,
+                duration_days:integer(c.duration,'duration'),units:integer(c.units,'resource units'),
+                release_day:integer(c.release,'release day'),deadline_day:integer(c.deadline,'deadline',true)};
+            });
+            draft={format:'openworkgraph.portfolio-resource-schedule.v1',snapshot_sha256:inv.snapshot_sha256,
+              tasks,capacities:JSON.parse(pools.value),alternatives:JSON.parse(alternatives.value)};
+            reviewed.value=JSON.stringify(draft,null,2);run.disabled=false;
+            status.textContent='Review the exact assumptions above, then evaluate. No opportunity will be modified.';
+          }catch(error){status.textContent=error.message;}
+        };
+        const table=(headers,rows)=>{
+          const wrap=el('div',null,'table-wrap'), table=el('table'),head=el('thead'),hr=el('tr'),body=el('tbody');
+          headers.forEach(h=>{const cell=el('th',h);cell.scope='col';hr.append(cell);});head.append(hr);
+          for(const row of rows){const tr=el('tr');row.forEach(value=>tr.append(el('td',value??'—')));body.append(tr);}
+          table.append(head,body);wrap.append(table);return wrap;
+        };
+        const timeline=(scenario,name)=>{
+          const chart=el('div');chart.setAttribute('role','group');chart.setAttribute('aria-label','Relative planning-day timeline for '+scenario.label);
+          chart.append(el('p','Day 0 to '+scenario.makespan_days+'; bar positions show relative time, not calendar dates. Exact dates are in the table below.','muted'));
+          for(const row of scenario.schedule){
+            const item=el('div');item.style.cssText='display:grid;grid-template-columns:minmax(0,1fr) minmax(0,2fr);gap:8px;align-items:center;margin:5px 0';
+            const title=el('span',name(row.idea_id)+' · '+row.pool);title.style.overflowWrap='anywhere';
+            const track=el('div');track.style.cssText='height:22px;border:1px solid var(--line);border-radius:4px;position:relative;background:var(--soft)';
+            const bar=el('div');bar.style.cssText='height:100%;position:absolute;border-radius:3px;background:var(--green)';
+            bar.style.left=(100*row.start_day/scenario.makespan_days)+'%';
+            bar.style.width=(100*row.duration_days/scenario.makespan_days)+'%';
+            bar.title='Day '+row.start_day+' to '+row.finish_day_exclusive+' (exclusive)';
+            track.setAttribute('aria-hidden','true');track.append(bar);item.append(title,track);chart.append(item);
+          }
+          return chart;
+        };
+        run.onclick=async()=>{
+          if(!draft)return;
+          const n=++version, spec=draft;report=null;save.disabled=true;run.disabled=true;output.replaceChildren();
+          status.textContent='Evaluating feasible schedules and makespan bounds…';
+          try{
+            const data=await(await api('/v1/automation-pipeline/resource-schedule',{method:'POST',
+              headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)})).json();
+            if(!active()||n!==version)return;
+            if(data.snapshot_sha256!==inv.snapshot_sha256)throw Error('Unexpected portfolio snapshot.');
+            report=data;save.disabled=false;
+            const titles=new Map(data.selected_ideas.map(i=>[i.idea_id,i.title]));
+            const name=id=>titles.get(id)||id;
+            status.textContent=data.blockers.length?'Selected portfolio has unresolved prerequisite blockers.':'Schedule scenarios evaluated. No saved plan changed.';
+            if(data.blockers.length){
+              output.append(el('h4','Resolve prerequisite blockers'));
+              for(const b of data.blockers)output.append(el('p',(b.idea_id?name(b.idea_id)+': ':'')+b.code.replaceAll('_',' ')+(b.dependency_id?' · '+name(b.dependency_id):'')));
+            }
+            if(data.scenarios.length){
+              output.append(el('h4','Resource capacity comparison'),table(
+                ['Design','Makespan (days)','Optimum bounds','Proof','Deadline misses','Change vs baseline'],
+                data.scenarios.map(s=>[s.label,s.makespan_days,s.optimization?s.optimization.lower_bound_days+'–'+s.optimization.upper_bound_days:null,
+                  s.optimization?(s.optimization.optimal_makespan_proven?'Proven makespan':'Feasible heuristic'):s.status.replaceAll('_',' '),
+                  s.deadline_misses_in_returned_schedule,s.makespan_change_vs_baseline_days])));
+              for(const s of data.scenarios){
+                const section=el('details');section.append(el('summary',s.label+' schedule and resource load'));
+                if(!s.schedule){section.append(el('p','Demand exceeds capacity for: '+s.oversized_task_ids.map(name).join('; ')));output.append(section);continue;}
+                section.append(el('p','Resource-free precedence bound '+s.resource_free_precedence_bound_days+
+                  ' days; returned makespan '+s.makespan_days+' days. '+s.deadline_misses_even_without_resource_constraints+
+                  ' declared deadlines missed even without resource constraints.','muted'),timeline(s,name),
+                  table(['Opportunity','Pool','Units','Start day','Finish (exclusive)','Duration','Wait after prerequisites','Deadline','Late days','Precedence slack'],
+                    s.schedule.map(t=>[name(t.idea_id),t.pool,t.units,t.start_day,t.finish_day_exclusive,t.duration_days,
+                      t.delay_after_dependency_ready_days,t.deadline_day,t.deadline_lateness_days,t.resource_free_total_slack_days])),
+                  table(['Pool','Capacity','Peak','Used unit-days','Available unit-days','Utilization','Fully occupied days'],
+                    s.resource_load.map(p=>[p.pool,p.capacity_units,p.peak_units,p.used_unit_days,p.available_unit_days,
+                      (p.utilization*100).toFixed(1)+'%',p.fully_occupied_days])),
+                  el('p','Optimum change bounds versus baseline: '+(s.optimal_makespan_change_bounds_days?s.optimal_makespan_change_bounds_days.join(' to ')+' days.':'Unavailable because the baseline is infeasible.'),'muted'));
+                output.append(section);
+              }
+            }
+            output.append(el('p',data.interpretation,'muted'));
+          }catch(error){if(active()&&n===version)status.textContent=error.message;}
+          finally{if(active()&&n===version)run.disabled=false;}
+        };
+        save.onclick=()=>{
+          if(!report)return;
+          const url=URL.createObjectURL(new Blob([JSON.stringify(report,null,2)],{type:'application/json'}));
+          const a=el('a');a.href=url;a.download='owg-portfolio-resource-schedule.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
+        };
+        root.replaceChildren(el('h4','Resource-constrained implementation planning'),
+          el('p','Select opportunities and enter explicit uninterrupted planning-day durations and units of one resource pool. Include unfinished prerequisites. No default durations or capacity are assumed. Deadlines are diagnostics; only makespan is optimized.','muted'),
+          find,options,field('Baseline pool capacities (JSON object)',pools),
+          field('Optional alternatives (JSON array of label and capacities objects)',alternatives),
+          el('p','Example alternative: [{"label":"More engineering","capacities":{"engineering":3,"operations":1}}]. Every alternative uses the same pools.','muted'),
+          prepare,field('Exact reviewed input',reviewed),run,save,status,output);
+      }catch(error){if(active())root.replaceChildren(el('p',error.message,'muted'));}
+    };
     const benefitOverlapButton=button('Review overlapping benefit evidence','secondary');
     benefitOverlapButton.id='owgPipelineBenefitOverlap';
     const benefitOverlapHost=el('div');
@@ -1067,7 +1227,7 @@
       }catch(e){if(generation===refreshGeneration)dependencyScheduleHost.replaceChildren(el('p',e.message,'muted'));}
       finally{dependencyScheduleButton.disabled=false;}
     };
-    card.append(row,resumeSection,auditSection,tools,planningFilters,status,counts,portfolioButton,portfolioHost,budgetScenarioButton,budgetScenarioHost,benefitOverlapButton,benefitOverlapHost,benefitReadinessButton,benefitReadinessHost,dependencyScheduleButton,dependencyScheduleHost,viewCount,list,comparison,detail);
+    card.append(row,resumeSection,auditSection,tools,planningFilters,status,counts,portfolioButton,portfolioHost,budgetScenarioButton,budgetScenarioHost,benefitOverlapButton,benefitOverlapHost,benefitReadinessButton,benefitReadinessHost,dependencyScheduleButton,dependencyScheduleHost,capacityButton,capacityHost,viewCount,list,comparison,detail);
     panel.appendChild(card);
 
     let latestIdeas=[],refreshGeneration=0,resumeGeneration=0,auditGeneration=0,auditPageIndex=0,auditAbort=null;
@@ -1476,6 +1636,7 @@
 
     async function refresh(){
       clearCumulative('Portfolio review cleared; explicitly check again after the list refresh.');
+      capacityGeneration++;if(capacityHost.childNodes.length)capacityHost.replaceChildren(el('p','Resource plan cleared; reload the portfolio before preparing another scenario.','muted'));
       if(dependencyScheduleHost.childNodes.length)dependencyScheduleHost.replaceChildren(el('p','Dependency review cleared; run it again after the portfolio refresh.','muted'));
       const generation=++refreshGeneration;
       const requested=filter.value;
