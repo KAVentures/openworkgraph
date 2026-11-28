@@ -23,11 +23,13 @@ relationships, audit evidence or legal compliance.
 """
 from __future__ import annotations
 
-from typing import Annotated, Any, Literal, TypeVar, Union
+import csv
+from typing import Annotated, Any, IO, Literal, TypeVar, Union
 
 import duckdb
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, ValidationError, field_validator
 from shared.event_log_formats import _exact_key,EventLogFormatError
+from shared.spreadsheet_review import review_cell
 
 from . import event_log_workspace as workspace
 from .event_log_analytics import _wilson
@@ -114,6 +116,12 @@ class _ViolationSpec(_Strict):
     expected_graph: _GraphPin | None = None
     after: tuple[Annotated[str, Field(max_length=200)], Annotated[str, Field(max_length=200)]] | None = None
     limit: StrictInt = Field(default=50, ge=1, le=100)
+
+
+class _ViolationExportSpec(_Strict):
+    rule: Rule
+    expected_revision: StrictInt = Field(ge=0)
+    expected_graph: _GraphPin | None = None
 
 
 def _validate_rule(rule) -> None:
@@ -308,15 +316,21 @@ def evaluate(conn, log_id: str, rule) -> dict[str, Any]:
                           "limits": {"relation_pairs": MAX_RELATION_PAIRS}}
     units, activated, violated = conn.execute(
         "SELECT count(*), count(*) FILTER (WHERE activated), count(*) FILTER (WHERE violated) FROM oc").fetchone()
-    examples = [{"unit": u, "detail": d} for u, d in conn.execute(
-        "SELECT unit, detail FROM oc WHERE violated ORDER BY unit LIMIT ?", [MAX_EXAMPLES]).fetchall()]
+    # Keep the legacy display string while also returning the literal keys.
+    # A delimiter in either key makes the old synchronization string ambiguous.
+    example_rows = conn.execute("""SELECT unit, detail, event_id, object_id FROM oc WHERE violated
+        ORDER BY unit, event_id NULLS FIRST, object_id NULLS FIRST LIMIT ?""", [MAX_EXAMPLES]).fetchall()
+    examples = [{"unit": unit, "detail": detail} for unit, detail, _, _ in example_rows]
+    exact_examples = [{"event_id": event, "object_id": obj, "detail": detail}
+                      for _, detail, event, obj in example_rows]
     return summary | {
         "complete": True, "units": units, "activated": activated, "vacuously_satisfied": units - activated,
         "violating": violated, "satisfied": activated - violated,
         "violation_rate": violated / activated if activated else None,
         "violation_rate_ci95": (list(_wilson(violated, activated, 1.959964))
                                 if activated and not isinstance(rule,SuppliedObjectCardinality) else None),
-        "violating_examples": examples, "examples_truncated": violated > len(examples),
+        "violating_examples": examples, "violating_examples_exact": exact_examples,
+        "examples_truncated": violated > len(examples),
     }
 
 
@@ -440,4 +454,69 @@ def violations(log_id: str, spec: Any) -> dict[str, Any]:
             "next_after": list(rows[settings.limit - 1][4:]) if len(rows) > settings.limit else None}
 
 
-__all__ = ["check", "compare", "violations", "describe", "parse"]
+def export_violations(log_id: str, spec: Any, out: IO[str]) -> dict[str, int]:
+    """Write one reviewed rule's complete violations with literal keys kept separate.
+
+    The caller owns the output file. The log lock covers revision checks,
+    recomputation and streaming so an append cannot mix different snapshots.
+    """
+    try:
+        settings = _ViolationExportSpec.model_validate(spec)
+    except ValidationError as exc:
+        first = exc.errors()[0]
+        raise workspace.EventLogWorkspaceError(
+            "object rule export is invalid: " + ".".join(str(p) for p in first["loc"]) + " " + first["msg"]) from None
+    rule = settings.rule
+    _validate_rule(rule)
+    supplied = isinstance(rule, SuppliedObjectCardinality)
+    if supplied != (settings.expected_graph is not None):
+        raise workspace.EventLogWorkspaceError("a supplied relationship export requires its reviewed graph pin")
+    with workspace._LOCK:
+        conn = workspace._connect()
+        try:
+            workspace._check_log(conn, log_id)
+            revision = supplied_relationships._revision(conn, log_id)
+            if settings.expected_revision != revision:
+                raise workspace.EventLogWorkspaceError("the retained log has changed; check the object rules again")
+            if supplied:
+                basis = _snapshot(conn, log_id)
+                if any(basis[key] != value for key, value in settings.expected_graph.model_dump().items()):
+                    raise workspace.EventLogWorkspaceError("the retained graph has changed; check the object rules again")
+            try:
+                summary = evaluate(conn, log_id, rule)
+            except duckdb.OutOfMemoryException:
+                raise workspace.EventLogWorkspaceError("the object rule exceeds available analysis memory; no export was produced") from None
+            if not summary["complete"]:
+                raise workspace.EventLogWorkspaceError("the object rule is incomplete; no export was produced")
+            writer = csv.writer(out)
+            writer.writerow(["rule_template", "object_type_review", "related_type_review", "activity_review",
+                             "required_activity_review", "via_activity_review", "unit", "event_id_review",
+                             "object_id_review", "timestamp_utc", "detail_review", "log_id", "log_revision",
+                             "min", "max", "direction", "qualifier_present", "qualifier_review",
+                             "relationships_sha256", "object_index_sha256"])
+            prefix = [rule.template, rule.object_type, getattr(rule, "related_type", None),
+                      getattr(rule, "activity", None), getattr(rule, "required_activity", None),
+                      getattr(rule, "via_activity", None), summary["unit"]]
+            cursor = conn.execute("""SELECT oc.event_id, oc.object_id, e.ts, oc.detail FROM oc
+                LEFT JOIN events e ON e.log_id = ? AND e.event_id = oc.event_id
+                WHERE oc.violated ORDER BY coalesce(oc.event_id, ''), coalesce(oc.object_id, '')""", [log_id])
+            written = 0
+            while batch := cursor.fetchmany(5000):
+                for event, obj, timestamp, detail in batch:
+                    row = [*prefix, event, obj, timestamp.isoformat() + "Z" if timestamp is not None else None,
+                           detail, log_id, revision, getattr(rule, "min", None), getattr(rule, "max", None),
+                           getattr(rule, "direction", None),
+                           str(rule.qualifier is not None).lower() if supplied else None,
+                           rule.qualifier if supplied else None,
+                           settings.expected_graph.relationships_sha256 if supplied else None,
+                           settings.expected_graph.object_index_sha256 if supplied else None]
+                    writer.writerow([review_cell(value) for value in row])
+                    written += 1
+            if written != summary["violating"]:
+                raise workspace.EventLogWorkspaceError("the object-rule evidence changed; no export was produced")
+            return {"violations": written}
+        finally:
+            conn.close()
+
+
+__all__ = ["check", "compare", "violations", "export_violations", "describe", "parse"]

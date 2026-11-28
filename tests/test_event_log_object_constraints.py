@@ -1,7 +1,8 @@
 """Object-centric conformance rules (#370 R24)."""
 from __future__ import annotations
 
-from io import BytesIO
+from io import BytesIO, StringIO
+import csv
 import json
 import os
 from pathlib import Path
@@ -213,6 +214,12 @@ with TestClient(app) as client:
     assert found.status_code == 200 and found.headers["cache-control"] == "no-store", found.text
     assert found.json()["violations"] == [{"event_id": "p", "object_id": None,
                                            "detail": "1 linked", "timestamp": "2024-01-01T08:00:00Z"}]
+    export_path = path + "/violations/export"
+    assert client.post(export_path, json=evidence, headers=bearer).status_code in (401, 403)
+    downloaded = client.post(export_path, json=evidence, headers=headers)
+    assert downloaded.status_code == 200 and downloaded.headers["cache-control"] == "no-store", downloaded.text
+    assert downloaded.headers["x-owg-rows"] == "1" and "review.csv" in downloaded.headers["content-disposition"]
+    assert "event_id_review" in downloaded.text and ",p,,2024-01-01T08:00:00Z,1 linked," in downloaded.text
     doc["events"][0]["id"] = "comparison-p"
     other = client.post("/v1/event-logs/import?format=ocel&name=other", content=json.dumps(doc).encode(),
                         headers={**headers, "x-owg-local-storage-confirmed": "true"}).json()["log_id"]
@@ -232,3 +239,89 @@ with TestClient(app) as client:
                 "WORKFLOW_OBSERVER_CONFIG": str(tmp_path / "config.json")})
     result = subprocess.run([sys.executable, "-c", code], cwd=ROOT, env=env, capture_output=True, text=True, timeout=120)
     assert result.returncode == 0, f"stdout={result.stdout}\nstderr={result.stderr}"
+
+
+def test_synchronization_examples_preserve_literal_event_and_object_keys():
+    doc = {'objectTypes': [], 'eventTypes': [],
+           'objects': [{'id': 'z', 'type': 'order'}, {'id': 'y / z', 'type': 'order'},
+                       {'id': 'i1', 'type': 'item'}, {'id': 'i2', 'type': 'item'}],
+           'events': [
+               {'id': 's1', 'type': 'Link', 'time': '2024-01-01T00:00:00Z',
+                'relationships': [{'objectId': 'z', 'qualifier': ''}, {'objectId': 'i1', 'qualifier': ''}]},
+               {'id': 's2', 'type': 'Link', 'time': '2024-01-01T00:00:00Z',
+                'relationships': [{'objectId': 'y / z', 'qualifier': ''}, {'objectId': 'i2', 'qualifier': ''}]},
+               {'id': 'x / y', 'type': 'Ship', 'time': '2024-01-01T01:00:00Z',
+                'relationships': [{'objectId': 'z', 'qualifier': ''}]},
+               {'id': 'x', 'type': 'Ship', 'time': '2024-01-01T01:00:00Z',
+                'relationships': [{'objectId': 'y / z', 'qualifier': ''}]}]}
+    log = _ocel(doc)
+    rule = {'template': 'synchronization', 'activity': 'Ship', 'object_type': 'order',
+            'related_type': 'item', 'required_activity': 'Pick'}
+    [result] = _check(log, rule)
+    assert [example['unit'] for example in result['violating_examples']] == ['x / y / z', 'x / y / z']
+    exact = {(example['event_id'], example['object_id']) for example in result['violating_examples_exact']}
+    assert exact == {('x / y', 'z'), ('x', 'y / z')}
+    evidence = constraints.violations(log, {'rule': rule})
+    assert {(item['event_id'], item['object_id']) for item in evidence['violations']} == exact
+
+
+def test_violation_csv_streams_all_rows_and_escapes_formula_labels():
+    objects, events = [], []
+    for i in range(120):
+        order, item = f'+order{i:03}', f'i{i:03}'
+        objects.extend([{'id': order, 'type': 'order'}, {'id': item, 'type': 'item'}])
+        events.extend([
+            {'id': f'link{i:03}', 'type': 'Link', 'time': '2024-01-01T00:00:00Z',
+             'relationships': [{'objectId': order, 'qualifier': ''}, {'objectId': item, 'qualifier': ''}]},
+            {'id': f'=event{i:03}', 'type': '=Ship', 'time': '2024-01-01T01:00:00Z',
+             'relationships': [{'objectId': order, 'qualifier': ''}]},
+        ])
+    log = _ocel({'objectTypes': [], 'eventTypes': [], 'objects': objects, 'events': events})
+    rule = {'template': 'synchronization', 'activity': '=Ship', 'object_type': 'order',
+            'related_type': 'item', 'required_activity': 'Pick'}
+    report = constraints.check(log, {'rules': [rule]})
+    out = StringIO(newline='')
+    assert constraints.export_violations(log, {'rule': rule, 'expected_revision': report['log_revision']}, out) == {'violations': 120}
+    rows = list(csv.DictReader(StringIO(out.getvalue())))
+    assert len(rows) == 120
+    assert rows[0]['event_id_review'] == "'=event000" and rows[-1]['object_id_review'] == "'+order119"
+    assert rows[0]['activity_review'] == "'=Ship" and rows[0]['timestamp_utc'] == '2024-01-01T01:00:00Z'
+    assert len({(row['event_id_review'], row['object_id_review']) for row in rows}) == 120
+    with pytest.raises(workspace.EventLogWorkspaceError, match='invalid'):
+        constraints.export_violations(log, {'rule': rule}, StringIO())
+    with pytest.raises(workspace.EventLogWorkspaceError, match='invalid'):
+        constraints.export_violations(log, {'rule': rule, 'expected_revision': 0, 'after': ['x', 'y']}, StringIO())
+    new_doc = {'objectTypes': [], 'eventTypes': [], 'objects': [{'id': 'new', 'type': 'order'}],
+               'events': [{'id': 'new-event', 'type': 'Link', 'time': '2024-01-02T00:00:00Z',
+                           'relationships': [{'objectId': 'new', 'qualifier': ''}]}]}
+    workspace.append_log(log, BytesIO(json.dumps(new_doc).encode()), source_format='ocel')
+    stale = StringIO()
+    with pytest.raises(workspace.EventLogWorkspaceError, match='changed'):
+        constraints.export_violations(log, {'rule': rule, 'expected_revision': report['log_revision']}, stale)
+    assert stale.getvalue() == ''
+
+
+def test_violation_csv_requires_graph_pin_and_refuses_incomplete(monkeypatch):
+    log = _ocel(_order_to_cash())
+    supplied = {'template': 'supplied_object_cardinality', 'object_type': 'order', 'related_type': 'item', 'min': 1, 'qualifier': ''}
+    report = constraints.check(log, {'rules': [supplied]})
+    with pytest.raises(workspace.EventLogWorkspaceError, match='graph pin'):
+        constraints.export_violations(log, {'rule': supplied, 'expected_revision': report['log_revision']}, StringIO())
+    basis = report['supplied_relationship_basis']
+    pin = {key: basis[key] for key in ('relationships_sha256', 'object_index_sha256')}
+    target = StringIO()
+    result = constraints.export_violations(log, {'rule': supplied, 'expected_revision': report['log_revision'], 'expected_graph': pin}, target)
+    assert result['violations'] == report['results'][0]['violating']
+    rows = list(csv.DictReader(StringIO(target.getvalue())))
+    assert rows and rows[0]['qualifier_present'] == 'true' and rows[0]['qualifier_review'] == ''
+    assert rows[0]['relationships_sha256'] == pin['relationships_sha256']
+    assert rows[0]['object_index_sha256'] == pin['object_index_sha256']
+    bad = {**pin, 'relationships_sha256': '0' * 64}
+    with pytest.raises(workspace.EventLogWorkspaceError, match='changed'):
+        constraints.export_violations(log, {'rule': supplied, 'expected_revision': report['log_revision'], 'expected_graph': bad}, StringIO())
+    rule = {'template': 'object_cardinality', 'object_type': 'order', 'related_type': 'item', 'min': 1}
+    monkeypatch.setattr(constraints, 'MAX_RELATION_PAIRS', 1)
+    target = StringIO()
+    with pytest.raises(workspace.EventLogWorkspaceError, match='incomplete'):
+        constraints.export_violations(log, {'rule': rule, 'expected_revision': report['log_revision']}, target)
+    assert target.getvalue() == ''
