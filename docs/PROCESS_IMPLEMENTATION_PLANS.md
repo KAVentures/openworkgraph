@@ -154,3 +154,6 @@ benefit allocations and verified realized value remain work under #370/#264.
 This is an original functional implementation; no proprietary code or assets
 were copied. Synthetic tests do not establish real-company or financial accuracy
 acceptance.
+
+
+For exact historical forecast bridges, calendar diagnostics and lower-bound budget exposure, see [Implementation history controls](IMPLEMENTATION_HISTORY_CONTROLS.md).

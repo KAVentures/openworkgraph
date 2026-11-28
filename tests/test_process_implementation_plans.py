@@ -251,6 +251,19 @@ def test_human_routes_preflight_parser_and_exact_history_export(tmp_path):
         saved=client.post(base+'/implementation-plan',headers=headers,json=SaveBaseline(baseline=b,expected_access_revision=2,user_confirmed=True,organization_sharing_confirmed=True).model_dump(mode='json'));assert saved.status_code==200,saved.text
         exported=client.get(base+'/implementation-plan/export?revision=1',headers=headers);assert exported.status_code==200
         assert exported.json()['artifact']['baseline']['opportunity']==pin(origin) and not exported.json()['execution_authorized']
+        history=base+'/implementation-plan/history'
+        first=client.get(history,headers=headers)
+        assert first.status_code==200 and first.headers['cache-control']=='no-store'
+        assert client.get(history,headers={'Authorization':'Bearer foreign'}).status_code in (403,404)
+        assert client.post(base+'/implementation-plan',headers=headers,json=SaveBaseline(baseline=b,expected_revision=1,expected_access_revision=2,user_confirmed=True,organization_sharing_confirmed=True).model_dump(mode='json')).status_code==200
+        from datetime import datetime,timezone
+        latest=client.get(history,headers=headers).json()
+        request={'before_revision':1,'after_revision':2,'expected_history_sha256':latest['history_sha256'],'as_of_date':datetime.now(timezone.utc).date().isoformat()}
+        result=client.post(history+'/compare',headers=headers,json=request)
+        assert result.status_code==200,result.text
+        assert result.json()['comparison']['baseline_reassessed']
+        assert client.post(history+'/compare',headers=headers,json={**request,'expected_history_sha256':first.json()['history_sha256']}).status_code==409
+        assert client.post(history+'/compare',headers={'Authorization':'Bearer foreign'},json=request).status_code in (403,404)
         script=client.get('/process-implementation-client.js');assert script.status_code==200 and script.headers['cache-control']=='no-store'
 
 

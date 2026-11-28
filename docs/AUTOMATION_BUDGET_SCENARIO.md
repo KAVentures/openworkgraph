@@ -66,3 +66,6 @@ There is no currency conversion, savings claim, new persistent store,
 or change to existing planning/transition rules. Tests cover exact
 optimization against an independent exhaustive subset oracle, dependency
 closure, decimal arithmetic, stale snapshots, and authorization.
+
+
+For exact cost/priority tradeoffs and forced-membership sensitivity, see [Portfolio frontier review](AUTOMATION_PORTFOLIO_FRONTIER.md).
