@@ -1325,6 +1325,10 @@ async def clarify_process_design(request: Request, workflow_id: str = Query(patt
     return JSONResponse(result, headers={'Cache-Control': 'no-store'})
 
 
+from .process_policy_window_routes import router as policy_window_router
+app.include_router(policy_window_router)
+
+
 @app.post('/v1/process-catalog/clarify/effective-timeline')
 async def review_effective_policy_timeline(request: Request, workflow_id: str = Query(pattern=_PROCESS_ID),
                                            revision: int = Query(ge=1)) -> Response:

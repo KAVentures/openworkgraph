@@ -1722,6 +1722,8 @@
           if(confirm('Download a local copy containing all exact policy source texts? Review and protect this file before sharing.'))
             exportReport(basis.payload,'owg-effective-policy-input.json');
         }));
+      const windowHost=el('div'),preparedBasis=basis;timelineOut.append(windowHost);
+      import('/policy-window-review.js').then(m=>{if(windowHost.isConnected&&stillCurrent(preparedBasis)&&timelineReport===data)m.mount(windowHost,{isCurrent:()=>stillCurrent(preparedBasis)&&timelineReport===data,request:()=>request('/v1/process-catalog/clarify/effective-window-review'+queryFor(preparedBasis.record),{...preparedBasis.payload,expected_timeline_sha256:data.timeline_sha256}),openDate:(point,previous)=>locked(async()=>{if(!stillCurrent(preparedBasis))return;asOf.value=point;compareTo.value=previous||'';clearDate();await runDate();dateOut.scrollIntoView({block:'nearest'});})});}).catch(()=>{if(windowHost.isConnected)windowHost.textContent='Whole-window review unavailable; date review remains available.';});
     }));
     async function runDate(offset=0,pin=null){
       const selected=basis,prepared=timelineReport;
