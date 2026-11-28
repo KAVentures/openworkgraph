@@ -31,6 +31,13 @@ async def _body(request):
             raise HTTPException(413, "Selected files exceed the 8 MiB request budget")
         raw.extend(chunk)
 
+    try:
+        return _decode(raw.decode("utf-8", errors="strict"))
+    except UnicodeError:
+        raise HTTPException(422, "Invalid JSON input") from None
+
+
+def _decode(text):
     def pairs(items):
         result = {}
         for key, value in items:
@@ -43,9 +50,20 @@ async def _body(request):
         raise ValueError("nonfinite JSON")
 
     try:
-        return json.loads(raw.decode("utf-8"), object_pairs_hook=pairs, parse_constant=constant)
+        return json.loads(text, object_pairs_hook=pairs, parse_constant=constant)
     except (ValueError, RecursionError):
         raise HTTPException(422, "Invalid JSON input") from None
+
+
+def _draft(value):
+    # Preserve the selected original JSON files until strict server-side parsing.
+    if not isinstance(value, dict) or set(value) != {"sources", "proposal", "title", "description"}:
+        raise HTTPException(422, "Select original evidence and proposal JSON files")
+    sources = value["sources"]
+    if (not isinstance(sources, list) or not 1 <= len(sources) <= 8 or
+            not all(isinstance(s, str) for s in sources) or not isinstance(value["proposal"], str)):
+        raise HTTPException(422, "Select one to eight original evidence JSON files and one proposal")
+    return {**value, "sources": [_decode(s) for s in sources], "proposal": _decode(value["proposal"])}
 
 
 @router.get("/ai-opportunity-handoff.js")
@@ -58,7 +76,7 @@ async def preview(request: Request):
     payload = await _body(request)
     _require_dashboard(request)
     try:
-        result = await run_in_threadpool(handoff.prepare, payload)
+        result = await run_in_threadpool(handoff.prepare, _draft(payload))
     except (ValueError, TypeError, KeyError, AttributeError, RecursionError, OverflowError):
         raise HTTPException(422, "Proposal review refused; check the original evidence, proposal and human-entered idea") from None
     _require_dashboard(request)
@@ -69,8 +87,10 @@ async def preview(request: Request):
 async def commit(request: Request):
     payload = await _body(request)
     _require_dashboard(request)
+    if not isinstance(payload, dict) or set(payload) != {"draft", "expected_preview_sha256", "confirm_create_idea"}:
+        raise HTTPException(422, "Exact preview and confirmation required")
     try:
-        idea, lineage = await run_in_threadpool(handoff.confirm, payload)
+        idea, lineage = await run_in_threadpool(handoff.confirm, {**payload, "draft": _draft(payload["draft"])})
     except (ValueError, TypeError, KeyError, AttributeError, RecursionError, OverflowError):
         raise HTTPException(422, "Creation refused; review the exact preview and explicitly confirm again") from None
     _require_dashboard(request)
