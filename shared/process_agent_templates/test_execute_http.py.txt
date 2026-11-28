@@ -306,3 +306,41 @@ class HttpRuntime(unittest.IsolatedAsyncioTestCase):
                 review(spec,suite,doc,digest(doc),{"assignments":{"done":"read_case"}})
         self.assertFalse(self.calls)
         self.assertFalse(self.resolved)
+
+    async def test_disabled_http_proposal_from_exact_case_review(self):
+        from suggest_http_fields import review
+        from propose_http_bindings import propose
+        spec,plan,case,bindings,_,doc,ops=self.data
+        suite={"format":"openworkgraph.reviewed-shadow-cases.v1",
+               "process_reference":bindings["process_reference"],"spec_sha256":digest(spec),
+               "reviewed_by_customer":True,"case_inputs_authorized":True,
+               "cases":[{"id":"case_1","category":"normal","input":deepcopy(case),
+                         "expected":{"status":"proposal","accepted_routes":[plan["activity_ids"]],
+                                     "review_confirmed":True}}]}
+        selection={"assignments":{"resolve":"resolve_case","readback":"read_case"}}
+        choices={"argument_choices":{"resolve":{"issue":"/issue","expected_version":"/version",
+                                                "request_id":"/request_id"},
+                                      "readback":{"issue":"/issue"}}}
+        with patch("execute_http.DirectClient",side_effect=AssertionError("Unexpected transport")):
+            report=review(spec,suite,doc,digest(doc),selection)
+            result=propose(spec,suite,doc,digest(doc),selection,report,report["review_sha256"],choices)
+            self.assertFalse(result["enabled"])
+            self.assertEqual(len(result["bindings"]),2)
+            self.assertTrue(all(b["authorized"] is False and b["operation_kind"]=="unmapped" for b in result["bindings"]))
+            self.assertEqual(result["proposal_metadata"]["combined_request_checks"],
+                             [{"activity_id":"readback","combined_request_checks_passed":1},
+                              {"activity_id":"resolve","combined_request_checks_passed":1}])
+            self.assertFalse(result["proposal_metadata"]["execution_authorized"])
+            self.assertNotIn(case["issue"],json.dumps(result))
+            self.assertNotIn(case["request_id"],json.dumps(result))
+            changed=deepcopy(report);changed["clarification_cases"]=99
+            with self.assertRaises(ValueError):
+                propose(spec,suite,doc,digest(doc),selection,changed,report["review_sha256"],choices)
+            with self.assertRaises(ValueError):
+                propose(spec,suite,doc,digest(doc),selection,report,"f"*64,choices)
+            invalid=deepcopy(choices);invalid["argument_choices"]["resolve"]["issue"]="/version"
+            # Integer versions do not satisfy the string path argument.
+            with self.assertRaises(ValueError):
+                propose(spec,suite,doc,digest(doc),selection,report,report["review_sha256"],invalid)
+        self.assertFalse(self.calls)
+        self.assertFalse(self.resolved)
