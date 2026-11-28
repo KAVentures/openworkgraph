@@ -192,6 +192,10 @@ class Operations:
     def preflight(self,spec,plan,case,bindings,intent):
         prepared=prepare(spec,plan,case,bindings)
         validate_intent(spec,prepared,case,bindings,intent)
+        return self.check_prepared(prepared,bindings)
+
+    def check_prepared(self,prepared,bindings):
+        """Check actual wire construction offline; never grants execution."""
         require(bindings.get("tool_server_url")==self.origin,"Bindings must pin the reviewed HTTP origin")
         mapped={r["activity_id"]:r for r in bindings["bindings"]}
         for action in prepared["actions"]:
