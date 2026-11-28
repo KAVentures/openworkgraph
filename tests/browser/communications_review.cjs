@@ -88,6 +88,29 @@ const path=require('node:path');
          const r=await fetch('/v1/communications/review/label',{method:'POST',headers:h,body:JSON.stringify({example_id:x.example_id,labels})});if(!r.ok)throw new Error(await r.text());}
      }
    },corpus);
+   // Review a terms-only draft against the labelled training population, then
+   // invalidate the pin on editing and apply the exact re-reviewed draft.
+   await page.getByText('Intent taxonomy',{exact:true}).click();
+   const taxonomyEditor=page.locator('#owgCommsTaxonomy');
+   const originalTaxonomy=await taxonomyEditor.inputValue();
+   const draft=originalTaxonomy.replace(/^Refund request:.*$/m,line=>line+', synthetic future phrase');
+   assert.notEqual(draft,originalTaxonomy);
+   await taxonomyEditor.fill(draft);
+   await page.locator('#owgCommsTaxonomyPreview').click();
+   await page.locator('#owgCommsTaxonomyPreviewResult').getByRole('heading',{name:'Training-only change review'}).waitFor();
+   assert.equal(await page.locator('#owgCommsTaxonomyApply').isEnabled(),true);
+   assert.match(await page.locator('#owgCommsTaxonomyPreviewResult').textContent(),/labelled training messages/);
+   assert.doesNotMatch(await page.locator('#owgCommsTaxonomyPreviewResult').textContent(),/client\.example/);
+   await taxonomyEditor.fill(originalTaxonomy);
+   assert.equal(await page.locator('#owgCommsTaxonomyApply').isDisabled(),true);
+   await taxonomyEditor.fill(draft);
+   await page.locator('#owgCommsTaxonomyPreview').click();
+   await page.locator('#owgCommsTaxonomyPreviewResult').getByRole('heading',{name:'Training-only change review'}).waitFor();
+   await page.locator('#owgCommsTaxonomyApply').click();
+   await page.locator('#owgCommsTaxonomyStatus').getByText('Reviewed taxonomy saved on this computer.').waitFor();
+   const savedTaxonomy=await page.evaluate(async()=>await (await fetch('/v1/communications/taxonomy')).json());
+   assert(savedTaxonomy.taxonomy.intents.find(i=>i.name==='Refund request').terms.includes('synthetic future phrase'));
+   await page.getByText('Intent taxonomy',{exact:true}).click();
    await page.locator('#owgCommsTrain').click();
    await page.locator('#owgCommsReviewStatus').filter({hasText:'Model trained.'}).waitFor({timeout:60000});
    const modelText=await page.locator('#owgCommsModel').textContent();
