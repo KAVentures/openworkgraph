@@ -160,6 +160,9 @@ def test_portable_dossier_requires_complete_current_inbox_without_advancing_pins
     with pytest.raises(journal.JournalError):
         dossier.freeze_inbox(scope(first),now=150)
     complete=admit(first,packet("b",b))
+    assert complete["idempotent_replay"] is False
+    before_freeze=status()
+    assert before_freeze=={key:value for key,value in complete.items() if key!="idempotent_replay"}
     with pytest.raises(journal.JournalError):
         dossier.freeze_inbox(scope(first),now=150)
     with pytest.raises(ValueError):
@@ -170,6 +173,6 @@ def test_portable_dossier_requires_complete_current_inbox_without_advancing_pins
     receipt=dossier.verify(doc,{"expected_correlation_namespace_sha256":NS,
         "trust":[pin("a",a),pin("b",b)]},expected_dossier_sha256=doc["dossier_sha256"])
     assert receipt["historical_report_recomputed"]
-    assert status()==complete
+    assert status()==before_freeze
     assert all(r["accepted_at_ms"] is None for r in trust.status({})["entries"])
     assert inbox.review(scope(complete),now=150)["accepted_new_packets"]==2
