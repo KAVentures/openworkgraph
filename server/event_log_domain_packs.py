@@ -35,6 +35,9 @@ from . import event_log_object_process_model as object_model
 from . import event_log_query as query
 from . import event_log_workspace as workspace
 from .event_log_domain_packs_operations import OPERATIONS_PACKS
+from .event_log_domain_packs_operational_control import (
+    MANUFACTURING_QUALITY_1_0_0, SUPPLIER_QUALIFICATION_1_0_0, FINANCIAL_CLOSE_1_0_0,
+)
 from .event_log_domain_packs_returns import RETURNS_REFUNDS_1_0_0
 from .event_log_domain_packs_regulated_services import ALL_REGULATED_SERVICE_PACKS
 from .event_log_domain_packs_claims import INSURANCE_CLAIMS_1_0_0
@@ -776,7 +779,10 @@ PACKS: dict[str, dict[str, dict[str, Any]]] = {**OPERATIONS_PACKS,
                                               "expense_reimbursement": {"1.0.0": EXPENSE_REIMBURSEMENT_1_0_0},
                                               "insurance_claims": {"1.0.0": INSURANCE_CLAIMS_1_0_0},
                                               **SERVICE_GOVERNANCE_PACKS,
-                                              **BUSINESS_SUPPORT_PACKS}
+                                              **BUSINESS_SUPPORT_PACKS,
+                                              "manufacturing_quality": {"1.0.0": MANUFACTURING_QUALITY_1_0_0},
+                                              "supplier_qualification": {"1.0.0": SUPPLIER_QUALIFICATION_1_0_0},
+                                              "financial_close": {"1.0.0": FINANCIAL_CLOSE_1_0_0}}
 
 
 class _Strict(BaseModel):
@@ -932,7 +938,8 @@ def resolve(pack: dict[str, Any], mapping: dict[str, dict[str, str]], params: di
     # The claims pack explicitly discloses every unmapped optional intake/receipt
     # activity. Preserve the existing per-definition not_applicable contract
     # for previously shipped packs, whose consumers expect only omitted rules.
-    if pack["pack_id"] == "insurance_claims" or pack["pack_id"] in OPERATIONS_PACKS:
+    if (pack["pack_id"] in {"insurance_claims", "manufacturing_quality", "supplier_qualification", "financial_close"}
+            or pack["pack_id"] in OPERATIONS_PACKS):
         reported_missing = {row["unmapped_role"] for row in out["not_applicable"]}
         for index, activity in enumerate(pack["activities"]):
             role = activity["role"]
