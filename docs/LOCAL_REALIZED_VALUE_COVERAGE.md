@@ -107,3 +107,8 @@ portfolio aggregation occur. The existing coverage-aware response contains
 an additive sensitivity object; invalid comparisons return null. Regression
 tests cover opposing effort and volume effects, measured-date gaps, source
 composition, influence-driven reversals and historical cross-period overlap.
+
+
+For explicit multi-month investment alternatives, discounted cash flow and
+capacity conversion sensitivity based on selected retained effort periods,
+see [Phased investment business cases](PHASED_INVESTMENT_BUSINESS_CASE.md).

@@ -115,3 +115,6 @@ possible score (zero pinball or interval width), not an imputed completion.
 Upper bounds remain unknown until all eligible cases are observed. Invalid
 estimates and absent pairs are disclosed. No new stored data, threshold
 selection, execution authorization, or statistical confidence claim is added.
+
+
+For censoring-aware quantile and fixed-bin outcome calibration over exact frozen populations, see [Prospective calibration review](PROSPECTIVE_CALIBRATION_REVIEW.md).

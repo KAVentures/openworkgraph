@@ -302,8 +302,10 @@ Report-style exports often put a title or an export date above the column names.
 holds the column names with `header_row=` (1 to 50) on the import, append and preview routes; the
 lines above it are skipped and the setting is part of the import's recorded transform. A first line
 `sep=;` (Excel's delimiter hint) is skipped automatically and its delimiter is used. Timestamp format
-detection finds the column names below such lines by itself. The dashboard skips a `sep=` line when it
-reads the columns; choosing a header row in the dashboard is not available yet.
+detection finds the column names below such lines by itself. In the dashboard, **Column names on line** is
+found when you choose the file: the first line that splits into at least two columns, followed by a
+line that splits the same way (title rows and a `sep=` line are skipped). Change it if the guess is
+wrong.
 
 ### Excel workbooks
 
@@ -3978,6 +3980,13 @@ the current selection. The dashboard checks that
 the saved hidden set has not changed since it loaded. If another view changed
 it, reload before saving; the stale selection is not applied.
 
+### Completion labels in open-case signals
+
+When creating an **are open longer than** signal, add each completion activity
+separately. Labels match exactly, including commas and whitespace. The saved
+rule lists the completion labels used when checking whether a case is open.
+Changing the draft selection clears its preview; saving does not evaluate it.
+
 ### Reusing activity groupings across logs
 
 Under **Group activities**, download a saved mapping as JSON. In another log,
@@ -3991,6 +4000,15 @@ The dashboard-session endpoint `POST /v1/event-logs/{log_id}/activity-mappings/t
 accepts `{ "format": "openworkgraph.activity-mapping.v1", "mapping": { ... } }`.
 It validates and previews the definition against original event labels without
 changing the log or its saved mappings.
+
+### Exact variant paths in CSV
+
+The ordinary variant CSV retains its existing human-readable `path` column.
+For labels that contain the display separator, **Download variants with exact
+paths (CSV)** adds `path_json`, a JSON array of the exact activity labels. This
+is a variant summary, not an event-log re-import format. It honours the active
+case filter and the same 10,000-variant limit. The equivalent API request is
+`GET /v1/event-logs/{log_id}/variants.csv?exact_paths=true`.
 
 ### Exact activities in compliance rules
 
