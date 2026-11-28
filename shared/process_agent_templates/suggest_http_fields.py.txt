@@ -1,0 +1,153 @@
+"""Local suite-wide candidate fields for explicitly selected HTTP operations."""
+import argparse
+from collections import Counter
+import json
+from pathlib import Path
+import re
+
+FORMAT = "openworkgraph.direct-http-field-review.v1"
+MAX_BYTES = 262144
+MAX_REPORT = 4 * 1024 * 1024
+KEY = re.compile(r"[A-Za-z_][A-Za-z0-9_.-]{0,63}\Z")
+MAX_NODES = 2000
+MAX_FIELDS = 200
+MAX_CHECKS = 2_000_000
+
+
+def project(value):
+    """Only scalar leaves at safe named object paths, not array positions."""
+    fields = {}
+    pending = [(value, "", 0)]
+    nodes = omitted = 0
+    while pending:
+        item, path, depth = pending.pop()
+        nodes += 1
+        if nodes > MAX_NODES:
+            raise ValueError("Case field projection exceeds node budget")
+        if isinstance(item, dict):
+            for key, child in sorted(item.items(), reverse=True):
+                if depth >= 6 or not KEY.fullmatch(key):
+                    omitted += 1
+                    continue
+                pending.append((child, path + "/" + key, depth + 1))
+        elif isinstance(item, list):
+            omitted += 1
+        elif path and type(item) in (str, int, float, bool):
+            fields[path] = item
+            if len(fields) > MAX_FIELDS:
+                raise ValueError("Case field projection exceeds scalar field budget")
+        else:
+            omitted += 1
+    return fields, omitted
+
+
+def candidates(cases, assignments, operations, *, role, compatible):
+    """Inputs are validated suite cases and explicitly selected activities."""
+    projected = {}
+    for case in cases:
+        fields, omitted = project(case["input"])
+        reached = {a for route in case["expected"]["accepted_routes"] for a in route}
+        projected[case["id"]] = (fields, omitted, reached)
+    rows = []
+    checks = 0
+    for activity, operation_name in sorted(assignments.items()):
+        op = operations[operation_name]
+        relevant = [(fields, omitted) for fields, omitted, reached in projected.values() if activity in reached]
+        n = len(relevant)
+        arguments = []
+        unique = {}
+        for arg, kind in sorted(op["fields"].items()):
+            support = Counter()
+            for fields, _ in relevant:
+                checks += len(fields)
+                if checks > MAX_CHECKS:
+                    raise ValueError("Field review exceeds compatibility work budget")
+                for path, value in fields.items():
+                    if compatible(op, arg, value):
+                        support[path] += 1
+            full = sorted(p for p, count in support.items() if count == n and n)
+            if len(full) == 1:
+                unique[arg] = full[0]
+            arguments.append({"argument": arg, "kind": kind, "wire_role": role(op, arg),
+                              "full_support_paths": full, "full_support_count": len(full),
+                              "best_case_support": max(support.values(), default=0),
+                              "status": "no_reviewed_route" if not n else "unique_compatible" if len(full) == 1 else
+                              "ambiguous" if full else "no_full_support"})
+        rows.append({"activity_id": activity, "operation_name": operation_name,
+                     "relevant_cases": n, "projection_omissions": sum(v for _, v in relevant),
+                     "arguments": arguments, "unreviewed_unique_argument_map": unique,
+                     "all_arguments_have_unique_candidates": bool(n) and len(unique) == len(arguments),
+                     "binding_authorized": False})
+    return rows
+
+
+def review(spec, suite, catalog, catalog_pin, selection):
+    from execute import ImplementationError, digest, reference
+    from evaluate import validate_suite
+    from execute_http import Operations, scalar, path_fields, SEGMENT, IDEMPOTENCY, version_header
+    ops = Operations(spec, catalog, catalog_pin)
+    cases = validate_suite(spec, suite, allow_current_source_rules=True)
+    eligible = {a["id"] for a in spec["process_model"]["activities"]
+                if a["kind"] == "activity" and a["implementation"] != "human"}
+    if not isinstance(selection, dict) or set(selection) != {"assignments"}:
+        raise ImplementationError("Explicit activity-to-operation selection required")
+    mapping = selection["assignments"]
+    if (not isinstance(mapping, dict) or not 1 <= len(mapping) <= 40 or
+            any(a not in eligible or not isinstance(o, str) or o not in ops.operations for a, o in mapping.items())):
+        raise ImplementationError("Select existing non-human activities and reviewed operations")
+    roles = {}
+    for name, op in ops.operations.items():
+        roles[name] = {**{a: "path" for a in path_fields(op["path"])},
+                       **{a: "query" for a in op["query"]}, **{a: "body" for a in op["body"]}}
+        if op["method"] != "GET":
+            roles[name][op["expected_version_argument"]] = "expected_version"
+            roles[name][op["idempotency_argument"]] = "idempotency_key"
+    def role(op, arg):
+        return roles[op["name"]][arg]
+    def compatible(op, arg, value):
+        if not scalar(value, op["fields"][arg]):
+            return False
+        kind = role(op, arg)
+        if kind == "path":
+            return SEGMENT.fullmatch(str(value)) is not None and str(value) not in (".", "..")
+        if kind == "idempotency_key":
+            return IDEMPOTENCY.fullmatch(value) is not None
+        if kind == "expected_version":
+            try:
+                version_header(value)
+            except ImplementationError:
+                return False
+        return True
+    rows = candidates(cases, mapping, ops.operations, role=role, compatible=compatible)
+    body = {"format": FORMAT, "process_reference": reference(spec), "spec_sha256": digest(spec),
+            "suite_sha256": digest(suite), "operations_sha256": catalog_pin, "selection_sha256": digest(selection),
+            "selected_activities": rows, "unselected_nonhuman_activity_ids": sorted(eligible - set(mapping)),
+            "clarification_cases": sum(not c["expected"]["accepted_routes"] for c in cases),
+            "case_values_returned": False, "mapping_semantics_verified": False,
+            "combined_request_validated": False, "business_tools_called": False, "execution_authorized": False,
+            "interpretation": "Named object scalar paths only. Full support means single-field wire compatibility in every distinct reviewed case reaching the activity, not semantic correctness. Arrays and unsafe/deep paths are omitted. Unique candidates are unreviewed hints, not enabled bindings. Review predicates, write controls, preconditions and complete requests separately."}
+    return {**body, "review_sha256": digest(body)}
+
+
+def main(argv=None):
+    from execute import load_object
+    from configure import write_new
+    p = argparse.ArgumentParser(description=__doc__)
+    p.add_argument("--spec", default=str(Path(__file__).parent / "workflow.spec.json"))
+    for arg in ("cases", "operations", "operations-sha256", "selection", "output"):
+        p.add_argument("--" + arg, required=True)
+    p.add_argument("--confirm-local-field-review", action="store_true", required=True)
+    args = p.parse_args(argv)
+    try:
+        spec, suite, catalog, selection = (load_object(Path(path), MAX_BYTES) for path in
+                                         (args.spec, args.cases, args.operations, args.selection))
+        result = review(spec, suite, catalog, args.operations_sha256, selection)
+        write_new(Path(args.output), result, limit=MAX_REPORT)
+    except (ValueError, OSError, TypeError, KeyError, IndexError, RecursionError, OverflowError, ImportError):
+        p.exit(2, "HTTP field review refused; check exact reviewed inputs, limits and output file.\n")
+    print(json.dumps({"selected_activities": len(result["selected_activities"]), "review_sha256": result["review_sha256"]}))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

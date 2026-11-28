@@ -110,7 +110,7 @@ def build_runtime_project(packet: dict) -> bytes:
     model = ProcessModel.model_validate(spec['process_model'])
     files = {name: (_TEMPLATES / (name + '.txt')).read_text(encoding='utf-8')
              for name in ('agent.py', 'runtime.py', 'test_shadow.py', 'test_agent_sdk.py', 'execute.py', 'test_execution.py', 'monitor.py', 'test_monitor.py', 'send_report.py', 'stop.py', 'configure.py', 'test_configuration.py', 'evaluate.py', 'test_evaluation.py', 'plan_sources.py', 'test_source_planning.py', 'evaluate_sources.py', 'test_source_evaluation.py', 'check_runtime.py', 'review_bindings.py', 'test_binding_rehearsal.py')}
-    for name in ('run_queue.py', 'test_run_queue.py', 'execute_http.py', 'test_execute_http.py', 'import_openapi.py', 'test_import_openapi.py', 'rehearse_http.py'):
+    for name in ('run_queue.py', 'test_run_queue.py', 'execute_http.py', 'test_execute_http.py', 'import_openapi.py', 'test_import_openapi.py', 'rehearse_http.py', 'suggest_http_fields.py'):
         files[name] = (_TEMPLATES / (name + '.txt')).read_text(encoding='utf-8')
     files['owg_report_signing.py'] = (Path(__file__).parent/'automation_report_signing.py').read_text(encoding='utf-8')
     for name in ('process_source_state.py','process_rule_conditions.py'):
@@ -522,6 +522,7 @@ def build_runtime_project(packet: dict) -> bytes:
         'bindings to the exact origin; pin every action and precondition to catalog input_schema_sha256.\n'
         'Use the normal disabled intent template and separate customer approval. Set the distinct\n'
         'OWG_EXECUTION_HTTP_TOKEN and required OWG source/catalog read credentials.\n'
+        'For local suite-wide argument candidates, run suggest_http_fields.py with reviewed cases and explicit activity/operation choices.\n'
         'Before authorization, run rehearse_http.py with the reviewed cases, bindings, exact operations pin\n'
         'and --confirm-local-case-review to check direct HTTP wire construction without provider calls.\n'
         'Run python execute_http.py --operations operations.json --operations-sha256 PIN --execute-approved\n'
