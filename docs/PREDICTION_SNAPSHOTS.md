@@ -121,3 +121,6 @@ selection, execution authorization, or statistical confidence claim is added.
 
 Freeze and later score a capacity-limited ranking against a same-capacity naive
 baseline. See [prospective triage policies](PROSPECTIVE_TRIAGE_POLICIES.md).
+
+
+For censoring-aware quantile and fixed-bin outcome calibration over exact frozen populations, see [Prospective calibration review](PROSPECTIVE_CALIBRATION_REVIEW.md).

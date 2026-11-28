@@ -1,0 +1,7 @@
+# Source-bound local analysis jobs (R8)
+
+POST the existing typed analysis definition to `/v1/event-logs/{log_id}/analysis-jobs?source_bound=true`. The job is session-scoped, cancellable and subject to the existing global queue, time, result-size and retention budgets. It computes the same complete source and case-view digests as the synchronous source-bound analysis under one reentrant workspace lock, then runs the analysis once. Cancellation interrupts both the digest and the actual query, and no partial result is published.
+
+On success, status reports `source_bound_result_available: true`. GET the existing job result endpoint for the retained JSON including `source_content_sha256` and, for case-level analyses, `case_review_sha256` and group digests. The source is pinned at **execution**, not at submission; changes after completion do not mutate retained bytes. Existing freshness and group-review checks still apply before accessing current source evidence. This is a local static result, not a durable snapshot, verified business claim or permission to execute. If fingerprint budget is exceeded, the job fails rather than returning a partial digest.
+
+Omit the query parameter to retain the ordinary job behavior. The dashboard requests the source-bound mode and consumes the retained result rather than silently re-executing the query. It deletes the retained job after review or cancellation as before.
