@@ -214,9 +214,19 @@ async def agent_root_cause(request: Request, log_id: str,
                            outcome: str = Query(pattern="^(duration_over|rework|contains_activity|ends_with)$"),
                            hours: float | None = Query(default=None, gt=0, le=100000),
                            activity: str | None = Query(default=None, max_length=200),
-                           case_type: str | None = Query(default=None, max_length=200)):
+                           case_type: str | None = Query(default=None, max_length=200),
+                           case_filter: str | None = Query(default=None, max_length=8192)):
     _require_agent_access(request)
-    return await _answer(sharing.root_cause, log_id, outcome, case_type, hours, activity)
+    chosen = None
+    if case_filter is not None:
+        import json
+        try:
+            chosen = json.loads(case_filter)
+        except ValueError:
+            raise HTTPException(422, "case_filter must be a JSON object") from None
+        if not isinstance(chosen, dict):
+            raise HTTPException(422, "case_filter must be a JSON object")
+    return await _answer(sharing.root_cause, log_id, outcome, case_type, hours, activity, chosen)
 
 
 @router.get("/v1/process-intelligence/{log_id}/case")
@@ -647,12 +657,22 @@ async def agent_process_map(request: Request, log_id: str, activities: float = Q
 @router.get("/v1/process-intelligence/{log_id}/duration-distribution")
 async def agent_duration_distribution(request: Request, log_id: str,
                                       cutoffs_seconds: str = Query(default="3600,14400,86400,259200", max_length=110),
-                                      case_type: str | None = Query(default=None, max_length=200)):
+                                      case_type: str | None = Query(default=None, max_length=200),
+                                      case_filter: str | None = Query(default=None, max_length=8192)):
     _require_agent_access(request)
     parts = cutoffs_seconds.split(",")
     if not 1 <= len(parts) <= 10 or any(not p.isascii() or not p.isdecimal() or len(p) > 10 for p in parts):
         raise HTTPException(422, "duration thresholds must be comma-separated whole seconds")
-    return await _answer(sharing.duration_distribution, log_id, [int(p) for p in parts], case_type)
+    chosen = None
+    if case_filter is not None:
+        import json
+        try:
+            chosen = json.loads(case_filter)
+        except ValueError:
+            raise HTTPException(422, "case_filter must be a JSON object") from None
+        if not isinstance(chosen, dict):
+            raise HTTPException(422, "case_filter must be a JSON object")
+    return await _answer(sharing.duration_distribution, log_id, [int(p) for p in parts], case_type, chosen)
 
 
 @router.get("/v1/process-intelligence/{log_id}/time-patterns")

@@ -390,17 +390,24 @@ def register_process_intelligence_tools(mcp: Any, runtime_module: Any) -> None:
 
     @mcp.tool(annotations=_READ_ONLY)
     def get_process_root_cause(log_id: str, outcome: str, hours: float | None = None,
-                               activity: str | None = None, case_type: str | None = None) -> dict[str, Any]:
+                               activity: str | None = None, case_type: str | None = None,
+                               case_filter: dict[str, Any] | None = None) -> dict[str, Any]:
         """Which activities, resources and case attributes are associated with an outcome.
 
         outcome is duration_over (needs hours), rework, contains_activity or ends_with (both need
         activity). Returns risk differences with confidence intervals and a Bonferroni flag.
-        These are associations in the log, never causes.
+        These are associations in the log, never causes. case_filter (the same keys as insight cohorts)
+        looks within one group of at least 5 cases.
         """
         if outcome not in _OUTCOMES:
             raise ToolError("outcome must be duration_over, rework, contains_activity or ends_with")
-        return _get("get_process_root_cause", f"/v1/process-intelligence/{_log(log_id)}/root-cause",
-                    {"outcome": outcome, "hours": hours, "activity": activity, "case_type": case_type})
+        params: dict[str, Any] = {"outcome": outcome, "hours": hours, "activity": activity, "case_type": case_type}
+        if case_filter is not None:
+            if not isinstance(case_filter, dict) or not case_filter:
+                raise ToolError("case_filter must be a non-empty object")
+            import json as _json
+            params["case_filter"] = _json.dumps(case_filter, separators=(",", ":"))
+        return _get("get_process_root_cause", f"/v1/process-intelligence/{_log(log_id)}/root-cause", params)
 
     @mcp.tool(annotations=_READ_ONLY)
     def explain_process_case(log_id: str, case_id: str, case_type: str | None = None) -> dict[str, Any]:
@@ -1025,18 +1032,25 @@ def register_process_intelligence_tools(mcp: Any, runtime_module: Any) -> None:
 
     @mcp.tool(annotations=_READ_ONLY)
     def get_process_duration_distribution(log_id: str, cutoffs_hours: list[float] | None = None,
-                                          case_type: str | None = None) -> dict[str, Any]:
+                                          case_type: str | None = None,
+                                          case_filter: dict[str, Any] | None = None) -> dict[str, Any]:
         """How case durations of a shared log are spread: the number and share of cases in each band between the
         given cut-offs (default 1 h, 4 h, 1 day, 3 days) and the median, p90 and p95 duration. Elapsed time between
-        first and last event, not work time. Aggregates only.
+        first and last event, not work time. case_filter (the same keys as insight cohorts) limits it to one group of
+        at least 5 cases. Aggregates only.
         """
         hours = list(cutoffs_hours or [1, 4, 24, 72])
         if not 1 <= len(hours) <= 10 or any(isinstance(h, bool) or not isinstance(h, (int, float)) or h <= 0 for h in hours):
             raise ToolError("cutoffs_hours must be 1 to 10 positive numbers")
         seconds = sorted({int(round(h * 3600)) for h in hours})
+        params: dict[str, Any] = {"cutoffs_seconds": ",".join(str(s) for s in seconds), "case_type": case_type}
+        if case_filter is not None:
+            if not isinstance(case_filter, dict) or not case_filter:
+                raise ToolError("case_filter must be a non-empty object")
+            import json as _json
+            params["case_filter"] = _json.dumps(case_filter, separators=(",", ":"))
         return _get("get_process_duration_distribution",
-                    f"/v1/process-intelligence/{_log(log_id)}/duration-distribution",
-                    {"cutoffs_seconds": ",".join(str(s) for s in seconds), "case_type": case_type})
+                    f"/v1/process-intelligence/{_log(log_id)}/duration-distribution", params)
 
     @mcp.tool(annotations=_READ_ONLY)
     def get_process_time_patterns(log_id: str, time_zone: str = "UTC", activity: str | None = None,

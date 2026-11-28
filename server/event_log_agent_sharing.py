@@ -436,11 +436,17 @@ def brief(log_id: str, case_type: str | None = None, sla_hours: float | None = N
 
 
 def root_cause(log_id: str, outcome: str, case_type: str | None = None, hours: float | None = None,
-               activity: str | None = None) -> dict[str, Any]:
+               activity: str | None = None, case_filter: dict[str, Any] | None = None) -> dict[str, Any]:
     require(log_id, "aggregates")
     from . import event_log_analytics as analytics
+    if case_filter is not None:
+        if not isinstance(case_filter, dict) or not case_filter:
+            raise EventLogWorkspaceError("case_filter must be a non-empty object of case-filter keys")
+        if workspace.summary(log_id, case_type, case_filter)["cases"] < AGENT_MIN_FILTERED_CASES:
+            raise EventLogWorkspaceError(f"fewer than {AGENT_MIN_FILTERED_CASES} cases match this filter; widen it")
     result = analytics.root_cause(log_id, outcome, case_type,
-                                  threshold_seconds=int(hours * 3600) if hours else None, activity=activity, limit=15)
+                                  threshold_seconds=int(hours * 3600) if hours else None, activity=activity, limit=15,
+                                  cohort=case_filter)
     return {"format": FORMAT, "log_id": log_id, **{k: result.get(k) for k in (
         "cases", "outcome_rate", "outcome", "features_tested", "associations", "method",
         "associations_are_not_causes", "temporal_order_not_checked", "numeric_attributes", "note") if k in result}}
@@ -1545,12 +1551,17 @@ def process_map(log_id: str, case_type: str | None = None, activities: float = 1
 
 
 def duration_distribution(log_id: str, cutoffs_seconds: list[int] | None = None,
-                          case_type: str | None = None) -> dict[str, Any]:
+                          case_type: str | None = None, case_filter: dict[str, Any] | None = None) -> dict[str, Any]:
     """How many cases fall in each duration band, with median and upper percentiles (aggregates level). The
     shortest and longest single case durations are not returned."""
     require(log_id, "aggregates")
     from . import event_log_duration_distribution as dd
-    result = dd.distribution(log_id, cutoffs_seconds or [3600, 14400, 86400, 259200], case_type)
+    if case_filter is not None:
+        if not isinstance(case_filter, dict) or not case_filter:
+            raise EventLogWorkspaceError("case_filter must be a non-empty object of case-filter keys")
+        if workspace.summary(log_id, case_type, case_filter)["cases"] < AGENT_MIN_FILTERED_CASES:
+            raise EventLogWorkspaceError(f"fewer than {AGENT_MIN_FILTERED_CASES} cases match this filter; widen it")
+    result = dd.distribution(log_id, cutoffs_seconds or [3600, 14400, 86400, 259200], case_type, cohort=case_filter)
     observed = {k: v for k, v in (result.get("observed_duration_seconds") or {}).items() if k not in ("minimum", "maximum")}
     out = {k: v for k, v in result.items() if k != "log"}
     return {**out, "format": FORMAT, "log_id": log_id, "observed_duration_seconds": observed}
