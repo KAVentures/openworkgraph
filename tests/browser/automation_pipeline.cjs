@@ -35,6 +35,38 @@ const path=require('node:path');
    assert.equal(portable.status,0,portable.stderr);
    const fixture=JSON.parse(portable.stdout),handoff=page.locator('#owgAiOpportunityHandoff');
    await handoff.locator(':scope > summary').click();
+   // Earlier sectioned proposal compatibility uses the actual two local reviewers.
+   {
+     const cp=spawnSync(python,['-c',"import sys,json;sys.path.insert(0,'tests');from test_ai_implementation_compat import fixture;from test_ai_implementation_review import proposal;s,p,o,r=fixture();print(json.dumps({'source':s,'evidence_pin':p,'old':o,'review_pin':r,'new':proposal([s])}))"],{encoding:'utf8'});
+     assert.equal(cp.status,0,cp.stderr);const c=JSON.parse(cp.stdout);
+     const original=handoff.getByLabel('Original workflow evidence JSON files (ordered as in the portable packet)',{exact:true});
+     await original.setInputFiles({name:'compat-source.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(c.source))});
+     await handoff.getByRole('button',{name:'Prepare evidence packet',exact:true}).click();
+     await handoff.getByText('Packet ready:',{exact:false}).waitFor();
+     const panel=handoff.locator('#owgImplementationCompat');await panel.locator(':scope > summary').click();
+     const prep=panel.getByRole('button',{name:'Prepare compatibility handoff',exact:true});assert(await prep.isDisabled());
+     await panel.getByLabel('Original sectioned proposal JSON',{exact:true}).setInputFiles({name:'old.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(c.old))});
+     await panel.getByLabel('Earlier evidence SHA-256',{exact:true}).fill(c.evidence_pin);
+     await panel.getByLabel('Earlier sectioned review SHA-256',{exact:true}).fill(c.review_pin);
+     await prep.click();await panel.getByText('Compatibility handoff ready.',{exact:false}).waitFor();
+     await panel.getByLabel('Re-authored integrated proposal JSON',{exact:true}).setInputFiles({name:'new.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(c.new))});
+     await panel.getByRole('button',{name:'Review re-authored proposal',exact:true}).click();
+     await panel.getByText('Compatibility review complete.',{exact:false}).waitFor();
+     await panel.getByText('1 of 2 original scoped citations retained.',{exact:false}).waitFor();
+     const [d]=await Promise.all([page.waitForEvent('download'),panel.getByRole('button',{name:'Download compatibility review',exact:true}).click()]);
+     const report=JSON.parse(await fs.readFile(await d.path(),'utf8'));
+     assert.equal(report.section_reference_review.length,12);assert.equal(report.semantic_preservation_verified,false);
+     await panel.getByRole('button',{name:'Use re-authored proposal for individual review',exact:true}).click();
+     await handoff.getByLabel('Human-reviewed opportunity title',{exact:true}).fill('Reviewed compatibility candidate');
+     await handoff.getByRole('button',{name:'Review exact proposal',exact:true}).click();
+     await handoff.getByText('Structural review passed.',{exact:false}).waitFor();
+     assert((await handoff.textContent()).includes(report.integrated_proposal_sha256));
+     assert(await handoff.getByRole('button',{name:'Create unassessed idea',exact:true}).isDisabled());
+     await panel.getByLabel('Earlier evidence SHA-256',{exact:true}).fill('0'.repeat(64));
+     assert(await panel.getByRole('button',{name:'Download compatibility review',exact:true}).isDisabled());
+     assert(await handoff.getByRole('button',{name:'Create unassessed idea',exact:true}).isDisabled());
+     await panel.locator(':scope > summary').click();await original.setInputFiles([]);
+   }
    // Direct selection uses original observed-run evidence GET responses. Intercept
    // just those two reads with an exact contract fixture; preparation is real API.
    const picker=handoff.locator('#owgImplementationEvidencePicker');
