@@ -5,6 +5,8 @@ from __future__ import annotations
 from typing import Any
 from mcp.types import ToolAnnotations
 
+from . import knowledge_discovery
+
 
 _REGISTERED_SERVER_IDS: set[int] = set()
 
@@ -55,7 +57,7 @@ Use OpenWorkGraph when the user's request depends on previous or observed work, 
 
 When the user needs status or review evidence for a business record they previously observed in OWG, use get_record_graph with an exact opaque owg:r: resource reference. GitHub PR merge, Jira issue closure and Stripe invoice/refund processor state are distinct, potentially stale source facts, not proof of customer success; do not guess references, ask for credentials, or call it on ordinary coding requests.
 
-When the user asks to draft a skill/procedure/automation from observed work, use get_workflow_evidence. It is the dedicated evidence bundle for that task. Prefer explicit execution_ids when the user selected examples; otherwise a family_key is only a derived grouping. Do not treat find_repeated_workflows, playbooks, dominant sequences, or support counts as policy, permission, or semantic ground truth. OpenWorkGraph supplies evidence; you and the user author the skill. Read get_workflow_knowledge for previously reviewed rules. After showing the complete procedure and obtaining explicit user confirmation, use save_workflow_knowledge to retain portable reviewed context; never silently promote a draft or observed chat into policy. Prefer outcome-oriented use of current authorized tools/connectors over mechanically replaying UI clicks, ask for missing business rules, and never invent clipboard values or infer authorization from repetition.
+When the user asks to draft a skill/procedure/automation from observed work, use get_workflow_evidence. It is the dedicated evidence bundle for that task. Prefer explicit execution_ids when the user selected examples; otherwise a family_key is only a derived grouping. Do not treat find_repeated_workflows, playbooks, dominant sequences, or support counts as policy, permission, or semantic ground truth. OpenWorkGraph supplies evidence; you and the user author the skill. Read get_workflow_knowledge for previously reviewed rules. If the workflow ID is not known, use its optional query and summary_only discovery mode for a bounded literal shortlist, then retrieve the relevant exact ID and recheck revision and digest. A missing match is not proof of absence. After showing the complete procedure and obtaining explicit user confirmation, use save_workflow_knowledge to retain portable reviewed context; never silently promote a draft or observed chat into policy. Prefer outcome-oriented use of current authorized tools/connectors over mechanically replaying UI clicks, ask for missing business rules, and never invent clipboard values or infer authorization from repetition.
 
 When the user asks an already-authorized agent to **perform** a workflow, use `get_workflow_evidence` and its `agent_workflow_map` as compact context. Inspect canonical executions for uncertain steps, combine the proposed map with independently verified user rules, then use the agent's existing authorized tools to carry out the requested task and verify the outcome in its live system of record. A map does not itself authorize execution. Do not ask the person to manually export a map if this tool is already available. Explain missing observation coverage rather than silently treating the map as complete.
 """
@@ -152,13 +154,23 @@ def register_workflow_evidence_tools(mcp: Any, runtime_module: Any) -> None:
         return runtime_module.core._finish("get_workflow_evidence", result)
 
     @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False))
-    def get_workflow_knowledge(workflow_id: str = "", limit: int = 50) -> dict[str, Any]:
+    def get_workflow_knowledge(workflow_id: str = "", limit: int = 50,
+                               query: str = "", summary_only: bool = False) -> dict[str, Any]:
         """Read portable user-reviewed procedures and decision rules before asking again.
 
+        If you do not know the workflow ID, supply a literal query or set
+        summary_only=true to receive metadata for matching saved workflows
+        within a bounded 100-record inventory. No semantic ranking; incomplete
+        inventory is explicit. Retrieve the relevant exact workflow ID without
+        discovery arguments and check its revision and digest before reuse.
         Knowledge is explicitly supplied, not captured evidence or execution
         permission. Check unresolved questions and evidence dates before reuse.
         """
         runtime_module.authorize_tool("get_workflow_knowledge")
+        if query or summary_only:
+            params, terms = knowledge_discovery.request_args(workflow_id, limit, query, summary_only)
+            result = knowledge_discovery.discover(runtime_module.secure_get("/v1/workflow-knowledge", params), terms, limit)
+            return runtime_module.core._finish_reviewed_knowledge("get_workflow_knowledge", result)
         return runtime_module.core._finish_reviewed_knowledge("get_workflow_knowledge", runtime_module.secure_get("/v1/workflow-knowledge", {"workflow_id": workflow_id, "limit": limit}))
 
     @mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=False))
