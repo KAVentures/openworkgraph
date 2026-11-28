@@ -13,6 +13,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, StrictInt
 
 from . import process_clarification as c
+from . import process_source_provenance as provenance
 from .process_model import ProcessModel
 
 FORMAT = "openworkgraph.source-revision-review.v1"
@@ -98,6 +99,10 @@ def compare(record,spec):
     changes=_inventory_delta(before,after)
     counts=dict.fromkeys(KINDS,0)
     counts.update(Counter(kind for kind,_,_ in changes))
+    title_summary,title_groups=provenance.summarize(before,after)
+    title_summary['both_bounded_document_scans_complete']=complete
+    if title_summary['retained_occurrences']!=counts['retained']:
+        raise ValueError('indexed source occurrence accounting mismatch')
     subjects=[]
     matches={}
     for kind,target,text in _subjects(model):
@@ -145,7 +150,8 @@ def compare(record,spec):
     def citation(row):
         return c._cite(row) if row else None
     page=visible[spec.offset:spec.offset+spec.limit]
-    evidence=[{"kind":k,"baseline":citation(l),"candidate":citation(r)} for k,l,r in page]
+    evidence=[{"kind":k,"baseline":citation(l),"candidate":citation(r),
+               "exact_text_title_distribution":title_groups[(l or r)["text"]]} for k,l,r in page]
     def coverage(rows,stats):
         return {"indexed_statements":len(rows),"document_scan_complete":_complete(stats),
                 "instruction_like_statements":sum(r["instruction_like"] for r in rows),
@@ -155,6 +161,7 @@ def compare(record,spec):
             "baseline":coverage(before,b_stats),"candidate":coverage(after,a_stats),
             "both_bounded_document_scans_complete":complete,
             "indexed_statement_occurrence_counts":counts,
+            "document_title_provenance":title_summary,
             "subjects":subjects,"subjects_with_review_flags":sum(s["renewed_review_suggested"] for s in subjects),
             "page":{"change_kind":spec.change_kind,"subject_type":spec.subject_type,"target_id":spec.target_id,
                     "matching_occurrences":len(visible),"offset":spec.offset,
@@ -166,6 +173,7 @@ def compare(record,spec):
             "interpretation":[
                 "Counts compare indexed, trimmed full statement text as occurrences. Formatting within a statement, punctuation or wording differences can produce removal and addition. Identical occurrences are paired in stable bundle order, not by verified document identity.",
                 "Source reorder, title changes and changes outside indexed statements may change the bundle digest without changing indexed statement counts.",
+                "Title-label provenance gives the minimum cross-title exact-text matches among maximum-cardinality matches; it is not the specific stable-order occurrence pairing shown on the page. Duplicate document titles are grouped. A title change or copied text does not establish a document move, identity or authority.",
                 "Subject matches and possible conflicts are lexical review prompts; absence of a flag does not prove that the policy is unchanged or consistent.",
                 "Instruction-like statements remain visible in the raw evidence delta but are excluded from subject matching. Omitted statements make the comparison incomplete.",
                 "No existing human decision is transferred, updated or invalidated by this read-only report. Run the existing clarification review on the candidate bundle to record new decisions."]}

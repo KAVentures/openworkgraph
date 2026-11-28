@@ -58,6 +58,28 @@ def test_reorder_title_only_and_instruction_like_changes():
     assert all(s["added_matching_occurrences"]==0 for s in r["subjects"])
 
 
+def test_title_provenance_exact_occurrences_and_scope():
+    text="Refund amount requires manager approval."
+    base=[{"title":"Old policy","text":text+" "+text},
+          {"title":"Shared","text":text}]
+    current=[{"title":"Shared","text":text+" "+text},
+             {"title":"New policy","text":text}]
+    body=spec(base,current)
+    first=review.compare(RECORD,{**body,"limit":1})
+    p=first["document_title_provenance"]
+    assert p["same_title_retained_maximum"]==1
+    assert p["cross_title_retained_minimum"]==2
+    assert p["retained_occurrences"]==first["indexed_statement_occurrence_counts"]["retained"]==3
+    assert p["both_bounded_document_scans_complete"]
+    second=review.compare(RECORD,{**body,"limit":1,"offset":1,
+                                 "expected_review_sha256":first["review_sha256"]})
+    assert second["document_title_provenance"]==p
+    assert second["page"]["rows"][0]["exact_text_title_distribution"]==first["page"]["rows"][0]["exact_text_title_distribution"]
+    incomplete=review.compare(RECORD,spec(base,[*current,{"title":"Oversized","text":"x"*601}]))
+    assert not incomplete["document_title_provenance"]["both_bounded_document_scans_complete"]
+    assert not p["document_identity_verified"] and not p["policy_authority_verified"]
+
+
 def test_paging_pin_and_changed_bundle_refusal():
     b=spec(docs("Review refund. "*40),docs("Review refund."))
     first=review.compare(RECORD,{**b,"limit":1})
