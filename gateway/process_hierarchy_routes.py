@@ -20,6 +20,20 @@ def add_routes(router,store,human,body,response):
     def inventory(after:str=Query(default='',max_length=80),limit:int=Query(default=50,ge=1,le=100),p=Depends(human)):
         return response(maps.inventory,p,after,limit)
 
+    from shared.process_hierarchy_portfolio import Query as PortfolioQuery
+    from .process_hierarchy_portfolio import RepositoryPortfolio
+    portfolio=RepositoryPortfolio(store)
+
+    @router.post('/v1/human/process-hierarchies/portfolio')
+    async def portfolio_review(request:Request,p=Depends(human)):
+        return await run_in_threadpool(response,portfolio.report,p,await body(request,PortfolioQuery,maximum=4096))
+
+    @router.post('/v1/human/process-hierarchies/portfolio/export')
+    async def portfolio_export(request:Request,p=Depends(human)):
+        result=await run_in_threadpool(response,portfolio.report,p,await body(request,PortfolioQuery,maximum=4096),exporting=True)
+        result.headers['Content-Disposition']='attachment; filename="owg-repository-portfolio-page.json"'
+        return result
+
     @router.get(base)
     def detail(workflow_id:str=Path(pattern=ID),revision:int|None=Query(default=None,ge=1,le=20),p=Depends(human)):
         return response(maps.detail,p,workflow_id,revision)

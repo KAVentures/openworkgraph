@@ -35,8 +35,42 @@ const path=require('node:path');
   await page.locator('#hierarchyInventory').click();await page.locator('#repositoryInventory').getByText(/Support landscape 雪/).waitFor();
   await page.locator('#hierarchyFilter').fill('not a category');assert.equal(await page.locator('#repositoryInventory #hierarchyFilter').count(),1);assert.equal(await page.locator('#repositoryInventory').getByRole('button',{name:'Open repository root',exact:true}).count(),0);
   await page.locator('#hierarchyFilter').fill('Customer service');assert.equal(await page.locator('#repositoryInventory').getByRole('button',{name:'Open repository root',exact:true}).count(),1);
+  // Organization-wide portfolio is independent of the loaded inventory page.
+  const secondMap={organization_id:'acme',title:'Second landscape',category:'Finance',capability:'Case management',
+    nodes:[{id:'root',parent_id:null,process:{workflow_id:c.workflow_id,revision:c.revision,content_sha256:c.content_sha256}},
+      {id:'n1',parent_id:'root',process:{workflow_id:d.workflow_id,revision:d.revision,content_sha256:d.content_sha256}}]};
+  await api('/v1/human/processes/'+c.workflow_id+'/hierarchy',{hierarchy:secondMap,expected_revision:0,expected_access_revision:1,
+    user_confirmed:true,organization_sharing_confirmed:true});
+  const portfolio=page.locator('#hierarchyPortfolioPanel');
+  await portfolio.locator('summary').first().click();
+  await page.locator('#hierarchyPortfolioLoad').click();
+  await page.locator('#hierarchyPortfolioStatus').filter({hasText:'2 saved maps · 8 occurrences · 5 unique referenced processes.'}).waitFor();
+  await page.locator('#hierarchyPortfolioFilter').selectOption('reused');
+  await page.locator('#hierarchyPortfolioLoad').click();
+  await page.locator('#hierarchyPortfolioOutput').getByText('2 matching rows; showing 2 at offset 0.',{exact:true}).waitFor();
+  const reuseRow=page.locator('#hierarchyPortfolioOutput tbody tr').filter({hasText:'Reusable D'});
+  await reuseRow.getByRole('button',{name:'Inspect occurrences'}).click();
+  await page.locator('#hierarchyPortfolioOutput').getByText('3 matching rows; showing 3 at offset 0.',{exact:true}).waitFor();
+  const [portfolioDownload]=await Promise.all([page.waitForEvent('download'),page.locator('#hierarchyPortfolioExport').click()]);
+  const report=JSON.parse(await fs.readFile(await portfolioDownload.path(),'utf8'));
+  assert.equal(report.page.view,'occurrences');assert.equal(report.page.focus_workflow_id,d.workflow_id);
+  assert.equal(report.page.rows.length,3);assert.equal(report.execution_authorized,false);
+  await page.locator('#hierarchyPortfolioFocus').fill('');
+  await page.locator('#hierarchyPortfolioView').selectOption('overlaps');
+  await page.locator('#hierarchyPortfolioLoad').click();
+  await page.locator('#hierarchyPortfolioOutput').getByRole('cell',{name:'2/5',exact:true}).waitFor();
+  await page.locator('#hierarchyPortfolioOutput').getByRole('button',{name:'Compare exact membership'}).click();
+  await page.locator('#hierarchyPortfolioOutput').getByText('5 matching rows; showing 5 at offset 0.',{exact:true}).waitFor();
+  await page.locator('#hierarchyPortfolioFilter').selectOption('shared');
+  await page.locator('#hierarchyPortfolioLoad').click();
+  await page.locator('#hierarchyPortfolioOutput').getByText('2 matching rows; showing 2 at offset 0.',{exact:true}).waitFor();
   // Current child changes never silently replace the historical title or digest.
   await api('/v1/human/processes/'+b.workflow_id,{title:'Child B latest',process_model:b.process_model,expected_revision:1,user_confirmed:true,organization_sharing_confirmed:true});
+  // Old portfolio export must refuse a changed reference basis.
+  await page.locator('#hierarchyPortfolioExport').click();
+  await page.locator('#hierarchyPortfolioStatus').filter({hasText:'basis changed'}).waitFor();
+  assert.equal(await page.locator('#hierarchyPortfolioExport').count(),0);
+  await portfolio.locator('summary').first().click();
   await page.locator('#hierarchyLoad').click();await status().filter({hasText:'Some references have changed'}).waitFor();
   assert.match(await page.locator('#hierarchyTree').textContent(),/Child B · pinned r1 · revision_changed/);
   await page.getByRole('button',{name:'Refresh reference n1',exact:true}).click();await status().filter({hasText:'Updated n1 to r2'}).waitFor();assert.ok(await page.locator('#hierarchyExport').isDisabled());
