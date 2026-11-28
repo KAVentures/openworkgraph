@@ -3111,6 +3111,31 @@ async def event_log_evaluate_prediction_snapshot(request: Request, log_id: str, 
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
+@router.get("/prediction-calibration.js")
+def prediction_calibration_script():
+    return FileResponse(Path(__file__).resolve().parents[1]/"dashboard"/"prediction_calibration.js",media_type="application/javascript")
+
+
+@router.post("/v1/event-logs/{log_id}/prediction-snapshots/{snapshot_id}/calibration")
+async def event_log_prediction_calibration(request: Request,log_id: str,snapshot_id: str):
+    from . import event_log_prediction_calibration as calibration
+    _require_dashboard(request)
+    spec=await _json_body(request,"prospective calibration",strict=True,limit=16384)
+    result=await run_in_threadpool(_respond,calibration.review,log_id,snapshot_id,spec)
+    _require_dashboard(request)
+    return result
+
+
+@router.post("/v1/event-logs/{log_id}/prediction-snapshots/{snapshot_id}/calibration/evidence")
+async def event_log_prediction_calibration_evidence(request: Request,log_id: str,snapshot_id: str):
+    from . import event_log_prediction_calibration as calibration
+    _require_dashboard(request)
+    spec=await _json_body(request,"prospective calibration evidence",strict=True,limit=16384)
+    result=await run_in_threadpool(_respond,calibration.evidence,log_id,snapshot_id,spec)
+    _require_dashboard(request)
+    return result
+
+
 @router.post("/v1/event-logs/{log_id}/prediction-snapshots/{snapshot_id}/delete")
 async def event_log_delete_prediction_snapshot(request: Request, log_id: str, snapshot_id: str):
     from . import event_log_prediction_snapshots as prediction_snapshots
