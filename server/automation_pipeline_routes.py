@@ -379,3 +379,7 @@ def delete_measurement(request: Request, idea_id: str, measurement_id: str):
     from . import automation_benefits
     _require_dashboard(request)
     return _benefit(automation_benefits.delete, idea_id, measurement_id)
+
+# Additive local external-AI opportunity handoff.
+from .ai_opportunity_routes import router as _ai_opportunity_router
+router.include_router(_ai_opportunity_router)
