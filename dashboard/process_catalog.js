@@ -1590,6 +1590,16 @@
           el('p',value.both_bounded_document_scans_complete?'Bounded document scans complete.':'Incomplete indexed source coverage; do not treat this as a complete change inventory.','note'),
           el('p',value.subjects_with_review_flags+' process subjects flagged for renewed review. Bundle identical: '+String(value.document_bundles_identical)+'.'),
           el('p','Review SHA-256 '+value.review_sha256,'muted'));
+        const provenance=value.document_title_provenance;
+        if(provenance){
+          const panel=el('details');panel.id='owgSourceTitleProvenance';
+          panel.append(el('summary','Document-title provenance'),
+            el('p',provenance.same_title_retained_maximum+' maximum same-title retained occurrences · '+provenance.cross_title_retained_minimum+' minimum cross-title retained occurrences.'),
+            el('p','Exact title labels are grouped, not verified document identities. Counts cover indexed statements only; title changes or copied text do not establish changed authority.','muted'));
+          const list=el('ul');
+          for(const row of provenance.titles)list.append(el('li',row.document_title+' · '+row.baseline_occurrences+' previous / '+row.candidate_occurrences+' current · '+row.same_title_retained+' same-title matches · '+row.baseline_unmatched_within_title+' previous / '+row.candidate_unmatched_within_title+' current unmatched within title'));
+          panel.append(list);reviewOutput.append(panel);
+        }
         const subjectPicker=el('select');subjectPicker.setAttribute('aria-label','Source revision subject');
         const choices=[null,...value.subjects];choices.forEach((s,i)=>{const o=el('option',s?s.subject_type+' · '+s.target_id:'All subjects / raw statements');o.value=String(i);subjectPicker.append(o);});
         subjectPicker.value=String(subject?choices.findIndex(s=>s&&s.subject_type===subject.subject_type&&s.target_id===subject.target_id):0);
@@ -1603,6 +1613,11 @@
         reviewOutput.append(details,subjectPicker,kindPicker,el('p',p.matching_occurrences+' matching occurrences · offset '+p.offset));
         for(const row of p.rows){const item=el('section');item.append(el('h6',row.kind));
           for(const [label,cite] of [['Previous',row.baseline],['Current',row.candidate]])if(cite)item.append(el('p',label+' · '+cite.document_title+' · characters '+cite.start+'–'+cite.end+(cite.instruction_like?' · instruction-like (excluded from matching)':'')+': '+cite.text));
+          const distribution=row.exact_text_title_distribution;
+          if(distribution?.title_distribution_changed){
+            const detail=el('details');detail.append(el('summary','Exact text title distribution changed'),el('p',distribution.cross_title_retained_minimum+' minimum cross-title matches for this exact wording (not this specific occurrence).'));
+            const list=el('ul');for(const t of distribution.title_counts)list.append(el('li',t.document_title+' · '+t.baseline_occurrences+' previous / '+t.candidate_occurrences+' current'));detail.append(list);item.append(detail);
+          }
           reviewOutput.append(item);}
         const prev=button('Previous source evidence page',()=>locked(()=>pageReview(Math.max(0,p.offset-25),kind,subject)));
         const next=button('Next source evidence page',()=>locked(()=>pageReview(p.next_offset,kind,subject)));
