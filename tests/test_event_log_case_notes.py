@@ -43,6 +43,26 @@ def test_add_list_per_case_and_remove():
         cn.remove(log, first["added"])
 
 
+def test_edit_preserves_identity_and_rejects_stale_or_invalid_changes():
+    log, other = _log(), _log()
+    note = cn.add(log, {"case_id": "c1", "text": "Original"})["added"]
+    original = cn.notes(log)["notes"][0]
+    assert cn.update(log, note, {"expected_text": "Original", "text": "  Corrected\nline  "}) == {"updated": note, "case_id": "c1"}
+    changed = cn.notes(log)["notes"][0]
+    assert changed["text"] == "Corrected\nline" and changed["created_at"] == original["created_at"]
+    assert cn.query(log, {"search": "corrected"})["notes_total"] == 1
+    with pytest.raises(cn.NoteConflict):
+        cn.update(log, note, {"expected_text": "Original", "text": "Lost update"})
+    for bad in ({"expected_text": changed["text"], "text": "   "},
+                {"expected_text": changed["text"], "text": "bad\x01"},
+                {"expected_text": changed["text"], "text": "x", "extra": 1}):
+        with pytest.raises(EventLogWorkspaceError):
+            cn.update(log, note, bad)
+    with pytest.raises(EventLogWorkspaceError):
+        cn.update(other, note, {"expected_text": changed["text"], "text": "x"})
+    assert cn.notes(log)["notes"][0]["text"] == "Corrected\nline"
+
+
 def test_validation_and_limit(monkeypatch):
     log = _log()
     for bad, match in (({"case_id": "nope", "text": "x"}, "no case"), ({"case_id": "c1", "text": "   "}, "write something"),
@@ -139,6 +159,12 @@ with TestClient(app) as client:
     assert client.post(url+'/query',json={'search':'call'},headers=bearer).status_code in (401,403)
     found=client.post(url+'/query',json={'search':'call'},headers=owner)
     assert found.headers['cache-control']=='no-store' and found.json()['notes'][0]['note_id']==note
+    edit={'expected_text':'Called','text':'Corrected'}
+    assert client.post(url+'/'+note+'/update',json=edit,headers=bearer).status_code in (401,403)
+    updated=client.post(url+'/'+note+'/update',json=edit,headers=owner)
+    assert updated.status_code==200 and updated.headers['cache-control']=='no-store'
+    assert client.post(url+'/'+note+'/update',json=edit,headers=owner).status_code==409
+    assert client.get(url+'?case_id=c1',headers=owner).json()['notes'][0]['text']=='Corrected'
     assert client.post(url,json={"case_id":"zz","text":"x"},headers=owner).status_code==422
     assert client.post(url+'/'+note+'/delete',headers=bearer).status_code in (401,403)
     assert client.post(url+'/'+note+'/delete',headers=owner).json()['notes']==[]

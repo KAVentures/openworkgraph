@@ -3425,7 +3425,7 @@
     nav.append(previous,next);show(nav,false);
     panel.append(form,msg,...(fixedCase===null?[searchRow]:[]),list,nav);
     const plural=(n,w)=>Number(n).toLocaleString()+' '+w+(n===1?'':'s');
-    let searchText='',loadTurn=0,pageIndex=0,following=null,cursors=[null],writing=false;
+    let searchText='',loadTurn=0,pageIndex=0,following=null,cursors=[null],writing=false,editing=false,pendingRefresh=false;
     const post=async(url,body)=>(await api(url,{method:'POST',...(body===undefined?{}:{headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})})).json();
     function refreshViews(changedCase){
       document.querySelectorAll('[data-owg-case-notes-view]').forEach(view=>{
@@ -3445,7 +3445,7 @@
           list.replaceChildren(el('div',searchText?'No notes match this search.':'No case notes yet.','muted'));
           return;
         }
-        const headers=[...(fixedCase===null?['Case','Object type']:[]),'Note','Written','Actions'];
+        const headers=[...(fixedCase===null?['Case','Object type']:[]),'Note','Created','Actions'];
         const t=table(headers,r.notes.map(n=>{
           const actions=el('div',null,'row');
           if(inspection&&n.has_events&&n.object_type){
@@ -3463,8 +3463,27 @@
             }catch(error){if(current())msg.textContent=error.message;}
             finally{writing=false;if(current())del.disabled=add.disabled=false;}
           };
-          actions.appendChild(del);
           const body=el('div',n.text);body.style.whiteSpace='pre-wrap';
+          const edit=button('Edit','secondary');edit.setAttribute('aria-label','Edit note on case '+n.case_id);
+          edit.onclick=()=>{
+            if(editing||writing||!current())return;
+            const editor=document.createElement('textarea');editor.maxLength=2000;editor.rows=3;editor.value=n.text;
+            editor.setAttribute('aria-label','Edit note text for case '+n.case_id);
+            const saveEdit=button('Save note','secondary'),cancel=button('Cancel editing','secondary');
+            editing=true;body.replaceChildren(editor);actions.replaceChildren(saveEdit,cancel);editor.focus();
+            cancel.onclick=()=>{editing=false;body.textContent=n.text;actions.replaceChildren(edit,del);if(pendingRefresh){pendingRefresh=false;restart();}};
+            saveEdit.onclick=async()=>{
+              if(writing||!current())return;
+              if(!editor.value.trim()){msg.textContent='Write something in the note.';return;}
+              writing=true;saveEdit.disabled=cancel.disabled=add.disabled=true;
+              try{
+                await post(endpoint+'/'+encodeURIComponent(n.note_id)+'/update',{expected_text:n.text,text:editor.value});
+                editing=false;pendingRefresh=false;if(current())msg.textContent='Note updated.';refreshViews(n.case_id);
+              }catch(error){if(current())msg.textContent=error.message;}
+              finally{writing=false;if(current())saveEdit.disabled=cancel.disabled=add.disabled=false;}
+            };
+          };
+          actions.append(edit,del);
           return [...(fixedCase===null?[n.case_id,n.object_type||'—']:[]),body,n.created_at.slice(0,16).replace('T',' ')+' UTC',actions];
         }));
         const count=plural(r.notes_total,'note')+' on '+plural(r.matching_cases,'case')+'.';
@@ -3473,13 +3492,15 @@
       finally{if(valid()){list.inert=false;previous.disabled=pageIndex===0;next.disabled=following===null;}}
     }
     const restart=()=>{cursors=[null];pageIndex=0;following=null;load(0);};
-    previous.onclick=()=>load(pageIndex-1);
-    next.onclick=()=>{cursors[pageIndex+1]=following;load(pageIndex+1);};
-    find.onclick=()=>{searchText=search.value.trim();msg.textContent='';restart();};
+    previous.onclick=()=>{if(!editing)load(pageIndex-1);else msg.textContent='Save or cancel your note edit before changing pages.';};
+    next.onclick=()=>{if(editing){msg.textContent='Save or cancel your note edit before changing pages.';return;}cursors[pageIndex+1]=following;load(pageIndex+1);};
+    find.onclick=()=>{if(editing){msg.textContent='Save or cancel your note edit before searching.';return;}searchText=search.value.trim();msg.textContent='';restart();};
     search.onkeydown=event=>{if(event.key==='Enter'){event.preventDefault();find.click();}};
-    clear.onclick=()=>{search.value='';find.click();};
+    clear.onclick=()=>{if(editing){msg.textContent='Save or cancel your note edit before searching.';return;}search.value='';find.click();};
     panel.addEventListener('owg-case-note-change',event=>{
-      if(fixedCase===null||event.detail===fixedCase)restart();
+      if(fixedCase!==null&&event.detail!==fixedCase)return;
+      if(editing){pendingRefresh=true;msg.textContent='Notes changed in another view. Your draft is kept; cancel to reload.';return;}
+      restart();
     });
     add.onclick=async()=>{
       if(writing||!current())return;
