@@ -280,7 +280,8 @@ def register_process_intelligence_tools(mcp: Any, runtime_module: Any) -> None:
 
     @mcp.tool(annotations=_READ_ONLY)
     def get_process_trace_clusters(log_id: str, k: int | None = None, max_k: int = 8,
-                                   case_type: str | None = None) -> dict[str, Any]:
+                                   case_type: str | None = None,
+                                   case_filter: dict[str, Any] | None = None) -> dict[str, Any]:
         """Groups of cases of a shared log with similar behaviour (trace clustering): each cluster's cases and
         share, top variants, activities more and less common in it than in the whole log, median throughput time
         and events per case. k fixes the number of clusters; otherwise the best between 2 and max_k is chosen.
@@ -290,8 +291,13 @@ def register_process_intelligence_tools(mcp: Any, runtime_module: Any) -> None:
         for name, value in (("k", k), ("max_k", max_k)):
             if value is not None and (isinstance(value, bool) or not isinstance(value, int) or not 2 <= value <= 12):
                 raise ToolError(f"{name} must be 2 to 12")
-        return _get("get_process_trace_clusters", f"/v1/process-intelligence/{_log(log_id)}/trace-clusters",
-                    {"k": k, "max_k": max_k, "case_type": case_type})
+        params: dict[str, Any] = {"k": k, "max_k": max_k, "case_type": case_type}
+        if case_filter is not None:
+            if not isinstance(case_filter, dict) or not case_filter:
+                raise ToolError("case_filter must be a non-empty object")
+            import json as _json
+            params["case_filter"] = _json.dumps(case_filter, separators=(",", ":"))
+        return _get("get_process_trace_clusters", f"/v1/process-intelligence/{_log(log_id)}/trace-clusters", params)
 
     @mcp.tool(annotations=_READ_ONLY)
     def check_process_compliance(log_id: str, rules: list[dict[str, Any]], case_type: str | None = None) -> dict[str, Any]:
@@ -431,6 +437,34 @@ def register_process_intelligence_tools(mcp: Any, runtime_module: Any) -> None:
             raise ToolError(str(exc) or "process intelligence request failed") from None
         result["interpretation"] = _NOTE
         return runtime_module.core._finish("simulate_process_scenario", result)
+
+    @mcp.tool(annotations=_READ_ONLY)
+    def compare_process_scenarios(log_id: str, alternatives: list[dict[str, Any]], baseline: dict[str, Any] | None = None,
+                                  case_type: str | None = None) -> dict[str, Any]:
+        """Compare 2 to 4 named what-if alternatives for a shared log side by side. All of them and the baseline
+        are simulated from one calibration with the same cases and random seed, so the differences are like for
+        like. Each alternative needs a distinct "label" and may override "activities", "paths", "distribution",
+        "arrivals_per_hour", "scenario_calendar", "pools" and "priorities" (as in simulate_process_scenario).
+        baseline holds the shared "cases" (10 to 5000), "seed", "calendar", "activity_time_basis" and
+        "arrivals_per_hour". Returns cycle time, throughput, longest waits and the change against the baseline
+        for each. Does not pick a winner; a model output, not a forecast. Aggregates only.
+        """
+        if not isinstance(alternatives, list) or not 2 <= len(alternatives) <= 4:
+            raise ToolError("alternatives must be a list of 2 to 4 named scenarios")
+        if baseline is not None and not isinstance(baseline, dict):
+            raise ToolError("baseline must be an object")
+        payload: dict[str, Any] = {"alternatives": alternatives}
+        if baseline is not None:
+            payload["baseline"] = baseline
+        if case_type is not None:
+            payload["case_type"] = case_type
+        runtime_module.authorize_tool("compare_process_scenarios")
+        try:
+            result = runtime_module.secure_post(f"/v1/process-intelligence/{_log(log_id)}/compare-scenarios", payload)
+        except Exception as exc:
+            raise ToolError(str(exc) or "process intelligence request failed") from None
+        result["interpretation"] = _NOTE
+        return runtime_module.core._finish("compare_process_scenarios", result)
 
     @mcp.tool(annotations=_READ_ONLY)
     def get_process_automation_candidates(log_id: str, limit: int = 10, case_type: str | None = None) -> dict[str, Any]:
@@ -631,7 +665,8 @@ def register_process_intelligence_tools(mcp: Any, runtime_module: Any) -> None:
 
     @mcp.tool(annotations=_READ_ONLY)
     def get_process_heuristics_net(log_id: str, dependency_threshold: float = 0.5,
-                                   case_type: str | None = None) -> dict[str, Any]:
+                                   case_type: str | None = None,
+                                   case_filter: dict[str, Any] | None = None) -> dict[str, Any]:
         """Heuristics-miner model of a shared log: arrows kept only where one activity follows another clearly
         more often than the reverse (dependency at or above the threshold), with each split and join marked AND
         (branches occur in both orders) or XOR (one or the other), and self- and two-step loops. Inferred from
@@ -640,8 +675,13 @@ def register_process_intelligence_tools(mcp: Any, runtime_module: Any) -> None:
         if isinstance(dependency_threshold, bool) or not isinstance(dependency_threshold, (int, float)) \
                 or not 0 <= dependency_threshold <= 1:
             raise ToolError("dependency_threshold must be a number from 0 to 1")
-        return _get("get_process_heuristics_net", f"/v1/process-intelligence/{_log(log_id)}/heuristics-net",
-                    {"dependency_threshold": float(dependency_threshold), "case_type": case_type})
+        params: dict[str, Any] = {"dependency_threshold": float(dependency_threshold), "case_type": case_type}
+        if case_filter is not None:
+            if not isinstance(case_filter, dict) or not case_filter:
+                raise ToolError("case_filter must be a non-empty object")
+            import json as _json
+            params["case_filter"] = _json.dumps(case_filter, separators=(",", ":"))
+        return _get("get_process_heuristics_net", f"/v1/process-intelligence/{_log(log_id)}/heuristics-net", params)
 
     @mcp.tool(annotations=_READ_ONLY)
     def get_process_data_quality(log_id: str) -> dict[str, Any]:
@@ -654,7 +694,8 @@ def register_process_intelligence_tools(mcp: Any, runtime_module: Any) -> None:
         return _get("get_process_data_quality", f"/v1/process-intelligence/{_log(log_id)}/data-quality", {})
 
     @mcp.tool(annotations=_READ_ONLY)
-    def get_process_footprints(log_id: str, noise: float = 0.2, case_type: str | None = None) -> dict[str, Any]:
+    def get_process_footprints(log_id: str, noise: float = 0.2, case_type: str | None = None,
+                               case_filter: dict[str, Any] | None = None) -> dict[str, Any]:
         """Footprint comparison of a shared log: for every pair of activities, whether one directly follows the
         other (→), both orders occur (||) or neither (#), once from the recorded cases and once from the discovered
         model, with the orderings only the log has (and how many cases took them) or only the model allows.
@@ -662,12 +703,18 @@ def register_process_intelligence_tools(mcp: Any, runtime_module: Any) -> None:
         """
         if isinstance(noise, bool) or not isinstance(noise, (int, float)) or not 0 <= noise < 1:
             raise ToolError("noise must be a share from 0 up to (not including) 1")
-        return _get("get_process_footprints", f"/v1/process-intelligence/{_log(log_id)}/footprints",
-                    {"noise": float(noise), "case_type": case_type})
+        params: dict[str, Any] = {"noise": float(noise), "case_type": case_type}
+        if case_filter is not None:
+            if not isinstance(case_filter, dict) or not case_filter:
+                raise ToolError("case_filter must be a non-empty object")
+            import json as _json
+            params["case_filter"] = _json.dumps(case_filter, separators=(",", ":"))
+        return _get("get_process_footprints", f"/v1/process-intelligence/{_log(log_id)}/footprints", params)
 
     @mcp.tool(annotations=_READ_ONLY)
     def get_process_model_quality(log_id: str, noise_levels: list[float] | None = None,
-                                  case_type: str | None = None) -> dict[str, Any]:
+                                  case_type: str | None = None,
+                                  case_filter: dict[str, Any] | None = None) -> dict[str, Any]:
         """How good the discovered process model of a shared log is at each noise level: fitness (can it replay
         the cases), precision (does it allow little else), their F-score, generalization and simplicity, plus the
         noise level with the best F-score. Use it to pick a noise level before asking for the model or its
@@ -679,6 +726,11 @@ def register_process_intelligence_tools(mcp: Any, runtime_module: Any) -> None:
                     or any(isinstance(v, bool) or not isinstance(v, (int, float)) or not 0 <= v < 1 for v in noise_levels)):
                 raise ToolError("noise_levels must be 1 to 8 shares from 0 up to (not including) 1")
             params["levels"] = ",".join(str(float(v)) for v in noise_levels)
+        if case_filter is not None:
+            if not isinstance(case_filter, dict) or not case_filter:
+                raise ToolError("case_filter must be a non-empty object")
+            import json as _json
+            params["case_filter"] = _json.dumps(case_filter, separators=(",", ":"))
         return _get("get_process_model_quality", f"/v1/process-intelligence/{_log(log_id)}/model-quality", params)
 
     @mcp.tool(annotations=_READ_ONLY)
@@ -699,7 +751,8 @@ def register_process_intelligence_tools(mcp: Any, runtime_module: Any) -> None:
                     {"noise": float(noise), "activities": float(activities), "case_type": case_type})
 
     @mcp.tool(annotations=_READ_ONLY)
-    def get_process_deviations(log_id: str, noise: float = 0.2, case_type: str | None = None) -> dict[str, Any]:
+    def get_process_deviations(log_id: str, noise: float = 0.2, case_type: str | None = None,
+                               case_filter: dict[str, Any] | None = None) -> dict[str, Any]:
         """Exactly where the recorded cases of a shared log depart from its discovered process model, from optimal
         alignments: the steps cases took that the model does not allow there, the steps the model requires that
         cases skipped (each with case counts), alignment fitness, and how each non-fitting variant is explained
@@ -708,8 +761,13 @@ def register_process_intelligence_tools(mcp: Any, runtime_module: Any) -> None:
         """
         if isinstance(noise, bool) or not isinstance(noise, (int, float)) or not 0 <= noise < 1:
             raise ToolError("noise must be a share from 0 up to (not including) 1")
-        return _get("get_process_deviations", f"/v1/process-intelligence/{_log(log_id)}/model-deviations",
-                    {"noise": float(noise), "case_type": case_type})
+        params: dict[str, Any] = {"noise": float(noise), "case_type": case_type}
+        if case_filter is not None:
+            if not isinstance(case_filter, dict) or not case_filter:
+                raise ToolError("case_filter must be a non-empty object")
+            import json as _json
+            params["case_filter"] = _json.dumps(case_filter, separators=(",", ":"))
+        return _get("get_process_deviations", f"/v1/process-intelligence/{_log(log_id)}/model-deviations", params)
 
     @mcp.tool(annotations=_READ_ONLY)
     def list_process_reference_nets(log_id: str) -> dict[str, Any]:
@@ -1058,16 +1116,23 @@ def register_process_intelligence_tools(mcp: Any, runtime_module: Any) -> None:
         return _get("get_process_signals", f"/v1/process-intelligence/{_log(log_id)}/signals", {})
 
     @mcp.tool(annotations=_READ_ONLY)
-    def get_process_rework(log_id: str, limit: int = 20, case_type: str | None = None) -> dict[str, Any]:
+    def get_process_rework(log_id: str, limit: int = 20, case_type: str | None = None,
+                           case_filter: dict[str, Any] | None = None) -> dict[str, Any]:
         """Rework in a shared log: the share of cases that repeat an activity, which activities are repeated most
         and how often, the most common loop patterns (self-loop, short loop, longer return), and how long cases
         with rework take compared with cases without (median difference with a 95% interval). Association, not
-        cause. Aggregates only.
+        cause. case_filter (the same keys as insight cohorts) narrows the cases; logs above 200,000 cases need one.
+        Aggregates only.
         """
         if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 100:
             raise ToolError("limit must be 1 to 100")
-        return _get("get_process_rework", f"/v1/process-intelligence/{_log(log_id)}/rework",
-                    {"limit": limit, "case_type": case_type})
+        params: dict[str, Any] = {"limit": limit, "case_type": case_type}
+        if case_filter is not None:
+            if not isinstance(case_filter, dict) or not case_filter:
+                raise ToolError("case_filter must be a non-empty object")
+            import json as _json
+            params["case_filter"] = _json.dumps(case_filter, separators=(",", ":"))
+        return _get("get_process_rework", f"/v1/process-intelligence/{_log(log_id)}/rework", params)
 
     @mcp.tool(annotations=_READ_ONLY)
     def get_process_waiting_times(log_id: str, case_type: str | None = None,
@@ -1177,11 +1242,13 @@ def register_process_intelligence_tools(mcp: Any, runtime_module: Any) -> None:
 
     @mcp.tool(annotations=_READ_ONLY)
     def get_process_batching(log_id: str, gap_seconds: int = 60, min_batch_size: int = 3, by_resource: bool = True,
-                             case_type: str | None = None) -> dict[str, Any]:
+                             case_type: str | None = None,
+                             case_filter: dict[str, Any] | None = None) -> dict[str, Any]:
         """Batch processing in a shared log: per activity, the share of events done in batches (events of one
         activity by one resource within gap_seconds, at least min_batch_size of them), batch sizes, whether batches
         are simultaneous or sequential, and how long cases waited before a batched event compared with an unbatched
-        one. Batches are inferred from timestamps; resources are only counted, never named. Aggregates only.
+        one. Batches are inferred from timestamps; resources are only counted, never named. case_filter (the same keys
+        as insight cohorts) limits it to one group of at least 5 cases. Aggregates only.
         """
         if isinstance(gap_seconds, bool) or not isinstance(gap_seconds, int) or not 0 <= gap_seconds <= 86_400:
             raise ToolError("gap_seconds must be 0 to 86400")
@@ -1189,9 +1256,14 @@ def register_process_intelligence_tools(mcp: Any, runtime_module: Any) -> None:
             raise ToolError("min_batch_size must be 2 to 1000")
         if not isinstance(by_resource, bool):
             raise ToolError("by_resource must be true or false")
-        return _get("get_process_batching", f"/v1/process-intelligence/{_log(log_id)}/batching",
-                    {"gap_seconds": gap_seconds, "min_batch_size": min_batch_size,
-                     "by_resource": "true" if by_resource else "false", "case_type": case_type})
+        params: dict[str, Any] = {"gap_seconds": gap_seconds, "min_batch_size": min_batch_size,
+                                  "by_resource": "true" if by_resource else "false", "case_type": case_type}
+        if case_filter is not None:
+            if not isinstance(case_filter, dict) or not case_filter:
+                raise ToolError("case_filter must be a non-empty object")
+            import json as _json
+            params["case_filter"] = _json.dumps(case_filter, separators=(",", ":"))
+        return _get("get_process_batching", f"/v1/process-intelligence/{_log(log_id)}/batching", params)
 
     @mcp.tool(annotations=_READ_ONLY)
     def get_process_handovers(log_id: str, limit: int = 50, case_type: str | None = None,

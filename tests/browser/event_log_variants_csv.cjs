@@ -40,6 +40,12 @@ const path=require('node:path');
    assert.deepEqual(lines.slice(1).map(l=>l.split(',').slice(0,6).join(',')),
      ['1,Open > Approve > Close,3,6,0.5,0.5','2,Open > Reject > Close,3,4,0.333333,0.833333','3,Open > Close,2,2,0.166667,1.0']);
    await page.locator('#owgVariantsCsvStatus').filter({hasText:'Downloaded 3 variants.'}).waitFor();
+   const [exact]=await Promise.all([page.waitForEvent('download'),page.locator('#owgVariantsExactCsv').click()]);
+   assert.match(exact.suggestedFilename(),/-variants-exact\.csv$/);
+   const exactText=await fs.readFile(await exact.path(),'utf8');
+   assert.match(exactText.split('\n')[0],/p90_seconds,path_json/);
+   assert.match(exactText,/"\[""Open"",""Approve"",""Close""\]"/);
+   await page.locator('#owgVariantsCsvStatus').filter({hasText:'Exact paths are in the path_json column.'}).waitFor();
    assert.deepEqual(errors,[]);
    console.log('Variant CSV browser acceptance passed: every variant with steps, cases, share and running share.');
  }finally{if(browser)await browser.close();server.kill();}

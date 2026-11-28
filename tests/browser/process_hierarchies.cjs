@@ -74,6 +74,26 @@ const path=require('node:path');
   await page.locator('#hierarchyLoad').click();await status().filter({hasText:'Some references have changed'}).waitFor();
   assert.match(await page.locator('#hierarchyTree').textContent(),/Child B · pinned r1 · revision_changed/);
   await page.getByRole('button',{name:'Refresh reference n1',exact:true}).click();await status().filter({hasText:'Updated n1 to r2'}).waitFor();assert.ok(await page.locator('#hierarchyExport').isDisabled());
+  // The single-reference path is still available; discard its draft and
+  // exercise independently reviewed batch maintenance on the saved map.
+  await page.locator('#hierarchyLoad').click();await status().filter({hasText:'Some references have changed'}).waitFor();
+  await page.locator('#hierarchyReferenceRefresh summary').click();
+  assert.equal(await page.locator('#hierarchyReferenceRefresh input:checked').count(),1);
+  await page.locator('#hierarchyRefreshRun').click();
+  await page.locator('#hierarchyReferenceRefresh').getByText(/1 changed occurrences/).waitFor();
+  const [refreshFile]=await Promise.all([page.waitForEvent('download'),page.locator('#hierarchyRefreshDownload').click()]);
+  const refresh=JSON.parse(await fs.readFile(await refreshFile.path(),'utf8'));
+  assert.deepEqual(refresh.changed_node_ids,['n1']);
+  assert.deepEqual(refresh.branch_impacts[0].ancestor_node_ids,['root']);
+  assert.equal(refresh.persisted,false);
+  assert.equal((await api(rootURL+'/hierarchy')).latest_revision,1);
+  await page.locator('#hierarchyRefreshStage').click();
+  await status().filter({hasText:'Staged 1 exact reference changes in the draft'}).waitFor();
+  assert.equal((await api(rootURL+'/hierarchy')).latest_revision,1);
+  assert.ok(await page.locator('#hierarchyExport').isDisabled());
+  assert.ok(await page.locator('#hierarchySave').isDisabled());
+  assert.equal(await page.locator('#hierarchyConfirm').isChecked(),false);
+
   await page.locator('#hierarchyConfirm').check();await page.locator('#hierarchySave').click();await status().filter({hasText:'Repository map saved.'}).waitFor();
   await page.locator('#hierarchyRevision').selectOption('1');await page.locator('#hierarchyHistory').click();await status().filter({hasText:'Opened map revision 1.'}).waitFor();assert.ok(await page.locator('#hierarchySave').isDisabled());
   const [oldDownload]=await Promise.all([page.waitForEvent('download'),page.locator('#hierarchyExport').click()]);assert.deepEqual(JSON.parse(await fs.readFile(await oldDownload.path(),'utf8')).artifact,first.artifact);
