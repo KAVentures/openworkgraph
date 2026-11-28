@@ -131,3 +131,9 @@ packaged-client acceptance remain required before release.
 ```sh
 python -m pytest -q tests/test_ai_opportunity_handoff.py tests/test_ai_opportunity_integration.py
 ```
+
+## Directly select observed work without exporting a file first
+
+Expand **Select observed work directly from OWG**. Enter an explicit offset-aware window of at most seven days. The local candidate search uses the existing workflow-evidence family navigation endpoint, with 25,000 source rows, at most 20 families and at most 12 examples per family. Derived families are not verified workflows, ranking is not task confidence, and the bounded population does not establish coverage. Select individual observed execution IDs (or paste exact IDs directly, including a known run not shown in the navigation list). Then explicitly replace the current handoff sources with the requested canonical evidence. The picker requests at most 12 selected runs with up to 100 returned events per run and refuses mismatched or omitted IDs/windows or responses exceeding 2 MiB. Visible coverage flags include the source limit, truncated or empty executions and unverified event membership. These are not completeness scores.
+
+The original local API response is retained as a browser-memory file without JSON reserialization. Download it if needed for later exact proposal verification. The existing preparation, external-AI instructions, optional local inference, trials, opportunity review and native skill draft paths use that same source; no new model, data store, authorization, background capture or upload is introduced. Existing file import stays available. Changing the picker draft alone does not replace the current handoff source; a successful explicit selection clears old packet/proposal-review and inference confirmation state. A refused selection leaves previous sources intact. Review authorization, sensitive content and evidence coverage before any separate external AI request.

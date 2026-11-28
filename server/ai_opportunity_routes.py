@@ -20,6 +20,7 @@ MAX_BYTES = 8 * 1024 * 1024
 _LOCAL_MODEL_SLOT = Lock()
 SCRIPT = Path(__file__).resolve().parents[1] / "dashboard" / "ai_opportunity_handoff.js"
 TRIAL_SCRIPT = SCRIPT.with_name("ai_context_trial.js")
+EVIDENCE_PICKER_SCRIPT = SCRIPT.with_name("ai_implementation_evidence_picker.js")
 
 
 def _require_dashboard(request):
@@ -81,6 +82,11 @@ def script():
 @router.get("/ai-context-trial.js")
 def trial_script():
     return FileResponse(TRIAL_SCRIPT, media_type="application/javascript")
+
+
+@router.get("/ai-implementation-evidence-picker.js")
+def evidence_picker_script():
+    return FileResponse(EVIDENCE_PICKER_SCRIPT, media_type="application/javascript")
 
 
 @router.post("/v1/ai-opportunity-handoff/prepare-packet")

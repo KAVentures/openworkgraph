@@ -35,6 +35,53 @@ const path=require('node:path');
    assert.equal(portable.status,0,portable.stderr);
    const fixture=JSON.parse(portable.stdout),handoff=page.locator('#owgAiOpportunityHandoff');
    await handoff.locator('summary').click();
+   // Direct selection uses original observed-run evidence GET responses. Intercept
+   // just those two reads with an exact contract fixture; preparation is real API.
+   const picker=handoff.locator('#owgImplementationEvidencePicker');
+   const window={since:'2026-11-28T07:00:00.000Z',until:'2026-11-28T11:00:00.000Z'};
+   const liveSource=structuredClone(fixture.source),eid=liveSource.executions[0].execution_id;
+   const missing='execution:'+'c'.repeat(16);
+   liveSource.selector={selection_mode:'explicit_executions',family_selection_is_ground_truth:false,selected_execution_count:1,execution_ids:[eid]};
+   Object.assign(liveSource.provenance,{source:'canonical_local_event_store',requested_window:window,selected_execution_ids:[eid],source_limit_reached:true});
+   const liveText=JSON.stringify(liveSource,null,2);let discoveryCalls=0,evidenceCalls=0;
+   const familyPattern='**/v1/workflow-evidence/families?*',evidencePattern='**/v1/workflow-evidence?*';
+   await page.route(familyPattern,async route=>{
+     discoveryCalls++;const q=new URL(route.request().url()).searchParams;
+     assert.equal(q.get('since'),window.since);assert.equal(q.get('until'),window.until);
+     assert.equal(q.get('min_runs'),'1');assert.equal(q.get('limit'),'20');
+     await route.fulfill({json:{format:liveSource.format,authoritative:false,family_grouping_is_navigation_only:true,requested_window:window,source_limit_reached:true,
+       families_returned:1,families_total:2,families:[{family_key:'fixture',family_is_ground_truth:false,execution_count:2,executions:[{execution_id:eid,actor_kind:'human',started_at:window.since},{execution_id:missing,actor_kind:'agent',started_at:window.since}]}]}});
+   });
+   await page.route(evidencePattern,async route=>{
+     evidenceCalls++;const q=new URL(route.request().url()).searchParams;
+     assert.equal(q.get('since'),window.since);assert.equal(q.get('until'),window.until);
+     assert.equal(q.get('include_canonical_evidence'),'true');assert.equal(q.get('max_runs'),'1');
+     await route.fulfill({status:200,contentType:'application/json',body:liveText});
+   });
+   try{
+     await picker.locator('summary').click();
+     const find=picker.getByRole('button',{name:'Find local execution candidates',exact:true});
+     const use=picker.getByRole('button',{name:'Use selected executions (replace sources)',exact:true});
+     assert(await find.isDisabled());assert(await use.isDisabled());assert.equal(discoveryCalls+evidenceCalls,0);
+     await picker.getByLabel('Evidence window start (ISO 8601 with offset)',{exact:true}).fill('2026-11-28T08:00:00+01:00');
+     await picker.getByLabel('Evidence window end (ISO 8601 with offset)',{exact:true}).fill('2026-11-28T12:00:00+01:00');
+     await find.click();await picker.getByText('Returned 1 of 2 candidate families;',{exact:false}).waitFor();assert(await use.isDisabled());
+     await picker.getByRole('button',{name:'Add '+eid,exact:true}).click();
+     await use.click();await picker.getByText('Original source loaded into the handoff below.',{exact:false}).waitFor();
+     assert.equal(discoveryCalls,1);assert.equal(evidenceCalls,1);
+     const [originalFile]=await Promise.all([page.waitForEvent('download'),picker.getByRole('button',{name:'Download last selected original evidence',exact:true}).click()]);
+     assert.equal(await fs.readFile(await originalFile.path(),'utf8'),liveText);
+     await handoff.getByRole('button',{name:'Prepare evidence packet',exact:true}).click();
+     await handoff.getByText('Packet ready:',{exact:false}).waitFor();
+     const [selectedPacket]=await Promise.all([page.waitForEvent('download'),handoff.getByRole('button',{name:'Download evidence packet',exact:true}).click()]);
+     const expected=spawnSync(python,['-c',"import sys,json;from shared.ai_implementation_review import prepare;print(prepare([json.load(sys.stdin)])['packet_sha256'])"],{input:liveText,encoding:'utf8'});
+     assert.equal(expected.status,0,expected.stderr);assert.equal(JSON.parse(await fs.readFile(await selectedPacket.path(),'utf8')).packet_sha256,expected.stdout.trim());
+     await picker.getByLabel('Exact execution IDs (one per line or comma separated)',{exact:true}).fill(missing);
+     await use.click();await picker.getByText('Returned evidence does not match every explicitly selected', {exact:false}).waitFor();
+     // A refused replacement leaves the previously prepared packet available.
+     assert(await handoff.getByRole('button',{name:'Download evidence packet',exact:true}).isEnabled());
+     await picker.locator('summary').click();
+   }finally{await page.unroute(familyPattern);await page.unroute(evidencePattern);}
    await handoff.getByLabel('Original workflow evidence JSON files (ordered as in the portable packet)',{exact:true}).setInputFiles({name:'evidence.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(fixture.source))});
    const prepButton=handoff.getByRole('button',{name:'Prepare evidence packet',exact:true});
    const packetDownload=handoff.getByRole('button',{name:'Download evidence packet',exact:true});
