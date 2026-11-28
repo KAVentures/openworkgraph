@@ -8,7 +8,7 @@ const path=require('node:path');
  const scratch=await fs.mkdtemp(path.join(tmpdir(),'owg-shadow-review-browser-'));
  const python=process.env.OWG_BROWSER_PYTHON||'python',base='http://127.0.0.1:8787';
  const server=spawn(python,['-m','uvicorn','process_shadow_review_app:app','--app-dir','tests/browser','--host','127.0.0.1','--port','8787'],{
-  env:{...process.env,OWG_BROWSER_TEST_DIR:scratch},stdio:['ignore','pipe','pipe']});
+  env:{...process.env,OWG_BROWSER_TEST_DIR:scratch,OWG_JIRA_REMEDIATION_WRITE_ENABLED:'0'},stdio:['ignore','pipe','pipe']});
  let logs='',browser,spawnError;
  server.on('error',error=>spawnError=error);for(const pipe of [server.stdout,server.stderr])pipe.on('data',chunk=>logs=(logs+chunk).slice(-8000));
  try{
@@ -183,6 +183,142 @@ const path=require('node:path');
   await page.locator('#owgCatalogProcurementResult').getByText('Rehearsal decision receipt',{exact:true}).waitFor();
 
 
+  // Generate real signed audit dossiers using the same installed Python implementation.
+  const auditFixture=spawnSync(python,['-c',`import sys,json
+sys.path.insert(0,"tests")
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from test_agent_procurement_workforce_timeline import snapshot,manifest
+from test_agent_procurement_workforce_exchange import row
+from shared.agent_procurement import digest
+key=Ed25519PrivateKey.generate()
+a=snapshot({"site":(key,[row("site",incident=True)])},100)
+b=snapshot({"site":(key,[row("site")])},120)
+c=snapshot({"site":(key,[row("site")])},140)
+m=manifest(a,b)
+extended=manifest(a,b,c)
+print(json.dumps({"a":a[0],"b":b[0],"c":c[0],"trust":a[1]["trust"],"manifest":m,"pin":digest(m),"extended":extended,"extended_pin":digest(extended)}))
+`],{encoding:'utf8'});
+  assert.equal(auditFixture.status,0,auditFixture.stderr);
+  const archives=JSON.parse(auditFixture.stdout);
+  const exchangePanel=page.getByText('Exchange minimized monitoring summaries across installations',{exact:true});
+  await exchangePanel.click();
+  await page.getByText('Independently verify historical workforce audit evidence',{exact:true}).click();
+  const auditInput=page.getByLabel('Independent audit trust file or timeline manifest',{exact:true});
+  const auditPin=page.getByLabel('Independently obtained audit digest',{exact:true});
+  const upload=(value)=>({name:'audit.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(value))});
+  let auditRequests=0;
+  page.on('request',r=>{if(new URL(r.url()).pathname.includes('/exchange/audit-'))auditRequests++;});
+  await auditInput.setInputFiles(upload(archives.trust));
+  await auditPin.fill(archives.a.dossier_sha256);
+  await page.getByLabel('Historical dossier 1',{exact:true}).setInputFiles(upload(archives.a));
+  assert.equal(auditRequests,0);
+  page.once('dialog',d=>d.accept());
+  await page.getByRole('button',{name:'Recompute selected historical audit evidence',exact:true}).click();
+  await page.getByText('Historical dossier independently recomputed',{exact:true}).waitFor();
+  assert.equal(auditRequests,1);
+  await auditPin.fill('0'.repeat(64));
+  assert.equal(await page.getByText('Historical dossier independently recomputed',{exact:true}).count(),0);
+  page.once('dialog',d=>d.accept());
+  await page.getByRole('button',{name:'Recompute selected historical audit evidence',exact:true}).click();
+  await page.getByText(/Historical review refused/).waitFor();
+  await page.getByLabel('Historical audit operation',{exact:true}).selectOption('timeline');
+  await auditInput.setInputFiles(upload(archives.manifest));
+  await auditPin.fill(archives.pin);
+  await page.getByLabel('Historical dossier 1',{exact:true}).setInputFiles(upload(archives.a));
+  await page.getByLabel('Historical dossier 2',{exact:true}).setInputFiles(upload(archives.b));
+  assert.equal(auditRequests,2);
+  page.once('dialog',d=>d.accept());
+  await page.getByRole('button',{name:'Recompute selected historical audit evidence',exact:true}).click();
+  await page.getByText('Independently recomputed historical timeline',{exact:true}).waitFor();
+  await page.getByText('Prioritized audit findings and follow-up assignments',{exact:true}).click();
+  await page.getByLabel('Declared audit reviewer alias',{exact:true}).fill('reviewer');
+  await page.getByRole('checkbox',{name:/Select finding /}).check();
+  await page.getByRole('textbox',{name:/Follow-up owner /}).fill('ops');
+  page.once('dialog',d=>d.accept());
+  const receiptResponse=page.waitForResponse(r=>r.url().endsWith('/audit-triage')&&r.status()===200);
+  await page.getByRole('button',{name:'Record selected audit follow-up referrals',exact:true}).click();
+  const auditReceipt=await (await receiptResponse).json();
+  await page.getByText('Evidence-pinned follow-up receipt',{exact:true}).waitFor();
+  await page.getByText('1 declared referrals · 0 unselected findings · 0 unselected rollback referrals',{exact:true}).waitFor();
+  await page.getByLabel('Declared audit reviewer alias',{exact:true}).fill('different');
+  assert.equal(await page.getByText('Evidence-pinned follow-up receipt',{exact:true}).count(),0);
+  await page.getByText('Reconcile follow-up receipts from multiple reviewers',{exact:true}).click();
+  await page.getByLabel('Reconciliation receipt 1',{exact:true}).setInputFiles(upload(auditReceipt));
+  await page.getByLabel('Independent receipt digest 1',{exact:true}).fill(auditReceipt.triage_sha256);
+  page.once('dialog',d=>d.accept());
+  await page.getByRole('button',{name:'Recompute and reconcile selected receipts',exact:true}).click();
+  await page.getByText('Recomputed audit receipt reconciliation',{exact:true}).waitFor();
+  await page.getByText('0 unaddressed · 1 single declarations · 0 matching · 0 conflicting',{exact:true}).waitFor();
+  await page.getByLabel('Receipt reconciliation status',{exact:true}).selectOption('all');
+  await page.getByText('rollback referral · one declaration',{exact:true}).click();
+  await page.getByText(/reviewer · investigate · owner ops/).waitFor();
+  await page.getByLabel('Independent receipt digest 1',{exact:true}).fill('0'.repeat(64));
+  assert.equal(await page.getByText('Recomputed audit receipt reconciliation',{exact:true}).count(),0);
+  page.once('dialog',d=>d.accept());
+  await page.getByRole('button',{name:'Recompute and reconcile selected receipts',exact:true}).click();
+  await page.getByText(/Reconciliation refused/).waitFor();
+  page.once('dialog',d=>d.accept());
+  await page.getByRole('button',{name:'Retain exact worklist for local remediation',exact:true}).click();
+  await page.getByText('Retained audit remediation register',{exact:true}).waitFor();
+  await page.getByText('rollback referral · unassigned',{exact:true}).click();
+  await page.getByLabel('Remediation reviewer alias',{exact:true}).fill('reviewer');
+  await page.getByRole('textbox',{name:/Remediation owner /}).fill('ops');
+  page.once('dialog',d=>d.accept());
+  await page.getByRole('button',{name:'Record remediation progress',exact:true}).click();
+  await page.getByText('rollback referral · assigned',{exact:true}).waitFor();
+  await page.getByRole('button',{name:'Load retained remediation registers',exact:true}).click();
+  await page.getByRole('button',{name:/Open remediation register /}).click();
+  await page.getByText('rollback referral · assigned',{exact:true}).waitFor();
+  await page.getByText('Explicit Jira ticket creation and follow-up comments',{exact:true}).click();
+  await page.getByRole('button',{name:'Load Jira handoff attempts',exact:true}).click();
+  await page.getByText('0 retained external write attempts',{exact:true}).waitFor();
+  await page.getByRole('button',{name:'Preview exact Jira handoff',exact:true}).click();
+  await page.getByText(/Preview refused:/).waitFor();
+  assert.equal(await page.getByRole('button',{name:'Confirm and send one Jira write',exact:true}).count(),0);
+  await page.getByLabel('Historical journal review filter',{exact:true}).selectOption('rollback');
+  await page.getByText('1 matching journals · page 1 of 1',{exact:true}).waitFor();
+  await page.getByText(/site · .*rollback referral observed/).click();
+  await page.getByText('Rollback referral snapshots: 1',{exact:true}).waitFor();
+  await page.getByLabel('Search historical installation or journal tag',{exact:true}).fill('nonexistent');
+  await page.getByText('0 matching journals · page 1 of 1',{exact:true}).waitFor();
+  await page.getByRole('button',{name:'Add next dossier',exact:true}).click();
+  await auditInput.setInputFiles(upload(archives.extended));
+  await auditPin.fill(archives.extended_pin);
+  await page.getByLabel('Historical dossier 3',{exact:true}).setInputFiles(upload(archives.c));
+  page.once('dialog',d=>d.accept());
+  await page.getByRole('button',{name:'Recompute selected historical audit evidence',exact:true}).click();
+  await page.getByText('Independently recomputed historical timeline',{exact:true}).waitFor();
+  await page.getByText('Carry remediation into an appended audit history',{exact:true}).click();
+  await page.getByRole('button',{name:'Load previous remediation registers',exact:true}).click();
+  await page.getByText(/1 candidate prior registers/).waitFor();
+  await page.getByLabel('Independently obtained previous manifest digest',{exact:true}).fill(archives.pin);
+  await page.getByLabel('Continuity reviewer alias',{exact:true}).fill('reviewer');
+  page.once('dialog',d=>d.accept());
+  await page.getByRole('button',{name:'Compare exact appended remediation history',exact:true}).click();
+  await page.getByText('Verified remediation continuity preview',{exact:true}).waitFor();
+  await page.getByText('2 verified prior snapshots · 1 eligible owner assignments',{exact:true}).waitFor();
+  await page.getByRole('checkbox',{name:/Carry owner /}).check();
+  page.once('dialog',d=>d.accept());
+  await page.getByRole('button',{name:'Create successor remediation register',exact:true}).click();
+  await page.getByText('Separate successor remediation register created.',{exact:true}).waitFor();
+  await page.getByText(/Successor of .*1 carried owner assignments/).waitFor();
+  await page.getByText('rollback referral · assigned',{exact:true}).waitFor();
+  page.once('dialog',d=>d.accept());
+  await page.getByRole('button',{name:'Remove local remediation register',exact:true}).click();
+  await page.getByText('1 retained registers',{exact:true}).waitFor();
+  await page.getByRole('button',{name:/Open remediation register /}).click();
+  await page.getByText('rollback referral · assigned',{exact:true}).waitFor();
+  page.once('dialog',d=>d.accept());
+  await page.getByRole('button',{name:'Remove local remediation register',exact:true}).click();
+  await page.getByText('0 retained registers',{exact:true}).waitFor();
+  await page.getByLabel('Historical dossier 2',{exact:true}).setInputFiles(upload(archives.a));
+  assert.equal(await page.getByText('Independently recomputed historical timeline',{exact:true}).count(),0);
+  page.once('dialog',d=>d.accept());
+  await page.getByRole('button',{name:'Recompute selected historical audit evidence',exact:true}).click();
+  await page.getByText(/Historical review refused/).waitFor();
+  assert.equal(auditRequests,8);
+  await exchangePanel.click();
+
   await page.getByLabel('Business goal',{exact:true}).fill('Revised draft only');
   assert.equal(await page.locator('#owgCatalogShadowResult').textContent(),'');
   assert.equal(await page.locator('#owgCatalogProcurementResult').textContent(),'');
@@ -202,6 +338,8 @@ const path=require('node:path');
 c=sqlite3.connect(sys.argv[1])
 assert c.execute('SELECT COUNT(*) FROM workflow_knowledge').fetchone()[0]==1
 assert c.execute('SELECT COUNT(*) FROM events').fetchone()[0]==0
+for table in ('procurement_audit_remediation','procurement_audit_remediation_tickets','procurement_audit_jira_dispatch'):
+    assert c.execute('SELECT COUNT(*) FROM '+table).fetchone()[0]==0,table
 assert 'PRIVATE_' not in '\\n'.join(c.iterdump())
 `,path.join(scratch,'data','workflow_observer.db')],{encoding:'utf8'});
   assert.equal(checked.status,0,checked.stderr);assert.deepEqual(errors,[]);

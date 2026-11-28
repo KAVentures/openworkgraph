@@ -67,7 +67,7 @@ with TestClient(app) as client:
     assert client.post(signing_path,json={}).status_code==401
     assert client.post(signing_path,json={},headers=bearer).status_code==403
     assert client.post(signing_path,json={'document':'{"confirmed":false}'},headers=h).status_code==422
-    for action in ("inbox-status","inbox-admit","inbox-review","inbox-forget","inbox-retire"):
+    for action in ("inbox-status","inbox-admit","inbox-review","inbox-forget","inbox-retire","inbox-dossier","audit-verify","audit-timeline","audit-triage","audit-reconcile"):
         path="/v1/process-catalog/procurement-workforce/exchange/"+action
         assert client.post(path,json={"document":"{}"}).status_code==401
         assert client.post(path,json={"document":"{}"},headers=bearer).status_code==403
@@ -80,6 +80,124 @@ with TestClient(app) as client:
     assert trust_status.status_code==200,trust_status.text
     assert trust_status.json()['revision']==0
     assert trust_status.headers['cache-control']=='no-store'
+    # Real signed archives, verified through the production HTTP boundary.
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    from test_agent_procurement_workforce_timeline import snapshot,manifest
+    from test_agent_procurement_workforce_exchange import row
+    key=Ed25519PrivateKey.generate()
+    x=snapshot({"site":(key,[row("site",incident=True)])},100)
+    y=snapshot({"site":(key,[row("site")])},120)
+    historical={"confirmed":True,"expected_dossier_sha256":x[0]["dossier_sha256"],
+                "dossier":x[0],"trust":x[1]["trust"]}
+    m=manifest(x,y)
+    timeline_body={"confirmed":True,"expected_manifest_sha256":digest(m),"manifest":m,
+                   "dossiers":[x[0],y[0]]}
+    def audit_call(action,document):
+        return client.post('/v1/process-catalog/procurement-workforce/exchange/'+action,
+                           json={"document":json.dumps(document)},headers=h)
+    result=audit_call("audit-verify",historical)
+    assert result.status_code==200,result.text
+    assert result.headers["cache-control"]=="no-store"
+    assert result.json()["verification"]["historical_report_recomputed"]
+    assert result.json()["report"]["included_journals"]==1
+    assert not result.json()["local_trust_registry_used"]
+    result=audit_call("audit-timeline",timeline_body)
+    assert result.status_code==200,result.text
+    assert result.headers["cache-control"]=="no-store"
+    assert result.json()["timeline"]["unique_journals_with_observed_rollback_referrals"]==1
+    assert not result.json()["result_persisted"]
+    work=result.json()["worklist"]
+    finding=work["findings"][0]
+    assert finding["kind"]=="rollback_referral"
+    decision={"expected_worklist_sha256":work["worklist_sha256"],"reviewer_alias":"reviewer",
+              "confirmed":True,"selections":[{"finding_id":finding["finding_id"],
+              "expected_finding_sha256":finding["finding_sha256"],"disposition":"escalate",
+              "owner_alias":"ops"}]}
+    referred=audit_call("audit-triage",{**timeline_body,"decision":decision})
+    assert referred.status_code==200,referred.text
+    assert referred.headers["cache-control"]=="no-store"
+    assert referred.json()["selected_count"]==1
+    assert not referred.json()["incident_clearance_established"]
+    receipt=referred.json()
+    entry={"expected_triage_sha256":receipt["triage_sha256"],"receipt":receipt}
+    reconciled=audit_call("audit-reconcile",{**timeline_body,"receipt_set":{"confirmed":True,"receipts":[entry]}})
+    assert reconciled.status_code==200,reconciled.text
+    assert reconciled.headers["cache-control"]=="no-store"
+    assert reconciled.json()["counts_by_status"]["one_declaration"]==1
+    assert not reconciled.json()["conflicts_resolved"]
+    retained=audit_call("remediation-create",{**timeline_body,"expected_worklist_sha256":work["worklist_sha256"],
+                                              "confirm_local_retention":True})
+    assert retained.status_code==200,retained.text
+    v=retained.json()
+    assert v["revision"]==0 and v["finding_count"]==1
+    assert retained.headers["cache-control"]=="no-store"
+    scope={"worklist_sha256":v["worklist_sha256"]}
+    assert audit_call("remediation-list",{}).json()["registers"][0]["revision"]==0
+    assert audit_call("remediation-status",scope).json()==v
+    cmd={**scope,"expected_revision":0,"expected_history_sha256":v["history_sha256"],
+         "finding_id":finding["finding_id"],"expected_finding_sha256":finding["finding_sha256"],
+         "state":"assigned","owner_alias":"ops","reviewer_alias":"reviewer","confirmed":True}
+    updated=audit_call("remediation-change",cmd)
+    assert updated.status_code==200,updated.text
+    assert updated.json()["revision"]==1
+    assert audit_call("remediation-change",cmd).status_code==409
+    ticket=audit_call("remediation-ticket-status",scope)
+    assert ticket.status_code==200,ticket.text
+    assert ticket.headers["cache-control"]=="no-store"
+    assert ticket.json()["ticket_revision"]==0 and ticket.json()["bindings"]==[]
+    assert audit_call("remediation-ticket-bind",{"resource_ref":"ABC-123"}).status_code==422
+    assert audit_call("remediation-ticket-check",{}).status_code==422
+    handoff=audit_call("remediation-jira-status",scope)
+    assert handoff.status_code==200,handoff.text
+    assert handoff.headers["cache-control"]=="no-store"
+    assert handoff.json()["attempts"]==[]
+    assert audit_call("remediation-jira-preview",{}).status_code==422
+    assert audit_call("remediation-jira-dispatch",{}).status_code==422
+
+
+    z=snapshot({"site":(key,[row("site")])},140)
+    successor_manifest=manifest(x,y,z)
+    successor_body={"confirmed":True,"expected_manifest_sha256":digest(successor_manifest),
+                    "manifest":successor_manifest,"dossiers":[x[0],y[0],z[0]]}
+    successor_work=audit_call("audit-timeline",successor_body).json()["worklist"]
+    continuity={"previous_worklist_sha256":v["worklist_sha256"],"expected_previous_revision":1,
+                "expected_previous_history_sha256":updated.json()["history_sha256"],
+                "previous_manifest_sha256":digest(m),
+                "expected_current_worklist_sha256":successor_work["worklist_sha256"],"confirmed":True}
+    compared=audit_call("remediation-continuity-preview",{**successor_body,"continuity":continuity})
+    assert compared.status_code==200,compared.text
+    assert compared.headers["cache-control"]=="no-store"
+    assert compared.json()["owner_carry_eligible_count"]==1
+    carried=audit_call("remediation-continuity-carry",{**successor_body,"continuity":{**continuity,
+        "expected_continuity_sha256":compared.json()["continuity_sha256"],
+        "reviewer_alias":"reviewer","carry_finding_ids":[finding["finding_id"]],"confirm_local_retention":True}})
+    assert carried.status_code==200,carried.text
+    assert carried.json()["findings"][0]["state"]=="assigned"
+    assert carried.json()["lineage"]["previous_history_sha256"]==updated.json()["history_sha256"]
+    assert audit_call("remediation-status",scope).json()==updated.json()
+    assert audit_call("remediation-forget",{"worklist_sha256":carried.json()["worklist_sha256"],
+        "expected_revision":carried.json()["revision"],"expected_history_sha256":carried.json()["history_sha256"],
+        "confirmed_exported":True}).status_code==200
+    removed=audit_call("remediation-forget",{**scope,"expected_revision":1,
+                       "expected_history_sha256":updated.json()["history_sha256"],"confirmed_exported":True})
+    assert removed.status_code==200,removed.text
+    assert audit_call("remediation-status",scope).status_code==404
+    for action in ("remediation-create","remediation-list","remediation-status","remediation-change","remediation-forget","remediation-continuity-preview","remediation-continuity-carry","remediation-ticket-status","remediation-ticket-bind","remediation-ticket-check","remediation-jira-preview","remediation-jira-dispatch","remediation-jira-status"):
+        path="/v1/process-catalog/procurement-workforce/exchange/"+action
+        assert client.post(path,json={"document":"{}"}).status_code==401
+        assert client.post(path,json={"document":"{}"},headers=bearer).status_code==403
+        assert client.post(path,json={"document":"{}"},headers={**h,"X-OpenWorkGraph-Context":"ai"}).status_code==403
+
+    assert audit_call("audit-reconcile",{**timeline_body,"receipt_set":{"confirmed":True,"receipts":[entry,entry]}}).status_code==422
+
+    assert audit_call("audit-triage",{**timeline_body,"decision":{**decision,"expected_worklist_sha256":"0"*64}}).status_code==422
+    assert audit_call("audit-verify",{**historical,"confirmed":False}).status_code==422
+    assert audit_call("audit-verify",{**historical,"expected_dossier_sha256":"0"*64}).status_code==422
+    assert audit_call("audit-timeline",{**timeline_body,"dossiers":[y[0],x[0]]}).status_code==422
+    dup=json.dumps(historical)[:-1]+',"confirmed":true}'
+    assert client.post('/v1/process-catalog/procurement-workforce/exchange/audit-verify',
+                       json={"document":dup},headers=h).status_code==422
+    assert client.post(trust_path,json={"document":"{}"},headers=h).json()==trust_status.json()
     overview_path='/v1/process-catalog/procurement-workforce/overview'
     assert client.get(overview_path).status_code==401
     assert client.get(overview_path,headers=bearer).status_code==403

@@ -2599,6 +2599,20 @@
       if(!inboxOutput.isConnected||inboxScope().correlation_namespace_sha256!==scope.correlation_namespace_sha256)return;
       await loadInbox();renderReview(inboxOutput,result);
     }));
+    const exportDossier=button('Export independently verifiable signed audit dossier',()=>inboxPerform(async()=>{
+      const scope=pinnedScope();
+      if(!inboxState.ready_for_complete_review)throw new Error('Every active installation must have an available packet.');
+      if(!window.confirm('Export all current signed minimized packets and their reproducible report? Opaque tags are linkable within this namespace. Transfer only through an approved channel; separately communicate the dossier digest and trusted keys. Historical rollback signals require a separate inbox status export.'))return;
+      const result=await inboxCall('inbox-dossier',JSON.stringify(scope));
+      if(!inboxOutput.isConnected||JSON.stringify(scope)!==JSON.stringify(pinnedScope()))return;
+      inboxOutput.append(el('h5','Historical signed audit dossier'),
+        el('p','Dossier SHA-256: '+result.dossier_sha256),
+        el('p','This does not advance accepted registry pins or establish current authorization. Use separately obtained trust keys and digest to recompute the report offline.'),
+        button('Download signed audit dossier',()=>{
+          const url=URL.createObjectURL(new Blob([JSON.stringify(result)],{type:'application/json'}));
+          const link=el('a');link.href=url;link.download='owg-workforce-audit-dossier.json';link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
+        }));
+    }));
     const forgetInbox=button('Remove retained packets in namespace',()=>inboxPerform(async()=>{
       const scope=pinnedScope();delete scope.maximum_packet_age_ms;
       if(!window.confirm('Remove this namespace’s retained packet contents? Accepted registry watermarks and minimized rollback signals remain. Backups and exports are not erased.'))return;
@@ -2606,7 +2620,611 @@
     }));
     for(const [label,input] of [['Correlation namespace',inboxNs],['Maximum age in hours',age]]){const l=el('label',label+' ');l.appendChild(input);inboxSection.appendChild(l);}
     for(const input of [inboxNs,age])input.addEventListener('change',()=>{inboxState=null;inboxOutput.replaceChildren();});
-    inboxSection.append(button('Load inbox status',()=>inboxPerform(loadInbox)),inboxFile,admit,reviewInbox,forgetInbox,inboxOutput);
+    inboxSection.append(button('Load inbox status',()=>inboxPerform(loadInbox)),inboxFile,admit,reviewInbox,exportDossier,forgetInbox,inboxOutput);
+    const auditSection=el('details');auditSection.append(el('summary','Independently verify historical workforce audit evidence'),
+      el('p','Review on this local installation only, without enrolling keys or advancing registry watermarks. Obtain the expected digest and public-key trust file or timeline manifest through a separately trusted administrative channel. Never derive trust from the submitted dossier.'));
+    const auditMax=8*1024*1024;
+    const auditMode=el('select');auditMode.setAttribute('aria-label','Historical audit operation');
+    for(const [v,label] of [['verify','Verify one signed dossier'],['timeline','Review an ordered historical timeline']]){
+      const opt=el('option',label);opt.value=v;auditMode.appendChild(opt);
+    }
+    const auditDigest=el('input');auditDigest.type='text';auditDigest.maxLength=64;
+    auditDigest.setAttribute('aria-label','Independently obtained audit digest');auditDigest.autocomplete='off';
+    const makeFile=label=>{const input=el('input');input.type='file';input.accept='.json,application/json';input.setAttribute('aria-label',label);return input;};
+    const auditTrust=makeFile('Independent audit trust file or timeline manifest');
+    const auditInputs=el('div'),auditOutput=el('div');auditOutput.setAttribute('aria-live','polite');
+    const auditLabel=(label,input)=>{const l=el('label',label+' ');l.appendChild(input);return l;};
+    let auditGeneration=0,auditFiles=[];
+    const invalidateAudit=()=>{auditGeneration++;auditOutput.replaceChildren();};
+    const drawAuditFiles=()=>{
+      auditInputs.replaceChildren();
+      auditFiles.forEach((input,i)=>{
+        input.setAttribute('aria-label','Historical dossier '+(i+1));
+        auditInputs.appendChild(auditLabel('Dossier '+(i+1),input));
+      });
+      if(auditMode.value==='timeline'){
+        const add=button('Add next dossier',()=>{
+          if(auditFiles.length>=12)return;
+          invalidateAudit();const input=makeFile('Historical dossier');
+          input.addEventListener('change',invalidateAudit);auditFiles.push(input);drawAuditFiles();
+        });
+        add.disabled=auditFiles.length>=12;
+        const remove=button('Remove last dossier',()=>{
+          if(auditFiles.length<=2)return;
+          invalidateAudit();auditFiles.pop();drawAuditFiles();
+        });
+        remove.disabled=auditFiles.length<=2;
+        auditInputs.append(add,remove,el('p','Enter dossiers in the exact order of the independently pinned manifest, oldest first. Two to twelve dossiers supported.'));
+      }
+    };
+    const resetAuditFiles=()=>{
+      invalidateAudit();auditTrust.value='';auditDigest.value='';
+      auditFiles=Array.from({length:auditMode.value==='timeline'?2:1},()=>{
+        const input=makeFile('Historical dossier');input.addEventListener('change',invalidateAudit);return input;
+      });drawAuditFiles();
+    };
+    const auditRead=async file=>{
+      const raw=new TextDecoder('utf-8',{fatal:true}).decode(await file.arrayBuffer());
+      // Check syntax only. Preserve original text and numeric precision;
+      // duplicate keys and canonical values are checked on the server.
+      const parsed=JSON.parse(raw);
+      if(!parsed||Array.isArray(parsed)||typeof parsed!=='object')throw new Error('Each audit file must be a JSON object.');
+      return raw;
+    };
+    const renderAuditTimeline=(target,value)=>{
+      const result=value.timeline;
+      target.append(el('h4','Independently recomputed historical timeline'),
+        el('p',result.snapshots.length+' supplied snapshots · '+result.journals.length+' distinct opaque journal identities · '+result.unique_journals_with_observed_rollback_referrals+' with observed rollback referrals'),
+        el('p','Missing snapshots or a later clean report do not establish incident clearance. Key changes are separately pinned declarations, not verified rotation authority. No financial or deployment authorization.'),
+        el('p','Timeline SHA-256: '+result.timeline_sha256));
+      for(const s of result.snapshots){
+        const item=el('details');item.append(el('summary','Snapshot '+s.snapshot+' · '+new Date(s.reviewed_as_of_ms).toISOString()+' · '+s.included_journals+' included / '+s.excluded_journals+' excluded'),
+          el('p','Dossier: '+s.dossier_sha256),el('p','Report: '+s.report_sha256),
+          el('p','Supplied sites: '+s.active_supplied_aliases.join(', ')),
+          el('p','Added: '+(s.aliases_added_since_previous.join(', ')||'none')+' · absent: '+(s.aliases_absent_since_previous.join(', ')||'none')),
+          el('p',s.unreadable_journals+' unreadable journals · '+s.journals_absent_since_previous+' journals absent since preceding snapshot'),
+          el('p','Maximum packet age: '+s.maximum_packet_age_ms+' ms'+(s.packet_age_policy_changed?' (changed)':'')));
+        for(const k of s.declared_key_changes)item.appendChild(el('p','Declared key change: '+k.installation_alias+' · '+k.previous_key_sha256+' → '+k.current_key_sha256));
+        target.appendChild(item);
+      }
+      const filter=el('select');filter.setAttribute('aria-label','Historical journal review filter');
+      for(const [v,label] of [['attention','Attention (rollback, source warning, regression, cohort change or exclusion)'],['all','All journals'],['rollback','Observed rollback referrals'],['source','Source attention flags'],['regression','Cutoff regressions'],['cohort','Changed or unavailable cohorts'],['excluded','Excluded in any snapshot'],['absent','Absent in latest snapshot']]){
+        const opt=el('option',label);opt.value=v;filter.appendChild(opt);
+      }
+      const search=el('input');search.type='search';search.maxLength=80;search.setAttribute('aria-label','Search historical installation or journal tag');
+      const list=el('div');list.setAttribute('aria-live','polite');let page=0;
+      const isAttention=r=>r.historical_rollback_referral_observed||r.source_attention_snapshots.length||r.cutoff_regression_snapshots.length||r.changed_cohort_snapshots.length||r.excluded_snapshots.length;
+      const draw=()=>{
+        const q=search.value.trim().toLowerCase();
+        const match=r=>({all:true,attention:isAttention(r),rollback:r.historical_rollback_referral_observed,
+          source:r.source_attention_snapshots.length>0,regression:r.cutoff_regression_snapshots.length>0,cohort:r.changed_cohort_snapshots.length>0,
+          excluded:r.excluded_snapshots.length>0,absent:!r.present_in_latest_snapshot}[filter.value]);
+        const rows=result.journals.filter(r=>match(r)&&(!q||r.installation_alias.toLowerCase().includes(q)||r.journal_tag.includes(q)));
+        const per=40;const pages=Math.max(1,Math.ceil(rows.length/per));page=Math.min(page,pages-1);
+        list.replaceChildren(el('p',rows.length+' matching journals · page '+(page+1)+' of '+pages));
+        for(const r of rows.slice(page*per,(page+1)*per)){
+          const item=el('details');item.append(el('summary',r.installation_alias+' · '+r.journal_tag.slice(0,12)+' · '+(r.historical_rollback_referral_observed?'rollback referral observed':isAttention(r)?'review attention':'no supplied warning')+(r.present_in_latest_snapshot?'':' · absent in latest')),
+            el('p','Journal tag: '+r.journal_tag),
+            el('p','First snapshot '+r.first_snapshot+' · last '+r.last_snapshot+' · observed '+r.observed_snapshots+' times'),
+            el('p','Rollback referral snapshots: '+(r.rollback_referral_snapshots.join(', ')||'none')),
+            el('p','Source attention snapshots: '+(r.source_attention_snapshots.join(', ')||'none')),
+            el('p','Cutoff regression snapshots: '+(r.cutoff_regression_snapshots.join(', ')||'none')),
+            el('p','Changed/unavailable cohort snapshots: '+(r.changed_cohort_snapshots.join(', ')||'none')),
+            el('p','Excluded snapshots: '+(r.excluded_snapshots.join(', ')||'none')),
+            el('p','Latest recorded cutoff: '+r.latest_cutoff_ms+' · historical maximum: '+r.maximum_cutoff_ms));
+          list.appendChild(item);
+        }
+        const prev=button('Previous journal page',()=>{if(page>0){page--;draw();}});
+        const next=button('Next journal page',()=>{if(page+1<pages){page++;draw();}});
+        prev.disabled=page===0;next.disabled=page+1===pages;list.append(prev,next);
+      };
+      for(const input of [filter,search])input.addEventListener(input===filter?'change':'input',()=>{page=0;draw();});
+      target.append(el('h5','Historical journal review queue'),auditLabel('Filter',filter),auditLabel('Search',search),list,download(value,'owg-workforce-verified-audit-timeline'));draw();
+    };
+    const renderAuditTriage=(target,value,document,attempt)=>{
+      const work=value.worklist;
+      if(!work)return;
+      const panel=el('details');panel.append(el('summary','Prioritized audit findings and follow-up assignments'),
+        el('p',work.finding_count+' findings · exact worklist '+work.worklist_sha256),
+        el('p','Assign investigation, escalation or evidence requests. A receipt records declared referrals only; it does not create tickets, verify owners or clear incidents. Unselected findings remain visible.'));
+      const reviewer=el('input');reviewer.maxLength=80;reviewer.setAttribute('aria-label','Declared audit reviewer alias');
+      const kind=el('select');kind.setAttribute('aria-label','Audit finding kind');
+      for(const v of ['all',...Object.keys(work.counts_by_kind)]){const opt=el('option',v.replaceAll('_',' '));opt.value=v;kind.appendChild(opt);}
+      const search=el('input');search.type='search';search.maxLength=80;search.setAttribute('aria-label','Search audit findings');
+      const picks=new Map(),list=el('div'),selection=el('div'),receipt=el('div');receipt.setAttribute('aria-live','polite');
+      let page=0,serial=0;
+      const aliasValid=v=>/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$/.test(v);
+      const clearReceipt=()=>{serial++;receipt.replaceChildren();};
+      const count=()=>selection.replaceChildren(el('p',picks.size+' selected of '+work.finding_count+' · '+(work.finding_count-picks.size)+' not selected'));
+      const draw=()=>{
+        const q=search.value.trim().toLowerCase();
+        const matches=work.findings.filter(r=>(kind.value==='all'||r.kind===kind.value)&&(!q||r.finding_id.includes(q)||String(r.scope.installation_alias||'').toLowerCase().includes(q)||String(r.scope.journal_tag||'').includes(q)));
+        const per=25,pages=Math.max(1,Math.ceil(matches.length/per));page=Math.min(page,pages-1);
+        list.replaceChildren(el('p',matches.length+' matching findings · page '+(page+1)+' of '+pages));
+        for(const row of matches.slice(page*per,(page+1)*per)){
+          const item=el('fieldset');item.append(el('legend',row.kind.replaceAll('_',' ')+' · priority '+row.priority));
+          const id=el('p',row.finding_id);id.style.overflowWrap='anywhere';
+          item.append(id,el('p','Scope: '+Object.values(row.scope).join(' · ')),
+            el('p','Evidence snapshots: '+row.evidence.snapshots.map(s=>s.snapshot).join(', ')));
+          const chosen=picks.get(row.finding_id);
+          const select=el('input');select.type='checkbox';select.checked=!!chosen;
+          select.setAttribute('aria-label','Select finding '+row.finding_id);
+          const action=el('select');action.setAttribute('aria-label','Disposition '+row.finding_id);
+          for(const v of ['investigate','escalate','request_evidence',...(row.priority===0?[]:['acknowledge'])]){
+            const opt=el('option',v.replaceAll('_',' '));opt.value=v;action.appendChild(opt);
+          }
+          action.value=chosen?.disposition||'investigate';
+          const owner=el('input');owner.maxLength=80;owner.value=chosen?.owner_alias||'';owner.setAttribute('aria-label','Follow-up owner '+row.finding_id);
+          const ref=el('input');ref.maxLength=80;ref.value=chosen?.external_reference||'';ref.setAttribute('aria-label','External reference '+row.finding_id);
+          const sync=()=>{
+            clearReceipt();
+            if(select.checked){
+              if(!picks.has(row.finding_id)&&picks.size>=200){select.checked=false;receipt.replaceChildren(el('p','Maximum 200 findings per receipt.'));return;}
+              picks.set(row.finding_id,{finding_id:row.finding_id,expected_finding_sha256:row.finding_sha256,
+                disposition:action.value,owner_alias:owner.value||null,external_reference:ref.value||null});
+            }else picks.delete(row.finding_id);
+            count();
+          };
+          select.addEventListener('change',sync);action.addEventListener('change',sync);
+          for(const input of [owner,ref])input.addEventListener('input',sync);
+          item.append(auditLabel('Select for receipt',select),auditLabel('Disposition',action),
+            auditLabel('Declared owner (required for follow-up)',owner),auditLabel('Optional opaque external reference',ref));
+          list.appendChild(item);
+        }
+        const prev=button('Previous finding page',()=>{if(page>0){page--;draw();}});
+        const next=button('Next finding page',()=>{if(page+1<pages){page++;draw();}});
+        prev.disabled=page===0;next.disabled=page+1===pages;list.append(prev,next);
+      };
+      for(const input of [kind,search])input.addEventListener(input===kind?'change':'input',()=>{page=0;draw();});
+      reviewer.addEventListener('input',clearReceipt);
+      const submit=button('Record selected audit follow-up referrals',async()=>{
+        const version=++serial;receipt.replaceChildren();
+        try{
+          if(!aliasValid(reviewer.value)||!picks.size)throw new Error('Provide a reviewer alias and select at least one finding.');
+          const selections=[...picks.values()];
+          for(const p of selections){
+            if((p.disposition!=='acknowledge'&&!p.owner_alias)||(p.owner_alias&&!aliasValid(p.owner_alias))||(p.external_reference&&!aliasValid(p.external_reference)))throw new Error('Use valid opaque aliases and references; follow-up requires an owner.');
+          }
+          if(!window.confirm('Record only the selected evidence-pinned referrals? No incident clearance or external action is authorized.'))return;
+          const decision={expected_worklist_sha256:work.worklist_sha256,reviewer_alias:reviewer.value,confirmed:true,selections};
+          const payload=document.slice(0,-1)+',"decision":'+JSON.stringify(decision)+'}';
+          if(new TextEncoder().encode(payload).length>auditMax)throw new Error('Combined evidence and selections exceed the browser limit; use the offline CLI.');
+          const result=await inboxCall('audit-triage',payload);
+          if(version!==serial||attempt!==auditGeneration||!receipt.isConnected)return;
+          receipt.append(el('h5','Evidence-pinned follow-up receipt'),
+            el('p',result.selected_count+' declared referrals · '+result.unselected_count+' unselected findings · '+result.unselected_rollback_referrals+' unselected rollback referrals'),
+            el('p','Receipt SHA-256: '+result.triage_sha256),
+            el('p','No external tickets created and no incident clearance established.'),
+            download(result,'owg-workforce-audit-triage'));
+        }catch(error){if(version===serial&&attempt===auditGeneration&&receipt.isConnected)receipt.replaceChildren(el('p','Follow-up refused: '+error.message));}
+      });
+      panel.append(auditLabel('Declared reviewer',reviewer),auditLabel('Finding kind',kind),auditLabel('Search findings',search),
+        selection,list,button('Clear selected findings',()=>{picks.clear();clearReceipt();count();draw();}),
+        submit,receipt,download(work,'owg-workforce-audit-findings'));
+      count();draw();target.appendChild(panel);
+    };
+    const renderAuditReconciliation=(target,document,attempt)=>{
+      const panel=el('details');panel.append(el('summary','Reconcile follow-up receipts from multiple reviewers'),
+        el('p','Supply each exported receipt and its separately communicated digest. Conflicting declarations remain unresolved; matching declarations do not establish reviewer independence or work completion.'));
+      const inputs=el('div'),resultHost=el('div');resultHost.setAttribute('aria-live','polite');
+      let entries=[],serial=0;
+      const invalidate=()=>{serial++;resultHost.replaceChildren();};
+      const makeEntry=()=>{
+        const file=makeFile('Follow-up receipt');
+        const pin=el('input');pin.type='text';pin.maxLength=64;pin.autocomplete='off';
+        file.addEventListener('change',invalidate);pin.addEventListener('input',invalidate);
+        return {file,pin};
+      };
+      const drawInputs=()=>{
+        inputs.replaceChildren();
+        entries.forEach(({file,pin},i)=>{
+          file.setAttribute('aria-label','Reconciliation receipt '+(i+1));
+          pin.setAttribute('aria-label','Independent receipt digest '+(i+1));
+          inputs.append(auditLabel('Receipt '+(i+1),file),auditLabel('Independent receipt digest '+(i+1),pin));
+        });
+        const add=button('Add receipt',()=>{if(entries.length<40){invalidate();entries.push(makeEntry());drawInputs();}});
+        const remove=button('Remove last receipt',()=>{if(entries.length>1){invalidate();entries.pop();drawInputs();}});
+        add.disabled=entries.length>=40;remove.disabled=entries.length<=1;
+        inputs.append(add,remove);
+      };
+      const show=value=>{
+        resultHost.append(el('h5','Recomputed audit receipt reconciliation'),
+          el('p',value.receipt_count+' receipts · '+value.finding_count+' findings'),
+          el('p',value.counts_by_status.unaddressed+' unaddressed · '+value.counts_by_status.one_declaration+' single declarations · '+value.counts_by_status.matching_declarations+' matching · '+value.counts_by_status.conflicting_declarations+' conflicting'),
+          el('p',value.unaddressed_rollback_referrals+' unaddressed rollback referrals · '+value.conflicting_rollback_referrals+' conflicting rollback referrals'),
+          el('p','Reconciliation SHA-256: '+value.reconciliation_sha256),
+          el('p','No conflict resolved, incident cleared or external assignment created.'));
+        for(const aliases of value.casefold_reviewer_alias_variants)resultHost.appendChild(el('p','Reviewer alias spelling variants: '+aliases.join(', ')));
+        const filter=el('select');filter.setAttribute('aria-label','Receipt reconciliation status');
+        for(const [v,label] of [['attention','Conflicting or unaddressed'],['all','All findings'],['conflicting_declarations','Conflicting declarations'],['unaddressed','Unaddressed'],['matching_declarations','Matching declarations'],['one_declaration','Single declaration']]){
+          const opt=el('option',label);opt.value=v;filter.appendChild(opt);
+        }
+        const query=el('input');query.type='search';query.setAttribute('aria-label','Search reconciled findings');query.maxLength=80;
+        const list=el('div');let page=0;
+        const draw=()=>{
+          const q=query.value.trim().toLowerCase();
+          const rows=value.findings.filter(r=>(filter.value==='all'||(filter.value==='attention'&&['unaddressed','conflicting_declarations'].includes(r.status))||r.status===filter.value)&&(!q||r.finding_id.includes(q)||String(r.scope.installation_alias||'').toLowerCase().includes(q)||String(r.scope.journal_tag||'').includes(q)));
+          const per=25,pages=Math.max(1,Math.ceil(rows.length/per));page=Math.min(page,pages-1);
+          list.replaceChildren(el('p',rows.length+' matching reconciliation findings · page '+(page+1)+' of '+pages));
+          for(const row of rows.slice(page*per,(page+1)*per)){
+            const item=el('details');item.append(el('summary',row.kind.replaceAll('_',' ')+' · '+row.status.replaceAll('_',' ')),
+              el('p','Scope: '+Object.values(row.scope).join(' · ')),
+              el('p','Finding: '+row.finding_id),
+              el('p','Conflicting fields: '+(row.conflict_dimensions.join(', ')||'none')),
+              el('p',row.declared_reviewer_alias_count+' distinct case-folded declared reviewer aliases'+(row.same_reviewer_conflict?' · same-alias conflict':'')));
+            for(const d of row.declarations)item.appendChild(el('p',d.declared_reviewer_alias+' · '+d.disposition+' · owner '+(d.owner_alias||'none')+' · reference '+(d.external_reference||'none')+' · receipt '+d.triage_sha256));
+            list.appendChild(item);
+          }
+          const prev=button('Previous reconciliation page',()=>{if(page>0){page--;draw();}});
+          const next=button('Next reconciliation page',()=>{if(page+1<pages){page++;draw();}});
+          prev.disabled=page===0;next.disabled=page+1===pages;list.append(prev,next);
+        };
+        filter.addEventListener('change',()=>{page=0;draw();});query.addEventListener('input',()=>{page=0;draw();});
+        resultHost.append(auditLabel('Status',filter),auditLabel('Search',query),list,download(value,'owg-workforce-audit-reconciliation'));draw();
+      };
+      const submit=button('Recompute and reconcile selected receipts',async()=>{
+        const version=++serial;resultHost.replaceChildren();
+        try{
+          const picked=entries.map(e=>({file:e.file.files?.[0],pin:e.pin.value}));
+          if(picked.some(e=>!e.file||!/^[a-f0-9]{64}$/.test(e.pin)))throw new Error('Select every receipt and enter its separately obtained digest.');
+          if(new Set(picked.map(e=>e.pin)).size!==picked.length)throw new Error('Duplicate receipt digest.');
+          if(new TextEncoder().encode(document).length+picked.reduce((n,e)=>n+e.file.size,0)>auditMax)throw new Error('Combined evidence and receipts exceed the browser limit; use the offline CLI.');
+          if(!window.confirm('Recompute the original historical evidence and every selected receipt? No declarations will be applied to external systems.'))return;
+          const raw=[];
+          for(const e of picked)raw.push('{"expected_triage_sha256":'+JSON.stringify(e.pin)+',"receipt":'+await auditRead(e.file)+'}');
+          if(version!==serial||attempt!==auditGeneration||!resultHost.isConnected)return;
+          const payload=document.slice(0,-1)+',"receipt_set":{"confirmed":true,"receipts":['+raw.join(',')+']}}';
+          if(new TextEncoder().encode(payload).length>auditMax)throw new Error('Combined evidence and receipts exceed the browser limit.');
+          const value=await inboxCall('audit-reconcile',payload);
+          if(version!==serial||attempt!==auditGeneration||!resultHost.isConnected)return;
+          show(value);
+        }catch(error){if(version===serial&&attempt===auditGeneration&&resultHost.isConnected)resultHost.replaceChildren(el('p','Reconciliation refused: '+error.message));}
+      });
+      entries=[makeEntry()];drawInputs();
+      panel.append(inputs,submit,resultHost);target.appendChild(panel);
+    };
+    const remediationSection=el('details');remediationSection.append(el('summary','Local audit remediation registers'),
+      el('p','Opt-in persistent tracking of minimized findings and declared progress. Historical rollback flags are never cleared. Original archives and independent pins remain separate.'));
+    const remediationOutput=el('div');remediationOutput.setAttribute('aria-live','polite');
+    let remediationGeneration=0;
+    const remediationCall=(action,body)=>inboxCall('remediation-'+action,JSON.stringify(body));
+    const showRemediation=value=>{
+      const attempt=++remediationGeneration;remediationOutput.replaceChildren(
+        el('h5','Retained audit remediation register'),el('p','Worklist: '+value.worklist_sha256),
+        el('p','Revision '+value.revision+' · history '+value.history_sha256),
+        el('p',value.finding_count+' findings · '+value.rollback_referrals_retained+' historical rollback referrals retained'),
+        el('p',Object.entries(value.counts_by_state).map(([k,v])=>k.replaceAll('_',' ')+': '+v).join(' · ')),
+        el('p','Reported follow-up is not verified completion or incident clearance.'));
+      if(value.lineage)remediationOutput.appendChild(el('p','Successor of '+value.lineage.previous_worklist_sha256+' · prior revision '+value.lineage.previous_revision+' · '+value.lineage.carried_owner_finding_ids.length+' carried owner assignments'));
+      const reviewer=el('input');reviewer.maxLength=80;reviewer.setAttribute('aria-label','Remediation reviewer alias');
+      const filter=el('select');filter.setAttribute('aria-label','Remediation finding state');
+      for(const v of ['all',...Object.keys(value.counts_by_state)]){const opt=el('option',v.replaceAll('_',' '));opt.value=v;filter.appendChild(opt);}
+      const query=el('input');query.type='search';query.maxLength=80;query.setAttribute('aria-label','Search remediation findings');
+      const rows=el('div'),message=el('div');message.setAttribute('aria-live','polite');let page=0,busy=false;
+      const validAlias=v=>/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$/.test(v);
+      const transitions={unassigned:['assigned'],assigned:['investigating','awaiting_evidence','assigned'],
+        investigating:['awaiting_evidence','follow_up_reported','assigned'],awaiting_evidence:['investigating','assigned'],
+        follow_up_reported:['investigating','assigned']};
+      const pins={worklist_sha256:value.worklist_sha256,expected_revision:value.revision,expected_history_sha256:value.history_sha256};
+      const ticketPanel=el('details');ticketPanel.append(el('summary','Read-only Jira ticket synchronization'),
+        el('p','Bind an exact locally observed Jira issue reference to an assigned finding. Existing Jira tenant/OAuth opt-in is required for reads. Ticket state does not establish work completion or clear findings.'));
+      const ticketOutput=el('div');ticketOutput.setAttribute('aria-live','polite');let ticketView=null,ticketSerial=0,ticketBusy=false;
+      const drawTickets=ledger=>{
+        ticketView=ledger;ticketOutput.replaceChildren(el('p',ledger.bindings.length+' retained Jira mappings · '+ledger.events.length+' ticket events'),
+          el('p','Ticket history: '+ledger.ticket_history_sha256));
+        const select=el('select');select.setAttribute('aria-label','Ticket synchronization finding');
+        const available=value.findings.filter(r=>r.state!=='unassigned');
+        for(const r of available){const option=el('option',r.kind.replaceAll('_',' ')+' · '+r.finding_id.slice(0,12));option.value=r.finding_id;select.appendChild(option);}
+        const ref=el('input');ref.maxLength=38;ref.setAttribute('aria-label','Observed Jira opaque record reference');
+        const detail=el('div');
+        const show=()=>{
+          detail.replaceChildren();const bound=ledger.bindings.find(r=>r.finding_id===select.value);
+          if(bound){
+            detail.append(el('p','Bound record: '+bound.resource_ref),el('p',bound.latest_check?
+              'Last source state: '+bound.latest_check.source_state+' · resolution reported: '+bound.latest_check.resolution_reported+' · '+bound.latest_check.reason+(bound.check_matches_current_register?'':' · prior register revision'):'No source read yet.'));
+          }
+          ref.disabled=!!bound;ref.value=bound?.resource_ref||'';
+        };
+        select.addEventListener('change',show);
+        const run=async action=>{
+          if(ticketBusy||attempt!==remediationGeneration)return;
+          try{
+            const row=available.find(r=>r.finding_id===select.value);
+            if(!row)throw new Error('Assign a finding first.');
+            if(action==='bind'&&!/^owg:r:[0-9a-f]{32}$/.test(ref.value))throw new Error('Use an exact opaque reference from local observed evidence, not a Jira URL or issue key.');
+            if(!window.confirm(action==='bind'?'Retain this exact declared Jira mapping locally?':'Read this exact observed Jira issue using the existing opt-in connector and retain minimized state?'))return;
+            ticketBusy=true;
+            const body={...pins,expected_ticket_revision:ledger.ticket_revision,expected_ticket_history_sha256:ledger.ticket_history_sha256,
+              finding_id:row.finding_id,expected_finding_sha256:row.finding_sha256};
+            const next=await remediationCall('ticket-'+action,action==='bind'?{...body,resource_ref:ref.value,confirm_operator_mapping:true,confirm_local_retention:true}:{...body,confirm_source_read:true});
+            if(attempt===remediationGeneration&&ticketOutput.isConnected)drawTickets(next);
+          }catch(e){if(attempt===remediationGeneration)message.replaceChildren(el('p','Ticket action refused: '+e.message+' · reload before retrying.'));}
+          finally{ticketBusy=false;}
+        };
+        const bind=button('Bind observed Jira issue',()=>run('bind')),check=button('Refresh Jira ticket state',()=>run('check'));
+        bind.disabled=!available.length;check.disabled=!available.length;
+        ticketOutput.append(auditLabel('Finding',select),auditLabel('Observed opaque Jira reference',ref),detail,bind,check,download(ledger,'owg-workforce-remediation-ticket-ledger'));show();
+      };
+      const loadTickets=async()=>{
+        const token=++ticketSerial;ticketOutput.replaceChildren();
+        try{const ledger=await remediationCall('ticket-status',{worklist_sha256:value.worklist_sha256});
+          if(token!==ticketSerial||attempt!==remediationGeneration)return;
+          if(ledger.register_history_sha256!==value.history_sha256)throw new Error('Register changed; reload it first.');
+          drawTickets(ledger);
+        }catch(e){if(token===ticketSerial&&attempt===remediationGeneration)ticketOutput.replaceChildren(el('p',e.message));}
+      };
+      ticketPanel.append(button('Load Jira ticket ledger',loadTickets),ticketOutput);
+      const handoffPanel=el('details');handoffPanel.append(el('summary','Explicit Jira ticket creation and follow-up comments'),
+        el('p','Separate write opt-in and grant required. Preview the exact destination and minimized payload before confirming one external write. Uncertain attempts must be inspected manually; no automatic retry.'));
+      const handoffOutput=el('div');handoffOutput.setAttribute('aria-live','polite');
+      let handoffSerial=0,handoffBusy=false;
+      const loadHandoff=async()=>{
+        const token=++handoffSerial;handoffOutput.replaceChildren();
+        try{
+          const scope={worklist_sha256:value.worklist_sha256};
+          const ledger=await remediationCall('ticket-status',scope);
+          const attempts=await remediationCall('jira-status',scope);
+          if(token!==handoffSerial||attempt!==remediationGeneration||!handoffOutput.isConnected)return;
+          if(ledger.register_history_sha256!==value.history_sha256)throw new Error('Register changed; reload it first.');
+          handoffOutput.append(el('p',attempts.attempts.length+' retained external write attempts'),download(attempts,'owg-jira-handoff-attempts'));
+          for(const row of attempts.attempts)handoffOutput.appendChild(el('p',row.operation+' · '+row.finding_id.slice(0,12)+' · '+row.status+(row.issue_key?' · '+row.issue_key:'')+(row.comment_id?' · comment '+row.comment_id:'')));
+          const previous=attempts.related_creation_attempts||[];
+          if(previous.length){
+            const related=el('details');related.open=true;
+            related.append(el('summary',previous.length+' matching creation attempts in other worklists'),
+              el('p','A matching structural finding ID prevents another create. It does not prove that the earlier issue refers to this incident. Inspect Jira and bind the exact locally observed issue explicitly.'));
+            for(const row of previous)related.appendChild(el('p',row.finding_id.slice(0,12)+' · '+row.status+
+              (row.destination_host?' · '+row.destination_host:'')+(row.destination_project?' · project '+row.destination_project:'')+
+              (row.issue_key?' · '+row.issue_key:' · no confirmed issue key')+' · prior worklist '+row.previous_worklist_sha256));
+            handoffOutput.appendChild(related);
+          }
+          const finding=el('select');finding.setAttribute('aria-label','Jira handoff finding');
+          const eligible=value.findings.filter(r=>r.state!=='unassigned');
+          for(const r of eligible){const option=el('option',r.kind.replaceAll('_',' ')+' · '+r.finding_id.slice(0,12));option.value=r.finding_id;finding.appendChild(option);}
+          const operation=el('select');operation.setAttribute('aria-label','Jira handoff operation');
+          for(const [v,label] of [['create','Create review ticket'],['comment','Append review comment to observed bound ticket']]){const opt=el('option',label);opt.value=v;operation.appendChild(opt);}
+          const previewHost=el('div');let revision=0;
+          const reset=()=>{revision++;previewHost.replaceChildren();};
+          const existingCreation=()=>operation.value==='create'&&[...attempts.attempts,...previous].some(r=>r.finding_id===finding.value&&(r.operation==='create'||r.previous_worklist_sha256));
+          const selectionChanged=()=>{
+            reset();
+            preview.disabled=!eligible.length||existingCreation();
+            if(existingCreation())previewHost.appendChild(el('p','Creation already attempted for this finding. Inspect the retained attempt history and Jira before binding an observed issue.'));
+          };
+          finding.addEventListener('change',selectionChanged);operation.addEventListener('change',selectionChanged);
+          const preview=button('Preview exact Jira handoff',async()=>{
+            const version=++revision;previewHost.replaceChildren();
+            try{
+              const row=eligible.find(r=>r.finding_id===finding.value);
+              if(!row)throw new Error('Assign a finding first.');
+              const body={...pins,expected_ticket_revision:ledger.ticket_revision,expected_ticket_history_sha256:ledger.ticket_history_sha256,
+                finding_id:row.finding_id,expected_finding_sha256:row.finding_sha256,operation:operation.value};
+              const plan=await remediationCall('jira-preview',body);
+              if(version!==revision||token!==handoffSerial||attempt!==remediationGeneration||!previewHost.isConnected)return;
+              const payload=el('pre',JSON.stringify(plan.payload,null,2));payload.style.whiteSpace='pre-wrap';payload.style.overflowWrap='anywhere';
+              previewHost.append(el('h5','Exact external write preview'),el('p',plan.operation+' · '+plan.destination.host+' · project '+plan.destination.project+
+                (plan.destination.bound_issue_key?' · issue '+plan.destination.bound_issue_key:' · issue type '+plan.destination.issue_type_id)),
+                el('p','Plan SHA-256: '+plan.plan_sha256),payload);
+              const send=button('Confirm and send one Jira write',async()=>{
+                if(handoffBusy||version!==revision||token!==handoffSerial||attempt!==remediationGeneration)return;
+                if(!window.confirm('Send this exact previewed payload to the specified Jira project? A durable attempt is recorded before the request; an uncertain result cannot be automatically retried.'))return;
+                handoffBusy=true;send.disabled=true;
+                try{
+                  const result=await remediationCall('jira-dispatch',{...body,expected_plan_sha256:plan.plan_sha256,confirm_external_write:true});
+                  if(token===handoffSerial&&attempt===remediationGeneration){previewHost.appendChild(el('p','Provider result: '+result.status+(result.issue_key?' · '+result.issue_key:'')));await loadHandoff();}
+                }catch(e){if(token===handoffSerial&&attempt===remediationGeneration)previewHost.appendChild(el('p','Write not confirmed: '+e.message+' · inspect retained attempts and Jira before taking further action.'));}
+                finally{handoffBusy=false;}
+              });previewHost.appendChild(send);
+            }catch(e){if(version===revision&&token===handoffSerial)previewHost.replaceChildren(el('p','Preview refused: '+e.message));}
+          });selectionChanged();
+          handoffOutput.append(auditLabel('Finding',finding),auditLabel('Operation',operation),preview,previewHost);
+        }catch(e){if(token===handoffSerial&&attempt===remediationGeneration)handoffOutput.replaceChildren(el('p',e.message));}
+      };
+      handoffPanel.append(button('Load Jira handoff attempts',loadHandoff),handoffOutput);
+
+      const draw=()=>{
+        const q=query.value.trim().toLowerCase();
+        const matches=value.findings.filter(r=>(filter.value==='all'||r.state===filter.value)&&(!q||r.finding_id.includes(q)||String(r.scope.installation_alias||'').toLowerCase().includes(q)||String(r.scope.journal_tag||'').includes(q)));
+        const per=20,pages=Math.max(1,Math.ceil(matches.length/per));page=Math.min(page,pages-1);
+        rows.replaceChildren(el('p',matches.length+' remediation findings · page '+(page+1)+' of '+pages));
+        for(const row of matches.slice(page*per,(page+1)*per)){
+          const item=el('details');item.append(el('summary',row.kind.replaceAll('_',' ')+' · '+row.state.replaceAll('_',' ')),
+            el('p','Scope: '+Object.values(row.scope).join(' · ')),el('p','Finding: '+row.finding_id),
+            el('p','Current owner: '+(row.owner_alias||'unassigned')+' · evidence reference: '+(row.evidence_reference||'none')));
+          const state=el('select');state.setAttribute('aria-label','Next remediation state '+row.finding_id);
+          for(const s of transitions[row.state]){const opt=el('option',s.replaceAll('_',' '));opt.value=s;state.appendChild(opt);}
+          const owner=el('input');owner.maxLength=80;owner.value=row.owner_alias||'';owner.setAttribute('aria-label','Remediation owner '+row.finding_id);
+          const ref=el('input');ref.maxLength=80;ref.setAttribute('aria-label','Remediation evidence reference '+row.finding_id);
+          item.append(auditLabel('Next state',state),auditLabel('Declared owner',owner),auditLabel('Opaque evidence reference',ref),
+            button('Record remediation progress',async()=>{
+              if(busy||attempt!==remediationGeneration)return;
+              try{
+                if(!validAlias(reviewer.value)||!validAlias(owner.value)||(ref.value&&!validAlias(ref.value)))throw new Error('Provide valid opaque reviewer, owner and optional evidence aliases.');
+                if(state.value==='follow_up_reported'&&!ref.value)throw new Error('Reported follow-up requires a declared evidence reference.');
+                if(!window.confirm('Retain this exact follow-up transition locally? This does not clear an incident or create an external assignment.'))return;
+                busy=true;
+                const updated=await remediationCall('change',{...pins,finding_id:row.finding_id,expected_finding_sha256:row.finding_sha256,state:state.value,owner_alias:owner.value,reviewer_alias:reviewer.value,evidence_reference:ref.value||null,confirmed:true});
+                if(attempt===remediationGeneration&&remediationOutput.isConnected)showRemediation(updated);
+              }catch(error){if(attempt===remediationGeneration)message.replaceChildren(el('p','Progress refused: '+error.message+' · reload register before retrying.'));}
+              finally{busy=false;}
+            }));
+          rows.appendChild(item);
+        }
+        const prev=button('Previous remediation page',()=>{if(page>0){page--;draw();}});
+        const next=button('Next remediation page',()=>{if(page+1<pages){page++;draw();}});
+        prev.disabled=page===0;next.disabled=page+1===pages;rows.append(prev,next);
+      };
+      filter.addEventListener('change',()=>{page=0;draw();});query.addEventListener('input',()=>{page=0;draw();});
+      const history=el('details');history.append(el('summary','Local progress history ('+value.events.length+')'));
+      const events=el('div');let offset=0;
+      const drawEvents=()=>{
+        const subset=value.events.slice(offset,offset+25);
+        events.replaceChildren(el('p','History entries '+(subset.length?offset+1:0)+'–'+(offset+subset.length)+' of '+value.events.length));
+        for(const e of subset)events.appendChild(el('p','#'+e.revision+' · '+e.finding_id.slice(0,12)+' · '+e.previous_state+' → '+e.state+' · '+e.owner_alias+' · '+e.declared_reviewer_alias+' · '+(e.evidence_reference||'no reference')+' · '+e.event_sha256));
+        const prev=button('Previous history page',()=>{offset=Math.max(0,offset-25);drawEvents();});
+        const next=button('Next history page',()=>{offset+=25;drawEvents();});
+        prev.disabled=offset===0;next.disabled=offset+25>=value.events.length;events.append(prev,next);
+      };history.appendChild(events);drawEvents();
+      remediationOutput.append(auditLabel('Declared reviewer',reviewer),auditLabel('Filter state',filter),auditLabel('Search',query),message,rows,history,ticketPanel,handoffPanel,
+        download(value,'owg-workforce-remediation-register'),
+        button('Reload register',async()=>{const token=++remediationGeneration;try{const current=await remediationCall('status',{worklist_sha256:value.worklist_sha256});if(token===remediationGeneration)showRemediation(current);}catch(e){if(token===remediationGeneration)remediationOutput.replaceChildren(el('p',e.message));}}),
+        button('Remove local remediation register',async()=>{
+          if(busy||attempt!==remediationGeneration)return;
+          if(!window.confirm('Confirm you exported this exact register history and any loaded ticket ledger and want to remove their local records. Existing backups and exports are not erased.'))return;
+          busy=true;try{await remediationCall('forget',{...pins,confirmed_exported:true,...(ticketView?{expected_ticket_history_sha256:ticketView.ticket_history_sha256}:{})});if(attempt===remediationGeneration)await listRemediation();}
+          catch(error){if(attempt===remediationGeneration)message.replaceChildren(el('p',error.message));}finally{busy=false;}
+        }));draw();
+    };
+    const listRemediation=async()=>{
+      const attempt=++remediationGeneration;remediationOutput.replaceChildren();
+      try{
+        const result=await remediationCall('list',{});
+        if(attempt!==remediationGeneration||!remediationOutput.isConnected)return;
+        remediationOutput.appendChild(el('p',result.registers.length+' retained registers'));
+        for(const r of result.registers){
+          const item=el('div');item.append(el('p',r.worklist_sha256+' · '+r.finding_count+' findings · revision '+r.revision),
+            button('Open remediation register '+r.worklist_sha256.slice(0,12),async()=>{
+              const token=++remediationGeneration;
+              try{const value=await remediationCall('status',{worklist_sha256:r.worklist_sha256});if(token===remediationGeneration)showRemediation(value);}
+              catch(error){if(token===remediationGeneration)remediationOutput.replaceChildren(el('p',error.message));}
+            }));remediationOutput.appendChild(item);
+        }
+      }catch(error){if(attempt===remediationGeneration)remediationOutput.replaceChildren(el('p',error.message));}
+    };
+    remediationSection.append(button('Load retained remediation registers',listRemediation),remediationOutput);
+    const addRemediationCreate=(target,value,document,attempt)=>{
+      const result=el('div');
+      const create=button('Retain exact worklist for local remediation',async()=>{
+        try{
+          if(!value.worklist.finding_count)throw new Error('No findings to retain.');
+          if(!window.confirm('Retain this exact minimized worklist and its future declared progress in the local database? No signed packets, source case tags or trust keys will be retained by this register.'))return;
+          const body=document.slice(0,-1)+',"expected_worklist_sha256":'+JSON.stringify(value.worklist.worklist_sha256)+',"confirm_local_retention":true}';
+          if(new TextEncoder().encode(body).length>auditMax)throw new Error('Combined retention request exceeds the browser limit.');
+          const token=++remediationGeneration;
+          const saved=await inboxCall('remediation-create',body);
+          if(attempt!==auditGeneration||token!==remediationGeneration||!result.isConnected)return;
+          result.replaceChildren(el('p','Exact remediation register retained locally.'));remediationSection.open=true;showRemediation(saved);
+        }catch(error){if(attempt===auditGeneration&&result.isConnected)result.replaceChildren(el('p','Retention refused: '+error.message));}
+      });
+      target.append(create,result);
+    };
+    const renderContinuity=(target,value,document,attempt)=>{
+      const panel=el('details');panel.append(el('summary','Carry remediation into an appended audit history'),
+        el('p','Only an exact extension of the previous independently pinned manifest is accepted. Unchanged evidence may carry a selected owner as a new assignment; prior progress and references never carry automatically.'));
+      const prior=el('select');prior.setAttribute('aria-label','Previous remediation register');
+      const pin=el('input');pin.maxLength=64;pin.setAttribute('aria-label','Independently obtained previous manifest digest');
+      const reviewer=el('input');reviewer.maxLength=80;reviewer.setAttribute('aria-label','Continuity reviewer alias');
+      const output=el('div');output.setAttribute('aria-live','polite');
+      let registers=[],serial=0;
+      const invalidate=()=>{serial++;output.replaceChildren();};
+      const current=()=>registers.find(r=>r.worklist_sha256===prior.value);
+      const load=button('Load previous remediation registers',async()=>{
+        const token=++serial;output.replaceChildren();
+        try{
+          const result=await remediationCall('list',{});
+          if(token!==serial||attempt!==auditGeneration||!output.isConnected)return;
+          registers=result.registers.filter(r=>r.worklist_sha256!==value.worklist.worklist_sha256);
+          prior.replaceChildren();for(const r of registers){const opt=el('option',r.worklist_sha256.slice(0,16)+' · revision '+r.revision);opt.value=r.worklist_sha256;prior.appendChild(opt);}
+          output.appendChild(el('p',registers.length+' candidate prior registers. Enter the independently obtained prior manifest digest.'));
+        }catch(e){if(token===serial)output.replaceChildren(el('p',e.message));}
+      });
+      const base=()=>{
+        const r=current();
+        if(!r||!/^[a-f0-9]{64}$/.test(pin.value))throw new Error('Load and select a previous register and supply its independent manifest digest.');
+        return {previous_worklist_sha256:r.worklist_sha256,expected_previous_revision:r.revision,
+          expected_previous_history_sha256:r.history_sha256,previous_manifest_sha256:pin.value,
+          expected_current_worklist_sha256:value.worklist.worklist_sha256,confirmed:true};
+      };
+      const call=(action,body)=>{
+        const payload=document.slice(0,-1)+',"continuity":'+JSON.stringify(body)+'}';
+        if(new TextEncoder().encode(payload).length>auditMax)throw new Error('Combined continuity request exceeds browser limit.');
+        return inboxCall('remediation-continuity-'+action,payload);
+      };
+      const preview=button('Compare exact appended remediation history',async()=>{
+        const token=++serial;output.replaceChildren();
+        try{
+          const req=base();
+          if(!window.confirm('Compare the prior register against the exact prefix of the current verified history?'))return;
+          const result=await call('preview',req);
+          if(token!==serial||attempt!==auditGeneration||!output.isConnected)return;
+          output.append(el('h5','Verified remediation continuity preview'),
+            el('p',Object.entries(result.counts_by_relation).map(([k,v])=>k.replaceAll('_',' ')+': '+v).join(' · ')),
+            el('p',result.verified_prefix_snapshot_count+' verified prior snapshots · '+result.owner_carry_eligible_count+' eligible owner assignments'),
+            el('p','Missing findings remain in the previous register. No progress or clearance is inferred.'));
+          const chosen=new Set(),list=el('div'),count=el('p','0 selected');let page=0;
+          const filter=el('select');filter.setAttribute('aria-label','Continuity finding relation');
+          for(const k of ['all','same_evidence_pin','changed_evidence_pin','new_finding','not_in_successor','eligible']){const opt=el('option',k.replaceAll('_',' '));opt.value=k;filter.appendChild(opt);}
+          const draw=()=>{
+            const rows=result.findings.filter(r=>filter.value==='all'||(filter.value==='eligible'?r.owner_carry_eligible:r.relation===filter.value));
+            const per=25,pages=Math.max(1,Math.ceil(rows.length/per));page=Math.min(page,pages-1);
+            list.replaceChildren(el('p',rows.length+' continuity findings · page '+(page+1)+' of '+pages));
+            for(const r of rows.slice(page*per,(page+1)*per)){
+              const item=el('div');item.append(el('p',r.kind.replaceAll('_',' ')+' · '+r.relation.replaceAll('_',' ')+' · '+Object.values(r.scope).join(' · ')),
+                el('p','Prior state: '+(r.previous_state||'none')+' · prior owner: '+(r.previous_owner_alias||'none')));
+              if(r.owner_carry_eligible){
+                const check=el('input');check.type='checkbox';check.checked=chosen.has(r.finding_id);check.setAttribute('aria-label','Carry owner '+r.finding_id);
+                check.addEventListener('change',()=>{if(check.checked&&chosen.size<200)chosen.add(r.finding_id);else{chosen.delete(r.finding_id);check.checked=false;}count.textContent=chosen.size+' selected';});
+                item.appendChild(auditLabel('Carry owner as new assignment',check));
+              }list.appendChild(item);
+            }
+            const back=button('Previous continuity page',()=>{page--;draw();}),next=button('Next continuity page',()=>{page++;draw();});
+            back.disabled=page===0;next.disabled=page+1===pages;list.append(back,next);
+          };
+          filter.addEventListener('change',()=>{page=0;draw();});
+          const message=el('div');let busy=false;
+          const carry=button('Create successor remediation register',async()=>{
+            if(busy||token!==serial||attempt!==auditGeneration)return;
+            try{
+              if(!/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$/.test(reviewer.value))throw new Error('Provide a declared reviewer alias.');
+              if(!window.confirm('Create a separate retained successor register with only the selected owners as new assignments? Prior history remains unchanged.'))return;
+              busy=true;
+              const next=await call('carry',{...req,expected_continuity_sha256:result.continuity_sha256,reviewer_alias:reviewer.value,carry_finding_ids:[...chosen],confirm_local_retention:true});
+              if(token!==serial||attempt!==auditGeneration||!output.isConnected)return;
+              message.replaceChildren(el('p','Separate successor remediation register created.'));carry.disabled=true;remediationSection.open=true;showRemediation(next);
+            }catch(e){if(token===serial)message.replaceChildren(el('p','Successor creation refused: '+e.message));}
+            finally{busy=false;}
+          });
+          output.append(auditLabel('Relation',filter),count,list,download(result,'owg-workforce-remediation-continuity'),carry,message);draw();
+        }catch(e){if(token===serial)output.replaceChildren(el('p','Continuity refused: '+e.message));}
+      });
+      prior.addEventListener('change',invalidate);pin.addEventListener('input',invalidate);
+      panel.append(load,auditLabel('Previous register',prior),auditLabel('Previous manifest digest',pin),auditLabel('Declared reviewer',reviewer),preview,output);target.appendChild(panel);
+    };
+    const verifyAudit=button('Recompute selected historical audit evidence',async()=>{
+      const attempt=++auditGeneration;auditOutput.replaceChildren();
+      try{
+        const mode=auditMode.value,digest=auditDigest.value;
+        if(!/^[a-f0-9]{64}$/.test(digest))throw new Error('Enter the separately obtained lowercase SHA-256 digest.');
+        const anchor=auditTrust.files?.[0],files=auditFiles.map(input=>input.files?.[0]);
+        if(!anchor||files.some(f=>!f))throw new Error('Select the independent trust file or manifest and every required dossier.');
+        if([anchor,...files].reduce((n,f)=>n+f.size,0)>auditMax)throw new Error('Combined browser input must be at most 8 MiB. Use the offline audit CLI for larger archives.');
+        if(!window.confirm('Recompute signatures and reports against the independently obtained trust anchors? Selected artifacts will be processed by the local OWG server only, without registry changes or storage by this review.'))return;
+        auditOutput.appendChild(el('p','Recomputing selected evidence…'));
+        const trustText=await auditRead(anchor);const raw=[];
+        for(const file of files)raw.push(await auditRead(file));
+        if(attempt!==auditGeneration||!auditOutput.isConnected)return;
+        const document=mode==='verify'?
+          '{"confirmed":true,"expected_dossier_sha256":'+JSON.stringify(digest)+',"trust":'+trustText+',"dossier":'+raw[0]+'}':
+          '{"confirmed":true,"expected_manifest_sha256":'+JSON.stringify(digest)+',"manifest":'+trustText+',"dossiers":['+raw.join(',')+']}';
+        if(new TextEncoder().encode(document).length>auditMax)throw new Error('Combined review document exceeds 8 MiB. Use the offline CLI.');
+        const value=await inboxCall(mode==='verify'?'audit-verify':'audit-timeline',document);
+        if(attempt!==auditGeneration||!auditOutput.isConnected)return;
+        auditOutput.replaceChildren();
+        if(mode==='verify'){
+          const receipt=value.verification;
+          auditOutput.append(el('h4','Historical dossier independently recomputed'),
+            el('p','Dossier SHA-256: '+receipt.dossier_sha256),
+            el('p','Historical review clock: '+new Date(receipt.reviewed_as_of_ms).toISOString()+' · current freshness and trusted timestamp not verified.'),
+            download(value,'owg-workforce-verified-audit-dossier'));
+          renderReview(auditOutput,value.report);
+        }else{renderAuditTimeline(auditOutput,value);renderAuditTriage(auditOutput,value,document,attempt);renderAuditReconciliation(auditOutput,document,attempt);addRemediationCreate(auditOutput,value,document,attempt);renderContinuity(auditOutput,value,document,attempt);}
+      }catch(error){if(attempt===auditGeneration&&auditOutput.isConnected)auditOutput.replaceChildren(el('p','Historical review refused. Check file ordering, independent pins and size limits. '+error.message));}
+    });
+    auditMode.addEventListener('change',resetAuditFiles);auditDigest.addEventListener('input',invalidateAudit);auditTrust.addEventListener('change',invalidateAudit);
+    auditSection.append(auditLabel('Operation',auditMode),auditLabel('Independent digest',auditDigest),
+      auditLabel('Independent trust JSON or manifest',auditTrust),auditInputs,verifyAudit,auditOutput,
+      el('p','Browser review is limited to 8 MiB including the request wrapper. Larger archives can be verified offline using the documented CLI.'));
+    resetAuditFiles();
     const runReview=button('Review pinned installation packets',async()=>{
       const attempt=++generation;output.replaceChildren();
       try{
@@ -2621,7 +3239,7 @@
     file.addEventListener('change',()=>{generation++;output.replaceChildren();});
     signingMode.addEventListener('change',()=>{generation++;output.replaceChildren();});
     registered.addEventListener('change',()=>{generation++;output.replaceChildren();});
-    section.append(signingLabel,registeredLabel,identity,button('Load local trust registry',refreshTrust),trustPanel,inboxSection,aliasLabel,secretLabel,runExport,el('p','Review bundle: combine downloaded packets with separately obtained pins, the expected correlation namespace and either the expected registry revision (registered review) or an explicit public-key trust list (stateless signed review) (see AGENT_PROCUREMENT_WORKFORCE_EXCHANGE.md).'),file,runReview,output);host.appendChild(section);
+    section.append(signingLabel,registeredLabel,identity,button('Load local trust registry',refreshTrust),trustPanel,inboxSection,auditSection,remediationSection,aliasLabel,secretLabel,runExport,el('p','Review bundle: combine downloaded packets with separately obtained pins, the expected correlation namespace and either the expected registry revision (registered review) or an explicit public-key trust list (stateless signed review) (see AGENT_PROCUREMENT_WORKFORCE_EXCHANGE.md).'),file,runReview,output);host.appendChild(section);
   }
   function installWorkforceSchedule(host){
     const section=el('details');section.append(el('summary','Schedule local workforce deadline reviews'),
