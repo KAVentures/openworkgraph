@@ -79,6 +79,8 @@ const $=id=>document.getElementById(id),base='/v1/human/analyses';
 let identityScopes=[],identityActor='';
 let credential='',credentialScheme='Bearer',epoch=0,selected=null,snapshot=null,pairedCase=null,caseDataset=null,canPublish=false,next=null,fileAttempt=0,pairedCaseFileAttempt=0,viewAttempt=0,listAttempt=0;
 let portfolio=[],portfolioBaseline=0,portfolioTurn=0,portfolioReport=null;
+// History state must exist before the synchronous SSO callback clears the selection.
+let historyInventory=null,historyTurn=0,historyReport=null;
 const text=(tag,value)=>{const n=document.createElement(tag);n.textContent=value;return n;};
 function table(node,doc){
  node.replaceChildren();const t=document.createElement('table'),head=document.createElement('tr');
@@ -407,7 +409,6 @@ async function reviewPortfolio(download=false){
 $('portfolioRun').onclick=()=>reviewPortfolio(false);
 $('portfolioDownload').onclick=()=>reviewPortfolio(true);
 
-let historyInventory=null,historyTurn=0,historyReport=null;
 function invalidateHistory(){
  historyTurn++;historyReport=null;$('historyResult').replaceChildren();
  $('historyDownload').disabled=true;$('historyRun').disabled=!historyInventory;
