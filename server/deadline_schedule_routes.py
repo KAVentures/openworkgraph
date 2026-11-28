@@ -17,3 +17,9 @@ def core():
 def ui():
     return FileResponse(_DASH / "deadline_schedule_ui.js", media_type="application/javascript",
                         headers={"Cache-Control":"no-store","X-Content-Type-Options":"nosniff"})
+
+
+@router.get("/deadline-windows.js")
+def windows():
+    return FileResponse(_DASH / "deadline_windows.js", media_type="application/javascript",
+                        headers={"Cache-Control":"no-store","X-Content-Type-Options":"nosniff"})
