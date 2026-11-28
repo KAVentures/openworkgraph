@@ -56,6 +56,11 @@ def campaign_script() -> FileResponse:
     return FileResponse(_SCRIPT.with_name("ai_implementation_campaign.js"), media_type="application/javascript")
 
 
+@router.get("/ai-implementation-campaign-outcomes.js")
+def campaign_outcomes_script() -> FileResponse:
+    return FileResponse(_SCRIPT.with_name("ai_implementation_campaign_outcomes.js"), media_type="application/javascript")
+
+
 @router.get("/v1/automation-pipeline")
 def list_pipeline(request: Request, state: str | None = Query(default=None, max_length=20)):
     _require_dashboard(request)

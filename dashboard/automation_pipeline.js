@@ -1231,10 +1231,12 @@
     panel.appendChild(card);
     let campaignPanel=null;
     const campaignHost=el('div');card.insertBefore(campaignHost,portfolioButton);
-    import('/ai-implementation-campaign.js').then(module=>{
+    Promise.all([import('/ai-implementation-campaign.js'),import('/ai-implementation-campaign-outcomes.js').catch(()=>null)]).then(([module,outcomes])=>{
       campaignPanel=module.mountImplementationCampaign(campaignHost,{
         loadIdeas:async()=>{const r=await (await api('/v1/automation-pipeline')).json();return r.ideas;},
         openIdea:id=>show(id),
+        mountOutcomes:outcomes?.mountCampaignOutcomes,
+        loadReadiness:async()=>await (await api('/v1/automation-pipeline/benefit-readiness')).json(),
         download:(name,body)=>{const url=URL.createObjectURL(new Blob([body],{type:'application/json'}));const a=el('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}
       });
     }).catch(()=>{campaignHost.textContent='Implementation campaign unavailable; existing portfolio remains available.';});
