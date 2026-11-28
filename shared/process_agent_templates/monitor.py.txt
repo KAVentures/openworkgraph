@@ -113,7 +113,6 @@ def report(spec, records, deployment_name):
                    for t in route['target_activity_ids']):
                 _fail()
             expected_routes[table.id]=route['target_activity_ids']
-        from runtime import check_plan
         path=first.get('declared_activity_ids')
         plan_hash=first.get('declared_plan_sha256')
         if not isinstance(plan_hash,str) or re.fullmatch(r'[0-9a-f]{64}',plan_hash) is None:
