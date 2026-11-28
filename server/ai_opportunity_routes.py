@@ -93,6 +93,11 @@ def script():
     return FileResponse(SCRIPT, media_type="application/javascript")
 
 
+@router.get("/ai-implementation-checkpoint.js")
+def checkpoint_script():
+    return FileResponse(SCRIPT.with_name("ai_implementation_checkpoint.js"), media_type="application/javascript")
+
+
 @router.get("/ai-context-trial.js")
 def trial_script():
     return FileResponse(TRIAL_SCRIPT, media_type="application/javascript")
