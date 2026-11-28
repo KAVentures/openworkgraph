@@ -769,6 +769,14 @@
         const max=el('input');max.type='number';max.min='1';max.max='18';max.value='18';max.id='owgBudgetMax';
         const labelled=(label,node)=>{const wrapper=el('label',label+' ');wrapper.append(node);return wrapper;};
         const controls=el('div',null,'row');controls.append(labelled('Currency',currency),labelled('Budget basis',basis),labelled('Budget limit',limit),labelled('Maximum selected ideas',max));
+        const frontierOn=el('input');frontierOn.type='checkbox';frontierOn.id='owgBudgetFrontier';
+        const targets=el('input');targets.type='text';targets.id='owgBudgetFrontierTargets';targets.value='50,100,200';targets.maxLength=80;targets.disabled=true;
+        const checkpoints=el('input');checkpoints.type='text';checkpoints.id='owgBudgetFrontierCheckpoints';checkpoints.maxLength=200;checkpoints.disabled=true;checkpoints.placeholder='Optional: 10000,50000,100000';
+        const profileInput=el('textarea');profileInput.id='owgBudgetPreferenceProfiles';profileInput.rows=6;profileInput.maxLength=8192;profileInput.disabled=true;profileInput.value='[]';profileInput.style.cssText='width:100%;box-sizing:border-box';
+        const profileTemplate=button('Create editable alternate preference profile','secondary');profileTemplate.disabled=true;
+        const frontierControls=el('div');frontierControls.append(labelled('Include exact budget frontier and candidate sensitivity',frontierOn),
+          labelled('Priority targets (0–1800, comma separated)',targets),labelled('Optional budget checkpoints, comma separated',checkpoints),profileTemplate,labelled('Optional preference profiles JSON (up to three, 16 candidates maximum)',profileInput));
+        frontierOn.onchange=()=>{targets.disabled=checkpoints.disabled=profileInput.disabled=profileTemplate.disabled=!frontierOn.checked;invalidate();};targets.oninput=checkpoints.oninput=profileInput.oninput=()=>invalidate();
         const options=el('div'),out=el('div'),status=el('p');status.setAttribute('role','status');
         const run=button('Evaluate exact portfolio combinations','secondary'),download=button('Download scenario report','secondary');download.disabled=true;
         let attempt=0,report=null;const controlsById=new Map();
@@ -797,6 +805,7 @@
           }
         }
         query.oninput=renderChoices;renderChoices();
+        profileTemplate.onclick=()=>{const selected=[...controlsById.values()].filter(x=>x.selected.checked);if(!selected.length||selected.length>16){status.textContent='Select 1–16 candidates first.';return;}if(profileInput.value.trim()!=='[]'&&!window.confirm('Replace existing alternate preference profiles?'))return;profileInput.value=JSON.stringify([{label:'Alternate stakeholder',priorities:Object.fromEntries(selected.map(x=>[x.idea.idea_id,Number(x.priority.value)]))}],null,2);invalidate();};
         download.onclick=()=>{if(!report)return;const url=URL.createObjectURL(new Blob([JSON.stringify(report,null,2)],{type:'application/json'}));const a=el('a');a.href=url;a.download='owg-portfolio-budget-scenario.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);};
         run.onclick=async()=>{
           invalidate();const k=attempt;
@@ -805,10 +814,28 @@
             [...controlsById.values()].some(c=>c.selected.checked&&!c.priority.value)){
             status.textContent='Enter an uppercase currency, budget, selection limit and priorities for 1–18 candidates.';return;
           }
+          let frontierReview;
+          if(frontierOn.checked){
+            const values=targets.value.split(',').map(x=>x.trim());
+            if(values.length>12||values.some(x=>!/^\d{1,4}$/.test(x)||Number(x)>1800)||new Set(values.map(Number)).size!==values.length){
+              status.textContent='Enter one to twelve distinct integer targets from 0 to 1800.';return;
+            }
+            const budgets=checkpoints.value.trim()?checkpoints.value.split(',').map(x=>x.trim()):[];
+            if(budgets.length>12||budgets.some(x=>!/^\d+(?:\.\d+)?$/.test(x)||!Number.isFinite(Number(x))||Number(x)>1e12)||new Set(budgets.map(Number)).size!==budgets.length){
+              status.textContent='Enter up to twelve distinct nonnegative budget checkpoints.';return;
+            }
+            let profiles;
+            try{profiles=JSON.parse(profileInput.value);}
+            catch(_){status.textContent='Invalid preference profile JSON.';return;}
+            if(!Array.isArray(profiles)||profiles.length>3||(profiles.length&&candidates.length>16)){
+              status.textContent='Use at most three alternate profiles and sixteen candidates.';return;
+            }
+            frontierReview={priority_targets:values.map(Number),budget_checkpoints:budgets.map(Number),preference_profiles:profiles};
+          }
           run.disabled=true;status.textContent='Evaluating all bounded candidate subsets…';
           try{
             const data=await(await api('/v1/automation-pipeline/budget-scenario',{method:'POST',headers:{'Content-Type':'application/json'},
-              body:JSON.stringify({snapshot_sha256:inv.snapshot_sha256,currency:currency.value,budget_basis:basis.value,budget_limit:Number(limit.value),max_selected:Number(max.value),candidates})})).json();
+              body:JSON.stringify({snapshot_sha256:inv.snapshot_sha256,currency:currency.value,budget_basis:basis.value,budget_limit:Number(limit.value),max_selected:Number(max.value),candidates,...(frontierReview?{frontier_review:frontierReview}:{})})})).json();
             if(!active()||k!==attempt)return;
             if(data.snapshot_sha256!==inv.snapshot_sha256)throw Error('Unexpected portfolio snapshot.');
             report=data;download.disabled=false;status.textContent=data.feasible_subsets+' feasible subsets of '+data.subsets_considered+' examined.';
@@ -818,6 +845,53 @@
               el('p',row.budget_remaining+' '+data.currency+' remaining; '+row.selected_count+' ideas','muted'));return item;};
             out.replaceChildren(el('h4',data.status==='feasible'?'Highest-ranked feasible alternatives':'No feasible portfolio under these constraints'),
               ...data.alternatives.map(show));
+            if(data.frontier_review){
+              const f=data.frontier_review,host=el('div');host.id='owgBudgetFrontierResult';
+              const grid=(headers,rows)=>{const wrap=el('div',null,'table-wrap');wrap.tabIndex=0;wrap.setAttribute('role','region');wrap.setAttribute('aria-label','Table: '+headers.join(', ').slice(0,120));
+                const t=el('table'),h=el('thead'),hr=el('tr'),b=el('tbody');for(const x of headers){const th=el('th',x);th.scope='col';hr.append(th);}h.append(hr);
+                for(const row of rows){const tr=el('tr');for(const x of row)tr.append(el('td',String(x??'—')));b.append(tr);}t.append(h,b);wrap.append(t);return wrap;};
+              const names=r=>r?r.selected_idea_ids.map(id=>titles.get(id)||id).join('; ')||'Empty portfolio':'Infeasible';
+              host.append(el('h4','Exact spending versus priority frontier'),
+                el('p',f.structurally_feasible_subsets+' structurally feasible subsets; '+f.current_budget_feasible_subsets+' within budget. '+f.frontier.length+' nondominated cost/priority points.'),
+                el('p',f.maximum_priority_portfolios+' portfolios tie for maximum priority within current budget (before cost/count/ID tie-breaks).'),
+                grid(['Target points','Minimum budget ('+data.currency+')','Extra budget required','Representative portfolio'],
+                  f.priority_targets.map(x=>[x.minimum_priority_points,x.least_cost_portfolio?.budget_used,x.least_cost_portfolio?.additional_budget_required,names(x.least_cost_portfolio)])));
+              if(f.budget_checkpoints.length)host.append(el('h4','Budget checkpoint sensitivity'),
+                grid(['Budget','Best priority','Used budget','Unused budget','Priority delta vs current budget','Extra to next breakpoint','Best portfolio'],
+                  f.budget_checkpoints.map(x=>[x.budget_limit,x.best_portfolio?.priority_points,x.best_portfolio?.budget_used,x.unused_budget,
+                    x.priority_delta_vs_current_budget,x.additional_budget_to_next_breakpoint,names(x.best_portfolio)])));
+              const view=el('div'),prev=button('Previous frontier page','secondary'),next=button('Next frontier page','secondary');let offset=0;
+              const page=()=>{view.replaceChildren(el('p',(offset+1)+'–'+Math.min(offset+30,f.frontier.length)+' of '+f.frontier.length+' frontier points.'),
+                grid(['Priority points','Minimum cost','Within budget','Representative portfolio'],f.frontier.slice(offset,offset+30).map(x=>[x.priority_points,x.budget_used,x.within_current_budget?'Yes':'No',names(x)])));
+                prev.disabled=offset===0;next.disabled=offset+30>=f.frontier.length;};
+              prev.onclick=()=>{offset=Math.max(0,offset-30);page();};next.onclick=()=>{offset+=30;page();};
+              if(f.frontier.length){page();host.append(view,prev,next);}else host.append(el('p','No structurally feasible portfolio.'));
+              host.append(el('h4','Candidate inclusion and exclusion sensitivity'),
+                grid(['Opportunity','In all/some/no maximum-priority portfolios','Feasible with','Feasible without','Priority loss if required','Priority loss if excluded'],
+                  f.candidate_sensitivity.map(x=>[titles.get(x.idea_id)||x.idea_id,x.membership_among_max_priority_portfolios,x.feasible_subsets_including,x.feasible_subsets_excluding,
+                    x.forced_in.priority_loss_vs_optimum??'Infeasible',x.forced_out.priority_loss_vs_optimum??'Infeasible'])));
+              const details=el('details');details.append(el('summary','Exact forced-in and forced-out alternatives'));
+              for(const x of f.candidate_sensitivity)details.append(el('h5',titles.get(x.idea_id)||x.idea_id),
+                grid(['Constraint','Points','Budget used','Budget delta vs ranked optimum','Selected opportunities'],
+                  [['Required',x.forced_in.best_portfolio?.priority_points,x.forced_in.best_portfolio?.budget_used,x.forced_in.budget_delta_vs_ranked_optimum,names(x.forced_in.best_portfolio)],
+                   ['Excluded',x.forced_out.best_portfolio?.priority_points,x.forced_out.best_portfolio?.budget_used,x.forced_out.budget_delta_vs_ranked_optimum,names(x.forced_out.best_portfolio)]]),
+                grid(['Structural constraint (any budget)','Feasible subsets','Minimum cost','Extra budget required','Least-cost portfolio'],
+                  [['Required',x.structural_subsets_including,x.least_cost_portfolio_including?.budget_used,x.least_cost_portfolio_including?.additional_budget_required,names(x.least_cost_portfolio_including)],
+                   ['Excluded',x.structural_subsets_excluding,x.least_cost_portfolio_excluding?.budget_used,x.least_cost_portfolio_excluding?.additional_budget_required,names(x.least_cost_portfolio_excluding)]]));
+              if(f.preference_review){
+                const r=f.preference_review,display=el('details');display.open=true;display.append(el('summary','Stakeholder preference robustness'),
+                  el('p',r.feasible_subsets+' identical feasible portfolios evaluated against '+r.profiles.length+' declared profiles.'));
+                if(r.status==='feasible'){
+                  const showProfile=(label,p)=>[label,p.priority_points,p.worst_profile_priority_points,p.maximum_regret_points,p.total_regret_points,p.budget_used,names(p)];
+                  display.append(el('p',r.simultaneously_optimal_portfolios+' portfolios achieve every individual profile optimum.'),
+                    grid(['Choice rule','Original points','Worst profile points','Maximum regret','Total regret','Budget used','Selected portfolio'],
+                      [...r.individual_optima.map(x=>showProfile('Optimum: '+x.label,x.portfolio)),showProfile('Minimax regret',r.minimax_regret_portfolio),showProfile('Maximin priority',r.maximin_priority_portfolio)]),
+                    grid(['Choice rule','Profile','Score','Regret'],[['Minimax regret',r.minimax_regret_portfolio],['Maximin priority',r.maximin_priority_portfolio]].flatMap(([label,p])=>p.profile_scores.map(x=>[label,x.label,x.priority_points,x.regret_points]))),el('p',r.interpretation,'muted'));
+                }else display.append(el('p','No feasible portfolio within the original budget.'));
+                host.append(display);
+              }
+              host.append(details,grid(['Selected count','Feasible subsets'],f.feasible_subset_counts_by_size.map(x=>[x.selected_count,x.count])),el('p',f.interpretation,'muted'));out.append(host);
+            }
             const details=el('details');details.append(el('summary','Best feasible alternative by selected count'),...data.best_by_selected_count.map(show));out.append(details);
             for(const candidate of data.candidates.filter(c=>c.blockers.length))out.append(el('p',candidate.title+': '+candidate.blockers.map(b=>b.code+(b.dependency_id?' ('+(titles.get(b.dependency_id)||b.dependency_id)+')':'')).join('; ')));
             out.append(el('p','Required ideas and unfinished selected prerequisites: '+data.required_closure_ids.map(id=>titles.get(id)||id).join('; ')));
@@ -825,7 +899,7 @@
           }catch(e){if(active()&&k===attempt)status.textContent=e.message;}
           finally{if(active()&&k===attempt)run.disabled=false;}
         };
-        root.replaceChildren(heading,description,controls,query,options,run,download,status,out);
+        root.replaceChildren(heading,description,controls,frontierControls,query,options,run,download,status,out);
       }catch(e){if(active())root.replaceChildren(el('p',e.message,'muted'));}
     };
     const benefitOverlapButton=button('Review overlapping benefit evidence','secondary');
