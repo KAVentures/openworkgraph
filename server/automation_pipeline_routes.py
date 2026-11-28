@@ -290,6 +290,27 @@ async def quality_benefit_scenario(request: Request, idea_id: str):
     return await run_in_threadpool(_benefit, quality.analyze, idea_id, spec)
 
 
+@router.get("/v1/automation-pipeline/{idea_id}/investment-case/inventory")
+async def investment_case_inventory(request: Request, idea_id: str):
+    from . import automation_investment_case as investment
+    _require_dashboard(request)
+    response = await run_in_threadpool(_benefit, investment.inventory, idea_id)
+    _require_dashboard(request)
+    return response
+
+
+@router.post("/v1/automation-pipeline/{idea_id}/investment-case")
+async def investment_case(request: Request, idea_id: str):
+    from . import automation_investment_case as investment
+    from .event_log_routes import _json_body
+    _require_dashboard(request)
+    spec = await _json_body(request, "phased investment business case", strict=True, limit=65536)
+    _require_dashboard(request)
+    response = await run_in_threadpool(_benefit, investment.evaluate, idea_id, spec)
+    _require_dashboard(request)
+    return response
+
+
 @router.get("/v1/automation-pipeline/{idea_id}/realized-value")
 def realized_value(request: Request, idea_id: str):
     from . import automation_benefits
