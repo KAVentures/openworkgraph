@@ -1,7 +1,7 @@
 /* Explicit native shadow snapshot and human-declared case review. */
 export function mountNativeShadowReview(host) {
   const el=(tag,text)=>{const n=document.createElement(tag);if(text!==undefined)n.textContent=text;return n;};
-  const field=(label,node)=>{const n=el('label',label+' ');n.append(node);return n;};
+  const field=(label,node)=>{const n=el('label',label+' ');n.style.display='block';n.style.margin='0.5rem 0';n.append(node);return n;};
   const input=(placeholder)=>{const n=el('input');n.placeholder=placeholder;return n;};
   const button=text=>{const n=el('button',text);n.type='button';return n;};
   const since=input('2026-11-28T09:00:00Z'),until=input('2026-11-28T10:00:00Z');
@@ -41,7 +41,7 @@ export function mountNativeShadowReview(host) {
   for(const n of [since,until,include])n.addEventListener('change',clearSnapshot);
   for(const n of [since,until])n.addEventListener('input',clearSnapshot);
   pin.addEventListener('input',()=>{invalidateReview();refreshControls();});
-  root.onchange=()=>{framework.value=runs.find(r=>r.execution_id===root.value)?.agent?.framework||'';};
+  root.onchange=()=>{framework.value='';};
   async function request(path,init){
     await window.__owgAuthReady;
     const r=await fetch(path,{cache:'no-store',...init});
@@ -104,11 +104,11 @@ export function mountNativeShadowReview(host) {
   saveReport.onclick=()=>{if(receipt&&!busy)download('native-shadow-review.json',JSON.stringify(receipt,null,2));};
   const details=el('details');details.id='owgNativeShadowReview';
   details.append(el('summary','Review native shadow-test evidence'),
-    el('p','Read-only local snapshot. Associations are your declarations; reported tool labels are not permissions. Missing activity is not proof of no action.'),
+    el('p','Read-only local snapshot. Associations are your declarations; reported tool labels are not permissions. Missing activity is not proof of no action. The existing source read is bounded before filtering, so a smaller returned count does not prove complete coverage.'),
     field('Test window start (ISO 8601 with offset)',since),field('Test window end (ISO 8601 with offset)',until),
     field('Include disconnected integrations in retained history',include),capture,snapshotInfo,saveTrace,
     field('Staged package SHA-256',pin),field('Case ID',caseId),field('Root execution',root),
-    field('Expected framework',framework),field('Reviewed exact tool display labels (one per line; empty means none)',tools),
+    field('Expected framework (declare independently of observed label)',framework),field('Reviewed exact tool display labels (one per line; empty means none)',tools),
     add,caseList,saveDeclaration,review,status,result,saveReport);
   host.append(details);refreshControls();
 }
