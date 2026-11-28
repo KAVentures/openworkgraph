@@ -1,10 +1,13 @@
 """Local-only UI and API for supplied OCEL event-binding continuity."""
 from __future__ import annotations
 
+import os
+import tempfile
 from pathlib import Path
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse
+from starlette.background import BackgroundTask
 from starlette.concurrency import run_in_threadpool
 
 from . import event_log_object_binding_continuity as bindings
@@ -53,6 +56,48 @@ async def object_state_check_witnesses(request: Request, log_id: str):
     spec = await _json_body(request, "object state witness settings", strict=True, limit=16384)
     _require_dashboard(request)
     return await run_in_threadpool(_respond, state.witnesses, log_id, spec)
+
+
+@router.post("/v1/event-logs/{log_id}/object-state-check/labels")
+async def object_state_check_labels(request: Request, log_id: str):
+    from . import event_log_object_state_labels as labels
+    _require_dashboard(request)
+    spec = await _json_body(request, "object state label lookup", strict=True, limit=16384)
+    _require_dashboard(request)
+    return await run_in_threadpool(_respond, labels.search, log_id, spec)
+
+
+@router.post("/v1/event-logs/{log_id}/object-state-check/export")
+async def export_object_state_check(request: Request, log_id: str):
+    from . import event_log_object_state_check as state
+    from . import event_log_workspace as workspace
+    _require_dashboard(request)
+    spec = await _json_body(request, "object state export settings", strict=True, limit=16384)
+
+    def prepare():
+        workspace.DATA_DIR.mkdir(parents=True, exist_ok=True)
+        handle = tempfile.NamedTemporaryFile('w', encoding='utf-8', newline='', suffix='.review.csv',
+                                             dir=str(workspace.DATA_DIR), delete=False)
+        try:
+            with handle:
+                result = state.export_worklist(log_id, spec, handle)
+        except BaseException:
+            os.unlink(handle.name)
+            raise
+        return handle.name, result
+
+    try:
+        filename, result = await run_in_threadpool(prepare)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    try:
+        _require_dashboard(request)
+    except BaseException:
+        os.unlink(filename)
+        raise
+    return FileResponse(filename, media_type='text/csv', filename=f'{log_id}-object-state-{spec["kind"]}.review.csv',
+                        headers={'Cache-Control':'no-store', 'X-OWG-Rows':str(result['rows'])},
+                        background=BackgroundTask(os.unlink, filename))
 
 
 __all__ = ["router"]

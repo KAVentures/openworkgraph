@@ -1,16 +1,19 @@
 """Descriptive event-time checks against retained OCEL object attribute history."""
 from __future__ import annotations
 
-from typing import Literal
+import csv
+from typing import IO, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 from shared.event_log_formats import _exact_key, EventLogFormatError
+from shared.spreadsheet_review import review_cell
 from . import event_log_workspace as workspace
 from . import event_log_object_relationships as relationships
 
 MAX_EVENTS = 200_000
 MAX_LINKS = 1_000_000
 MAX_HISTORY_ROWS = 2_000_000
+MAX_WORKLIST_BYTES = 512 * 1024 * 1024
 STATUSES = ("matched", "not_matched", "unknown", "no_linked_object")
 OBJECT_STATUSES = ("matched", "not_matched", "missing_history", "before_first_value", "ambiguous_value")
 FORMAT = "openworkgraph.ocel-event-time-state-check.v1"
@@ -61,6 +64,27 @@ class WitnessSpec(Spec):
         return value
 
 
+class ExportSpec(Spec):
+    expected_revision: int = Field(ge=0)
+    kind: Literal['events', 'objects']
+
+
+class _LimitedWorklist:
+    def __init__(self, out: IO[str]):
+        self.out = out
+        self.size = 0
+
+    def write(self, text: str):
+        try:
+            size = len(text.encode('utf-8'))
+        except UnicodeEncodeError:
+            raise workspace.EventLogWorkspaceError('state export contains unsupported text; no export was produced') from None
+        if self.size + size > MAX_WORKLIST_BYTES:
+            raise workspace.EventLogWorkspaceError('state export exceeds the 512 MiB file limit; no export was produced')
+        self.size += size
+        return self.out.write(text)
+
+
 def _parse(value):
     try:
         result = Spec.model_validate(value)
@@ -87,7 +111,55 @@ def witnesses(log_id, value):
     return _analyze(log_id, spec, witness=True)
 
 
-def _analyze(log_id, spec, witness=False):
+def export_worklist(log_id: str, value, out: IO[str]):
+    try:
+        spec = ExportSpec.model_validate(value)
+    except ValidationError:
+        raise workspace.EventLogWorkspaceError('invalid event-time state export request') from None
+    if spec.offset != 0 or spec.limit != 30:
+        raise workspace.EventLogWorkspaceError('state export always covers the complete filtered selection')
+    return _analyze(log_id, spec, export=out)
+
+
+def _write_worklist(conn, log_id: str, spec: ExportSpec, revision: int, out: IO[str]) -> dict[str, int]:
+    predicate = ' WHERE r.status=?' if spec.status else ''
+    params = [spec.status] if spec.status else []
+    if spec.kind == 'events':
+        expected = conn.execute('SELECT count(*) FROM st_result r' + predicate, params).fetchone()[0]
+        query = '''SELECT r.event_id,r.ts,r.status,r.n_objects,r.n_true,r.n_false,r.n_unknown,
+                          NULL::VARCHAR,NULL::VARCHAR,NULL::TIMESTAMP,NULL::VARCHAR FROM st_result r'''
+    else:
+        expected = conn.execute('''SELECT coalesce(sum(CASE WHEN r.n_objects=0 THEN 1 ELSE r.n_objects END),0)
+                                   FROM st_result r''' + predicate, params).fetchone()[0]
+        query = '''SELECT r.event_id,r.ts,r.status,r.n_objects,r.n_true,r.n_false,r.n_unknown,
+                          o.object_id,o.status,o.valid_from,o.value_then
+                   FROM st_result r LEFT JOIN st_object o ON o.event_id=r.event_id'''
+    query += predicate + (' ORDER BY r.ts,r.event_id' if spec.kind == 'events' else ' ORDER BY r.ts,r.event_id,o.object_id')
+    cursor = conn.execute(query, params)
+    writer = csv.writer(_LimitedWorklist(out))
+    writer.writerow(['record_type','log_id','log_revision','activity_review','object_type_review','attribute_review',
+                     'expected_value_review','operator','quantifier','qualifier_present','qualifier_review','result_filter',
+                     'event_id_review','event_time_utc','event_result','linked_objects','matched_objects',
+                     'not_matched_objects','unknown_objects','object_id_review','object_result','recorded_from_utc',
+                     'recorded_value_review','recorded_value_present'])
+    prefix = [log_id,revision,spec.activity,spec.object_type,spec.attribute,spec.expected_value,spec.operator,
+              spec.quantifier,str(spec.event_qualifier is not None).lower(),spec.event_qualifier,spec.status]
+    writer.writerow([review_cell(value) for value in ['check',*prefix,None,None,None,None,None,None,None,
+                                                       None,None,None,None,'false']])
+    written = 0
+    while batch := cursor.fetchmany(5000):
+        for eid,at,status,n,yes,no,unknown,oid,object_status,valid_from,recorded in batch:
+            kind = 'event' if spec.kind == 'events' else ('event_without_object' if oid is None else 'event_object')
+            values = [kind,*prefix,eid,_stamp(at),status,n,yes,no,unknown,oid,
+                      object_status if oid is not None else None,_stamp(valid_from),recorded,str(recorded is not None).lower()]
+            writer.writerow([review_cell(value) for value in values])
+            written += 1
+    if written != expected:
+        raise workspace.EventLogWorkspaceError('state evidence changed; no export was produced')
+    return {'rows':written}
+
+
+def _analyze(log_id, spec, witness=False, export=None):
     with workspace._LOCK:
         conn = workspace._connect()
         try:
@@ -165,6 +237,8 @@ def _analyze(log_id, spec, witness=False):
             where="WHERE status=?" if spec.status else ""
             args=[spec.status] if spec.status else []
             total=conn.execute("SELECT count(*) FROM st_result "+where,args).fetchone()[0]
+            if export is not None:
+                return _write_worklist(conn, log_id, spec, revision, export)
             if witness:
                 selected = conn.execute('SELECT n_objects, status FROM st_result WHERE event_id=?' +
                                         (' AND status=?' if spec.status else ''),

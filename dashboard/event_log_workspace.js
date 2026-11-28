@@ -4236,31 +4236,82 @@
   // Plain reading of an object-centric conformance result.
   function objectStateCheckSection(){
     const box=el('div');box.id='owgObjectStateCheck';
-    box.append(el('h4','Event-time object state check'),el('p','Check recorded object attribute values at each event of an exact stored activity. This uses the whole retained object log, not the case filter or activity mappings. Missing, future-only and conflicting values are unknown; recorded values do not verify policy compliance or business state.','muted'));
+    box.append(el('h4','Event-time object state check'),el('p','Check recorded object attribute values at each event of an exact stored activity. This uses the whole retained object log, not the case filter or activity mappings. Value lookup searches retained history for the selected type, including values from other times. Missing, future-only and conflicting values are unknown; recorded values do not verify policy compliance or business state.','muted'));
     const activity=input('owgObjectStateActivity','text','Exact stored activity');activity.maxLength=400;
     const types=(state.objectTypes||[]).map(t=>[t.object_type,t.object_type.trim()===t.object_type?t.object_type:JSON.stringify(t.object_type)]);
     const objectType=select('owgObjectStateType',types);if(state.caseType&&types.some(([value])=>value===state.caseType))objectType.value=state.caseType;
     const attribute=input('owgObjectStateAttribute','text','Exact attribute name');attribute.maxLength=400;
     const operator=select('owgObjectStateOperator',[['eq','Equals'],['ne','Does not equal']]);
-    const value=input('owgObjectStateValue','text','Exact recorded value');value.maxLength=8192;
+    const value=el('textarea');value.id='owgObjectStateValue';value.rows=2;value.placeholder='Exact recorded value';value.maxLength=8192;
     const quantifier=select('owgObjectStateQuantifier',[['all','All linked objects'],['any','Any linked object']]);
     const exact=input('owgObjectStateExactQualifier','checkbox'),qualifier=input('owgObjectStateQualifier','text','Exact qualifier');qualifier.maxLength=160;
     const qualifierField=field('Qualifier (empty is a valid exact label)',qualifier);show(qualifierField,false);
+    function labelLookup(kind,target,subject,maxLength){
+      const wrap=document.createElement('details');wrap.id='owgObjectStateLookup-'+kind;
+      const find=button('Find '+subject,'secondary'),more=button('More matches','secondary'),use=button('Use selected '+subject,'secondary');
+      more.setAttribute('aria-label','More '+subject+' matches');
+      const choices=select('owgObjectStateLookupChoice-'+kind,[]),choiceField=field('Matching '+subject+' labels',choices);
+      const status=el('div',null,'muted');status.setAttribute('role','status');
+      wrap.append(el('summary','Find '+subject),find,choiceField,use,more,status);
+      show(choiceField,false);show(use,false);show(more,false);
+      let lookupTurn=0,nextAfter=null,lookupRevision=null,items=[],checkable=[];
+      const reset=()=>{++lookupTurn;nextAfter=null;lookupRevision=null;items=[];checkable=[];choices.replaceChildren();find.disabled=more.disabled=use.disabled=false;show(choiceField,false);show(use,false);show(more,false);status.textContent='';};
+      const active=t=>box.isConnected&&generation===state.generation&&logId===state.logId&&t===lookupTurn;
+      const updateUse=()=>{use.disabled=choices.selectedIndex<0||!checkable[Number(choices.value)];};
+      choices.onchange=updateUse;
+      async function load(after){
+        const text=target.value,type=objectType.value,name=attribute.value;
+        if(Array.from(text).length>maxLength){status.textContent='Search text is too long for this lookup.';return;}
+        if(kind!=='activity'&&!type){status.textContent='Choose an object type first.';return;}
+        if(kind==='value'&&!name.trim()){status.textContent='Enter an exact attribute name first.';return;}
+        const ticket=++lookupTurn;find.disabled=more.disabled=use.disabled=true;status.textContent='Searching retained data…';
+        const payload={kind,search:text,...(kind!=='activity'?{object_type:type}:{}),...(kind==='value'?{attribute:name}:{}),
+          ...(after!==null?{after,expected_revision:lookupRevision}:{})};
+        try{
+          const response=await (await api(base+'/labels',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)})).json();
+          if(!active(ticket)||target.value!==text||(kind!=='activity'&&objectType.value!==type)||(kind==='value'&&attribute.value!==name))return;
+          items=response.labels;checkable=response.checkable;lookupRevision=response.revision;nextAfter=response.next_after;
+          setOptions(choices,items.map((label,index)=>[String(index),JSON.stringify(label)]));
+          [...choices.options].forEach((option,index)=>{option.disabled=!checkable[index];});
+          if(choices.selectedIndex>=0&&!checkable[Number(choices.value)])choices.selectedIndex=[...choices.options].findIndex(option=>!option.disabled);
+          show(choiceField,items.length>0);show(use,items.length>0);show(more,nextAfter!==null);
+          status.textContent=items.length+(items.length===1?' match':' matches')+' on this page. Matching is case-sensitive and literal.'+(checkable.some(item=>!item)?' Some stored labels cannot be used in this check.':'');
+          updateUse();
+        }catch(error){if(active(ticket)){items=[];checkable=[];nextAfter=null;lookupRevision=null;choices.replaceChildren();show(choiceField,false);show(use,false);show(more,false);status.textContent=error.message;}}
+        finally{if(active(ticket)){find.disabled=more.disabled=false;updateUse();}}
+      }
+      find.onclick=()=>{reset();load(null);};more.onclick=()=>{if(nextAfter!==null)load(nextAfter);};
+      use.onclick=()=>{if(choices.selectedIndex<0)return;const index=Number(choices.value);if(!checkable[index])return;target.value=items[index];target.dispatchEvent(new Event('input',{bubbles:true}));target.focus();};
+      target.addEventListener('input',reset);
+      wrap.addEventListener('input',event=>event.stopPropagation());wrap.addEventListener('change',event=>event.stopPropagation());
+      return {wrap,reset};
+    }
+    const activityLookup=labelLookup('activity',activity,'stored activities',200);
+    const attributeLookup=labelLookup('attribute',attribute,'attributes',200);
+    const valueLookup=labelLookup('value',value,'recorded values',500);
+    const qualifierLookup=labelLookup('qualifier',qualifier,'link qualifiers',80);
+    objectType.addEventListener('change',()=>{attributeLookup.reset();valueLookup.reset();qualifierLookup.reset();});
+    attribute.addEventListener('input',valueLookup.reset);
+    qualifierField.append(qualifierLookup.wrap);
     const run=button('Check recorded state');run.id='owgObjectStateRun';
     const form=el('div',null,'row');form.style.alignItems='end';
-    form.append(field('Stored activity',activity),field('Object type',objectType),field('Attribute',attribute),field('Comparison',operator),field('Expected value (empty is allowed)',value),field('Match',quantifier),field('Match an exact event-link qualifier',exact),qualifierField,run);
+    form.append(field('Stored activity',activity),activityLookup.wrap,field('Object type',objectType),field('Attribute',attribute),attributeLookup.wrap,field('Comparison',operator),field('Expected value (empty is allowed)',value),valueLookup.wrap,field('Match',quantifier),field('Match an exact event-link qualifier',exact),qualifierField,run);
     const notice=el('div',null,'muted');notice.id='owgObjectStateStatus';notice.setAttribute('role','status');
     const summary=el('div');summary.id='owgObjectStateSummary';
     const resultFilter=select('owgObjectStateResultFilter',[['','All results'],['matched','Matched'],['not_matched','Not matched'],['unknown','Unknown'],['no_linked_object','No linked object']]);
     const resultControls=el('div',null,'row'),previous=button('Previous state results','secondary'),next=button('Next state results','secondary');
     resultControls.append(field('Result status',resultFilter),previous,next);show(resultControls,false);
+    const exportBar=el('div');exportBar.id='owgObjectStateExports';
+    const exportEvents=button('Download event results (CSV)','secondary'),exportObjects=button('Download object evidence (CSV)','secondary');
+    const exportStatus=el('div',null,'muted');exportStatus.setAttribute('role','status');
+    exportBar.append(el('p','Downloads cover the entire selected result status and include event or object IDs and recorded values. Formula-like cells are escaped for spreadsheet review.','muted'),exportEvents,exportObjects,exportStatus);show(exportBar,false);
     const results=el('div');results.id='owgObjectStateResults';
     const witness=el('div');witness.id='owgObjectStateWitness';
-    box.append(form,notice,summary,resultControls,results,witness);
+    box.append(form,notice,summary,resultControls,exportBar,results,witness);
     const generation=state.generation,logId=state.logId,base='/v1/event-logs/'+encodeURIComponent(logId)+'/object-state-check';
-    let turn=0,witnessTurn=0,settings=null,revision=null,offset=0,following=null;
+    let turn=0,witnessTurn=0,exportTurn=0,settings=null,revision=null,offset=0,following=null;
     const current=t=>generation===state.generation&&box.isConnected&&t===turn;
-    const clear=()=>{++turn;settings=null;revision=null;offset=0;following=null;run.disabled=false;notice.textContent='';summary.replaceChildren();results.replaceChildren();witness.replaceChildren();show(resultControls,false);};
+    const clear=()=>{++turn;++exportTurn;settings=null;revision=null;offset=0;following=null;run.disabled=false;notice.textContent='';exportStatus.textContent='';summary.replaceChildren();results.replaceChildren();witness.replaceChildren();show(resultControls,false);show(exportBar,false);};
     form.addEventListener('input',clear);form.addEventListener('change',clear);
     exact.addEventListener('change',()=>show(qualifierField,exact.checked));
     const statusLabel={matched:'Matched',not_matched:'Not matched',unknown:'Unknown',no_linked_object:'No linked object',missing_history:'No timed history',before_first_value:'Before first value',ambiguous_value:'Conflicting values'};
@@ -4297,7 +4348,7 @@
       prev.onclick=()=>page(index-1);nextPage.onclick=()=>{cursors[index+1]=following;page(index+1);};page(0);
     }
     async function load(spec,start,filter,pin){
-      const request=++turn;run.disabled=true;resultFilter.disabled=previous.disabled=next.disabled=true;
+      const request=++turn;++exportTurn;run.disabled=true;resultFilter.disabled=previous.disabled=next.disabled=true;show(exportBar,false);exportStatus.textContent='';
       notice.textContent='Checking recorded state…';summary.replaceChildren();results.replaceChildren();witness.replaceChildren();
       try{
         const payload={...spec,offset:start,limit:30,...(filter?{status:filter}:{}),...(pin!==null?{expected_revision:pin}:{})};
@@ -4315,6 +4366,7 @@
           return [item.event_id,item.at,statusLabel[item.status]||item.status,Number(item.linked_objects).toLocaleString(),Number(item.matched_objects).toLocaleString(),Number(item.not_matched_objects).toLocaleString(),Number(item.unknown_objects).toLocaleString(),inspect];
         })):el('p','No events match this result filter.','muted'));
         show(resultControls,true);resultFilter.disabled=false;previous.disabled=offset===0;next.disabled=following===null;
+        exportEvents.disabled=exportObjects.disabled=false;show(exportBar,true);
       }catch(error){if(current(request)){settings=null;revision=null;notice.textContent=error.message;show(resultControls,false);}}
       finally{if(current(request))run.disabled=false;}
     }
@@ -4322,6 +4374,21 @@
     resultFilter.onchange=()=>{if(settings)load(settings,0,resultFilter.value,revision);};
     previous.onclick=()=>{if(settings)load(settings,Math.max(0,offset-30),resultFilter.value,revision);};
     next.onclick=()=>{if(settings&&following!==null)load(settings,following,resultFilter.value,revision);};
+    async function downloadWorklist(kind){
+      if(!settings||revision===null)return;
+      const request=turn,ticket=++exportTurn,active=()=>current(request)&&ticket===exportTurn;
+      const payload={...settings,expected_revision:revision,kind,...(resultFilter.value?{status:resultFilter.value}:{})};
+      exportEvents.disabled=exportObjects.disabled=true;exportStatus.textContent='Preparing the complete worklist…';
+      let success=false;
+      try{
+        const response=await api(base+'/export',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+        const blob=await response.blob();if(!active())return;
+        downloadBlob(blob,logId+'-object-state-'+kind+'.review.csv');
+        exportStatus.textContent='Downloaded '+(response.headers.get('X-OWG-Rows')||'the matching')+' evidence rows.';success=true;
+      }catch(error){if(active())exportStatus.textContent=error.message+' Rerun the check to retry.';}
+      finally{if(active()&&success)exportEvents.disabled=exportObjects.disabled=false;}
+    }
+    exportEvents.onclick=()=>downloadWorklist('events');exportObjects.onclick=()=>downloadWorklist('objects');
     return box;
   }
 
