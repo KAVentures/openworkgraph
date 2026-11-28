@@ -87,6 +87,66 @@ def test_filtered_pagination_and_revision_rejection():
         s.analyze(log,spec(expected_revision=first["revision"]+1))
 
 
+def test_all_event_witnesses_page_with_exact_revision_and_filter():
+    objects=[]
+    for n in range(120):
+        values=([{'name':'status','time':'1970-01-01T00:00:00Z','value':'approved'}] if n<60 else
+                [{'name':'status','time':'2024-01-01T01:00:00Z','value':v} for v in ('one','two')] if n<90 else [])
+        objects.append({'id':f'o{n:03}','type':'order','attributes':values})
+    doc={'objectTypes':[],'eventTypes':[],'objects':objects,
+         'events':[{'id':'big','type':'Pay','time':'2024-01-01T02:00:00Z',
+                    'relationships':[{'objectId':o['id'],'qualifier':''} for o in objects]}]}
+    log=w.import_log(BytesIO(json.dumps(doc).encode()),name='many',source_format='ocel')['log_id']
+    report=s.analyze(log,spec())
+    assert report['rows'][0]['object_witnesses_truncated'] and report['rows'][0]['status']=='unknown'
+    request=spec(event_id='big',status='unknown',expected_revision=report['revision'],witness_limit=50)
+    first=s.witnesses(log,request)
+    second=s.witnesses(log,{**request,'after':first['next_after']})
+    third=s.witnesses(log,{**request,'after':second['next_after']})
+    rows=first['witnesses']+second['witnesses']+third['witnesses']
+    assert first['total_objects']==120 and third['next_after'] is None
+    assert [r['object_id'] for r in rows]==[f'o{n:03}' for n in range(120)]
+    assert rows[0]['status']=='matched' and rows[60]['status']=='ambiguous_value' and rows[-1]['status']=='missing_history'
+    with pytest.raises(w.EventLogWorkspaceError,match='not in'):
+        s.witnesses(log,{**request,'status':'matched'})
+    with pytest.raises(w.EventLogWorkspaceError,match='not in'):
+        s.witnesses(log,{**request,'event_id':'missing'})
+    with pytest.raises(w.EventLogWorkspaceError,match='changed'):
+        s.witnesses(log,{**request,'expected_revision':report['revision']+1})
+    with pytest.raises(w.EventLogWorkspaceError,match='invalid'):
+        s.witnesses(log,spec(event_id='big'))
+    with pytest.raises(w.EventLogWorkspaceError,match='invalid'):
+        s.witnesses(log,{**request,'witness_limit':101})
+    newer={'objectTypes':[],'eventTypes':[], 'objects':[{'id':'o000','type':'order'}],
+           'events':[{'id':'new-event','type':'Pay','time':'2024-01-02T00:00:00Z',
+                      'relationships':[{'objectId':'o000','qualifier':''}]}]}
+    w.append_log(log,BytesIO(json.dumps(newer).encode()),source_format='ocel')
+    with pytest.raises(w.EventLogWorkspaceError,match='changed'):
+        s.witnesses(log,{**request,'after':first['next_after']})
+    other=load();base=s.analyze(other,spec())
+    empty=s.witnesses(other,spec(event_id='e7',expected_revision=base['revision'],status='no_linked_object'))
+    assert empty['total_objects']==0 and empty['witnesses']==[] and empty['next_after'] is None
+
+
+def test_state_check_reads_one_snapshot_during_append(monkeypatch):
+    log=load()
+    original=s.relationships._revision
+    appended=[]
+    def interleave(conn, log_id):
+        revision=original(conn,log_id)
+        if not appended:
+            appended.append(True)
+            newer={'objectTypes':[],'eventTypes':[], 'objects':[{'id':'a','type':'order'}],
+                   'events':[{'id':'new-event','type':'Pay','time':'2024-01-02T00:00:00Z',
+                              'relationships':[{'objectId':'a','qualifier':''}]}]}
+            w.append_log(log,BytesIO(json.dumps(newer).encode()),source_format='ocel')
+        return revision
+    monkeypatch.setattr(s.relationships,'_revision',interleave)
+    reviewed=s.analyze(log,spec())
+    assert reviewed['selected_events']==8 and reviewed['revision']==0
+    assert s.analyze(log,spec())['selected_events']==9
+
+
 @pytest.mark.parametrize("bad",[{"limit":True},{"quantifier":"none"},{"operator":"gt"},{"extra":1},
                               {"activity":""},{"offset":1}])
 def test_invalid_requests(bad):
@@ -120,6 +180,13 @@ with TestClient(app) as c:
     assert r.status_code==200,r.text
     assert r.headers["cache-control"]=="no-store"
     assert r.json()["event_counts"]["matched"]==2
+    witness_url=url+'/witnesses'
+    payload=spec(event_id='e4',expected_revision=r.json()['revision'])
+    assert c.post(witness_url,json=payload,headers=bearer).status_code in (401,403)
+    witness=c.post(witness_url,json=payload,headers=h)
+    assert witness.status_code==200 and witness.headers['cache-control']=='no-store',witness.text
+    assert witness.json()['witnesses'][0]['status']=='ambiguous_value'
+    assert c.post(witness_url,json=spec(event_id='e4'),headers=h).status_code==422
     assert c.post(url,content=b'{"limit":1,"limit":2}',headers={**h,"Content-Type":"application/json"}).status_code==422
 """
     env={**os.environ,"WORKFLOW_OBSERVER_DATA":str(tmp_path/"data"),

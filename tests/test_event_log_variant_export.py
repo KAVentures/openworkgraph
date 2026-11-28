@@ -107,6 +107,9 @@ with TestClient(app) as client:
     assert r.headers['x-owg-variants']=='variants=2; written=2; truncated=false'
     assert r.text.splitlines()[1].startswith('1,A > C,2,3,0.6,0.6,')
     assert client.get(url+'?activity=B',headers=owner).text.count('\n')==2
+    exact=client.get(url+'?activity=B&exact_paths=true',headers=owner)
+    assert exact.status_code==200 and exact.text.splitlines()[0].endswith(',path_json')
+    assert exact.text.count('\n')==2 and exact.headers['x-owg-variants'].startswith('variants=1;')
 '''
     env = {**os.environ, 'WORKFLOW_OBSERVER_DATA': str(tmp_path / 'data'), 'WORKFLOW_OBSERVER_AUTH_DIR': str(tmp_path / 'auth')}
     subprocess.run([sys.executable, '-c', code], env=env, check=True, timeout=60)

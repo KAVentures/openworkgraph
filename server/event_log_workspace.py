@@ -1082,15 +1082,15 @@ def variants(log_id: str, case_type: str | None = None, limit: int = 20,
     limit = max(1, min(int(limit), 200))
     def run(conn):
         rows = conn.execute(f"""WITH v AS (
-              SELECT case_id, string_agg(activity, '{_SEP}' ORDER BY ts, event_id) AS path,
+              SELECT case_id, list(activity ORDER BY ts, event_id) AS path,
                      epoch(max(ts) - min(ts)) AS duration
               FROM ce GROUP BY case_id)
             SELECT path, count(*) AS cases, quantile_cont(duration, 0.5) AS median_duration
             FROM v GROUP BY path ORDER BY cases DESC, path LIMIT {limit}""").fetchall()
         total, distinct = conn.execute(f"""SELECT count(*), count(DISTINCT path) FROM (
-            SELECT string_agg(activity, '{_SEP}' ORDER BY ts, event_id) AS path FROM ce GROUP BY case_id)""").fetchone()
+            SELECT list(activity ORDER BY ts, event_id) AS path FROM ce GROUP BY case_id)""").fetchone()
         return {"cases": total, "distinct_variants": distinct, "variants": [
-            {"path": path.split(_SEP), "cases": n, "share": round(n / total, 6) if total else 0,
+            {"path": path, "cases": n, "share": round(n / total, 6) if total else 0,
              "median_duration_seconds": d} for path, n, d in rows]}
     return _query_filtered(log_id, case_type, cohort, run)
 

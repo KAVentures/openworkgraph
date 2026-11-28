@@ -17,7 +17,6 @@ from .event_log_analytics import risk_difference
 from .event_log_variant_coverage import VARIANT_KEY_SQL
 from .event_log_workspace import EventLogWorkspaceError
 
-_SEP = workspace._SEP
 _KEYS = {"label", "started_from", "started_before", "resource", "activity", "attribute", "attribute_range", "event_attribute", "tag",
          "follows", "variants", "duration", "starts_with", "ends_with", "ended_from", "ended_before", "events",
          "path_cases", "rework", "without_tag", "without_activity", "all_of"}
@@ -318,13 +317,13 @@ def _predicate(cohort: dict[str, Any], log_id: str) -> tuple[str, list[Any]]:
         p = cohort["path_cases"]
         cond = (["n >= ?"] if "min" in p else []) + (["n <= ?"] if "max" in p else [])
         clauses.append(f"""case_id IN (SELECT case_id FROM (SELECT case_id, count(*) OVER (PARTITION BY path) AS n
-            FROM (SELECT case_id, string_agg(activity, '{_SEP}' ORDER BY ts, event_id) AS path FROM ce GROUP BY case_id))
+            FROM (SELECT case_id, list(activity ORDER BY ts, event_id) AS path FROM ce GROUP BY case_id))
             WHERE {' AND '.join(cond)})""")
         params += [p[k] for k in ("min", "max") if k in p]
     if "variants" in cohort:
         clauses.append(f"""case_id IN (SELECT case_id FROM ce GROUP BY case_id
-            HAVING string_agg(activity, '{_SEP}' ORDER BY ts, event_id) IN (SELECT unnest(?)))""")
-        params.append([_SEP.join(v) for v in cohort["variants"]])
+            HAVING list(activity ORDER BY ts, event_id) IN (SELECT unnest(?::VARCHAR[][])))""")
+        params.append(cohort["variants"])
     for part in cohort.get("all_of", ()):
         predicate, arguments = _predicate(part, log_id)
         clauses.append(f"({predicate})")
