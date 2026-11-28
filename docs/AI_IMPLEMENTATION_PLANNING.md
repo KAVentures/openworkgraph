@@ -88,8 +88,7 @@ benefits as actual savings or as evidence that an AI system meets its
 quality, safety, and operational requirements. The separate retained
 outcome/operating-cost evaluation is necessary after testing.
 
-This increment is a local CLI foundation. Dashboard integration and mapping
-reviewed assumptions to existing saved assessments remain follow-up.
+The same planning workflow is available in the local implementation dashboard after reviewing a proposal batch. Expand **Compare implementation economics and dependencies**, enter the currency, prepare a worklist, and enable the candidates you wish to assess. Complete both bounds or leave both blank for unknown. Use displayed one-based item numbers for dependencies; the editor converts these to the original zero-based indexes. Confirm the assumptions explicitly, compare scenarios, and download the exact reviewed assumptions and report. Source, budget, batch or currency changes clear the worklist; editing assumptions clears the result and confirmation. Unassessed and invalid candidates remain visible. This does not save assessments or rank the portfolio. Mapping reviewed assumptions to saved assessments remains follow-up. The CLI remains available.
 No live-data queries or external requests occur; outputs are exclusive
 private bounded files.
 

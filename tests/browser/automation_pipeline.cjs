@@ -125,6 +125,30 @@ const path=require('node:path');
      const [reportFile]=await Promise.all([page.waitForEvent('download'),batch.getByRole('button',{name:'Download complete batch review',exact:true}).click()]);
      const batchReport=JSON.parse(await fs.readFile(await reportFile.path(),'utf8'));
      assert.equal(batchReport.item_count,6);assert.equal(batchReport.portfolio_written,false);
+     const planning=batch.locator('#owgImplementationPlanning');await planning.locator('summary').click();
+     const preparePlan=planning.getByRole('button',{name:'Prepare planning worklist',exact:true});
+     assert(await preparePlan.isDisabled());
+     await planning.getByLabel('Planning currency code',{exact:true}).fill('SEK');await preparePlan.click();
+     await planning.getByText('Planning worklist ready: 2 distinct reviewed candidates.',{exact:false}).waitFor();
+     await planning.getByLabel('Assess item 1',{exact:true}).check();
+     for(const [label,lo,hi] of [['Cases per month','60','120'],['Eligible share (0–1)','0.5','1'],['Net human minutes saved per eligible case','-6','12']]){
+       await planning.getByLabel(label+' — low (item 1)',{exact:true}).fill(lo);
+       await planning.getByLabel(label+' — high (item 1)',{exact:true}).fill(hi);
+     }
+     await planning.getByLabel('Reviewed basis and uncertainties (item 1)',{exact:true}).fill('Hypothetical bounds; measure the baseline independently.');
+     const comparePlan=planning.getByRole('button',{name:'Compare reviewed scenarios',exact:true});assert(await comparePlan.isDisabled());
+     await planning.getByLabel('I reviewed these assumptions and uncertainties',{exact:true}).check();
+     await comparePlan.click();
+     await planning.getByText('Planning comparison complete: 1 assessed of 2 distinct candidates; 6 returned items retained.',{exact:false}).waitFor();
+     await planning.getByText('Modeled net human hours per month: -12 to 24 hours',{exact:true}).waitFor();
+     await planning.getByText('Modeled monthly capacity value: Unknown SEK',{exact:true}).waitFor();
+     const [planningDownload]=await Promise.all([page.waitForEvent('download'),planning.getByRole('button',{name:'Download planning review',exact:true}).click()]);
+     const planningReport=JSON.parse(await fs.readFile(await planningDownload.path(),'utf8'));
+     assert.equal(planningReport.portfolio_total,null);assert.equal(planningReport.batch_review_sha256,batchReport.batch_review_sha256);
+     assert.equal(planningReport.shared_scoped_citations.length,1);
+     await planning.getByLabel('Cases per month — low (item 1)',{exact:true}).fill('70');
+     assert(await comparePlan.isDisabled());assert(await planning.getByRole('button',{name:'Download planning review',exact:true}).isDisabled());
+     await planning.locator('summary').click();
      await batch.getByRole('button',{name:'Use item 3 for individual review',exact:true}).click();
      await batch.getByText('Item 3 transferred to individual review.',{exact:false}).waitFor();
      await handoff.getByLabel('Human-reviewed opportunity title',{exact:true}).fill('Reviewed second candidate');
@@ -134,6 +158,7 @@ const path=require('node:path');
      assert(await handoff.getByRole('button',{name:'Create unassessed idea',exact:true}).isDisabled());
      await batchFile.setInputFiles({name:'changed.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(proposals.slice().reverse()))});
      assert(await batch.getByRole('button',{name:'Download complete batch review',exact:true}).isDisabled());
+     assert(await preparePlan.isDisabled());assert.equal(await planning.getByLabel('Assess item 1',{exact:true}).count(),0);
      assert(await handoff.getByRole('button',{name:'Create unassessed idea',exact:true}).isDisabled());
      await batch.locator('summary').click();
    }

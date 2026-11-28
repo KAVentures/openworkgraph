@@ -18,6 +18,8 @@ from .local_auth import dashboard_session_valid
 router = APIRouter()
 from .ai_implementation_batch_routes import router as _batch_router
 router.include_router(_batch_router)
+from .ai_implementation_planning_routes import router as _planning_router
+router.include_router(_planning_router)
 MAX_BYTES = 8 * 1024 * 1024
 _LOCAL_MODEL_SLOT = Lock()
 SCRIPT = Path(__file__).resolve().parents[1] / "dashboard" / "ai_opportunity_handoff.js"

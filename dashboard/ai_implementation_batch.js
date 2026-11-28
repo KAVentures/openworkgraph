@@ -7,15 +7,16 @@ export function mountImplementationBatch(host,{getState,post,lock,download,onSel
   const review=button('Review complete proposal batch'),save=button('Download complete batch review');
   const status=el('p','Prepare a shared evidence packet and select the returned proposal array.');
   status.setAttribute('role','status');status.setAttribute('aria-live','polite');
-  const output=el('div');let basis=null,choices=[],epoch=0;
+  const output=el('div');let basis=null,choices=[],epoch=0,planningPanel=null;
   const hex=v=>typeof v==='string'&&/^[a-f0-9]{64}$/.test(v);
   const LIMIT=2*1024*1024;
   function refresh(){
     const s=getState();file.disabled=s.busy;review.disabled=s.busy||!s.packet||!file.files?.[0];save.disabled=s.busy||!basis;
     for(const n of choices)n.disabled=s.busy||!basis;
+    planningPanel?.refresh();
   }
   function invalidate(){
-    epoch++;basis=null;choices=[];output.replaceChildren();onClear();
+    epoch++;basis=null;choices=[];output.replaceChildren();onClear();planningPanel?.invalidate();
     status.textContent='Inputs changed. Review the complete batch again.';refresh();
   }
   file.addEventListener('change',invalidate);
@@ -75,7 +76,12 @@ export function mountImplementationBatch(host,{getState,post,lock,download,onSel
     }catch(e){if(ticket===epoch){basis=null;choices=[];output.replaceChildren();status.textContent=e.message;}}finally{lock(false);refresh();}
   };
   save.onclick=()=>{if(basis&&!getState().busy)download('owg-implementation-batch-review.json','application/json',basis.raw);};
+  const planningHost=el('div');
   const details=el('details');details.id='owgImplementationBatch';
-  details.append(el('summary','Review multiple AI implementation proposals'),el('p','Provide the shared original or compact evidence and matching instructions to an authorized AI. Ask it to return a JSON array of 1–20 independent existing v1 proposal objects with the same original packet pin. Do not invent candidates to fill a quota. Review the original proposals yourself; OWG validates references, not business meaning.'),field('Returned proposal array JSON (2 MiB max)',file),review,status,output,save);
-  host.append(details);refresh();return {refresh,invalidate};
+  details.append(el('summary','Review multiple AI implementation proposals'),el('p','Provide the shared original or compact evidence and matching instructions to an authorized AI. Ask it to return a JSON array of 1–20 independent existing v1 proposal objects with the same original packet pin. Do not invent candidates to fill a quota. Review the original proposals yourself; OWG validates references, not business meaning.'),field('Returned proposal array JSON (2 MiB max)',file),review,status,output,save,planningHost);
+  host.append(details);refresh();
+  import('/ai-implementation-planning.js').then(module=>{
+    planningPanel=module.mountImplementationPlanning(planningHost,{getBasis:()=>basis,getBusy:()=>getState().busy,post,lock,download});
+  }).catch(()=>{planningHost.textContent='Implementation planning unavailable; batch review remains available.';});
+  return {refresh,invalidate};
 }
