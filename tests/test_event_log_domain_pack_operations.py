@@ -212,7 +212,7 @@ with TestClient(app) as client:
 
 
 def test_operation_metric_names_fit_existing_schema():
-    from server import event_log_domain_packs_operations as definitions
+    from server import event_log_domain_packs_operational_control as definitions
     names = []
     for pack in (definitions.MANUFACTURING_QUALITY_1_0_0,
                  definitions.SUPPLIER_QUALIFICATION_1_0_0,
