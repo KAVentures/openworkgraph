@@ -58,3 +58,9 @@ python -m pytest -q tests/test_ai_implementation_context_trial.py
 Tests use real synthetic loopback HTTP calls, both orderings, failed arms,
 missing usage, exact source/citation checks, preflight refusal and
 exclusive file output. A synthetic provider is not a real model benchmark.
+
+## Dashboard experiment
+
+In the existing implementation opportunity dashboard, prepare a compact-eligible packet of at most 512 KiB and configure the optional local model settings. Expand **Compare original and compact model context**. Select the arm order and explicitly authorize both local requests. The server checks both prepared evidence digests and shares the same process-wide single-flight lock with single-model requests. It does not choose a proposal automatically. Each valid proposal and the complete canonical report can be downloaded separately; failures retain their place and missing measurements remain unknown. The existing single-model generation path remains available.
+
+The report is kept in browser memory only. Download it before modifying source selection, model settings, budget or order. The server performs neither persistent trial storage nor external upload beyond the explicitly confirmed loopback requests. A loopback service may proxy data. A request may continue after the browser disconnects or the session is revoked (both attempts were explicitly authorized); the server checks session validity again before returning the result. A lost result does not mean no requests or costs occurred. Do not retry automatically. The socket timeout is not a guaranteed wall-clock deadline. Independent model/quality review and representative held-out outcomes are necessary before adopting any representation. Full integrated application and actual model acceptance remain required.
