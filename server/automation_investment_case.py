@@ -53,7 +53,7 @@ def _pool(rows):
         "declared_source_kinds":sorted({r["source"] for r in rows})}
 
 
-def evaluate(idea_id,payload):
+def _review_basis(idea_id,payload):
     try:
         spec=core.Scenario.model_validate(payload)
         core.validate(spec)
@@ -82,7 +82,11 @@ def evaluate(idea_id,payload):
             raise benefits.BenefitError("selected calendar periods overlap")
     b,b_info=_pool(groups["baseline"])
     a,a_info=_pool(groups["after"])
-    delta=b-a
+    return spec,snapshot,selected,by_id,b-a,b_info,a_info
+
+
+def evaluate(idea_id,payload):
+    spec,snapshot,selected,by_id,delta,b_info,a_info=_review_basis(idea_id,payload)
     result=core.evaluate(spec,delta)
     # Reject an edit during calculation rather than returning a report as if
     # it still referred to the current retained snapshot.
