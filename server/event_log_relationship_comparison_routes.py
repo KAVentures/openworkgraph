@@ -9,6 +9,8 @@ from . import event_log_relationship_comparison as comparison
 from .event_log_routes import _json_body, _require_dashboard, _respond
 
 router = APIRouter()
+from .event_log_topology_review_routes import router as topology_router
+router.include_router(topology_router)
 _DASH = Path(__file__).resolve().parents[1] / "dashboard"
 _HEADERS = {"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"}
 
