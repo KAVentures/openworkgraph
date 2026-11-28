@@ -2779,6 +2779,31 @@ async def event_log_impact(request: Request, log_id: str):
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
+@router.get("/event-log-case-mix.js")
+def event_log_case_mix_script():
+    return FileResponse(Path(__file__).resolve().parents[1]/"dashboard"/"event_log_case_mix.js",media_type="application/javascript")
+
+
+@router.post("/v1/event-logs/{log_id}/impact/case-mix")
+async def event_log_case_mix(request: Request, log_id: str):
+    from . import event_log_case_mix as mix
+    _require_dashboard(request)
+    spec=await _json_body(request,"intervention case mix",strict=True,limit=32768)
+    result=await run_in_threadpool(_respond,mix.review,log_id,spec)
+    _require_dashboard(request)
+    return result
+
+
+@router.post("/v1/event-logs/{log_id}/impact/case-mix/evidence")
+async def event_log_case_mix_evidence(request: Request, log_id: str):
+    from . import event_log_case_mix as mix
+    _require_dashboard(request)
+    spec=await _json_body(request,"intervention case mix evidence",strict=True,limit=32768)
+    result=await run_in_threadpool(_respond,mix.evidence,log_id,spec)
+    _require_dashboard(request)
+    return result
+
+
 @router.post("/v1/event-logs/{log_id}/impact/cases")
 async def event_log_impact_cases(request: Request, log_id: str):
     _require_dashboard(request)
