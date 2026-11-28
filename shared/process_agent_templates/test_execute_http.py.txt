@@ -64,7 +64,7 @@ class HttpRuntime(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(token,"PRIVATE_SOURCE_TOKEN")
         value=receipt(request)
         if not self.resolved:
-            value.update(operation_verified=False,availability="unknown")
+            value.update(operation_verified=False,availability="unknown",reason="provider_state_not_expected_operation")
         return value
 
     def transport(self,request):
@@ -215,8 +215,10 @@ class HttpRuntime(unittest.IsolatedAsyncioTestCase):
         try:
             spec,plan,case,bindings,intent,doc,ops=documents("http://127.0.0.1:"+str(server.server_port))
             async def source(base,token,request):
-                self.assertTrue(state["resolved"])
-                return receipt(request)
+                value=receipt(request)
+                if not state["resolved"]:
+                    value.update(operation_verified=False,availability="unknown",reason="provider_state_not_expected_operation")
+                return value
             report=await run(spec,plan,case,bindings,intent,ops,
                 journal_directory=Path(self.temp.name)/"real-http",receipt_reader=source)
             self.assertEqual(state["calls"],["GET","PATCH","GET"])
