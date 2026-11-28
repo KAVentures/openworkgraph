@@ -317,10 +317,11 @@ export function mountAiOpportunityHandoff(host, post, onCreated, onStage){
     if(module)sourceInventory=module.mountSourceInventory(inventoryHost,{getFiles:()=>orderedSources.slice()});
     else inventoryHost.textContent='Source coverage inventory unavailable; existing packet preparation remains available.';
   });
-  import('/ai-implementation-knowledge-context.js').then(module=>{
+  Promise.all([import('/ai-implementation-knowledge-context.js'),import('/ai-implementation-combined-authoring.js').catch(()=>null),import('/ai-implementation-first-workflow.js').catch(()=>null)]).then(([module,combined,first])=>{
     knowledgePanel=module.mountKnowledgeContext(knowledgeHost,{
       getState:()=>({busy,packet:preparedPacket,files:orderedSources.slice()}),
-      post,lock,download:downloadLocal
+      post,lock,download:downloadLocal,
+      combinedAuthoring:combined&&first?(p,r,m)=>combined.combinedAuthoring(p,r,m,first.authoringFile):undefined
     });
   }).catch(()=>{knowledgeHost.textContent='Reviewed knowledge companion unavailable; original evidence handoff remains available.';});
   import('/ai-implementation-evidence-picker.js').then(module=>{

@@ -15,13 +15,16 @@ def catalog_page(after):
     from .local_process_catalog import knowledge, catalog
     page = knowledge.page(catalog.owner, after=after, limit=20)
     return {'format':'openworkgraph.ai-implementation-knowledge-list.v1',
-            'processes':[{**ctx.reference(r), 'title':r['title']} for r in page['workflows'] if r.get('process_model')],
+            'processes':[{**ctx.reference(r), 'title':r['title'], 'has_process_model':isinstance(r.get('process_model'),dict)} for r in page['workflows']],
             'has_more':page['has_more'], 'next_after':page['next_after']}
 
 
 def latest(key):
-    from .local_process_catalog import catalog
-    return catalog.get(key)
+    from .local_process_catalog import catalog, knowledge
+    result = knowledge.list(catalog.owner, key, limit=1)
+    rows = result['workflows']
+    ctx.require(len(rows)==1 and result['has_more'] is False, 'Saved reviewed workflow unavailable')
+    return rows[0]
 
 
 def documents(payload, listing=False):
@@ -64,3 +67,8 @@ async def context(request:Request):
 @router.get('/ai-implementation-knowledge-context.js')
 def script():
     return FileResponse(SCRIPT,media_type='application/javascript')
+
+
+@router.get('/ai-implementation-combined-authoring.js')
+def combined_authoring_script():
+    return FileResponse(SCRIPT.with_name('ai_implementation_combined_authoring.js'),media_type='application/javascript')

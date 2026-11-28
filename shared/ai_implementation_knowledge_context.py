@@ -45,7 +45,9 @@ def build(packet_sha256, references, get_latest):
         record = get_latest(key)
         require(isinstance(record, dict) and reference(record) == ref, 'Saved process changed; select its current revision again')
         require(record.get('format') == 'openworkgraph.workflow-knowledge.v1' and record.get('data_layer') == 'user_reviewed_knowledge'
-                and record.get('review_basis') == 'client_declared_user_confirmation' and isinstance(record.get('process_model'), dict)
+                and record.get('review_basis') == 'client_declared_user_confirmation'
+                and (isinstance(record.get('process_model'), dict) or
+                     ('process_model' not in record and isinstance(record.get('procedure'), str) and bool(record['procedure'].strip())))
                 and all(record.get(k) is False for k in ('observed_evidence', 'organization_policy', 'execution_authorization')),
                 'Expected reviewed process knowledge, not execution authority')
         # Same digest convention as KnowledgeWrite.portable(), excluding storage revision and digest.

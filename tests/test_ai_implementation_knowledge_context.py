@@ -42,3 +42,14 @@ def test_order_and_excludes_unselected():
     a,b=record('a'),record('b'); rows={'a':a,'b':b}
     c=ctx.build('b'*64,[ctx.reference(b),ctx.reference(a)],rows.__getitem__)
     assert [r['workflow_id'] for r in c['reviewed_knowledge']]==['b','a']
+
+
+def test_reviewed_plain_procedure_preserved_and_unreviewed_refused():
+    r=record(); del r['process_model']; r['procedure']='Inspect invoice and ask owner å'
+    def repin(row):
+        row['content_sha256']=hashlib.sha256(json.dumps({k:v for k,v in row.items() if k not in ('revision','content_sha256')},sort_keys=True).encode()).hexdigest()
+    repin(r)
+    assert ctx.build('a'*64,[ctx.reference(r)],lambda _:r)['reviewed_knowledge']==[r]
+    for key,value in [('procedure',' '),('review_basis','unreviewed'),('process_model',[])]:
+        bad={**r,key:value};repin(bad)
+        with pytest.raises(ValueError):ctx.build('a'*64,[ctx.reference(bad)],lambda _:bad)

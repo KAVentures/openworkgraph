@@ -42,3 +42,32 @@ isolated Chromium uses the real builder with substituted data/transport.
 The integrated API regression uses the original packet producer and
 substituted catalog/auth boundaries. Combined CI and real persisted-catalog,
 dashboard and external-model acceptance remain necessary.
+
+
+## Single-file external AI handoff
+
+The selector also supports existing reviewed plain procedures that have no
+process graph. The catalog page labels the type; exact current owner-scoped
+record and digest checks are unchanged.
+
+After preparing a knowledge companion, choose **Download original evidence
+with reviewed knowledge** or **Download compact evidence with reviewed
+knowledge** (when available). These actions reuse the original evidence
+export validator and preserve the exact JSON text of both sections, their
+separate pins and byte lengths, and the matching evidence instructions.
+No extra record is selected automatically. The returned proposal must
+still cite only events in the original evidence packet and use its original
+packet pin. Neither section is policy or authority to execute.
+
+Selection and packet changes invalidate the combined downloads. They remain
+local text artifacts; inspect them before sharing. There is no model
+invocation or new external transmission. The combined file is bounded to
+9 MiB; use a narrower selection if needed. The browser checks matching
+metadata and preserves exact server-returned text; it does not independently
+recompute the server's canonical digests.
+
+Validation: 11 focused Python tests and four Node tests passed; isolated
+Chromium exercised the real builder and both dashboard helper modules,
+with substituted transport, selecting, preparing, exporting and invalidating.
+The added persisted owner-scoped route regression is unexecuted locally;
+full application CI remains required.
