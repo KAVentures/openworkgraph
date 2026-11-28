@@ -194,6 +194,21 @@ const path=require('node:path');
   await page.locator('#triageConsent').check();
   await page.locator('#triageSave').click();
   await page.locator('#status').filter({hasText:'Existing review queue:'}).waitFor();
+  // Preserve the original conformance invalidation regression (#1605).
+  // Queue retention is independent of the now-invalid browser review.
+  await page.locator('#reassessmentRequestConsent').check();
+  await page.locator('#triageConsent').check();
+  await page.locator('#unlinked').uncheck();
+  assert.ok(await page.locator('#conformancePanel').isHidden());
+  assert.equal(await page.locator('#ruleReport').textContent(),'');
+  for(const id of ['ruleCatalogConsent','ruleConsent','ruleWorklistConsent','triageConsent','reassessmentRequestConsent'])
+    assert.equal(await page.locator('#'+id).isChecked(),false,id+' must reset');
+  for(const id of ['ruleRun','ruleDownload','ruleWorklist','triageSave','reassessmentRuleRequest','reassessmentLinkageRequest'])
+    assert.ok(await page.locator('#'+id).isDisabled(),id+' must be disabled');
+  await page.locator('#preview').click();
+  await page.locator('#conformancePanel').waitFor({state:'visible'});
+  assert.ok(await page.locator('#ruleCatalogOpen').isDisabled());
+  assert.ok(await page.locator('#ruleDownload').isDisabled());
   await page.goto(base+'/admin/connector-exception-triage');
   await page.getByRole('button',{name:'Open queue',exact:true}).click();
   await page.locator('#items article').waitFor();

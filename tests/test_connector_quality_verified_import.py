@@ -169,6 +169,14 @@ def test_quality_portable_live_export_and_local_dual_consent(linked):
         importer.preview(raw(package),r["log"]["log_id"])
 
 
+@pytest.mark.parametrize("bad",[{},None,[],True])
+def test_malformed_portable_quality_reports_fail_closed(linked,bad):
+    reviewed,spec,_,_=linked
+    package=portable(reviewed,spec)
+    with pytest.raises(ValueError,match="quality_report_integrity_failure"):
+        inspect(raw({**package,"quality_review":bad}))
+
+
 def test_linked_quality_exact_pins_org_and_expiry_required(linked):
     reviewed,spec,_,_=linked
     package=portable(reviewed,spec)
