@@ -61,8 +61,7 @@ approval occurs. Retain the original documents and use the existing
 individual proposal review and shadow test process for any later action.
 
 Outputs are private exclusive files; no new store, model invocation,
-portfolio write, deployment or execution. This is a local CLI compatibility
-path, not yet a dashboard integration. Full combined CI and real external-AI
+portfolio write, deployment or execution. The same compatibility path is available in the implementation dashboard. Prepare one original evidence source, expand **Optional: reuse an earlier sectioned proposal**, select the original sectioned proposal and enter its independently retained evidence and review SHA-256 pins. Download the exact compatibility handoff and review it locally before separately providing it to an authorized AI. Upload the returned integrated proposal to the local review panel, inspect per-entry citation omissions, and download the canonical compatibility review. Explicitly transfer the returned proposal into individual review; title, details and confirmation are reset. Editing source, budget, original proposal/pins or returned proposal clears stale compatibility review/transfer state. The original CLI remains available. The dashboard limits each proposal file to 1 MiB and the entire request to the existing 8 MiB request envelope; no data is silently truncated. Full combined CI and real external-AI
 acceptance remain necessary.
 
 ```sh
