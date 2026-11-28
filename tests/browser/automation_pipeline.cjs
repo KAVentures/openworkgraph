@@ -93,6 +93,37 @@ const path=require('node:path');
      await handoff.getByRole('button',{name:'Review exact proposal',exact:true}).click();
      await handoff.getByText('Structural review passed.',{exact:false}).waitFor();
      assert(await handoff.getByRole('button',{name:'Create unassessed idea',exact:true}).isDisabled());
+     // Direct exact transfer to the native shadow renderer, no intermediate file export.
+     const stageButton=handoff.getByRole('button',{name:'Start new shadow skill draft from reviewed proposal',exact:true});
+     assert(await stageButton.isEnabled());
+     await stageButton.click();
+     const transferred=page.locator('#owgNativeSkillDownload');
+     await transferred.getByText('Evidence and proposal transferred.',{exact:false}).waitFor();
+     const transferredDraft=transferred.getByLabel('Editable human-reviewed skill draft JSON',{exact:true});
+     const transferredConfirm=transferred.getByLabel('I inspected both rendered files and confirm download for isolated shadow testing only',{exact:true});
+     const transferredDownload=transferred.getByRole('button',{name:'Download exact shadow skill ZIP',exact:true});
+     assert.equal(JSON.parse(await transferredDraft.inputValue()).instructions,'');
+     assert(await transferredDownload.isDisabled());assert(await transferredConfirm.isDisabled());
+     await transferredDraft.fill(JSON.stringify({name:'customer-follow-up',description:'Draft customer follow-up',option_index:0,
+       instructions:'Draft a reply from synthetic cases only.',tool_mappings:{},
+       source_verification:'Check independent fixture status.',test_plan:'Run frozen normal and exception cases.',
+       escalation:'Stop on missing facts.',rollback:'Remove staged skill and discard drafts.',review_note:'Human reviewed against the proposal.'}));
+     const [transferPreview]=await Promise.all([
+       page.waitForResponse(r=>r.url().endsWith('/native-skill-download/preview')),
+       transferred.getByRole('button',{name:'Preview reviewed shadow skill',exact:true}).click()]);
+     assert.equal(transferPreview.status(),200);
+     const transferValue=await transferPreview.json();
+     assert.equal(transferValue.manifest.packet_sha256,compactReceipt.packet_sha256);
+     assert.equal(transferValue.manifest.proposal_sha256,compactReceipt.proposal_sha256);
+     assert.equal(transferValue.execution_authorized,false);
+     assert(await transferredDownload.isDisabled());
+     await transferredConfirm.check();
+     assert(await transferredDownload.isEnabled());
+     await stageButton.click();
+     await transferred.getByText('Evidence and proposal transferred.',{exact:false}).waitFor();
+     assert(await transferredDownload.isDisabled());assert.equal(await transferredConfirm.isChecked(),false);
+     assert.equal(JSON.parse(await transferredDraft.inputValue()).instructions,'');
+     await transferred.locator('summary').click();
      // The existing manual import path remains available, and clears approval.
    }finally{await new Promise(resolve=>modelServer.close(resolve));}
    await handoff.getByLabel('External AI proposal JSON',{exact:true}).setInputFiles({name:'proposal.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(fixture.proposal))});
@@ -120,6 +151,38 @@ const path=require('node:path');
    await handoff.locator('summary').click();
    await page.locator('#owgPipelineRefresh').click();
    await page.locator('#owgPipelineCounts').filter({hasText:'No ideas yet.'}).waitFor();
+
+   {
+   // Stage a reviewed shadow skill using the actual portable proposal contract.
+   const portable=spawnSync(python,['-c',"import json;from tests.test_native_skill_download_routes import inputs;print(json.dumps(inputs()))"],{encoding:'utf8'});
+   assert.equal(portable.status,0,portable.stderr);
+   const fixture=JSON.parse(portable.stdout),skills=page.locator('#owgNativeSkillDownload');
+   await skills.locator('summary').click();
+   await skills.getByLabel('Original skill evidence JSON files',{exact:true}).setInputFiles({name:'evidence.json',mimeType:'application/json',buffer:Buffer.from(fixture.sources[0])});
+   await skills.getByLabel('Original external AI skill proposal JSON',{exact:true}).setInputFiles({name:'proposal.json',mimeType:'application/json',buffer:Buffer.from(fixture.proposal)});
+   const draft=skills.getByLabel('Editable human-reviewed skill draft JSON',{exact:true});
+   await draft.fill(fixture.draft);
+   const preview=skills.getByRole('button',{name:'Preview reviewed shadow skill',exact:true});
+   const downloadSkill=skills.getByRole('button',{name:'Download exact shadow skill ZIP',exact:true});
+   await preview.click();
+   await skills.getByText('Inspect both complete rendered files.',{exact:false}).waitFor();
+   assert(await downloadSkill.isDisabled());
+   await skills.getByLabel('I inspected both rendered files and confirm download for isolated shadow testing only',{exact:true}).check();
+   assert(await downloadSkill.isEnabled());
+   await draft.fill(fixture.draft+' ');
+   assert(await downloadSkill.isDisabled());
+   await preview.click();
+   await skills.getByText('Inspect both complete rendered files.',{exact:false}).waitFor();
+   await skills.getByLabel('I inspected both rendered files and confirm download for isolated shadow testing only',{exact:true}).check();
+   const [skillDownload,skillResponse]=await Promise.all([page.waitForEvent('download'),page.waitForResponse(r=>r.url().endsWith('/native-skill-download/archive')),downloadSkill.click()]);
+   assert.equal(skillResponse.status(),200);
+   const skillBytes=await fs.readFile(await skillDownload.path());
+   assert.equal(createHash('sha256').update(skillBytes).digest('hex'),skillResponse.headers()['x-owg-archive-sha256']);
+   const skillPath=path.join(scratch,'reviewed-skill.zip');await fs.writeFile(skillPath,skillBytes);
+   const checked=spawnSync(python,['-c',"import sys,tempfile;from zipfile import ZipFile;from shared.ai_skill_stage import verify;d=tempfile.mkdtemp();ZipFile(sys.argv[1]).extractall(d);assert verify(d,sys.argv[2])['exact_staged_files_verified']",skillPath,skillResponse.headers()['x-owg-package-sha256']],{encoding:'utf8'});
+   assert.equal(checked.status,0,checked.stderr);
+   await skills.locator('summary').click();
+   }
 
    // Exact budget frontier uses real local revisions and is read-only.
    const frontierIds=await page.evaluate(async()=>{

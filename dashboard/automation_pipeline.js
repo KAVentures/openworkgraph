@@ -1230,8 +1230,16 @@
     card.append(row,resumeSection,auditSection,tools,planningFilters,status,counts,portfolioButton,portfolioHost,budgetScenarioButton,budgetScenarioHost,benefitOverlapButton,benefitOverlapHost,benefitReadinessButton,benefitReadinessHost,dependencyScheduleButton,dependencyScheduleHost,capacityButton,capacityHost,viewCount,list,comparison,detail);
     panel.appendChild(card);
     const aiHandoffHost=el('div');card.insertBefore(aiHandoffHost,row);
-    import('/ai-opportunity-handoff.js').then(module=>module.mountAiOpportunityHandoff(aiHandoffHost,post,async id=>{await refresh();await show(id);}))
-      .catch(()=>{aiHandoffHost.textContent='AI proposal handoff unavailable.';});
+    const nativeSkillHost=el('div');card.insertBefore(nativeSkillHost,row);
+    const nativeSkillReady=import('/native-skill-download.js')
+      .then(module=>module.mountNativeSkillDownload(nativeSkillHost,api))
+      .catch(()=>{nativeSkillHost.textContent='Native shadow skill preparation unavailable.';return null;});
+    import('/ai-opportunity-handoff.js').then(module=>module.mountAiOpportunityHandoff(aiHandoffHost,post,
+      async id=>{await refresh();await show(id);},async draft=>{
+        const target=await nativeSkillReady;
+        if(!target)throw Error('Native shadow skill preparation unavailable.');
+        target.acceptReviewedProposal(draft);
+      })).catch(()=>{aiHandoffHost.textContent='AI proposal handoff unavailable.';});
 
     let latestIdeas=[],refreshGeneration=0,resumeGeneration=0,auditGeneration=0,auditPageIndex=0,auditAbort=null;
     let loadedState=null,currentView=null;

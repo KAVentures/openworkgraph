@@ -383,3 +383,6 @@ def delete_measurement(request: Request, idea_id: str, measurement_id: str):
 # Additive local external-AI opportunity handoff.
 from .ai_opportunity_routes import router as _ai_opportunity_router
 router.include_router(_ai_opportunity_router)
+
+from .native_skill_download_routes import router as _native_skill_router
+router.include_router(_native_skill_router)
