@@ -161,3 +161,176 @@ print("ok")
     done = subprocess.run([sys.executable, "-c", code], cwd=Path(__file__).resolve().parents[1],
                           env=env, capture_output=True, text=True, timeout=180)
     assert done.returncode == 0 and done.stdout.strip().endswith("ok"), done.stderr + done.stdout
+
+
+def embedded(ident, body):
+    return f'<subProcess id="{ident}">{body}</subProcess>'
+
+
+def inner(ident, nodes, edges):
+    return "".join(f'<{kind} id="{n}"{attrs}/>' for n, kind, attrs in nodes) + "".join(
+        f'<sequenceFlow id="{ident}_f{i}" sourceRef="{a}" targetRef="{b}"/>'
+        for i, (a, b) in enumerate(edges))
+
+
+def wrapped(body, wrapper="sub"):
+    return bpmn([START, A, END], [("s", "a"), ("a", wrapper), (wrapper, "e")],
+                extra=embedded(wrapper, body))
+
+
+def test_embedded_scope_visible_internal_tasks_and_silent_wrapper():
+    body = inner("sub", [node("ss", "startEvent"), B, C, node("ee", "endEvent")],
+                 [("ss", "b"), ("b", "c"), ("c", "ee")])
+    data = wrapped(body)
+    assert traces(data) == {("A", "B", "C")}
+    result = importer.to_pnml(data)
+    assert result["nodes"] == 8
+    assert result["sequence_flows"] == 6
+    assert result["scope_by_node"]["b"] == "sub"
+    assert result["scope_by_node"]["sub"] == "p"
+    assert result["scope_by_flow"]["sub_f0"] == "sub"
+    boundary = result["subprocess_boundaries"]["sub"]
+    assert result["node_transition_ids"]["sub"] == [
+        boundary["entry_transition_id"], boundary["exit_transition_id"]]
+    parsed = replay.parse_pnml(result["pnml"].encode())
+    assert all(parsed["transitions"][t] is None for t in result["node_transition_ids"]["sub"])
+    assert parsed["initial"][boundary["entry_place_id"]] == 0
+    assert parsed["final"][boundary["exit_place_id"]] == 0
+
+
+def test_nested_subprocess_and_parallel_inside_repeatable_outer_scope():
+    inner_body = inner("deep", [node("ds", "startEvent"), SPLIT, B, C, JOIN, node("de", "endEvent")],
+                      [("ds", "x"), ("x", "b"), ("x", "c"), ("b", "j"), ("c", "j"), ("j", "de")])
+    outer_body = inner("sub", [node("ss", "startEvent"), node("se", "endEvent")],
+                      [("ss", "deep"), ("deep", "se")]) + embedded("deep", inner_body)
+    # The outer XOR loop may run the entire subprocess repeatedly. The child
+    # parallel region is acyclic within its own activation.
+    data = bpmn([START, node("merge", "exclusiveGateway"), node("choice", "exclusiveGateway"), END],
+                [("s", "merge"), ("merge", "sub"), ("sub", "choice"),
+                 ("choice", "merge"), ("choice", "e")], extra=embedded("sub", outer_body))
+    expected = {("B", "C"), ("C", "B")}
+    expected |= {a + b for a in expected for b in expected}
+    assert traces(data, 4) == expected
+    result = importer.to_pnml(data)
+    assert result["parallel_pairs"] == {"x": "j"}
+    assert set(result["subprocess_boundaries"]) == {"sub", "deep"}
+    assert result["scope_by_node"]["b"] == "deep"
+
+
+@pytest.mark.parametrize("change", [
+    lambda d: d.replace(b'<subProcess id="sub">', b'<subProcess id="sub" triggeredByEvent="true">'),
+    lambda d: d.replace(b'<subProcess id="sub">', b'<subProcess id="sub" isForCompensation="true">'),
+    lambda d: d.replace(b'<subProcess id="sub">', b'<subProcess id="sub"><multiInstanceLoopCharacteristics/>'),
+    lambda d: d.replace(b'targetRef="sub"', b'targetRef="b"'),
+    lambda d: d.replace(b'sourceRef="ss"', b'sourceRef="a"'),
+    lambda d: d.replace(b'id="b"', b'id="a"'),
+    lambda d: d.replace(b'id="sub_f0"', b'id="f0"'),
+    lambda d: d.replace(b'<endEvent id="ee"/>', b'<endEvent id="ee"><terminateEventDefinition/></endEvent>'),
+])
+def test_subprocess_scope_and_semantic_refusals(change):
+    body = inner("sub", [node("ss", "startEvent"), B, node("ee", "endEvent")],
+                 [("ss", "b"), ("b", "ee")])
+    with pytest.raises(EventLogWorkspaceError):
+        importer.to_pnml(change(wrapped(body)))
+
+
+def test_global_depth_and_node_limits(monkeypatch):
+    body = inner("sub", [node("ss", "startEvent"), B, node("ee", "endEvent")],
+                 [("ss", "b"), ("b", "ee")])
+    monkeypatch.setattr(importer, "MAX_SCOPE_DEPTH", 0)
+    with pytest.raises(EventLogWorkspaceError, match="nesting"):
+        importer.to_pnml(wrapped(body))
+    monkeypatch.setattr(importer, "MAX_SCOPE_DEPTH", 12)
+    monkeypatch.setattr(importer, "MAX_NODES", 5)
+    with pytest.raises(EventLogWorkspaceError, match="across scopes"):
+        importer.to_pnml(wrapped(body))
+
+
+def call(ident, ref):
+    return node(ident, "callActivity")[0], "callActivity", f' calledElement="{ref}"'
+
+
+def called_definition(ref="worker"):
+    body = inner(ref, [node(ref+"s", "startEvent"), node(ref+"a", "task", "Work"),
+                       node(ref+"e", "endEvent")],
+                 [(ref+"s", ref+"a"), (ref+"a", ref+"e")])
+    return f'<process id="{ref}">{body}</process>'
+
+
+def call_file(parallel=False):
+    if parallel:
+        nodes = [START, SPLIT, call("c1", "worker"), call("c2", "worker"), JOIN, END]
+        edges = [("s", "x"), ("x", "c1"), ("x", "c2"), ("c1", "j"), ("c2", "j"), ("j", "e")]
+    else:
+        nodes = [START, call("c1", "worker"), A, call("c2", "worker"), END]
+        edges = [("s", "c1"), ("c1", "a"), ("a", "c2"), ("c2", "e")]
+    return bpmn(nodes, edges, root_extra=called_definition())
+
+
+def test_explicit_definition_selection_and_separate_call_instances(monkeypatch):
+    data = call_file()
+    preview = importer.inspect_processes(data)
+    assert [p["id"] for p in preview["processes"]] == ["p", "worker"]
+    with pytest.raises(EventLogWorkspaceError, match="explicitly select"):
+        importer.to_pnml(data)
+    with pytest.raises(EventLogWorkspaceError, match="not present"):
+        importer.to_pnml(data, "missing")
+    result = importer.to_pnml(data, "p")
+    assert result == importer.to_pnml(data, "p")
+    assert result["available_process_ids"] == ["p", "worker"]
+    assert len(result["call_boundaries"]) == 2
+    assert result["nodes"] == 11
+    assert result["definition_nodes"] == 8
+    instances = [row for row in result["node_instances"] if row["source_id"] == "workera"]
+    assert [row["call_path"] for row in instances] == [["c1"], ["c2"]]
+    assert instances[0]["transition_ids"] != instances[1]["transition_ids"]
+    flows = [row for row in result["flow_instances"] if row["source_id"] == "worker_f0"]
+    assert len({row["place_id"] for row in flows}) == 2
+    original = importer.to_pnml
+    monkeypatch.setattr(importer, "to_pnml", lambda data: original(data, "p"))
+    assert traces(data) == {("Work", "A", "Work")}
+
+
+def test_concurrent_calls_do_not_share_tokens(monkeypatch):
+    data = call_file(parallel=True)
+    original = importer.to_pnml
+    result = original(data, "p")
+    assert len(result["call_boundaries"]) == 2
+    assert len({row["entry_place_id"] for row in result["call_boundaries"].values()}) == 2
+    monkeypatch.setattr(importer, "to_pnml", lambda data: original(data, "p"))
+    assert traces(data) == {("Work", "Work")}
+
+
+def test_reusable_definition_is_independently_selectable(monkeypatch):
+    data = call_file()
+    original = importer.to_pnml
+    result = original(data, "worker")
+    assert result["nodes"] == 3
+    assert not result["call_boundaries"]
+    monkeypatch.setattr(importer, "to_pnml", lambda data: original(data, "worker"))
+    assert traces(data) == {("Work",)}
+
+
+@pytest.mark.parametrize("ref", ["missing", "external:worker", "p", ""])
+def test_unresolved_qualified_and_recursive_calls_refused(ref):
+    data = call_file().replace(b'calledElement="worker"', f'calledElement="{ref}"'.encode(), 1)
+    with pytest.raises(EventLogWorkspaceError):
+        importer.to_pnml(data, "p")
+
+
+def test_indirect_recursion_refused():
+    data = call_file().replace(b'<task id="workera" name="Work"/>',
+                               b'<callActivity id="workera" calledElement="p"/>')
+    with pytest.raises(EventLogWorkspaceError, match="recursive"):
+        importer.to_pnml(data, "p")
+
+
+def test_expansion_budget_counts_reused_definitions(monkeypatch):
+    monkeypatch.setattr(importer, "MAX_EXPANDED_NODES", 10)
+    with pytest.raises(EventLogWorkspaceError, match="expanded"):
+        importer.to_pnml(call_file(), "p")
+
+
+def test_nested_call_instance_keys_do_not_alias():
+    assert importer._instance_key((), '["a","b"]') != importer._instance_key(("a",), "b")
+    assert importer._instance_key(("a:b",), "c") != importer._instance_key(("a",), "b:c")
