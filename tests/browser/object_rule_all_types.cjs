@@ -1,0 +1,58 @@
+const {chromium}=require('playwright');
+const assert=require('node:assert/strict');
+const fs=require('node:fs/promises');
+const {spawn}=require('node:child_process');
+const {tmpdir}=require('node:os');
+const path=require('node:path');
+(async()=>{
+ const scratch=await fs.mkdtemp(path.join(tmpdir(),'owg-rule-types-'));
+ const base='http://127.0.0.1:8787';
+ const server=spawn(process.env.OWG_BROWSER_PYTHON||'python',['-m','uvicorn','process_logs_app:app','--app-dir','tests/browser','--host','127.0.0.1','--port','8787'],{env:{...process.env,OWG_BROWSER_TEST_DIR:scratch},stdio:['ignore','pipe','pipe']});
+ let browser,logs='';for(const stream of [server.stdout,server.stderr])stream.on('data',c=>logs=(logs+c).slice(-10000));
+ try{
+  let ready=false;for(let i=0;i<100;i++){if(server.exitCode!==null)throw Error(logs);try{await fs.access(path.join(scratch,'session.txt'));if((await fetch(base+'/')).ok){ready=true;break;}}catch{}await new Promise(r=>setTimeout(r,200));}assert.ok(ready,logs);
+  browser=await chromium.launch({...(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE?{executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE}:{}),headless:true,args:['--no-sandbox']});
+  const page=await browser.newPage(),errors=[];page.on('pageerror',e=>errors.push(e.message));
+  const session=(await fs.readFile(path.join(scratch,'session.txt'),'utf8')).trim();
+  await page.goto(base+'/#session='+session);await page.locator('[role=tab][data-tab=evidence]').click();
+  const objects=[],events=[];
+  for(let i=0;i<22;i++){
+   const type=`type${String(i).padStart(2,'0')}`,id=`object${i}`;
+   objects.push({id,type,attributes:[]});
+   events.push({id:`event${i}`,type:'Action',time:'2024-01-01T00:00:00Z',attributes:[],relationships:[{objectId:id,qualifier:''}]});
+  }
+  const emptyType='  No events, 雪  ';objects.push({id:'empty',type:emptyType,attributes:[]});
+  await page.locator('#owgEventLogFile').setInputFiles({name:'objects.jsonocel',mimeType:'application/json',buffer:Buffer.from(JSON.stringify({objectTypes:[],eventTypes:[],objects,events}))});
+  await page.locator('#owgEventLogStatus').filter({hasText:'File mapping ready.'}).waitFor();await page.locator('#owgEventLogConsent').check();await page.locator('#owgEventLogImport').click();
+  await page.locator('#owgEventLogStatus').filter({hasText:'Imported'}).waitFor();
+  await page.locator('#owgEventLogCaseType').selectOption('type00');await page.locator('#owgEventLogAnalyze').click();await page.locator('#owgObjectRules').waitFor();
+  const types=page.locator('#owgObjectRuleType'),related=page.locator('#owgObjectRuleRelated'),template=page.locator('#owgObjectRuleTemplate');
+  assert.equal(await types.locator('option').count(),23);
+  await template.selectOption('object_cardinality');await types.selectOption('type21');await related.selectOption(emptyType);
+  await template.selectOption('supplied_object_cardinality');assert.equal(await types.inputValue(),'type21');assert.equal(await related.inputValue(),emptyType);
+  await template.selectOption('object_cardinality');assert.equal(await types.inputValue(),'type21');assert.equal(await related.inputValue(),emptyType);
+  await page.locator('#owgObjectRuleMin').fill('1');await page.locator('#owgObjectRuleAdd').click();
+  await types.selectOption(emptyType);await related.selectOption('type21');await page.locator('#owgObjectRuleAdd').click();
+  const [response]=await Promise.all([page.waitForResponse(r=>r.url().endsWith('/object-constraints')&&r.request().method()==='POST'),page.locator('#owgObjectRuleRun').click()]);
+  assert.equal(response.status(),200);const sent=response.request().postDataJSON();assert.equal(sent.rules[0].object_type,'type21');assert.equal(sent.rules[0].related_type,emptyType);assert.equal(sent.rules[1].object_type,emptyType);
+  const report=await response.json();assert.deepEqual(report.results.map(r=>[r.units,r.violating]),[[1,1],[1,1]]);
+  const discoveryTypes=page.locator('#owgObjectModelDiscoveryTypes');
+  assert.equal(await discoveryTypes.locator('option').count(),23);
+  await discoveryTypes.selectOption(Array.from({length:9},(_,i)=>`type${String(i).padStart(2,'0')}`));
+  await page.locator('#owgObjectModelDiscover').click();await page.locator('#owgObjectModelStatus').getByText('Choose at most eight object types for discovery.').waitFor();
+  await discoveryTypes.selectOption(['type00','type21']);
+  const [discovery]=await Promise.all([page.waitForResponse(r=>r.url().endsWith('/object-process-model/discovery')&&r.request().method()==='POST'),page.locator('#owgObjectModelDiscover').click()]);
+  assert.equal(discovery.status(),200);assert.deepEqual(discovery.request().postDataJSON().object_types,['type00','type21']);
+  const discovered=await discovery.json();assert.deepEqual(discovered.model.types.map(t=>t.object_type),['type00','type21']);
+  await page.locator('#owgObjectModelStatus').getByText('Discovered 2 object type models',{exact:false}).waitFor();
+  await discoveryTypes.selectOption([]);
+  const [defaultDiscovery]=await Promise.all([page.waitForResponse(r=>r.url().endsWith('/object-process-model/discovery')&&r.request().method()==='POST'),page.locator('#owgObjectModelDiscover').click()]);
+  assert.equal(defaultDiscovery.status(),200);assert.deepEqual(defaultDiscovery.request().postDataJSON(),{});
+  await page.locator('#owgObjectModelStatus').getByText('other retained object types were omitted',{exact:false}).waitFor();
+  await page.addScriptTag({content:await fs.readFile(require.resolve('axe-core/axe.min.js'),'utf8')});
+  const audit=await page.evaluate(()=>window.axe.run(document.querySelector('#owgObjectRules'),{runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21aa']}}));assert.deepEqual(audit.violations.map(v=>v.id),[]);
+  const modelAudit=await page.evaluate(()=>window.axe.run(document.querySelector('#owgObjectModel'),{runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21aa']}}));assert.deepEqual(modelAudit.violations.map(v=>v.id),[]);
+  await page.setViewportSize({width:390,height:844});assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+2));assert.deepEqual(errors,[]);
+  console.log('Object type browser passed: omitted and zero-event types, rules, selected and default discovery, accessibility.');
+ }finally{if(browser)await browser.close();server.kill('SIGTERM');await Promise.race([new Promise(r=>server.once('exit',r)),new Promise(r=>setTimeout(r,5000))]);if(server.exitCode===null)server.kill('SIGKILL');await fs.rm(scratch,{recursive:true,force:true});}
+})().catch(e=>{console.error(e);process.exit(1);});

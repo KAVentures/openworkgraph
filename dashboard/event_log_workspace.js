@@ -4005,12 +4005,16 @@
     const box=el('div');box.id='owgObjectRules';
     box.append(el('h4','Object rules'),el('div','Check object relations over the whole retained log; the main case filter does not select these graph assertions. Existing rules relate objects through shared events. The separate supplied-assertion rule checks direct graph shape, including objects with no events; it does not infer temporal validity, synchronization or case membership. Results describe retained links, not verified business compliance or source completeness.','muted'));
     const typeLabel=value=>value.trim()===value?value:JSON.stringify(value);
-    const types=(graph.object_types||[]).map(t=>[t.object_type,typeLabel(t.object_type)]);
     const allTypes=(state.objectTypes||[]).map(t=>[t.object_type,typeLabel(t.object_type)]);
+    const types=allTypes.length?allTypes:(graph.object_types||[]).map(t=>[t.object_type,typeLabel(t.object_type)]);
     const acts=[...new Set((graph.object_types||[]).flatMap(t=>t.activities.map(a=>a.activity)))].slice(0,500).map(a=>[a,a]);
     const template=select('owgObjectRuleTemplate',OBJECT_RULE_TEMPLATES);
     const activity=select('owgObjectRuleActivity',acts),objectType=select('owgObjectRuleType',types),relatedType=select('owgObjectRuleRelated',types);
-    if(types.length>1)relatedType.selectedIndex=1;
+    // Preserve the graph's primary type as the default even when the full retained list includes eventless types.
+    const primary=graph.object_types?.[0]?.object_type;
+    if(types.some(([value])=>value===primary))objectType.value=primary;
+    const related=types.find(([value])=>value!==objectType.value);
+    if(related)relatedType.value=related[0];
     const required=select('owgObjectRuleRequired',acts),via=select('owgObjectRuleVia',[['','Any shared event'],...acts]);
     const direction=select('owgObjectRuleDirection',[['outgoing','Outgoing supplied assertions'],['incoming','Incoming supplied assertions'],['both','Incoming and outgoing supplied assertions']]);
     const exact=input('owgObjectRuleExactQualifier','checkbox'),qualifier=input('owgObjectRuleQualifier','text','Exact relationship label');qualifier.maxLength=160;
@@ -4032,11 +4036,10 @@
     f.activity.append(field('Exact activity A',exactActivity));
     f.required.append(field('Exact activity B',exactRequired));
     f.via.append(field('Exact linking activity',exactVia));
-    box.appendChild(el('div','Activity suggestions are limited to the displayed object graph. Exact entries override them and use stored event labels, before any activity mapping or hidden-activity filter.','muted'));
-    if(types.length<2&&(allTypes.length>1||graph.log&&(graph.log.object_relationships||['ocel','ocelxml'].includes(graph.log.source_format))))template.value='supplied_object_cardinality';
+    box.appendChild(el('div','Object type choices include all retained types, including types with no events. Activity suggestions are limited to the displayed object graph. Exact entries override them and use stored event labels, before any activity mapping or hidden-activity filter.','muted'));
+    if((graph.object_types||[]).length<2&&(allTypes.length>1||graph.log&&(graph.log.object_relationships||['ocel','ocelxml'].includes(graph.log.source_format))))template.value='supplied_object_cardinality';
     const sync=()=>{
       const t=template.value,supplied=t==='supplied_object_cardinality';
-      for(const control of [objectType,relatedType]){const previous=control.value;setOptions(control,supplied&&allTypes.length?allTypes:types);if([...control.options].some(o=>o.value===previous))control.value=previous;}
       show(f.activity,!['object_cardinality','supplied_object_cardinality'].includes(t));show(f.related,t!=='event_cardinality');show(f.required,t==='synchronization');show(f.via,t==='object_cardinality');
       for(const key of ['direction','exact','qualifier'])show(f[key],supplied);
       show(f.min,t!=='synchronization');show(f.max,t!=='synchronization');
@@ -4487,12 +4490,15 @@
     const box=el('div');box.id='owgObjectModel';
     box.append(el('h4','Object process model'),el('div','Discover one lifecycle model per object type and which object types each activity involves, then check every object and event of the log against it. Edit the arcs to state what you expect. This checks lifecycles and arcs separately; use object rules to check that objects move together. Results describe recorded links, not verified business relationships.','muted'));
     const discover=button('Discover object model','secondary');discover.id='owgObjectModelDiscover';
+    const discoveryTypes=select('owgObjectModelDiscoveryTypes',(state.objectTypes||[]).map(t=>[t.object_type,t.object_type.trim()===t.object_type?t.object_type:JSON.stringify(t.object_type)]));
+    discoveryTypes.multiple=true;discoveryTypes.size=4;discoveryTypes.selectedIndex=-1;
     const check=button('Check object model');check.id='owgObjectModelCheck';check.disabled=true;
     const save=button('Download object model','secondary');save.id='owgObjectModelDownload';save.disabled=true;
     const file=input('owgObjectModelFile','file');file.accept='.json,application/json';
     const use=button('Load previewed model','secondary');use.id='owgObjectModelLoad';use.disabled=true;
     const portability=el('div',null,'row');portability.style.alignItems='end';
-    portability.append(discover,field('Preview object model JSON',file),use,save);
+    portability.append(field('Object types for discovery (optional, up to 8)',discoveryTypes),discover,field('Preview object model JSON',file),use,save);
+    portability.append(el('div','Select up to eight types for the next discovery. With none selected, discovery uses the first eight retained types. Use Ctrl or Command to select multiple types.','muted'));
     const importStatus=el('div',null,'muted');importStatus.setAttribute('role','status');
     const message=el('div',null,'muted');message.id='owgObjectModelStatus';message.setAttribute('role','status');
     const arcsOut=el('div');arcsOut.id='owgObjectModelArcs';
@@ -4516,7 +4522,7 @@
     const clearEvents=()=>{++eventTurn;eventList.replaceChildren();clearObjects();};
     function clearCheck(){out.replaceChildren();issueList.replaceChildren();clearEvents();}
     function syncModel(){
-      discover.disabled=busy;check.disabled=save.disabled=busy||!model;use.disabled=busy||!candidate;
+      discover.disabled=discoveryTypes.disabled=busy;check.disabled=save.disabled=busy||!model;use.disabled=busy||!candidate;
       selects.forEach(control=>{control.disabled=busy;});
     }
     const draft=()=>({...model,arcs:objectModelArcs(model.arcs,selects.map(s=>s.value))});
@@ -4658,13 +4664,16 @@
       render();
     }
     discover.onclick=async()=>{
+      const chosen=[...discoveryTypes.selectedOptions].map(option=>option.value);
+      if(chosen.length>8){message.textContent='Choose at most eight object types for discovery.';return;}
       const t=++turn;busy=true;syncModel();clearCheck();message.textContent='Discovering…';
       try{
-        const r=await (await api(path('discovery'),{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'})).json();
+        const r=await (await api(path('discovery'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(chosen.length?{object_types:chosen}:{})})).json();
         if(!current(t))return;
         drawDraft(r.model,r.arc_measurements);
         const skipped=r.types_not_discovered.map(x=>x.object_type+': '+x.reason);
-        message.textContent='Discovered '+model.types.length+' object type models with '+model.arcs.length+' arcs.'+(skipped.length?' Not discovered: '+skipped.join('; '):'');
+        const omitted=r.types_omitted_over_limit||[];
+        message.textContent='Discovered '+model.types.length+' object type models with '+model.arcs.length+' arcs.'+(skipped.length?' Not discovered: '+skipped.join('; '):'')+(omitted.length?' '+number(omitted.length)+' other retained object types were omitted by the discovery limit; select types to discover them.':'');
       }catch(error){if(current(t))message.textContent=error.message;}
       finally{if(current(t)){busy=false;syncModel();}}
     };
