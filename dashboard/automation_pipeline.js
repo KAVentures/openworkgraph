@@ -1229,6 +1229,9 @@
     };
     card.append(row,resumeSection,auditSection,tools,planningFilters,status,counts,portfolioButton,portfolioHost,budgetScenarioButton,budgetScenarioHost,benefitOverlapButton,benefitOverlapHost,benefitReadinessButton,benefitReadinessHost,dependencyScheduleButton,dependencyScheduleHost,capacityButton,capacityHost,viewCount,list,comparison,detail);
     panel.appendChild(card);
+    const aiHandoffHost=el('div');card.insertBefore(aiHandoffHost,row);
+    import('/ai-opportunity-handoff.js').then(module=>module.mountAiOpportunityHandoff(aiHandoffHost,post,async id=>{await refresh();await show(id);}))
+      .catch(()=>{aiHandoffHost.textContent='AI proposal handoff unavailable.';});
 
     let latestIdeas=[],refreshGeneration=0,resumeGeneration=0,auditGeneration=0,auditPageIndex=0,auditAbort=null;
     let loadedState=null,currentView=null;

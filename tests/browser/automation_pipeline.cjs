@@ -29,6 +29,38 @@ const path=require('node:path');
    await page.locator('#owgPipelineCard').waitFor();
    await page.locator('#owgPipelineCounts').filter({hasText:'No ideas yet.'}).waitFor();
 
+   // External AI proposal: select original evidence, review and add only an unassessed idea.
+   const portable=spawnSync(python,['-c',"import sys,json;sys.path.insert(0,'tests');from test_ai_implementation_review import source,proposal;s=[source(True)];print(json.dumps({'source':s[0],'proposal':proposal(s)}))"],{encoding:'utf8'});
+   assert.equal(portable.status,0,portable.stderr);
+   const fixture=JSON.parse(portable.stdout),handoff=page.locator('#owgAiOpportunityHandoff');
+   await handoff.locator('summary').click();
+   await handoff.getByLabel('Original workflow evidence JSON files (ordered as in the portable packet)',{exact:true}).setInputFiles({name:'evidence.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(fixture.source))});
+   await handoff.getByLabel('External AI proposal JSON',{exact:true}).setInputFiles({name:'proposal.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(fixture.proposal))});
+   await handoff.getByLabel('Human-reviewed opportunity title',{exact:true}).fill('Reviewed AI opportunity');
+   await handoff.getByLabel('Human-reviewed opportunity details',{exact:true}).fill('Resolve business rules before implementation.');
+   const reviewButton=handoff.getByRole('button',{name:'Review exact proposal',exact:true});
+   const createButton=handoff.getByRole('button',{name:'Create unassessed idea',exact:true});
+   await reviewButton.click();
+   await handoff.getByText('Structural review passed.',{exact:false}).waitFor();
+   assert(await createButton.isDisabled());
+   await handoff.getByLabel('I reviewed the original proposal and want to create an unassessed idea only',{exact:true}).check();
+   assert(await createButton.isEnabled());
+   await handoff.getByLabel('Human-reviewed opportunity title',{exact:true}).fill('Reviewed AI opportunity changed');
+   assert(await createButton.isDisabled());
+   await reviewButton.click();
+   await handoff.getByText('Structural review passed.',{exact:false}).waitFor();
+   await handoff.getByLabel('I reviewed the original proposal and want to create an unassessed idea only',{exact:true}).check();
+   await createButton.click();
+   await handoff.getByText('Unassessed idea created:',{exact:false}).waitFor();
+   await page.getByRole('button',{name:'Open idea Reviewed AI opportunity changed',exact:true}).waitFor();
+   const imported=await page.evaluate(async()=>(await(await fetch('/v1/automation-pipeline')).json()).ideas);
+   assert.equal(imported.length,1);assert.equal(imported[0].state,'idea');assert.equal(imported[0].assessment,null);
+   assert.equal(imported[0].execution_authorized,false);assert.equal(imported[0].ai_proposal_handoff.structural_review_only,true);
+   await page.evaluate(async id=>{const r=await fetch('/v1/automation-pipeline/'+id+'/delete',{method:'POST'});if(!r.ok)throw Error(await r.text());},imported[0].idea_id);
+   await handoff.locator('summary').click();
+   await page.locator('#owgPipelineRefresh').click();
+   await page.locator('#owgPipelineCounts').filter({hasText:'No ideas yet.'}).waitFor();
+
    // Exact budget frontier uses real local revisions and is read-only.
    const frontierIds=await page.evaluate(async()=>{
      const base='/v1/automation-pipeline',headers={'Content-Type':'application/json'},ids=[];
