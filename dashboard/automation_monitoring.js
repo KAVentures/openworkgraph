@@ -469,6 +469,10 @@
         searchButton,prev,next,message,list,detailHost,pinsLabel,compareButton,clearPins,compareHost);
       prev.disabled=next.disabled=true;
     }
+    const concurrencyButton=button('Review retained run concurrency','secondary');concurrencyButton.id='owgMonitorConcurrency';arow.appendChild(concurrencyButton);
+    concurrencyButton.onclick=()=>{const dep=pick.value;if(!dep)return;const n=++evidenceGeneration,host=el('div');host.id='owgRunConcurrency';evidenceHost.replaceChildren(host);
+      const active=()=>host.isConnected&&pick.value===dep&&n===evidenceGeneration;
+      import('/automation-run-concurrency.js').then(m=>{if(active())m.mount(host,{api,dep,isCurrent:active});}).catch(()=>{if(active())host.textContent='Concurrency review unavailable; existing monitoring remains available.';});};
     const recoveryButton=button('Review issue sequences and later completions','secondary');
     recoveryButton.id='owgMonitorRecoveryPatterns';arow.appendChild(recoveryButton);
     recoveryButton.onclick=()=>{

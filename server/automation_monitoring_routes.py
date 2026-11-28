@@ -165,6 +165,10 @@ async def compare_run_evidence(request: Request):
     return await _respond(evidence.compare, spec)
 
 
+from .automation_run_concurrency_routes import router as run_concurrency_router
+router.include_router(run_concurrency_router)
+
+
 @router.post("/v1/automation-monitoring/deployments/{deployment_id}/recovery-patterns")
 async def review_recovery_patterns(request: Request, deployment_id: str):
     from . import automation_recovery_patterns as recovery

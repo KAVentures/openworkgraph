@@ -78,6 +78,27 @@ const path=require('node:path');
    await page.locator('#owgMonitorReleasePanel').getByText(/Latest declaration: pilot_reported/).waitFor();
 
 
+   await page.locator('#owgMonitorConcurrency').click();
+   await page.locator('#owgConcurrencyStart').fill(report.runs[0].started_at.slice(0,10));
+   const concurrencyEnd=new Date(Math.max(...report.runs.map(r=>Date.parse(r.finished_at)))+86400000).toISOString().slice(0,10);
+   await page.locator('#owgConcurrencyEnd').fill(concurrencyEnd);
+   await page.locator('#owgConcurrencySpec').fill(report.deployment.workflow_spec_sha256);
+   await page.locator('#owgConcurrencyCapacity').fill('1');
+   await page.locator('#owgConcurrencyView').selectOption('runs');
+   const [concurrencyResponse]=await Promise.all([page.waitForResponse(r=>r.url().endsWith('/run-concurrency')),page.locator('#owgConcurrencyRun').click()]);
+   assert.equal(concurrencyResponse.status(),200,await concurrencyResponse.text());
+   const concurrencyReport=await concurrencyResponse.json();
+   assert.equal(concurrencyReport.summary.measured_intervals,60);
+   assert.equal(concurrencyReport.summary.peak_concurrent_runs,5);
+   assert.equal(concurrencyReport.summary.reported_run_elapsed_sum_us,'18000000000');
+   assert.equal(concurrencyReport.summary.excluded_records,0);
+   assert.equal(concurrencyReport.next_offset,50);
+   await page.locator('#owgConcurrencyStatus').filter({hasText:'Retained concurrency reviewed'}).waitFor();
+   const [nextConcurrency]=await Promise.all([page.waitForResponse(r=>r.url().endsWith('/run-concurrency')),page.getByRole('button',{name:'Next concurrency page',exact:true}).click()]);
+   const nextPage=await nextConcurrency.json();assert.equal(nextPage.review_sha256,concurrencyReport.review_sha256);assert.equal(nextPage.rows.length,10);
+   await page.locator('#owgConcurrencyCapacity').fill('2');
+   assert.ok(await page.locator('#owgConcurrencyDownload').isDisabled());
+   assert.equal(await page.locator('#owgConcurrencyResult').textContent(),'');
    await page.locator('#owgMonitorRecoveryPatterns').click();
    await page.locator('#owgRecoveryStart').fill(report.runs[0].started_at.slice(0,10));
    const recoveryEnd=new Date(Math.max(...report.runs.map(r=>Date.parse(r.started_at)))+86400000).toISOString().slice(0,10);
