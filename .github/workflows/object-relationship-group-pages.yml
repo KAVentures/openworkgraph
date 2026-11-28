@@ -6,6 +6,9 @@ on:
       - 'server/event_log_topology_review*.py'
       - 'server/event_log_relationship_comparison_routes.py'
       - 'shared/ocel_topology.py'
+      - 'shared/ocel_directed_topology.py'
+      - 'tests/test_ocel_directed_topology.py'
+      - 'tests/test_event_log_directed_topology.py'
       - 'dashboard/object_topology_review.*'
       - 'tests/test_ocel_topology.py'
       - 'server/event_log_routes.py'
@@ -21,6 +24,9 @@ on:
       - 'server/event_log_topology_review*.py'
       - 'server/event_log_relationship_comparison_routes.py'
       - 'shared/ocel_topology.py'
+      - 'shared/ocel_directed_topology.py'
+      - 'tests/test_ocel_directed_topology.py'
+      - 'tests/test_event_log_directed_topology.py'
       - 'dashboard/object_topology_review.*'
       - 'tests/test_ocel_topology.py'
       - 'server/event_log_routes.py'
@@ -44,7 +50,7 @@ jobs:
         with:
           node-version: '22'
       - run: python -m pip install -e '.[dev,gateway]'
-      - run: python -m pytest -q tests/test_event_log_object_relationships.py tests/test_ocel_topology.py tests/test_event_log_relationship_comparison.py
+      - run: python -m pytest -q tests/test_event_log_object_relationships.py tests/test_ocel_topology.py tests/test_event_log_relationship_comparison.py tests/test_ocel_directed_topology.py tests/test_event_log_directed_topology.py
       - name: Install browser dependencies
         run: |
           npm install --prefix "$RUNNER_TEMP/owg-browser" playwright@1.64.1 axe-core@4.10.3
