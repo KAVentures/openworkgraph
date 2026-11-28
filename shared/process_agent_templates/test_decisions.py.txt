@@ -420,4 +420,441 @@ class FirstDecisionPlanning(DecisionPlanning):
     asyncSetUp=FirstDecisionExecution.asyncSetUp
 
 
+def dependent_fixture():
+    spec,plan,case,bindings=mixed_fixture()
+    raw=spec['process_model']
+    second=next(t for t in raw['decision_tables'] if t['id']=='second_decision')
+    second['required_decisions']=[{'table_id':'source_decision','fact_path':'/decisions/first'}]
+    for rule in raw['business_rules']:
+        if rule['id'] in ('again_open','again_merged'):
+            rule['predicate']={'conditions':[{'path':'/decisions/first','operator':'eq',
+                'expected':'resolve' if rule['id']=='again_open' else 'hold'}]}
+    spec['process_model']=ProcessModel.model_validate(raw).model_dump()
+    spec['process_model_sha256']=digest(spec['process_model'])
+    spec['decision_table_contract']='openworkgraph.current-source-dependent-decision.v1'
+    bindings['decision_table_checks'][1]['dependency_semantics_reviewed']=True
+    return spec,plan,case,bindings
+
+
+class DependentDecisionContracts(unittest.TestCase):
+    def test_unvisited_prerequisite_closure_and_dependency_output(self):
+        from decision_runtime import check_decision_batch
+        spec,plan,case,bindings=dependent_fixture()
+        requests,missing=decision_bindings(spec,[{'table_id':'second_decision','target_activity_ids':['readback']}],case,bindings)
+        self.assertEqual(missing,[])
+        self.assertEqual([r['table_id'] for r in requests],['source_decision','second_decision'])
+        self.assertEqual(requests[0]['target_activity_ids'],[])
+        receipts={r['table_id']:receipt(r) for r in requests}
+        result=check_decision_batch(spec,requests,receipts)
+        self.assertTrue(all(r['route_matches'] for r in result))
+        self.assertEqual(result[0]['check_purpose'],'prerequisite_output')
+        self.assertEqual(result[1]['selected_target_activity_id'],'readback')
+        self.assertEqual(result[1]['required_decision_table_ids'],['source_decision'])
+        # The case cannot supply or override a dependent output.
+        case['decisions']={'first':'hold'}
+        self.assertEqual(decision_bindings(spec,[{'table_id':'second_decision','target_activity_ids':['readback']}],case,bindings)[0],requests)
+        receipts['source_decision']=None
+        result=check_decision_batch(spec,requests,receipts)
+        self.assertEqual(result[1]['status'],'dependency_unresolved')
+        self.assertFalse(result[1]['route_matches'])
+        receipts['source_decision']=receipt(requests[0],'merged')
+        result=check_decision_batch(spec,requests,receipts)
+        self.assertEqual(result[1]['selected_target_activity_id'],'hold')
+        self.assertFalse(result[1]['route_matches'])
+
+    def test_separate_record_binding_wrong_identity_and_stale_dependency_fail_closed(self):
+        from decision_runtime import check_decision_batch
+        spec,plan,case,bindings=dependent_fixture()
+        case['downstream_record']='owg:r:'+'e'*32
+        bindings['decision_table_checks'][1]['resource_ref_pointer']='/downstream_record'
+        routes=[{'table_id':'second_decision','target_activity_ids':['readback']}]
+        requests,missing=decision_bindings(spec,routes,case,bindings)
+        self.assertEqual(missing,[])
+        self.assertNotEqual(requests[0]['resource_ref'],requests[1]['resource_ref'])
+        now=datetime.now(timezone.utc)
+        receipts={r['table_id']:receipt(r,when=now) for r in requests}
+        self.assertTrue(all(r['route_matches'] for r in check_decision_batch(spec,requests,receipts,now=now)))
+        wrong=dict(receipts);wrong['second_decision']=wrong['source_decision']
+        self.assertEqual(check_decision_batch(spec,requests,wrong,now=now)[1]['status'],'unknown')
+        stale=dict(receipts);stale['source_decision']=receipt(requests[0],when=now-timedelta(seconds=121))
+        checked=check_decision_batch(spec,requests,stale,now=now)
+        self.assertEqual([r['status'] for r in checked],['unknown','dependency_unresolved'])
+
+    def test_unused_table_and_invariant_record_pointers_are_not_resolved(self):
+        from execute import source_rule_bindings
+        spec,plan,case,bindings=dependent_fixture()
+        # A short alternative visits only the first decision, not its dependent.
+        bindings['decision_table_checks'][1]['resource_ref_pointer']='/absent_downstream'
+        requests,missing=decision_bindings(spec,[{'table_id':'source_decision','target_activity_ids':['hold']}],case,bindings)
+        self.assertEqual(missing,[])
+        self.assertEqual([r['table_id'] for r in requests],['source_decision'])
+        with self.assertRaises(ImplementationError):
+            decision_bindings(spec,[{'table_id':'second_decision','target_activity_ids':['readback']}],case,bindings)
+        raw=spec['process_model']
+        next(e for e in raw['transitions'] if (e['source'],e['target'])==('resolve','choose_again'))['rule_id']='open_rule'
+        spec['process_model_sha256']=digest(raw)
+        bindings['source_rule_checks']=[{'rule_id':'open_rule','source_type':'github_pull_request',
+            'resource_ref_pointer':'/absent_invariant','mode':'invariant_before_each_action',
+            'record_semantics_reviewed':True,'non_atomic_reads_reviewed':True}]
+        checks=check_plan({'revision':spec['revision'],'content_sha256':spec['content_sha256'],
+            'activity_ids':['choose','hold']},spec)
+        bound,unbound=source_rule_bindings(spec,checks,case,bindings)
+        self.assertEqual(bound,[])
+        self.assertFalse(unbound)
+        checks=check_plan(plan,spec)
+        with self.assertRaises(ImplementationError):
+            source_rule_bindings(spec,checks,case,bindings)
+        # Duplicate declarations are still invalid even for unused routes.
+        bindings['decision_table_checks'].append(deepcopy(bindings['decision_table_checks'][1]))
+        with self.assertRaises(ImplementationError):
+            decision_bindings(spec,[{'table_id':'source_decision','target_activity_ids':['hold']}],case,bindings)
+
+    def test_missing_prerequisite_binding_and_explicit_review(self):
+        spec,plan,case,bindings=dependent_fixture()
+        routes=[{'table_id':'second_decision','target_activity_ids':['readback']}]
+        bindings['decision_table_checks'].pop(0)
+        requests,missing=decision_bindings(spec,routes,case,bindings)
+        self.assertEqual(missing,['source_decision'])
+        from decision_runtime import check_decision_batch
+        result=check_decision_batch(spec,requests,{r['table_id']:receipt(r) for r in requests})
+        self.assertEqual(result[0]['status'],'dependency_unresolved')
+        bindings['decision_table_checks'][0]['dependency_semantics_reviewed']=False
+        with self.assertRaises(ImplementationError):decision_bindings(spec,routes,case,bindings)
+
+    def test_source_namespace_and_legacy_contract_refused(self):
+        spec,plan,case,bindings=dependent_fixture()
+        spec['decision_table_contract']='openworkgraph.current-source-ordered-decision.v1'
+        with self.assertRaises(ValueError):validate_spec(spec)
+        spec,plan,case,bindings=dependent_fixture()
+        spec['process_model']['decision_tables'][1]['required_decisions'][0]['fact_path']='/source/state'
+        with self.assertRaises(ImplementationError):decision_bindings(spec,[{'table_id':'second_decision','target_activity_ids':['readback']}],case,bindings)
+
+
+class DependentDecisionExecution(unittest.IsolatedAsyncioTestCase):
+    source=DecisionExecution.source
+    outcomes=DecisionExecution.outcomes
+    run_case=DecisionExecution.run_case
+
+    async def asyncSetUp(self):
+        await DecisionExecution.asyncSetUp(self)
+        self.data=dependent_fixture()
+
+    async def test_dependency_runtime_success_and_minimized_journal(self):
+        result=await self.run_case()
+        self.assertTrue(result['declared_route_checks_satisfied'])
+        self.assertEqual(len(self.reads),5)  # shared exact reference once per checkpoint
+        self.assertEqual([c[0] for c in self.tools.calls],['read_case','resolve_case','read_case'])
+        from monitor import report,read_journal
+        journal=read_journal(next(Path(self.folder.name).glob('*.jsonl')))
+        self.assertEqual(report(self.data[0],journal,'Dependent runtime')['runs'][0]['status'],'succeeded')
+        tampered=deepcopy(journal)
+        row=next(r for r in tampered if r['phase']=='decision_table_checked' and r['table_id']=='second_decision')
+        row['required_decision_table_ids']=[]
+        with self.assertRaises(ImplementationError):report(self.data[0],tampered,'Tampered dependency journal')
+        omitted=deepcopy(journal)
+        omitted.pop(next(i for i,r in enumerate(omitted) if r['phase']=='decision_table_checked' and r['table_id']=='second_decision'))
+        with self.assertRaises(ImplementationError):report(self.data[0],omitted,'Missing checkpoint table')
+        omitted=deepcopy(journal)
+        first_batch=[i for i,r in enumerate(omitted) if r['phase']=='decision_table_checked' and r['checkpoint_number']==1]
+        for i in reversed(first_batch):omitted.pop(i)
+        with self.assertRaises(ImplementationError):report(self.data[0],omitted,'Missing whole checkpoint')
+
+
+    def add_invariants(self):
+        spec,plan,case,bindings=self.data
+        raw=spec['process_model']
+        for ident,edge in [('invariant_a',('resolve','choose_again')),
+                           ('invariant_b',('readback','done'))]:
+            raw['business_rules'].append({'id':ident,'text':'Reviewed invariant','user_confirmed':True,
+                'predicate':{'conditions':[{'path':'/source/state','operator':'eq','expected':'open'}]}})
+            next(e for e in raw['transitions'] if (e['source'],e['target'])==edge)['rule_id']=ident
+        spec['process_model']=ProcessModel.model_validate(raw).model_dump()
+        spec['process_model_sha256']=digest(spec['process_model'])
+        bindings['source_rule_checks']=[{'rule_id':ident,'source_type':'github_pull_request',
+            'resource_ref_pointer':'/record_ref','mode':'invariant_before_each_action',
+            'record_semantics_reviewed':True,'non_atomic_reads_reviewed':True}
+            for ident in ('invariant_a','invariant_b')]
+
+    async def test_monitor_requires_all_ordinary_invariants_and_decisions(self):
+        self.add_invariants()
+        result=await self.run_case()
+        self.assertTrue(result['declared_route_checks_satisfied'])
+        from monitor import report,read_journal
+        records=read_journal(next(Path(self.folder.name).glob('*.jsonl')))
+        self.assertEqual(records[0]['declared_source_rule_ids'],['invariant_a','invariant_b'])
+        checks=[r for r in records if r['phase']=='source_rule_checked']
+        self.assertEqual(len(checks),10)
+        self.assertEqual(len(self.reads),5) # one exact record for both rules and both tables
+        for purpose,attempt in [('initial',None),('precondition',1),('action',1),('action',2),('completion',None)]:
+            same=[r for r in records if r['phase'] in {'source_rule_checked','decision_table_checked'}
+                and (r['checkpoint_purpose'],r['checkpoint_attempt'])==(purpose,attempt)]
+            self.assertEqual(len(same),4)
+            self.assertEqual(len({r['checkpoint_checked_at'] for r in same}),1)
+        self.assertEqual([r['rule_id'] for r in checks[:2]],['invariant_a','invariant_b'])
+        self.assertEqual(report(self.data[0],records,'Complete mixed journal')['runs'][0]['status'],'succeeded')
+        for purpose in ('initial','precondition','action','completion'):
+            missing=deepcopy(records)
+            missing.pop(next(i for i,r in enumerate(missing) if r['phase']=='source_rule_checked'
+                and r['checkpoint_purpose']==purpose))
+            with self.assertRaises(ImplementationError):
+                report(self.data[0],missing,'Missing ordinary invariant')
+        wrong=deepcopy(records)
+        wrong[0]['declared_source_rule_ids']=[]
+        with self.assertRaises(ImplementationError):
+            report(self.data[0],wrong,'Omitted declaration')
+        wrong=deepcopy(records)
+        row=next(r for r in wrong if r['phase']=='decision_table_checked')
+        row['checkpoint_checked_at']='2000-01-01T00:00:00+00:00'
+        with self.assertRaises(ImplementationError):
+            report(self.data[0],wrong,'Different checkpoint clock')
+        wrong=deepcopy(records)
+        row=next(r for r in wrong if r['phase']=='decision_table_checked')
+        row['checked_on_utc']='2000-01-01'
+        with self.assertRaises(ImplementationError):
+            report(self.data[0],wrong,'Different policy date')
+
+
+    async def test_invariant_drift_before_precondition_stops_even_the_precondition_read(self):
+        self.add_invariants()
+        original=self.source
+        async def change(base,token,request):
+            value=await original(base,token,request)
+            if request.get('rule_id')=='invariant_a' and len(self.reads)>1:
+                return receipt(request,'merged')
+            return value
+        self.source=change
+        result=await self.run_case()
+        self.assertFalse(result['declared_route_checks_satisfied'])
+        self.assertFalse(self.tools.calls)
+
+    async def test_shared_receipt_cannot_mix_incompatible_rule_and_table_states(self):
+        self.add_invariants()
+        spec,plan,case,bindings=self.data
+        # The rule now requires the opposite state from the decision route.
+        rule=next(r for r in spec['process_model']['business_rules'] if r['id']=='invariant_a')
+        rule['predicate']['conditions'][0]['expected']='merged'
+        spec['process_model_sha256']=digest(spec['process_model'])
+        original=self.source
+        async def alternating(base,token,request):
+            value=await original(base,token,request)
+            return receipt(request,'merged' if request.get('rule_id')=='invariant_a' else 'open')
+        self.source=alternating
+        result=await self.run_case()
+        self.assertTrue(result['stopped_before_tools'])
+        self.assertFalse(self.tools.calls)
+        self.assertEqual(len(self.reads),1)
+
+    async def test_separate_record_staleness_at_shared_boundary_stops_tools(self):
+        self.add_invariants()
+        self.data[2]['other_ref']='owg:r:'+'e'*32
+        self.data[3]['decision_table_checks'][1]['resource_ref_pointer']='/other_ref'
+        original=self.source
+        async def stale(base,token,request):
+            value=await original(base,token,request)
+            if request['resource_ref']==self.data[2]['record_ref']:
+                return receipt(request,when=datetime.now(timezone.utc)-timedelta(seconds=121))
+            return value
+        self.source=stale
+        result=await self.run_case()
+        self.assertTrue(result['stopped_before_tools'])
+        self.assertEqual(len(self.reads),2)
+        self.assertFalse(self.tools.calls)
+
+    async def test_monitor_refuses_route_and_checkpoint_scope_tampering(self):
+        await self.run_case()
+        from monitor import report,read_journal
+        records=read_journal(next(Path(self.folder.name).glob('*.jsonl')))
+        variants=[]
+        # A self-consistent empty claimed closure must not hide visited decisions.
+        empty=deepcopy(records)
+        empty[0]['dependent_decision_routes']=[]
+        empty=[r for r in empty if r['phase']!='decision_table_checked']
+        variants.append(empty)
+        # Remove the initial checkpoint and renumber all remaining checks.
+        omitted=[deepcopy(r) for r in records if not
+            (r['phase']=='decision_table_checked' and r['checkpoint_purpose']=='initial')]
+        for r in omitted:
+            if r['phase']=='decision_table_checked':r['checkpoint_number']-=1
+        variants.append(omitted)
+        # Claim a shorter route or omit a declared business operation.
+        wrong=deepcopy(records);wrong[0]['declared_activity_ids']=['choose','hold']
+        variants.append(wrong)
+        wrong=deepcopy(records);wrong[0]['declared_precondition_attempts']=[]
+        variants.append(wrong)
+        wrong=deepcopy(records)
+        row=next(r for r in wrong if r['phase']=='decision_table_checked' and r['checkpoint_purpose']=='action')
+        row['checkpoint_attempt']=80
+        variants.append(wrong)
+        wrong=deepcopy(records)
+        row=next(r for r in wrong if r['phase']=='attempt_pending')
+        row['activity_id']='readback'
+        variants.append(wrong)
+        for variant in variants:
+            with self.assertRaises(ImplementationError):
+                report(self.data[0],variant,'Modified dependency journal')
+
+    async def test_missing_alternative_record_does_not_abort_read_only_planning(self):
+        from plan_sources import propose_with_sources
+        from evaluate_sources import evaluate_current_sources
+        from execute import reference
+        spec,plan,case,bindings=self.data
+        bindings['decision_table_checks'][1]['resource_ref_pointer']='/downstream_record'
+        self.state='merged'
+        report=await propose_with_sources(case,bindings,spec=spec,deterministic=True,
+            source_reads_confirmed=True,source_state_reader=self.source)
+        self.assertEqual(report['plan']['status'],'proposal')
+        self.assertEqual(report['plan']['activity_ids'],['choose','hold'])
+        self.assertEqual(report['source_planning']['unbound_decision_table_ids'],['second_decision'])
+        self.assertEqual(report['source_planning']['source_receipt_request_count'],1)
+        self.assertFalse(report['execution_permitted'])
+        suite={'format':'openworkgraph.reviewed-shadow-cases.v1','process_reference':reference(spec),
+            'spec_sha256':digest(spec),'reviewed_by_customer':True,'case_inputs_authorized':True,
+            'cases':[{'id':'case_1','category':'normal','input':case,'expected':{'status':'proposal',
+                'accepted_routes':[['choose','hold']],'review_confirmed':True}}]}
+        reviewed,summary=await evaluate_current_sources(spec,suite,bindings,deterministic=True,
+            source_reads_confirmed=True,source_state_reader=self.source)
+        self.assertEqual(reviewed['matching_case_count'],1)
+        self.assertEqual(summary['source_receipt_request_count'],1)
+        # The same missing input is blocking when its dependent route is viable.
+        self.state='open'
+        report=await propose_with_sources(case,bindings,spec=spec,deterministic=True,
+            source_reads_confirmed=True,source_state_reader=self.source)
+        self.assertEqual(report['plan']['status'],'needs_clarification')
+        self.assertFalse(self.tools.calls)
+        with self.assertRaises(ImplementationError):
+            prepare(spec,plan,case,bindings)
+        # Missing is not the same as a malformed or fabricated record reference.
+        case['downstream_record']='invalid-record'
+        with self.assertRaises(ImplementationError):
+            await propose_with_sources(case,bindings,spec=spec,deterministic=True,
+                source_reads_confirmed=True,source_state_reader=self.source)
+        case.pop('downstream_record')
+        bindings['decision_table_checks'][1]['resource_ref_pointer']='/bad~9pointer'
+        with self.assertRaises(ImplementationError):
+            await propose_with_sources(case,bindings,spec=spec,deterministic=True,
+                source_reads_confirmed=True,source_state_reader=self.source)
+
+    async def test_model_free_dependent_route_proposal(self):
+        import sys
+        from plan_sources import propose_with_sources
+        spec,plan,case,bindings=self.data
+        with patch.dict(sys.modules,{'agent':None,'agents':None}):
+            result=await propose_with_sources(case,bindings,spec=spec,deterministic=True,
+                source_reads_confirmed=True,source_state_reader=self.source)
+        self.assertEqual(result['plan']['status'],'proposal')
+        self.assertEqual(result['plan']['activity_ids'],plan['activity_ids'])
+        self.assertEqual(result['source_planning']['source_receipt_request_count'],1)
+        self.assertFalse(result['source_planning']['model_invoked'])
+        self.assertFalse(self.tools.calls)
+        self.mutation={'source_state_verified':False}
+        result=await propose_with_sources(case,bindings,spec=spec,deterministic=True,
+            source_reads_confirmed=True,source_state_reader=self.source)
+        self.assertEqual(result['plan']['status'],'needs_clarification')
+        self.assertFalse(self.tools.calls)
+
+    async def test_dependency_changes_after_precondition_stop_write(self):
+        original=self.tools.call_tool
+        async def change(*args):
+            result=await original(*args)
+            self.state='merged'
+            return result
+        self.tools.call_tool=change
+        result=await self.run_case()
+        self.assertEqual([c[0] for c in self.tools.calls],['read_case'])
+        self.assertFalse(result['declared_route_checks_satisfied'])
+
+
+@unittest.skipUnless(SDK_AVAILABLE,'Install requirements.txt for dependency-aware SDK checks')
+class DependentDecisionPlanning(unittest.IsolatedAsyncioTestCase):
+    source=DecisionExecution.source
+    async def asyncSetUp(self):
+        await DecisionExecution.asyncSetUp(self)
+        self.data=dependent_fixture()
+
+    async def test_actual_sdk_and_shadow_suite_with_dependencies(self):
+        from evaluate_sources import evaluate_current_sources
+        from test_agent_sdk import OfflineModel
+        from execute import reference
+        spec,plan,case,bindings=self.data
+        case['text']='SYNTHETIC_UNTRUSTED_INSTRUCTION';plan['missing_business_inputs']=[]
+        suite={'format':'openworkgraph.reviewed-shadow-cases.v1','process_reference':reference(spec),
+            'spec_sha256':digest(spec),'reviewed_by_customer':True,'case_inputs_authorized':True,
+            'cases':[{'id':'case_1','category':'normal','input':case,'expected':{'status':'proposal',
+                'accepted_routes':[plan['activity_ids']],'review_confirmed':True}}]}
+        report,summary=await evaluate_current_sources(spec,suite,bindings,model=OfflineModel(plan),
+            source_reads_confirmed=True,share_rule_checks_with_model_confirmed=True,source_state_reader=self.source)
+        self.assertEqual(report['matching_case_count'],1)
+        self.assertEqual(summary['source_receipt_request_count'],1)
+        self.assertFalse(self.tools.calls)
+
+
+class DeclaredDependencyScenarioCases(unittest.TestCase):
+    def test_dependency_review_uses_declared_facts_and_effective_dates(self):
+        from review_facts import review_scenarios
+        from execute import reference
+        spec,plan,case,bindings=dependent_fixture()
+        raw=spec['process_model']
+        # Test real numeric business facts, outside the live-source contract.
+        for rule in raw['business_rules']:
+            if rule['id'] in ('open_rule','merged_rule'):
+                rule['predicate']={'conditions':[{'path':'/credit/score',
+                    'operator':'gte' if rule['id']=='open_rule' else 'lt','expected':700}]}
+        spec['process_model']=ProcessModel.model_validate(raw).model_dump()
+        spec['process_model_sha256']=digest(spec['process_model'])
+        suite={'format':'openworkgraph.reviewed-shadow-cases.v1','process_reference':reference(spec),
+            'spec_sha256':digest(spec),'reviewed_by_customer':True,'case_inputs_authorized':True,
+            'cases':[]}
+        for i,(facts,path) in enumerate([({'credit':{'score':750}},plan['activity_ids']),
+                ({'credit':{'score':650}},['choose','hold']),({},None),
+                ({'credit':{'score':750},'decisions':{'first':'hold'}},None)],1):
+            suite['cases'].append({'id':f'case_{i}','category':'normal' if path else 'missing_facts',
+                'input':facts,'expected':{'status':'proposal' if path else 'needs_clarification',
+                    'accepted_routes':[path] if path else [],'review_confirmed':True}})
+        report=review_scenarios(spec,suite,as_of_date='2026-06-01')
+        self.assertEqual(report['matching_case_count'],4)
+        coverage=report['scenario_coverage']
+        tables={t['table_id']:t for t in coverage['decision_tables']}
+        self.assertEqual(tables['second_decision']['evaluated_cases'],4)
+        self.assertEqual(tables['second_decision']['unique_route_visit_cases'],1)
+        unvisited=next(r for r in tables['second_decision']['rows'] if r['target_activity_id']=='hold')
+        self.assertEqual(unvisited['selected_cases'],1)
+        self.assertEqual(unvisited['reviewed_matching_route_cases'],0)
+        self.assertFalse(coverage['all_declared_items_have_reviewed_matching_support'])
+        rows=report['cases']
+        self.assertEqual(rows[0]['search_status'],'unique_supported_route')
+        self.assertEqual(rows[2]['search_status'],'unresolved_routes')
+        self.assertEqual(next(r for r in rows[3]['decision_checks'] if r['table_id']=='second_decision')['status'],
+            'dependency_fact_conflict')
+        expired=review_scenarios(spec,suite,as_of_date='2100-01-01')
+        self.assertEqual(expired['matching_case_count'],2)
+        self.assertTrue(expired['review_required'])
+        self.assertFalse(expired['execution_plan_created'])
+        from review_facts import review_effective_period
+        from unittest.mock import patch
+        for table in spec['process_model']['decision_tables']:
+            table['effective_from']='2026-05-01' if table['id']=='source_decision' else '2026-06-01'
+            table['effective_until']='2026-07-01'
+        spec['process_model_sha256']=digest(spec['process_model'])
+        suite['spec_sha256']=digest(spec)
+        period=review_effective_period(spec,suite,start='2026-04-01',end='2026-08-01')
+        intervals=period['intervals']
+        self.assertEqual([(r['start'],r['end_exclusive']) for r in intervals],
+            [('2026-04-01','2026-05-01'),('2026-05-01','2026-06-01'),
+             ('2026-06-01','2026-07-01'),('2026-07-01','2026-08-01')])
+        self.assertEqual([r['cases'][0]['matches_fixed_expectation'] for r in intervals],
+            [False,False,True,False])
+        self.assertEqual(intervals[2]['boundary_changes'],[
+            {'table_id':'second_decision','kind':'effective_start'}])
+        self.assertEqual(len(intervals[3]['boundary_changes']),2)
+        self.assertTrue(period['review_required'])
+        self.assertTrue(period['all_interval_searches_complete'])
+        self.assertFalse(period['independent_date_specific_expectations_verified'])
+        self.assertNotIn('750',json.dumps(intervals))
+        with patch('review_facts.MAX_BATCH_WORK',1):
+            bounded=review_effective_period(spec,suite,start='2026-04-01',end='2026-08-01')
+        self.assertFalse(bounded['all_interval_searches_complete'])
+        self.assertTrue(bounded['review_required'])
+        self.assertEqual(bounded['intervals'][-1]['counts']['unresolved'],4)
+
+
 if __name__=='__main__':unittest.main()

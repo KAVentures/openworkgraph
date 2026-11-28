@@ -121,21 +121,56 @@ def test_case_checks_use_dependency_order():
     assert second['approval_table']['proposed_branch_agrees'] is False
 
 
-def test_dependencies_survive_bpmn_round_trip_and_block_generated_projects():
+def test_dependencies_survive_bpmn_round_trip_and_generate_disabled_runtime_contract():
     from shared.process_bpmn_import import import_bpmn
     from shared.process_agent_project import build_runtime_spec
     packet = {'workflow_id': 'loan', 'revision': 1, 'content_sha256': 'b' * 64, 'process_model': model().model_dump()}
     imported = ProcessModel.model_validate(import_bpmn(process_bpmn(packet).encode())['process_model'])
     [approval] = [t for t in imported.decision_tables if t.id == 'approval_table']
     assert approval.required_decisions[0].table_id == 'credit_table'
-    with pytest.raises(ValueError, match='dependent decision'):
-        build_runtime_spec(dict(deepcopy(packet), format='openworkgraph.versioned-process-export.v1',
-                                execution_authorization=False))
+    from io import BytesIO
+    from zipfile import ZipFile
+    import json
+    from shared.process_agent_project import build_runtime_project
+    saved=dict(deepcopy(packet),format='openworkgraph.versioned-process-export.v1',execution_authorization=False)
+    spec=build_runtime_spec(saved)
+    assert spec['decision_table_contract']=='openworkgraph.current-source-dependent-decision.v1'
+    assert spec['execution_authorization'] is False and spec['live_business_tools']==[]
+    with ZipFile(BytesIO(build_runtime_project(saved))) as archive:
+        bindings=json.loads(archive.read('tool-bindings.example.json'))
+        assert bindings['enabled'] is False
+        rows={r['table_id']:r for r in bindings['decision_table_checks']}
+        assert rows['approval_table']['dependency_semantics_reviewed'] is False
+        assert 'dependency_semantics_reviewed' not in rows['credit_table']
+        assert 'def check_decision_batch' in archive.read('decision_runtime.py').decode()
+        assert 'DependentDecisionExecution' in archive.read('test_decisions.py').decode()
 
 
-def test_dmn_export_refuses_dependencies_instead_of_dropping_them():
-    from shared.process_dmn import DMNError, export_dmn
-    packet = {'workflow_id': 'loan', 'revision': 1, 'content_sha256': 'b' * 64, 'process_model': model().model_dump()}
-    with pytest.raises(DMNError, match='dependencies'):
-        export_dmn(packet)
-    assert 'decisionTable' in export_dmn(dict(packet, process_model=model(dependency=False).model_dump()))
+
+def test_dependent_dmn_round_trip_preserves_paths_and_evaluated_targets():
+    from shared.process_dmn import export_dmn, import_dmn_batch, inspect_dmn
+    original=model()
+    packet={'workflow_id':'loan','revision':1,'content_sha256':'b'*64,'process_model':original.model_dump()}
+    raw=export_dmn(packet).encode()
+    inspection=inspect_dmn(raw)
+    assert inspection['output_convention']=='activity_id'
+    assert inspection['decisions'][0]['required_decision_indices']==[1]
+    assert not any(row['unsupported_reason'] for row in inspection['decisions'])
+    result=import_dmn_batch(raw,packet['process_model'],
+        [{'index':0,'decision_activity_id':'approval'},{'index':1,'decision_activity_id':'credit'}],
+        document_sha256=inspection['document_sha256'],effective_from='2026-01-01')
+    proposed=result['proposed_process_model']
+    assert [p['index'] for p in result['proposals']]==[1,0]
+    assert not any(t['user_confirmed'] for t in proposed['decision_tables'])
+    assert not any(r['user_confirmed'] for r in proposed['business_rules'])
+    approval=next(t for t in proposed['decision_tables'] if t['id']=='approval_table')
+    assert approval['required_decisions']==[{'table_id':'credit_table','fact_path':'/decisions/credit'}]
+    for t in proposed['decision_tables']:t['user_confirmed']=True
+    for r in proposed['business_rules']:r['user_confirmed']=True
+    restored=ProcessModel.model_validate(proposed)
+    for facts in ({'score':720},{'score':650},{'score':700},{},{'score':'bad'},
+                  {'score':720,'decisions':{'credit':'poor'}}):
+        def outputs(m):
+            return {r['table_id']:(r['status'],r['selected_target_activity_id'])
+                    for r in evaluate_decisions(m,facts,'2026-06-01')}
+        assert outputs(original)==outputs(restored)

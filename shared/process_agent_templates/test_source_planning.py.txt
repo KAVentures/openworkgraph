@@ -6,6 +6,7 @@ import os
 import unittest
 from unittest.mock import patch
 
+from test_execution import SOURCE_RULE_DEPENDENCIES
 from execute import ImplementationError,digest
 from plan_sources import propose_with_sources
 try:
@@ -200,5 +201,71 @@ class SourcePlanningCases(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(ImplementationError):await self.run_plan(catalog_reader=denied)
         self.assertEqual(len(self.reads),reads);self.assertEqual(len(self.model_calls),models)
 
+
+@unittest.skipUnless(SOURCE_RULE_DEPENDENCIES,'Install requirements.txt for structured fact evaluation')
+class DeterministicSourceRoutes(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        from test_execution import fixture,ImplementationCases
+        helper=ImplementationCases();helper.data=fixture()
+        self.spec,self.plan,self.case,self.bindings,_=helper.invariant_fixture()
+        self.helper=helper;self.reads=[];self.now=datetime.now(timezone.utc)
+        env=patch.dict(os.environ,{'OWG_EXECUTION_SOURCE_READ_TOKEN':'SYNTHETIC_SOURCE_SECRET'})
+        env.start();self.addCleanup(env.stop)
+
+    async def source(self,base,token,request):
+        self.reads.append(deepcopy(request))
+        return self.helper.invariant_receipt(request)
+
+    async def test_unique_route_no_model_sharing_or_sdk_invocation(self):
+        import sys
+        with patch.dict(sys.modules,{'agent':None,'agents':None}):
+            report=await propose_with_sources(self.case,self.bindings,spec=self.spec,
+                deterministic=True,source_reads_confirmed=True,source_state_reader=self.source,
+                clock=lambda:self.now)
+        self.assertEqual(report['plan']['status'],'proposal')
+        self.assertEqual(report['plan']['activity_ids'],self.plan['activity_ids'])
+        self.assertFalse(report['source_planning']['model_invoked'])
+        self.assertFalse(report['source_planning']['model_received_rule_check_results'])
+        self.assertFalse(report['execution_permitted'])
+        self.assertEqual(len(self.reads),1)
+        self.assertNotIn(self.case['approved_record'],json.dumps(report))
+
+    async def test_consent_and_stale_alternatives(self):
+        with self.assertRaises(ImplementationError):
+            await propose_with_sources(self.case,self.bindings,spec=self.spec,deterministic=True,
+                                       source_state_reader=self.source)
+        self.assertFalse(self.reads)
+        report=await propose_with_sources(self.case,self.bindings,spec=self.spec,deterministic=True,
+            source_reads_confirmed=True,source_state_reader=self.source,
+            clock=lambda:self.now+timedelta(seconds=121))
+        self.assertEqual(report['plan']['status'],'needs_clarification')
+
+
+@unittest.skipUnless(SOURCE_RULE_DEPENDENCIES,'Install requirements.txt for structured fact evaluation')
+class BoundedRouteSearch(unittest.TestCase):
+    def test_supported_unresolved_and_excluded_alternatives(self):
+        from route_candidates import _search
+        from test_execution import fixture,ImplementationCases
+        helper=ImplementationCases();helper.data=fixture()
+        spec,plan,case,bindings,_=helper.invariant_fixture()
+        raw=spec['process_model']
+        raw['activities'].append({'id':'hold','label':'Hold','kind':'end','implementation':'unmapped'})
+        raw['terminal_activity_ids'].append('hold')
+        raw['transitions'].append({'source':'resolve','target':'hold','rule_id':'open_source'})
+        raw['business_rules'].append({'id':'open_source','text':'Review open source','user_confirmed':True,
+            'predicate':{'conditions':[{'path':'/source/state','operator':'eq','expected':'open'}]}})
+        spec['process_model_sha256']=digest(raw)
+        def search(a,b,**limits):
+            return _search(spec,[{'rule_id':'current_source','status':a},{'rule_id':'open_source','status':b}],[],**limits)
+        one=search('matched','not_matched')
+        self.assertEqual(one['status'],'unique_supported_route')
+        self.assertEqual(one['unique_activity_ids'],plan['activity_ids'])
+        self.assertEqual(search('matched','unknown')['status'],'unresolved_routes')
+        self.assertEqual(search('matched','matched')['status'],'competing_supported_routes')
+        self.assertEqual(search('not_matched','not_matched')['status'],'no_supported_route')
+        self.assertEqual(search('matched','not_matched',max_work=1)['status'],'search_incomplete')
+        self.assertEqual(search('matched','not_matched',max_steps=1)['status'],'search_incomplete')
+        self.assertEqual(search('matched','not_matched',max_states=1)['status'],'search_incomplete')
+        self.assertFalse(one['execution_authorized'])
 
 if __name__=='__main__':unittest.main()

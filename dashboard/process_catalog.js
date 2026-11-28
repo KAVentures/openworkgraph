@@ -1359,6 +1359,8 @@
           const row=el('div');row.className='row';
           const title='Table '+(item.index+1)+(item.name?' · '+item.name:'');
           row.append(el('span',title+' · '+item.hit_policy+' · '+item.rule_count+' rules'));
+          if(item.required_decision_indices?.length)row.append(el('span','Requires table(s): '+item.required_decision_indices.map(i=>i+1).join(', ')));
+
           if(item.unsupported_reason)row.append(el('span',item.unsupported_reason));
           else{
             const select=el('select');
@@ -1387,6 +1389,13 @@
       if(new Set(assignments.map(item=>item.decision_activity_id)).size!==assignments.length){
         output.textContent='Choose a different design decision for each table.';return;
       }
+      const mappedIndices=new Set(assignments.map(a=>a.index));
+      for(const item of inspection.decisions){
+        if(mappedIndices.has(item.index)&&item.required_decision_indices?.some(i=>!mappedIndices.has(i))){
+          output.textContent='Table '+(item.index+1)+' requires all of its referenced decision tables to be mapped.';
+          return;
+        }
+      }
       output.textContent='Checking the selected tables…';
       try{
         const result=await send('batch',{workflow_id:selected.workflow_id,revision:String(selected.revision),
@@ -1399,8 +1408,15 @@
           const decision=decisions.find(activity=>activity.id===item.decision_activity_id);
           for(const rule of item.proposed_rules)list.append(el('li',rule.text));
           summary.append(el('summary',decision.label+' · '+item.hit_policy+' · '+item.proposed_rules.length+' unconfirmed rules'),list);
+          if(item.required_decisions?.length){
+            const deps=el('ul');
+            for(const dep of item.required_decisions)deps.append(el('li','Required decision '+dep.table_id+' → '+dep.fact_path));
+            summary.append(el('p','Imported dependency bindings (review required)'),deps);
+          }
+
           proposal.append(summary);
         }
+        if(result.downstream_review_invalidated?.length)proposal.append(el('p','Review cleared for dependent tables: '+result.downstream_review_invalidated.join(', ')+'. Reconfirm them after reviewing the changed prerequisites.'));
         proposal.append(button('Open proposal in editor',()=>{
           if(!current()||!replaceDraft())return;
           model=copy(result.proposed_process_model);reviewed=false;renderEditor();

@@ -76,6 +76,21 @@ def pointer(document, path):
     return result
 
 
+def resolve_source_record(case, path, *, allow_missing=False):
+    """Validate declaration syntax even if its case record is not available."""
+    if (not isinstance(path,str) or (path and not path.startswith('/')) or len(path)>500
+        or re.search(r'~(?![01])',path)):
+        raise ImplementationError('Source record bindings require bounded JSON Pointers')
+    try:
+        ref=pointer(case,path)
+    except ImplementationError:
+        if allow_missing:return None
+        raise
+    if not isinstance(ref,str) or re.fullmatch(r'owg:r:[a-f0-9]{32}',ref) is None:
+        raise ImplementationError('Source bindings require an exact observed record reference')
+    return ref
+
+
 def endpoint(value, *, source=False):
     if not isinstance(value, str) or len(value) > 2048 or any(ord(c) < 32 for c in value):
         raise ImplementationError('Configure the customer tool and source endpoints before execution')
@@ -132,7 +147,7 @@ def predicate_value(row, case):
     return row.get('result_equals')
 
 
-def source_rule_bindings(spec,checks,case,bindings):
+def source_rule_bindings(spec,checks,case,bindings,*,allow_missing=False):
     """Explicit customer-reviewed current-state invariants, never inferred grants."""
     rows=bindings.get('source_rule_checks',[])
     if not isinstance(rows,list) or len(rows)>40:
@@ -141,14 +156,18 @@ def source_rule_bindings(spec,checks,case,bindings):
     mapped={}
     table_rules={row['rule_id'] for table in spec['process_model'].get('decision_tables',[]) for row in table['rows']}
     required=(set(checks.get('unevaluated_structured_rule_ids',[]))-table_rules) | set(checks.get('non_table_structured_rule_ids',[]))
+    decision_nodes={table['decision_activity_id'] for table in spec['process_model'].get('decision_tables',[])}
+    non_table_rules={edge.get('rule_id') for edge in spec['process_model']['transitions'] if edge['source'] not in decision_nodes}
+    seen=set()
     keys={'rule_id','source_type','resource_ref_pointer','mode','record_semantics_reviewed','non_atomic_reads_reviewed'}
     for row in rows:
         if (not isinstance(row,dict) or set(row)!=keys or not isinstance(row.get('rule_id'),str)
-            or row['rule_id'] not in rules or row['rule_id'] in mapped or (row['rule_id'] in table_rules and row['rule_id'] not in required)
+            or row['rule_id'] not in rules or row['rule_id'] in seen or (row['rule_id'] in table_rules and row['rule_id'] not in non_table_rules)
             or not isinstance(row.get('source_type'),str) or row['source_type'] not in SOURCE_TYPES
             or row.get('mode')!='invariant_before_each_action'
             or row.get('record_semantics_reviewed') is not True or row.get('non_atomic_reads_reviewed') is not True):
             raise ImplementationError('Each source rule needs an exact reviewed current-state invariant binding')
+        seen.add(row['rule_id'])
         rule=rules[row['rule_id']]
         if rule.get('user_confirmed') is not True or not rule.get('predicate'):
             raise ImplementationError('Only confirmed structured rules can use source bindings')
@@ -157,9 +176,10 @@ def source_rule_bindings(spec,checks,case,bindings):
         except ValueError:raise ImplementationError('Invalid source rule predicate') from None
         if any(condition.path not in SOURCE_PATHS for condition in predicate.conditions):
             raise ImplementationError('Only supported current-source fact paths can use this implementation')
-        ref=pointer(case,row['resource_ref_pointer'])
-        if not isinstance(ref,str) or re.fullmatch(r'owg:r:[a-f0-9]{32}',ref) is None:
-            raise ImplementationError('Source rule bindings require a selected observed record reference')
+        if row['rule_id'] not in required:
+            continue
+        ref=resolve_source_record(case,row['resource_ref_pointer'],allow_missing=allow_missing)
+        if ref is None:continue
         mapped[row['rule_id']]={'rule_id':row['rule_id'],'source_type':row['source_type'],
             'resource_ref':ref,'predicate':predicate.model_dump()}
     return [mapped[rule_id] for rule_id in sorted(required) if rule_id in mapped],required-set(mapped)
@@ -528,7 +548,18 @@ async def execute_approved(spec, plan_document, case, bindings, intent, *, journ
         if 'dependency_build_basis_sha256' in spec:
             dependency_route={'dependency_route_activity_ids':list(prepared['plan']['activity_ids']),
                 'dependency_precondition_attempts':[i for i,action in enumerate(prepared['actions'],1) if action['precondition']]}
-        record('started', execution_id=execution_id, process_reference=reference(spec), spec_sha256=digest(spec), **dependency_route)
+        dependency_contract=spec.get('decision_table_contract')=='openworkgraph.current-source-dependent-decision.v1'
+        dependency_routes=[{'table_id':r['table_id'],'target_activity_ids':r['target_activity_ids']}
+                           for r in prepared.get('decision_tables',[])] if dependency_contract else []
+        record('started', execution_id=execution_id, process_reference=reference(spec), spec_sha256=digest(spec), **dependency_route,
+               **({'dependent_decision_routes':dependency_routes,
+                   'declared_activity_ids':prepared['plan']['activity_ids'],
+                   'declared_plan_sha256':digest(prepared['plan']),
+                   'declared_source_rule_ids':[r['rule_id'] for r in prepared['source_rules']],
+                   'declared_precondition_attempts':[i+1 for i,a in enumerate(prepared['actions']) if a['precondition']]}
+                  if dependency_contract else {}))
+        decision_checkpoint=0
+        source_checkpoint=0
         dependency_check_number=0
         async def check_catalog(purpose='refresh',attempt=None):
             nonlocal dependency_check_number
@@ -551,9 +582,28 @@ async def execute_approved(spec, plan_document, case, bindings, intent, *, journ
             if not current:
                 raise ImplementationError('Shared process changed, lost review, was archived or is unavailable')
             ensure_current(intent, now, stop_marker)
-        async def check_decisions():
+        async def check_decisions(purpose,attempt=None,*,snapshot=None,checked_at=None):
+            nonlocal decision_checkpoint
             if not prepared.get('decision_tables'):return
-            from decision_runtime import check_decision_receipt
+            from decision_runtime import check_decision_receipt, check_decision_batch, _dependent
+            if _dependent(spec):
+                if snapshot is None or checked_at is None:
+                    raise ImplementationError('Dependent decision checks require a complete checkpoint snapshot')
+                receipts={request['table_id']:snapshot[(request['resource_ref'],request['source_type'])]
+                          for request in prepared['decision_tables']}
+                summaries=check_decision_batch(spec,prepared['decision_tables'],receipts,now=checked_at)
+                decision_checkpoint+=1
+                for summary in summaries:
+                    summary['checkpoint_number']=decision_checkpoint
+                    summary['checkpoint_purpose']=purpose
+                    summary['checkpoint_attempt']=attempt
+                    summary['checkpoint_checked_at']=checked_at.isoformat()
+                    result.setdefault('decision_table_checks',[]).append(summary)
+                    record('decision_table_checked',**summary)
+                ensure_current(intent,now,stop_marker)
+                if len(summaries)!=len(prepared['decision_tables']) or any(not row['route_matches'] for row in summaries):
+                    raise ImplementationError('Current dependent decision route or prerequisite not established')
+                return
             passed=True
             for request in prepared['decision_tables']:
                 ensure_current(intent,now,stop_marker)
@@ -569,10 +619,48 @@ async def execute_approved(spec, plan_document, case, bindings, intent, *, journ
                 policy='ordered FIRST' if any(t.get('hit_policy')=='FIRST' for t in spec['process_model'].get('decision_tables',[])) else 'UNIQUE'
                 raise ImplementationError('Current '+policy+' decision route or effective date not established')
 
-        async def check_source_rules():
+        async def check_source_rules(purpose,attempt=None):
+            nonlocal source_checkpoint
+            source_checkpoint+=1
             # Deliberately do not reuse dashboard reports, caller facts or a
             # prior receipt. The customer has reviewed these as invariants;
             # every action and the final route check require fresh reads.
+            if dependency_contract:
+                # All ordinary rules and decision tables use one receipt per
+                # exact record/type and one freshness boundary, after reads.
+                # These snapshots are local to one checkpoint, not atomic
+                # across distinct records or with any business tool.
+                snapshot={}
+                for request in prepared['source_rules']+prepared.get('decision_tables',[]):
+                    ensure_current(intent,now,stop_marker)
+                    key=(request['resource_ref'],request['source_type'])
+                    if key not in snapshot:
+                        try:
+                            snapshot[key]=await source_state_reader(endpoint(bindings['source_api_url'],source=True),
+                                source_token,request)
+                        except Exception:
+                            snapshot[key]=None
+                ensure_current(intent,now,stop_marker)
+                checked_at=(now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+                passed=True
+                for request in prepared['source_rules']:
+                    from process_rule_conditions import evaluate_predicate
+                    key=(request['resource_ref'],request['source_type'])
+                    try:
+                        facts=facts_from_receipt(snapshot[key],*key,now=checked_at)
+                        status=evaluate_predicate(request['predicate'],facts)['status'] if facts else 'unknown'
+                    except Exception:
+                        status='unknown'
+                    summary={'rule_id':request['rule_id'],'status':status,
+                        'record_association':'customer_selected_not_independently_established',
+                        'checkpoint_number':source_checkpoint,'checkpoint_purpose':purpose,
+                        'checkpoint_attempt':attempt,'checkpoint_checked_at':checked_at.isoformat()}
+                    result['source_rule_checks'].append(summary);record('source_rule_checked',**summary)
+                    passed=passed and status=='matched'
+                ensure_current(intent,now,stop_marker)
+                if not passed:raise ImplementationError('Fresh source rule invariant was false or unknown')
+                await check_decisions(purpose,attempt,snapshot=snapshot,checked_at=checked_at)
+                return
             passed=True
             for request in prepared['source_rules']:
                 from process_rule_conditions import evaluate_predicate
@@ -589,10 +677,10 @@ async def execute_approved(spec, plan_document, case, bindings, intent, *, journ
                 passed=passed and status=='matched'
             ensure_current(intent,now,stop_marker)
             if not passed:raise ImplementationError('Fresh source rule invariant was false or unknown')
-            await check_decisions()
+            await check_decisions(purpose,attempt)
         try:
             await check_catalog('initial')
-            await check_source_rules()
+            await check_source_rules('initial')
         except ImplementationError:
             result.update(stopped_before_tools=True, all_tool_results_matched=False, all_declared_operations_verified=False)
             if os.path.lexists(str(stop_marker)):
@@ -642,7 +730,10 @@ async def execute_approved(spec, plan_document, case, bindings, intent, *, journ
                         await check_catalog()
                         ensure_current(intent, now, stop_marker)
                         if action['precondition']:
-                            await check_decisions()
+                            if dependency_contract:
+                                await check_source_rules('precondition',index+1)
+                            else:
+                                await check_decisions('precondition',index+1)
                             condition = action['precondition']
                             if 'dependency_build_basis_sha256' in spec:
                                 await check_catalog('precondition',index+1)
@@ -658,7 +749,7 @@ async def execute_approved(spec, plan_document, case, bindings, intent, *, journ
                                 record('precondition_not_established', activity_id=action['activity_id'], attempt=index+1)
                                 break
                         await check_catalog()
-                        await check_source_rules()
+                        await check_source_rules('action',index+1)
                         ensure_current(intent, now, stop_marker)
                         if 'dependency_build_basis_sha256' in spec:
                             await check_catalog('action',index+1)
@@ -691,7 +782,7 @@ async def execute_approved(spec, plan_document, case, bindings, intent, *, journ
             record('transport_or_tool_inventory_unavailable')
             result['transport_or_tool_inventory_unavailable'] = True
         try:
-            await check_source_rules()
+            await check_source_rules('completion')
             result['source_rules_matched_at_completion']=True
         except ImplementationError:
             result['source_rules_matched_at_completion']=False

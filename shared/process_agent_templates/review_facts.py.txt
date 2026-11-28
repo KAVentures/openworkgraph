@@ -1,0 +1,520 @@
+"""Offline business-fact scenarios for the exact reviewed workflow.
+
+Case input is a caller-declared fact object, never authenticated source data.
+No models, source reads, business tools, execution plans or grants are created.
+"""
+from __future__ import annotations
+
+import argparse
+from collections import Counter
+from datetime import date
+import json
+from pathlib import Path
+import re
+
+from evaluate import validate_suite
+from execute import ImplementationError, digest, load_object, reference
+from process_rule_conditions import evaluate_predicate, validate_facts
+from route_candidates import _search
+from runtime import load_spec, validate_spec
+
+FORMAT='openworkgraph.declared-fact-route-review.v1'
+MAX_INPUT_BYTES=262144
+MAX_REPORT_BYTES=2*1024*1024
+MAX_CASES=50
+MAX_BATCH_WORK=500000
+MAX_COVERAGE_REPLAY_WORK=500000
+
+
+def _as_of(value):
+    if type(value) is not str or not re.fullmatch(r'[0-9]{4}-[0-9]{2}-[0-9]{2}',value):
+        raise ImplementationError('Choose an explicit scenario date as YYYY-MM-DD')
+    try:
+        date.fromisoformat(value)
+    except ValueError:
+        raise ImplementationError('Choose a valid scenario date') from None
+    return value
+
+
+def _fact_checks(spec,facts,as_of_date):
+    """Use the shared rule/decision evaluators, not caller-provided statuses."""
+    validate_spec(spec)
+    validate_facts(facts)
+    model=spec['process_model']
+    table_rule_ids={row['rule_id'] for table in model.get('decision_tables',[]) for row in table['rows']}
+    table_activities={table['decision_activity_id'] for table in model.get('decision_tables',[])}
+    external_rule_ids={e.get('rule_id') for e in model['transitions'] if e['source'] not in table_activities}
+    rules=[]
+    for rule in model['business_rules']:
+        if not rule.get('predicate') or (rule['id'] in table_rule_ids and rule['id'] not in external_rule_ids):
+            continue
+        status=evaluate_predicate(rule['predicate'],facts)['status'] if rule['user_confirmed'] else 'unconfirmed'
+        rules.append({'rule_id':rule['id'],'status':status})
+    tables=[]
+    if model.get('decision_tables'):
+        from owg_model.process_model import ProcessModel
+        from owg_model.process_decision_tables import evaluate_decisions
+        for row in evaluate_decisions(ProcessModel.model_validate(model),facts,as_of_date):
+            tables.append({**{k:row[k] for k in ('table_id','status','selected_target_activity_id')},
+                'rows':[{'row_id':item['row_id'],'status':item['status']} for item in row['rows']]})
+    return rules,tables
+
+
+def _case_review(spec,case,as_of_date,remaining_work):
+    rules,tables=_fact_checks(spec,case['input'],as_of_date)
+    if remaining_work<=0:
+        return {'case_id':case['id'],'category':case['category'],'search_status':'batch_work_limit',
+            'search_complete':False,'work_count':0,'expected_status':case['expected']['status'],
+            'matches_reviewed_expectation':None,'reason':'batch_work_limit','review_required':True,
+            'rule_checks':rules,'decision_checks':tables,'candidate_examples':[]}
+    search=_search(spec,rules,tables,max_work=min(remaining_work,25000))
+    expected=case['expected'];selected=search['unique_activity_ids']
+    matched=None
+    if not search['search_complete']:
+        reason='search_incomplete'
+    elif selected is not None:
+        matched=expected['status']=='proposal' and selected in expected['accepted_routes']
+        reason='matches_reviewed_expectation' if matched else (
+            'expected_clarification' if expected['status']=='needs_clarification' else 'unexpected_route')
+    else:
+        matched=expected['status']=='needs_clarification'
+        reason='matches_reviewed_expectation' if matched else 'unexpected_clarification'
+    return {'case_id':case['id'],'category':case['category'],'search_status':search['status'],
+        'search_complete':search['search_complete'],'work_count':search['work_count'],
+        'expected_status':expected['status'],'matches_reviewed_expectation':matched,
+        'reason':reason,'review_required':matched is not True,
+        'supported_schedule_count':search['supported_schedule_count'],
+        'unresolved_schedule_count':search['unresolved_schedule_count'],
+        'limit_reasons':search['limit_reasons'],
+        'rule_checks':rules,'decision_checks':tables,'candidate_examples':search['examples']}
+
+
+def _validated_cases(spec,suite):
+    if not isinstance(suite,dict) or len(json.dumps(suite,allow_nan=False).encode())>MAX_INPUT_BYTES:
+        raise ImplementationError('Choose a bounded reviewed fact scenario suite')
+    cases=validate_suite(spec,suite,allow_current_source_rules=True)
+    if len(cases)>MAX_CASES:
+        raise ImplementationError('Choose at most 50 reviewed scenarios')
+    for case in cases:
+        validate_facts(case['input'])
+    return cases
+
+
+def _scenario_coverage(spec,cases,rows):
+    """Count distinct cases; never turn a merely evaluated row into a route visit."""
+    model=spec['process_model']
+    activities={a['id']:a for a in model['activities']}
+    edges={(e['source'],e['target']):e for e in model['transitions']}
+    tables={t['id']:t for t in model.get('decision_tables',[])}
+    token=spec.get('control_flow_contract')=='openworkgraph.parallel-node-firing-plan.v1'
+    # A token order is not an adjacency path. Replay returns the union of
+    # viable histories and their intersection; strict coverage uses only guaranteed edges.
+    paths={};replay_work=0;replay_budget_exhausted=False
+    if token:
+        from owg_model.process_model import ProcessModel
+        from owg_model.process_parallel import replay_node_ids, MAX_FIRING_REPLAY_WORK
+        graph=ProcessModel.model_validate(model)
+    def route_edges(path):
+        nonlocal replay_work,replay_budget_exhausted
+        key=tuple(path)
+        if key not in paths:
+            if token:
+                allowance=min(MAX_FIRING_REPLAY_WORK,MAX_COVERAGE_REPLAY_WORK-replay_work)
+                if allowance<=0:
+                    replay_budget_exhausted=True;paths[key]=None
+                    return None
+                try:
+                    replay=replay_node_ids(path,graph,max_work=allowance)
+                    replay_work+=replay['work_count']
+                    def edge_set(indices):
+                        return {(model['transitions'][i]['source'],model['transitions'][i]['target']) for i in indices}
+                    paths[key]=(edge_set(replay['transition_indices']),edge_set(replay['guaranteed_transition_indices']))
+                except ValueError:
+                    replay_work+=allowance
+                    replay_budget_exhausted=replay_budget_exhausted or replay_work>=MAX_COVERAGE_REPLAY_WORK
+                    paths[key]=None
+            else:
+                exact=set(zip(path,path[1:]))
+                paths[key]=(exact,exact)
+        return paths[key]
+    activity_counts={k:Counter() for k in activities}
+    transition_counts={k:Counter() for k in edges}
+    table_counts={k:Counter() for k in tables}
+    row_counts={(tid,r['id']):Counter() for tid,t in tables.items() for r in t['rows']}
+    replay_unknown=[]
+    for case,row in zip(cases,rows):
+        expected_paths=case['expected']['accepted_routes']
+        selected=[p['activity_ids'] for p in row['candidate_examples'] if p['status']=='supported']
+        actual_path=selected[0] if row['search_complete'] and row['search_status']=='unique_supported_route' and len(selected)==1 else None
+        reviewed_match=actual_path is not None and row['matches_reviewed_expectation'] is True
+        expected_nodes={node for path in expected_paths for node in path}
+        expected_edges=set()
+        for path in expected_paths:
+            found=route_edges(path)
+            if found is None:
+                replay_unknown.append(case['id'])
+            else:
+                expected_edges.update(found[0])
+        actual=route_edges(actual_path) if actual_path else (set(),set())
+        if actual is None:
+            replay_unknown.append(case['id']);actual=(set(),set())
+        possible_edges,actual_edges=actual
+        actual_nodes=set(actual_path or [])
+        for ident in expected_nodes:activity_counts[ident]['reviewed_expected_cases']+=1
+        for ident in actual_nodes:
+            activity_counts[ident]['unique_supported_cases']+=1
+            if reviewed_match:activity_counts[ident]['reviewed_matching_cases']+=1
+        for edge in expected_edges:transition_counts[edge]['reviewed_expected_cases']+=1
+        for edge in possible_edges:
+            transition_counts[edge]['possible_supported_cases']+=1
+            if reviewed_match:transition_counts[edge]['possible_reviewed_matching_cases']+=1
+        for edge in actual_edges:
+            transition_counts[edge]['unique_supported_cases']+=1
+            if reviewed_match:transition_counts[edge]['reviewed_matching_cases']+=1
+        for check in row['decision_checks']:
+            tid=check['table_id'];table=tables[tid];counts=table_counts[tid]
+            counts['evaluated_cases']+=1
+            counts['status:'+check['status']]+=1
+            visited=table['decision_activity_id'] in actual_nodes
+            if visited:counts['unique_route_visit_cases']+=1
+            target=check['selected_target_activity_id']
+            for row_check in check['rows']:
+                rc=row_counts[(tid,row_check['row_id'])]
+                rc['evaluated_cases']+=1;rc['status:'+row_check['status']]+=1
+            for declaration in table['rows']:
+                if target==declaration['target_activity_id']:
+                    rc=row_counts[(tid,declaration['id'])]
+                    rc['selected_cases']+=1
+                    if visited and (table['decision_activity_id'],target) in actual_edges:
+                        rc['unique_route_selection_cases']+=1
+                        if reviewed_match:rc['reviewed_matching_route_cases']+=1
+    def counts(counter,names):
+        return {k:counter[k] for k in names}
+    columns=('reviewed_expected_cases','unique_supported_cases','reviewed_matching_cases')
+    activity_rows=[{'activity_id':ident,**counts(c,columns)} for ident,c in sorted(activity_counts.items())]
+    transition_rows=[{'source_activity_id':source,'target_activity_id':target,**counts(c,columns+('possible_supported_cases','possible_reviewed_matching_cases'))}
+                     for (source,target),c in sorted(transition_counts.items())]
+    decision_rows=[]
+    for tid,c in sorted(table_counts.items()):
+        t=tables[tid];items=[]
+        for declaration in t['rows']:
+            ident=declaration['id'];rc=row_counts[(tid,ident)]
+            items.append({'row_id':ident,'target_activity_id':declaration['target_activity_id'],
+                **counts(rc,('evaluated_cases','selected_cases','unique_route_selection_cases','reviewed_matching_route_cases')),
+                'row_status_counts':{k[7:]:v for k,v in sorted(rc.items()) if k.startswith('status:')}})
+        decision_rows.append({'table_id':tid,'decision_activity_id':t['decision_activity_id'],
+            **counts(c,('evaluated_cases','unique_route_visit_cases')),
+            'table_status_counts':{k[7:]:v for k,v in sorted(c.items()) if k.startswith('status:')},
+            'rows':items})
+    gaps={'activities_without_reviewed_match':[r['activity_id'] for r in activity_rows if not r['reviewed_matching_cases']],
+        'transitions_without_reviewed_match':[{'source_activity_id':r['source_activity_id'],'target_activity_id':r['target_activity_id']}
+            for r in transition_rows if not r['reviewed_matching_cases']],
+        'decision_rows_without_reviewed_match':[{'table_id':t['table_id'],'row_id':r['row_id']}
+            for t in decision_rows for r in t['rows'] if not r['reviewed_matching_route_cases']]}
+    return {'format':'openworkgraph.declared-scenario-coverage.v1',
+        'case_count':len(cases),'transition_basis':'guaranteed_transitions_in_all_complete_token_replays' if token else 'exact_adjacent_transitions',
+        'route_replay_unknown_case_ids':sorted(set(replay_unknown)),
+        'coverage_replay_work_count':replay_work,'coverage_replay_budget':MAX_COVERAGE_REPLAY_WORK,
+        'coverage_replay_budget_exhausted':replay_budget_exhausted,
+        'incomplete_search_case_ids':[r['case_id'] for r in rows if not r['search_complete']],
+        'activities':activity_rows,'transitions':transition_rows,'decision_tables':decision_rows,'coverage_gaps':gaps,
+        'all_declared_items_have_reviewed_matching_support':not any(gaps.values()) and not replay_unknown and all(r['search_complete'] for r in rows),
+        'exhaustive_business_domain_coverage_verified':False,'execution_authorized':False,
+        'interpretation':'Distinct scenario counts, not visits. Only complete unique supported routes matching reviewed expectations contribute matching-route coverage. Decision rows evaluated in isolation do not establish route coverage. Token transition coverage uses the intersection of all complete structural replays; possible support is reported separately.'}
+
+
+def review_scenarios(spec,suite,*,as_of_date):
+    """Compare bounded scenario results with customer-reviewed expectations."""
+    as_of_date=_as_of(as_of_date)
+    cases=_validated_cases(spec,suite)
+    rows=[];remaining=MAX_BATCH_WORK
+    for case in cases:
+        row=_case_review(spec,case,as_of_date,remaining)
+        remaining-=row['work_count']
+        rows.append(row)
+    categories={}
+    for row in rows:
+        categories.setdefault(row['category'],Counter())[row['reason']]+=1
+    report={'format':FORMAT,'process_reference':reference(spec),
+        'spec_sha256':digest(spec),'suite_sha256':digest(suite),'as_of_date':as_of_date,
+        'case_count':len(rows),'matching_case_count':sum(r['matches_reviewed_expectation'] is True for r in rows),
+        'mismatching_case_count':sum(r['matches_reviewed_expectation'] is False for r in rows),
+        'unresolved_case_count':sum(r['matches_reviewed_expectation'] is None for r in rows),
+        'search_work_count':MAX_BATCH_WORK-remaining,
+        'reason_counts':dict(sorted(Counter(r['reason'] for r in rows).items())),
+        'by_category':{k:dict(sorted(v.items())) for k,v in sorted(categories.items())},
+        'cases':rows,'review_required':any(r['review_required'] for r in rows),
+        'scenario_coverage':_scenario_coverage(spec,cases,rows),
+        'facts_authoritativeness_verified':False,'historical_case_truth_verified':False,
+        'business_policy_compliance_verified':False,'model_invoked':False,
+        'source_reads_performed':False,'business_tools_called':False,
+        'execution_plan_created':False,'execution_authorized':False,
+        'case_values_included':False,
+        'interpretation':'Caller-declared hypothetical facts at an explicit date. Derived route candidates are design diagnostics, not current-source proposals or authorization. Incomplete search is unknown even if a clarification was expected.'}
+    if report['scenario_coverage']['route_replay_unknown_case_ids']:
+        report['review_required']=True
+    if len(json.dumps(report,allow_nan=False).encode())>MAX_REPORT_BYTES:
+        raise ImplementationError('Scenario report exceeds the bounded output size; narrow the suite')
+    return report
+
+
+def _expectation_key(expected):
+    return expected['status'],frozenset(tuple(path) for path in expected['accepted_routes'])
+
+
+def _route_key(row):
+    return (row['search_status'],frozenset((tuple(p['activity_ids']),p['status'])
+        for p in row['candidate_examples']))
+
+
+def _changed_ids(before,after,key):
+    a={row[key]:digest(row) for row in before}
+    b={row[key]:digest(row) for row in after}
+    return sorted(k for k in a.keys()|b.keys() if a.get(k)!=b.get(k))
+
+
+def _coverage_delta(before,after):
+    def inventory(report):
+        cov=report['scenario_coverage']
+        result={}
+        for a in cov['activities']:
+            result[('activity',a['activity_id'])]=a['reviewed_matching_cases']
+        for e in cov['transitions']:
+            result[('transition',e['source_activity_id'],e['target_activity_id'])]=e['reviewed_matching_cases']
+        for t in cov['decision_tables']:
+            for r in t['rows']:
+                result[('decision_row',t['table_id'],r['row_id'],r['target_activity_id'])]=r['reviewed_matching_route_cases']
+        return result
+    old,new=inventory(before),inventory(after)
+    def item(key):
+        return {'kind':key[0],'ids':list(key[1:]),'baseline_matching_cases':old.get(key),
+                'candidate_matching_cases':new.get(key)}
+    common=old.keys()&new.keys()
+    return {'lost_matching_support':[item(k) for k in sorted(common) if old[k]>0 and new[k]==0],
+        'gained_matching_support':[item(k) for k in sorted(common) if old[k]==0 and new[k]>0],
+        'added_without_matching_support':[item(k) for k in sorted(new.keys()-old.keys()) if new[k]==0],
+        'removed_items':[item(k) for k in sorted(old.keys()-new.keys())],
+        'baseline_transition_basis':before['scenario_coverage']['transition_basis'],
+        'candidate_transition_basis':after['scenario_coverage']['transition_basis'],
+        'comparison_complete':not any(r['scenario_coverage']['incomplete_search_case_ids'] or
+            r['scenario_coverage']['route_replay_unknown_case_ids'] for r in (before,after)),
+        'interpretation':'Matching scenario support only; stable identifiers do not prove unchanged business semantics.'}
+
+
+def compare_scenarios(before_spec,after_spec,before_suite,after_suite,*,as_of_date):
+    """Compare design behavior with one evaluator, never execute the two releases."""
+    as_of_date=_as_of(as_of_date)
+    if (before_spec['workflow_id']!=after_spec['workflow_id']
+            or type(before_spec['revision']) is not int or type(after_spec['revision']) is not int
+            or before_spec['revision']>=after_spec['revision']
+            or before_spec.get('organization_catalog_reference')!=after_spec.get('organization_catalog_reference')):
+        raise ImplementationError('Compare a baseline and newer revision of the same scoped workflow')
+    old_cases=_validated_cases(before_spec,before_suite)
+    new_cases=_validated_cases(after_spec,after_suite)
+    if len(old_cases)!=len(new_cases):
+        raise ImplementationError('Use the identical ordered case population for both revisions')
+    for old,new in zip(old_cases,new_cases):
+        if (old['id']!=new['id'] or old['category']!=new['category']
+                or digest(old['input'])!=digest(new['input'])):
+            raise ImplementationError('Both reviewed suites must contain identical ordered IDs, categories and case facts')
+    # Each revision receives the same independent work allowance, not a
+    # shared budget that could favor the one evaluated first.
+    old_report=review_scenarios(before_spec,before_suite,as_of_date=as_of_date)
+    new_report=review_scenarios(after_spec,after_suite,as_of_date=as_of_date)
+    rows=[]
+    for old,new,a,b in zip(old_cases,new_cases,old_report['cases'],new_report['cases']):
+        changed_expectation=_expectation_key(old['expected'])!=_expectation_key(new['expected'])
+        old_match,new_match=a['matches_reviewed_expectation'],b['matches_reviewed_expectation']
+        complete=a['search_complete'] and b['search_complete']
+        if not complete:
+            classification='comparison_incomplete'
+        elif changed_expectation:
+            classification='changed_expectation_matches' if new_match else 'changed_expectation_mismatch'
+        elif old_match and new_match:
+            classification='stable_match'
+        elif old_match:
+            classification='regression'
+        elif new_match:
+            classification='improvement'
+        else:
+            classification='persistent_mismatch'
+        behavior_changed=(_route_key(a)!=_route_key(b)) if complete else None
+        rows.append({'case_id':old['id'],'category':old['category'],
+            'classification':classification,'expectation_changed':changed_expectation,
+            'baseline_matches':old_match,'candidate_matches':new_match,
+            'baseline_search_status':a['search_status'],'candidate_search_status':b['search_status'],
+            'baseline_search_complete':a['search_complete'],'candidate_search_complete':b['search_complete'],
+            'route_behavior_changed':behavior_changed,
+            'changed_rule_ids':_changed_ids(a['rule_checks'],b['rule_checks'],'rule_id'),
+            'changed_decision_table_ids':_changed_ids(a['decision_checks'],b['decision_checks'],'table_id'),
+            'review_required':not complete or new_match is not True or behavior_changed is True
+                or changed_expectation})
+    coverage_delta=_coverage_delta(old_report,new_report)
+    groups={}
+    for row in rows:
+        groups.setdefault(row['category'],Counter())[row['classification']]+=1
+    result={'format':'openworkgraph.paired-declared-fact-revision-review.v1',
+        'baseline':{'process_reference':reference(before_spec),'spec_sha256':digest(before_spec),
+            'suite_sha256':digest(before_suite),'matching_case_count':old_report['matching_case_count'],
+            'search_work_count':old_report['search_work_count']},
+        'candidate':{'process_reference':reference(after_spec),'spec_sha256':digest(after_spec),
+            'suite_sha256':digest(after_suite),'matching_case_count':new_report['matching_case_count'],
+            'search_work_count':new_report['search_work_count']},
+        'as_of_date':as_of_date,'case_count':len(rows),
+        'classification_counts':dict(sorted(Counter(r['classification'] for r in rows).items())),
+        'by_category':{k:dict(sorted(v.items())) for k,v in sorted(groups.items())},
+        'changed_expectation_count':sum(r['expectation_changed'] for r in rows),
+        'changed_route_behavior_count':sum(r['route_behavior_changed'] is True for r in rows),
+        'cases':rows,'coverage_delta':coverage_delta,
+        'review_required':any(r['review_required'] for r in rows) or not coverage_delta['comparison_complete']
+            or bool(coverage_delta['lost_matching_support'] or coverage_delta['added_without_matching_support']),
+        'identical_case_facts_and_date':True,'same_evaluator_used_for_both_revisions':True,
+        'historical_release_code_executed':False,'release_runtime_compatibility_verified':False,
+        'case_values_included':False,'source_reads_performed':False,'model_invoked':False,
+        'business_tools_called':False,'execution_plan_created':False,'execution_authorized':False,
+        'interpretation':'Finite declared-fact comparison of two saved designs under this evaluator. Changed expectations are not counted as regressions or improvements. Incomplete search cannot establish behavioral equivalence. Not a test of historical code, tool mappings, provider behavior or actual business outcomes.'}
+    return result
+
+
+def compare_releases(before_root,after_root,before_pin,after_pin,before_suite,after_suite,*,as_of_date):
+    from verify_release import _pinned_inventory,_pinned_spec
+    # Only read verified files, never import modules from either supplied root.
+    old_manifest=_pinned_inventory(before_root,before_pin)
+    new_manifest=_pinned_inventory(after_root,after_pin)
+    before=_pinned_spec(before_root,old_manifest)
+    after=_pinned_spec(after_root,new_manifest)
+    report=compare_scenarios(before,after,before_suite,after_suite,as_of_date=as_of_date)
+    report['baseline']['manifest_sha256']=before_pin
+    report['candidate']['manifest_sha256']=after_pin
+    report['release_file_integrity_checked']=True
+    report['independent_signature_verified']=False
+    return report
+
+
+def review_effective_period(spec,suite,*,start,end):
+    """Review each declared effective-date interval with unchanged case facts."""
+    start,end=_as_of(start),_as_of(end)
+    if not start<end or (date.fromisoformat(end)-date.fromisoformat(start)).days>3660:
+        raise ImplementationError('Choose an ordered effective-date period of at most 3660 days')
+    cases=_validated_cases(spec,suite)
+    boundaries={start:[],end:[]}
+    for table in spec['process_model'].get('decision_tables',[]):
+        for key,kind in (('effective_from','effective_start'),('effective_until','effective_end')):
+            day=table.get(key)
+            if day is None:
+                continue
+            day=_as_of(day)
+            if start<=day<end:
+                boundaries.setdefault(day,[]).append({'table_id':table['id'],'kind':kind})
+    dates=sorted(boundaries)
+    if len(dates)>26:
+        raise ImplementationError('Too many effective-date boundaries; narrow the period')
+    remaining=MAX_BATCH_WORK
+    previous={}
+    intervals=[]
+    for lo,hi in zip(dates,dates[1:]):
+        details=[]
+        for case in cases:
+            row=_case_review(spec,case,lo,remaining)
+            remaining-=row['work_count']
+            old=previous.get(case['id'])
+            complete=row['search_complete']
+            match=row['matches_reviewed_expectation']
+            changes=None
+            changed_tables=[]
+            if old is not None:
+                if complete and old['search_complete']:
+                    changes=_route_key(old)!=_route_key(row)
+                changed_tables=_changed_ids(old['decision_checks'],row['decision_checks'],'table_id')
+            details.append({'case_id':case['id'],'category':case['category'],
+                'search_status':row['search_status'],'search_complete':complete,
+                'matches_fixed_expectation':match,'reason':row['reason'],
+                'route_behavior_changed_from_previous':changes,
+                'changed_decision_table_ids':changed_tables,
+                'decision_statuses':[{k:t[k] for k in ('table_id','status','selected_target_activity_id')}
+                                     for t in row['decision_checks']]})
+            previous[case['id']]=row
+        counts={'matching':sum(r['matches_fixed_expectation'] is True for r in details),
+                'mismatching':sum(r['matches_fixed_expectation'] is False for r in details),
+                'unresolved':sum(r['matches_fixed_expectation'] is None for r in details)}
+        intervals.append({'start':lo,'end_exclusive':hi,
+            'boundary_changes':sorted(boundaries[lo],key=lambda r:(r['table_id'],r['kind'])),
+            'counts':counts,'cases':details,
+            'review_required':bool(counts['mismatching'] or counts['unresolved'] or
+                any(r['route_behavior_changed_from_previous'] is True or r['changed_decision_table_ids']
+                    for r in details))})
+    result={'format':'openworkgraph.declared-effective-period-review.v1',
+        'process_reference':reference(spec),'spec_sha256':digest(spec),'suite_sha256':digest(suite),
+        'start':start,'end_exclusive':end,'case_count':len(cases),'interval_count':len(intervals),
+        'scenario_interval_count':len(cases)*len(intervals),
+        'search_work_count':MAX_BATCH_WORK-remaining,
+        'intervals':intervals,'review_required':any(r['review_required'] for r in intervals),
+        'all_interval_searches_complete':all(not i['counts']['unresolved'] for i in intervals),
+        'fixed_expectations_across_period':True,
+        'independent_date_specific_expectations_verified':False,
+        'historical_case_truth_verified':False,'case_values_included':False,
+        'source_reads_performed':False,'model_invoked':False,'business_tools_called':False,
+        'execution_authorized':False,
+        'interpretation':'The date is varied only at declared table effective-date boundaries. Facts and reviewed expectations are held fixed. A changed or expired policy may legitimately require different expectations; this is a review diagnostic, not historical truth or proof of complete policy coverage.'}
+    if len(json.dumps(result,allow_nan=False).encode())>MAX_REPORT_BYTES:
+        raise ImplementationError('Effective-period report exceeds the bounded output size; narrow the period or suite')
+    return result
+
+
+def main(argv=None):
+    parser=argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--cases',required=True,help='Current or candidate reviewed fact suite')
+    parser.add_argument('--baseline-release')
+    parser.add_argument('--candidate-release')
+    parser.add_argument('--baseline-manifest-sha256')
+    parser.add_argument('--candidate-manifest-sha256')
+    parser.add_argument('--baseline-cases')
+    parser.add_argument('--as-of-date',required=True)
+    parser.add_argument('--until-date',help='Exclusive end for single-revision effective-period review')
+    parser.add_argument('--output',required=True)
+    parser.add_argument('--confirm-declared-fact-review',action='store_true')
+    parser.add_argument('--require-all-declared-items-covered',action='store_true',
+        help='Require matching scenario support for every declared activity, transition and decision row (single revision only)')
+    args=parser.parse_args(argv)
+    if not args.confirm_declared_fact_review or Path(args.output).exists():
+        raise ImplementationError('Confirm local declared-fact review and select a new output file')
+    comparison=[args.baseline_release,args.candidate_release,args.baseline_manifest_sha256,
+                args.candidate_manifest_sha256,args.baseline_cases]
+    if args.until_date is not None:
+        if any(v is not None for v in comparison) or args.require_all_declared_items_covered:
+            raise ImplementationError('Effective-period review cannot be combined with release comparison or strict item coverage')
+        result=review_effective_period(load_spec(),load_object(args.cases,limit=MAX_INPUT_BYTES),
+            start=args.as_of_date,end=args.until_date)
+    elif any(v is not None for v in comparison):
+        if args.require_all_declared_items_covered:
+            raise ImplementationError('Use single-revision review for the complete declared-item coverage requirement')
+        if not all(comparison):
+            raise ImplementationError('Supply both release directories, independent manifest pins and both reviewed suites')
+        result=compare_releases(*comparison[:4],load_object(args.baseline_cases,limit=MAX_INPUT_BYTES),
+            load_object(args.cases,limit=MAX_INPUT_BYTES),as_of_date=args.as_of_date)
+    else:
+        result=review_scenarios(load_spec(),load_object(args.cases,limit=MAX_INPUT_BYTES),as_of_date=args.as_of_date)
+    if not any(comparison) and args.until_date is None:
+        coverage=result['scenario_coverage']
+        coverage['strict_coverage_requested']=args.require_all_declared_items_covered
+        if args.require_all_declared_items_covered and not coverage['all_declared_items_have_reviewed_matching_support']:
+            result['review_required']=True
+    # Serialize before opening the output to avoid creating a partial report
+    # because of an invalid or oversized result.
+    raw=json.dumps(result,indent=2,ensure_ascii=False,allow_nan=False)
+    if len(raw.encode('utf-8'))>MAX_REPORT_BYTES:
+        raise ImplementationError('Scenario report exceeds the bounded output size; narrow the suite')
+    with Path(args.output).open('x',encoding='utf-8') as stream:
+        stream.write(raw+'\n')
+    keys=('case_count','classification_counts','changed_expectation_count','changed_route_behavior_count','review_required') if any(comparison) else (
+        'case_count','matching_case_count','mismatching_case_count','unresolved_case_count','review_required')
+    if args.until_date is not None:
+        keys=('case_count','interval_count','scenario_interval_count','all_interval_searches_complete','review_required')
+    print(json.dumps({k:result[k] for k in keys},sort_keys=True))
+    return 2 if result['review_required'] else 0
+
+
+if __name__=='__main__':
+    try:raise SystemExit(main())
+    except (ImplementationError,ValueError,TypeError,OSError,RecursionError):
+        raise SystemExit('Declared-fact review refused; check exact suite, date, bounds and output path.') from None

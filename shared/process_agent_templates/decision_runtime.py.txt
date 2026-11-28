@@ -1,11 +1,33 @@
 """Current-record declared route invariants. No caller facts, tool access or grants."""
 from datetime import datetime, timezone
 
-from execute import ImplementationError, pointer
+from execute import ImplementationError, resolve_source_record
 from process_source_state import SOURCE_PATHS, SOURCE_TYPES, facts_from_receipt
 
 
-def decision_bindings(spec, routes, case, bindings):
+def _dependency_paths(table):
+    return {dep.fact_path for dep in table.required_decisions}
+
+
+def _required_tables(model, route_ids):
+    """All transitive prerequisite tables, including those not visited in the route."""
+    tables={t.id:t for t in model.decision_tables}
+    needed=set(route_ids)
+    pending=list(needed)
+    while pending:
+        table=tables[pending.pop()]
+        for dep in table.required_decisions:
+            if dep.table_id not in needed:
+                needed.add(dep.table_id)
+                pending.append(dep.table_id)
+    return needed
+
+
+def _dependent(spec):
+    return spec.get('decision_table_contract')=='openworkgraph.current-source-dependent-decision.v1'
+
+
+def decision_bindings(spec, routes, case, bindings, *, allow_missing=False):
     """A reviewed table uses ONE selected record snapshot for every competing row."""
     from owg_model.process_model import ProcessModel
     model=ProcessModel.model_validate(spec['process_model'])
@@ -14,17 +36,25 @@ def decision_bindings(spec, routes, case, bindings):
     rows=bindings.get('decision_table_checks',[])
     if not isinstance(rows,list) or len(rows)>12:
         raise ImplementationError('Use at most twelve explicit decision-table bindings')
-    mapped={}
+    targets={route['table_id']:list(route['target_activity_ids']) for route in routes}
+    if len(targets)!=len(routes) or not set(targets)<=set(tables):
+        raise ImplementationError('Decision route must identify unique declared tables')
+    needed=_required_tables(model,targets) if _dependent(spec) else set(targets)
+    mapped={};seen=set()
     keys={'table_id','source_type','resource_ref_pointer','mode','record_semantics_reviewed',
           'non_atomic_reads_reviewed','utc_effective_dates_reviewed'}
     for row in rows:
         if (not isinstance(row,dict) or not isinstance(row.get('table_id'),str)
-            or row['table_id'] not in tables or row['table_id'] in mapped):
+            or row['table_id'] not in tables or row['table_id'] in seen):
             raise ImplementationError('Each table needs an exact reviewed current-source route binding')
-        table=tables[row['table_id']]
+        table=tables[row['table_id']];seen.add(table.id)
         first=table.hit_policy=='FIRST'
         expected=keys|({'row_precedence_reviewed'} if first else set())
         mode='first_route_before_each_action' if first else 'unique_route_before_each_action'
+        if table.required_decisions:
+            expected.add('dependency_semantics_reviewed')
+            if row.get('dependency_semantics_reviewed') is not True:
+                raise ImplementationError('Explicitly review dependency semantics for this table')
         if (set(row)!=expected or row.get('mode')!=mode
             or row.get('record_semantics_reviewed') is not True
             or row.get('non_atomic_reads_reviewed') is not True
@@ -34,17 +64,33 @@ def decision_bindings(spec, routes, case, bindings):
             raise ImplementationError('Each table needs its exact reviewed current-source '+('FIRST precedence' if first else 'UNIQUE')+' route binding')
         if not table.user_confirmed or any(not rules[r.rule_id].user_confirmed for r in table.rows):
             raise ImplementationError('Confirm the table and every competing row before source binding')
-        if any(c.path not in SOURCE_PATHS for r in table.rows for c in rules[r.rule_id].predicate.conditions):
-            raise ImplementationError('Every competing row must use supported current-source fact paths')
-        ref=pointer(case,row['resource_ref_pointer'])
-        import re
-        if not isinstance(ref,str) or re.fullmatch(r'owg:r:[a-f0-9]{32}',ref) is None:
-            raise ImplementationError('Select an exact observed record reference for the entire table')
+        paths=_dependency_paths(table)
+        if any(p=='/source' or p.startswith('/source/') for p in paths):
+            raise ImplementationError('Decision dependencies cannot replace or extend authenticated source facts')
+        if any(c.path not in SOURCE_PATHS and c.path not in paths for r in table.rows for c in rules[r.rule_id].predicate.conditions):
+            raise ImplementationError('Every competing row must use supported current-source or exact declared dependency fact paths')
+        # A declaration for an unvisited, non-prerequisite table does not
+        # require its case-specific record reference on this route.
+        if table.id not in needed:
+            continue
+        ref=resolve_source_record(case,row['resource_ref_pointer'],allow_missing=allow_missing)
+        if ref is None:continue
         mapped[table.id]={'table_id':table.id,'source_type':row['source_type'],'resource_ref':ref}
     requests=[];missing=[]
-    for route in routes:
-        if route['table_id'] not in mapped:missing.append(route['table_id'])
-        else:requests.append({**mapped[route['table_id']],'target_activity_ids':list(route['target_activity_ids'])})
+    if not _dependent(spec):
+        for route in routes:
+            if route['table_id'] not in mapped:missing.append(route['table_id'])
+            else:requests.append({**mapped[route['table_id']],'target_activity_ids':list(route['target_activity_ids'])})
+        return requests,missing
+    from owg_model.process_decision_tables import decision_order
+    for table in decision_order(model.decision_tables):
+        ident=table.id
+        if ident not in needed:
+            continue
+        if ident not in mapped:
+            missing.append(ident)
+            continue
+        requests.append({**mapped[ident],'target_activity_ids':targets.get(ident,[])})
     return requests,missing
 
 
@@ -54,6 +100,8 @@ def check_decision_receipt(spec, request, receipt, *, now=None):
     from owg_model.process_decision_tables import evaluate_table
     model=ProcessModel.model_validate(spec['process_model'])
     table=next(t for t in model.decision_tables if t.id==request['table_id'])
+    if table.required_decisions:
+        raise ImplementationError('Dependent decisions require the complete current-source dependency batch')
     current=now or datetime.now(timezone.utc)
     if current.tzinfo is None:raise ImplementationError('Decision checks need an aware current clock')
     current=current.astimezone(timezone.utc)
@@ -72,3 +120,69 @@ def check_decision_receipt(spec, request, receipt, *, now=None):
         'policy_document_verified':False,'execution_authorized':False,
         **({'hit_policy':'FIRST','selected_row_id':result['selected_row_id'],
             'blocking_row_id':result['blocking_row_id'],'row_precedence':'declared_row_order'} if table.hit_policy=='FIRST' else {})}
+
+
+def check_decision_batch(spec,requests,receipts,*,now=None):
+    """Re-evaluate a dependency closure from fresh, per-table authenticated facts.
+
+    Prerequisite outputs are derived here, never supplied by a case or model.
+    All checks share one UTC consumer clock; reads themselves are not atomic.
+    """
+    if not _dependent(spec):
+        return [check_decision_receipt(spec,r,receipts.get(r['table_id']),now=now) for r in requests]
+    from owg_model.process_model import ProcessModel
+    from owg_model.process_decision_tables import decision_order, evaluate_table, _with_decision_facts
+    model=ProcessModel.model_validate(spec['process_model'])
+    rules={r.id:r for r in model.business_rules}
+    current=now or datetime.now(timezone.utc)
+    if current.tzinfo is None:
+        raise ImplementationError('Decision checks need an aware current clock')
+    current=current.astimezone(timezone.utc)
+    by_id={r['table_id']:r for r in requests}
+    needed=_required_tables(model,by_id)
+    selected={}
+    results=[]
+    for table in decision_order(model.decision_tables):
+        ident=table.id
+        if ident not in needed:
+            continue
+        request=by_id.get(ident)
+        if request is None:
+            selected[ident]=None
+            continue
+        facts=facts_from_receipt(receipts.get(ident),request['resource_ref'],request['source_type'],now=current)
+        required={d.table_id for d in table.required_decisions}
+        missing=sorted(d for d in required if selected.get(d) is None)
+        if missing or not facts:
+            status='dependency_unresolved' if missing else 'unknown'
+            target=None
+            row_id=blocking_row=None
+        else:
+            try:
+                combined=_with_decision_facts(facts,table,selected)
+            except ValueError:
+                combined=None
+            if combined is None:
+                status='dependency_fact_conflict'
+                target=None
+                row_id=blocking_row=None
+            else:
+                result=evaluate_table(table,rules,combined,current.date().isoformat())
+                status=result['status']
+                target=result['selected_target_activity_id']
+                row_id=result.get('selected_row_id')
+                blocking_row=result.get('blocking_row_id')
+        selected[ident]=target
+        targets=request['target_activity_ids']
+        matches=target is not None and all(t==target for t in targets)
+        summary={'table_id':ident,'status':status,'checked_on_utc':current.date().isoformat(),
+            'selected_target_activity_id':target,'route_matches':matches,
+            'required_decision_table_ids':sorted(required),'unresolved_required_decision_table_ids':missing,
+            'check_purpose':'visited_route' if targets else 'prerequisite_output',
+            'record_association':'customer_selected_not_independently_established',
+            'policy_document_verified':False,'execution_authorized':False}
+        if table.hit_policy=='FIRST':
+            summary.update(hit_policy='FIRST',selected_row_id=row_id,blocking_row_id=blocking_row,
+                           row_precedence='declared_row_order')
+        results.append(summary)
+    return results

@@ -221,6 +221,100 @@ def test_import_refuses_dependencies_and_preserves_downstream_reference_ids():
     replacement = import_dmn(raw, value, "choose", effective_from="2026-01-01")
     model = ProcessModel.model_validate(replacement["proposed_process_model"])
     assert next(t for t in model.decision_tables if t.id == "audit_table").required_decisions[0].table_id == "purchase"
+    assert replacement['downstream_review_invalidated']==['audit_table']
+
+
+def _dependent_external():
+    from test_process_decision_dependencies import graph as dependent_graph
+    value=dependent_graph()
+    raw=export_dmn(packet(value)).encode()
+    root=ET.fromstring(raw)
+    from shared.process_dmn import PROFILE, FACT_PATH
+    root.attrib.pop(PROFILE)
+    labels={a['id']:a['label'] for a in value['activities']}
+    # Emulate a foreign DMN file whose scalar outputs use human step labels.
+    for req in root.iter('{'+DMN+'}informationRequirement'):
+        req.attrib.pop(FACT_PATH,None)
+    for output in root.iter('{'+DMN+'}outputEntry'):
+        text=output.find('{'+DMN+'}text')
+        import json
+        text.text=json.dumps(labels[json.loads(text.text)])
+    for entry in root.iter('{'+DMN+'}inputEntry'):
+        text=entry.find('{'+DMN+'}text')
+        if text.text in ('"good"','"poor"'):
+            import json
+            text.text=json.dumps(labels[json.loads(text.text)])
+    return value,root
+
+
+def _preview(root,value,assignments=None):
+    import hashlib
+    raw=ET.tostring(root,encoding='utf-8')
+    return import_dmn_batch(raw,value,assignments or [
+        {'index':0,'decision_activity_id':'approval'},{'index':1,'decision_activity_id':'credit'}],
+        document_sha256=hashlib.sha256(raw).hexdigest(),effective_from='2026-01-01')
+
+
+def test_external_dependency_outputs_translate_labels_to_exact_activity_ids():
+    from shared.process_decision_tables import evaluate_decisions
+    value,root=_dependent_external()
+    result=_preview(root,value)
+    proposed=result['proposed_process_model']
+    dependent=next(t for t in proposed['decision_tables'] if t['id']=='approval_table')
+    assert dependent['required_decisions'][0]['fact_path'].startswith('/dmn_dependencies/')
+    rules={r['id']:r for r in proposed['business_rules']}
+    assert {rules[row['rule_id']]['predicate']['conditions'][0]['expected'] for row in dependent['rows']}=={'good','poor'}
+    for table in proposed['decision_tables']:table['user_confirmed']=True
+    for rule in proposed['business_rules']:rule['user_confirmed']=True
+    model=ProcessModel.model_validate(proposed)
+    for score,target in [(700,'approve'),(699,'decline')]:
+        outputs={r['table_id']:r for r in evaluate_decisions(model,{'score':score},'2026-06-01')}
+        assert outputs['approval_table']['selected_target_activity_id']==target
+
+
+def test_dependency_mapping_is_closed_and_unknown_output_is_refused():
+    value,root=_dependent_external()
+    with pytest.raises(DMNError,match='required decision dependency'):
+        _preview(root,value,[{'index':0,'decision_activity_id':'approval'}])
+    for entry in root.iter('{'+DMN+'}inputEntry'):
+        text=entry.find('{'+DMN+'}text')
+        if text.text=='"Good credit"':
+            text.text='"Unmapped label"'
+    with pytest.raises(DMNError,match='exact declared upstream output'):
+        _preview(root,value)
+
+
+def test_dependency_cycles_and_remote_references_refused():
+    value,root=_dependent_external()
+    decisions=root.findall('{'+DMN+'}decision')
+    req=ET.SubElement(decisions[1],'{'+DMN+'}informationRequirement')
+    ET.SubElement(req,'{'+DMN+'}requiredDecision',href='#'+decisions[0].get('id'))
+    table=decisions[1].find('{'+DMN+'}decisionTable')
+    column=ET.SubElement(table,'{'+DMN+'}input')
+    expr=ET.SubElement(column,'{'+DMN+'}inputExpression')
+    ET.SubElement(expr,'{'+DMN+'}text').text=decisions[0].get('name')
+    with pytest.raises(DMNError,match='cycle'):
+        inspect_dmn(ET.tostring(root))
+    req.find('{'+DMN+'}requiredDecision').set('href','https://example.invalid/remote#decision')
+    inspected=inspect_dmn(ET.tostring(root))
+    assert all(row['unsupported_reason'] for row in inspected['decisions'])
+
+
+def test_importing_upstream_clears_review_and_preserves_downstream_dependency():
+    value,root=_dependent_external()
+    result=_preview(root,value,[{'index':1,'decision_activity_id':'credit'}])
+    assert result['downstream_review_invalidated']==['approval_table']
+    table=next(t for t in result['proposed_process_model']['decision_tables'] if t['id']=='approval_table')
+    assert table['required_decisions']==[{'table_id':'credit_table','fact_path':'/decisions/credit'}]
+    assert table['user_confirmed'] is False
+
+
+def test_literal_whitespace_preserved_and_null_equality_refused_on_export():
+    assert unary_test_to_condition('amount','"x  y"').expected=='x  y'
+    value=graph()
+    value['business_rules'][0]['predicate']['conditions'][0].update(operator='eq',expected=None)
+    with pytest.raises(DMNError,match='represented exactly'):
+        export_dmn(packet(value))
 
 
 def test_export_and_import_routes(tmp_path):

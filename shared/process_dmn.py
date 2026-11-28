@@ -2,7 +2,7 @@
 
 OWG decision tables route an exclusive decision by structured predicates over case
 facts. This module writes them as DMN decision tables and reads DMN decision tables
-back, limited to the subset that maps exactly in both directions:
+back, limited to the reviewed declaration subset that maps between the models:
 
 - inputs are simple FEEL paths (``amount``, ``customer.tier``), which become OWG
   JSON pointers (``/amount``, ``/customer/tier``);
@@ -10,7 +10,8 @@ back, limited to the subset that maps exactly in both directions:
   a literal (``5``, ``"gold"``, ``true``), ``> 5``, ``>= 5``, ``< 5``, ``<= 5``,
   ``not(5)``, a list ``"a","b"``, ``not("a","b")``, ``null`` and ``not(null)``;
 - there is exactly one output column, whose entry is the label of the target step
-  as a string literal;
+  as a string literal (or stable activity IDs in the explicit OWG dependent profile);
+- local requiredDecision references to named scalar outputs, imported as a dependency-closed batch;
 - the hit policy is UNIQUE or FIRST.
 
 Anything else (full FEEL, ranges, functions, several outputs, other hit policies)
@@ -33,6 +34,9 @@ DMN = "https://www.omg.org/spec/DMN/20191111/MODEL/"
 DMN_NAMESPACES = {DMN, "http://www.omg.org/spec/DMN/20180521/MODEL/", "https://www.omg.org/spec/DMN/20230324/MODEL/"}
 MAX_BYTES = 256 * 1024
 MAX_TABLES = 12
+OWG = 'https://openworkgraph.local/dmn/dependencies/v1'
+PROFILE = '{'+OWG+'}outputConvention'
+FACT_PATH = '{'+OWG+'}factPath'
 _SEGMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
 _NUMBER = re.compile(r"^-?(?:0|[1-9][0-9]{0,14})(?:\.[0-9]{1,6})?$")
 _STRING = re.compile(r'^"((?:[^"\\]|\\["\\])*)"$')
@@ -126,7 +130,8 @@ def condition_to_test(condition: RuleCondition) -> str:
 
 def unary_test_to_condition(path: str, text: str) -> RuleCondition | None:
     """One FEEL simple unary test as an OWG condition; ``-`` means any value."""
-    text = " ".join(text.split())
+    # Do not collapse whitespace within quoted FEEL literals.
+    text = text.strip()
     if text in ("", "-"):
         return None
     if len(text) > 2000:
@@ -164,24 +169,58 @@ def export_dmn(packet: dict[str, Any]) -> str:
     model = ProcessModel.model_validate(packet["process_model"])
     if not model.decision_tables:
         raise DMNError("This revision has no decision tables to export")
-    if any(t.required_decisions for t in model.decision_tables):
-        # OWG passes the selected step ID; DMN outputs here are step labels.
-        raise DMNError("Decision dependencies cannot be written as DMN required decisions exactly; export without them")
+    dependent = any(t.required_decisions for t in model.decision_tables)
+    table_names = {}
+    if dependent:
+        # Reserve ordinary input roots before assigning names for decision
+        # outputs, so references never shadow actual case facts.
+        rules_by_id = {r.id:r for r in model.business_rules}
+        used = {c.path.split('/')[1] for t in model.decision_tables for row in t.rows
+                for c in rules_by_id[row.rule_id].predicate.conditions}
+        for index, table in enumerate(model.decision_tables,1):
+            name = _unused_id(f"owg_decision_{index}", used)
+            used.add(name)
+            table_names[table.id] = name
+        for table in model.decision_tables:
+            dep_paths={d.fact_path for d in table.required_decisions}
+            conditions=[c for row in table.rows for c in rules_by_id[row.rule_id].predicate.conditions]
+            if not dep_paths <= {c.path for c in conditions}:
+                raise DMNError("Every exported dependency needs an exact input reference")
+            deps={d.fact_path:d for d in table.required_decisions}
+            by_id={t.id:t for t in model.decision_tables}
+            for condition in conditions:
+                if any(_paths_overlap(condition.path,p) and condition.path!=p for p in dep_paths):
+                    raise DMNError("Dependency input paths cannot overlap other fact paths")
+                if condition.path in deps:
+                    upstream=by_id[deps[condition.path].table_id]
+                    mapping={row.target_activity_id:row.target_activity_id for row in upstream.rows}
+                    _translate_dependency_condition(condition,{'fact_path':condition.path,'output_mapping':mapping})
     rules = {r.id: r for r in model.business_rules}
     labels = {a.id: a.label for a in model.activities}
     ET.register_namespace("", DMN)
+    if dependent:
+        ET.register_namespace("owg",OWG)
     root = ET.Element("{" + DMN + "}definitions", {
         "id": "Definitions_OWG", "name": "OpenWorkGraph decisions",
         "namespace": "https://openworkgraph.local/process/" + str(packet["workflow_id"])})
+    if dependent:
+        root.set(PROFILE,"activity-id")
     _sub(root, "documentation").text = (
         f"Exported from reviewed design {packet['workflow_id']} revision {packet['revision']} "
         f"sha256 {packet['content_sha256']}. Declarations only; not policy certification or execution authority.")
     for table_index, table in enumerate(model.decision_tables, 1):
-        decision = _sub(root, "decision", id="Decision_" + table.id, name=labels[table.decision_activity_id])
+        decision = _sub(root, "decision", id="Decision_" + table.id, name=table_names.get(table.id,labels[table.decision_activity_id]))
         basis = table.source_basis
         _sub(decision, "description").text = (
             f"Effective from {table.effective_from}" + (f" until {table.effective_until} (exclusive)" if table.effective_until else "")
             + f". Source: {basis.label} (sha256 {basis.document_sha256}). Confirmed in OWG: {str(table.user_confirmed).lower()}.")
+        dep_names={d.fact_path:table_names[d.table_id] for d in table.required_decisions}
+        if dependent:
+            _sub(decision,"variable",id="Variable_"+table.id,name=table_names[table.id],typeRef="string")
+            for dependency_index,dependency in enumerate(table.required_decisions,1):
+                requirement=_sub(decision,"informationRequirement",id=f"Requirement_{table_index}_{dependency_index}")
+                requirement.set(FACT_PATH,dependency.fact_path)
+                _sub(requirement,"requiredDecision",href="#Decision_"+dependency.table_id)
         dmn_table = _sub(decision, "decisionTable", id="Table_" + table.id, hitPolicy=table.hit_policy)
         paths: list[str] = []
         per_row: list[dict[str, str]] = []
@@ -193,10 +232,17 @@ def export_dmn(packet: dict[str, Any]) -> str:
                 raise DMNError("Rows that match ANY of several conditions cannot be written as one DMN rule")
             entries: dict[str, str] = {}
             for condition in predicate.conditions:
-                path = _pointer_to_path(condition.path)
+                path = dep_names.get(condition.path) or _pointer_to_path(condition.path)
                 if path in entries:
                     raise DMNError("A row with two conditions on the same fact cannot be written as one DMN entry")
-                entries[path] = condition_to_test(condition)
+                test=condition_to_test(condition)
+                try:
+                    restored=unary_test_to_condition(path,test)
+                except (ValueError,DMNError):
+                    raise DMNError("A condition cannot be represented exactly in the supported DMN unary-test subset") from None
+                if (restored is None or restored.operator!=condition.operator or restored.expected!=condition.expected):
+                    raise DMNError("A condition cannot be represented exactly in the supported DMN unary-test subset")
+                entries[path] = test
                 if path not in paths:
                     paths.append(path)
             per_row.append(entries)
@@ -213,9 +259,12 @@ def export_dmn(packet: dict[str, Any]) -> str:
                 entry = _sub(rule, "inputEntry", id=f"InputEntry_{xml_row}_{index}")
                 _sub(entry, "text").text = entries.get(path, "-")
             output = _sub(rule, "outputEntry", id=f"OutputEntry_{xml_row}")
-            _sub(output, "text").text = _literal(labels[row.target_activity_id])
+            _sub(output, "text").text = _literal(row.target_activity_id if dependent else labels[row.target_activity_id])
     ET.indent(root)
-    return '<?xml version="1.0" encoding="UTF-8"?>\n' + ET.tostring(root, encoding="unicode")
+    result='<?xml version="1.0" encoding="UTF-8"?>\n' + ET.tostring(root, encoding="unicode")
+    if len(result.encode('utf-8'))>MAX_BYTES:
+        raise DMNError('Export exceeds the bounded DMN file size')
+    return result
 
 
 # ---------------------------------------------------------------- import
@@ -235,7 +284,7 @@ def _text_of(element, name="text") -> str:
     return (nodes[0].text or "") if nodes else ""
 
 
-def _document(raw: bytes) -> list[ET.Element]:
+def _document(raw: bytes) -> tuple[list[ET.Element],bool]:
     if not isinstance(raw, bytes) or not raw or len(raw) > MAX_BYTES:
         raise DMNError("DMN must be a nonempty UTF-8 file of at most 256 KiB")
     try:
@@ -258,15 +307,19 @@ def _document(raw: bytes) -> list[ET.Element]:
     decisions = [decision for decision in _child(root, "decision") if _child(decision, "decisionTable")]
     if not 1 <= len(decisions) <= MAX_TABLES:
         raise DMNError(f"Choose a DMN file with 1 to {MAX_TABLES} decision tables")
-    return decisions
+    profile=root.get(PROFILE)
+    if profile not in (None,'activity-id'):
+        raise DMNError('Unknown OWG decision output convention')
+    return decisions,profile=='activity-id'
 
 
-def _unsupported(decision: ET.Element) -> str | None:
+def _unsupported(decision: ET.Element, *, allow_dependencies=False) -> str | None:
     if any(_child(decision, tag) for tag in ("informationRequirement", "knowledgeRequirement", "authorityRequirement")):
         # A requiredInput declares a fact already named by a simple input expression.
         requirements = _child(decision, "informationRequirement")
         if (_child(decision, "knowledgeRequirement") or _child(decision, "authorityRequirement") or
-                any(not _child(requirement, "requiredInput") or len(requirement) != 1 for requirement in requirements)):
+                any(len(requirement)!=1 or not (_child(requirement,"requiredInput") or
+                    (allow_dependencies and _child(requirement,"requiredDecision"))) for requirement in requirements)):
             return "This table has decision, knowledge or authority dependencies"
     tables = _child(decision, "decisionTable")
     if len(tables) != 1 or any(_child(decision, tag) for tag in (
@@ -280,14 +333,107 @@ def _unsupported(decision: ET.Element) -> str | None:
     outputs = _child(table, "output")
     if len(outputs) != 1:
         return "A decision table needs exactly one output naming the next step"
+    if outputs[0].get('typeRef') not in (None,'string'):
+        return 'The next-step output must be a scalar string'
     if (_child(outputs[0], "defaultOutputEntry") or _child(outputs[0], "outputValues") or
             any(_child(column, "inputValues") for column in _child(table, "input"))):
         return "Default outputs and separately declared input or output domains are unsupported"
     return None
 
 
+def _paths_overlap(a,b):
+    return a==b or a.startswith(b+'/') or b.startswith(a+'/')
+
+
+def _input_paths(decision):
+    table=_child(decision,'decisionTable')[0]
+    paths=[]
+    for column in _child(table,'input'):
+        expressions=_child(column,'inputExpression')
+        if len(expressions)!=1:
+            raise DMNError('Every input needs one input expression')
+        paths.append(_text_of(expressions[0]).strip())
+    if len(set(paths))!=len(paths):
+        raise DMNError('Choose a table with a distinct path for each input')
+    return paths
+
+
+def _dependency_graph(decisions,profile):
+    """Map local requiredDecision references to exact scalar decision names."""
+    ids={}
+    for index,decision in enumerate(decisions):
+        ident=decision.get('id')
+        if ident:
+            if ident in ids:
+                raise DMNError('DMN decision dependencies require unique document IDs')
+            ids[ident]=index
+    graph={i:[] for i in range(len(decisions))}
+    errors={}
+    for index,decision in enumerate(decisions):
+        unsupported=_unsupported(decision,allow_dependencies=True)
+        if unsupported:
+            errors[index]=unsupported
+            continue
+        try:
+            paths=_input_paths(decision)
+            used=set()
+            for requirement in _child(decision,'informationRequirement'):
+                refs=_child(requirement,'requiredDecision')
+                if not refs:
+                    continue
+                href=refs[0].get('href','')
+                source=ids.get(href[1:]) if href.startswith('#') else None
+                if source is None or source==index or source in used:
+                    raise DMNError('Decision dependencies need distinct local decision-table references')
+                upstream=decisions[source]
+                name=upstream.get('name','')
+                variables=_child(upstream,'variable')
+                if (not _SEGMENT.fullmatch(name) or len(variables)!=1
+                        or variables[0].get('name')!=name
+                        or variables[0].get('typeRef') not in (None,'string')
+                        or sum(d.get('name')==name for d in decisions)!=1 or name not in paths):
+                    raise DMNError('Decision dependencies require a unique named scalar output used as an exact input expression')
+                if profile:
+                    fact_path=requirement.get(FACT_PATH)
+                    if not fact_path or not fact_path.startswith('/') or _path_to_pointer(_pointer_to_path(fact_path))!=fact_path:
+                        raise DMNError('OWG dependency profile requires an exact simple fact path')
+                else:
+                    fact_path='/dmn_dependencies/'+name
+                graph[index].append({'index':source,'input_name':name,'fact_path':fact_path})
+                used.add(source)
+            dep_names={r['input_name'] for r in graph[index]}
+            dep_paths=[r['fact_path'] for r in graph[index]]
+            ordinary=[_path_to_pointer(p) for p in paths if p not in dep_names] if dep_paths else []
+            if profile:
+                decision_names={d.get('name') for d in decisions}
+                if any(p.split('.')[0] in decision_names for p in paths if p not in dep_names):
+                    raise DMNError('An OWG decision output reference needs an explicit local dependency')
+
+            if any(_paths_overlap(a,b) for i,a in enumerate(dep_paths) for b in dep_paths[i+1:]+ordinary):
+                raise DMNError('Decision dependency paths overlap other inputs')
+        except (DMNError,ValueError,TypeError):
+            errors[index]='Unsupported or unresolved decision dependencies or input paths'
+    state={};order=[]
+    def visit(index):
+        if state.get(index)==2:return
+        if state.get(index)==1:
+            raise DMNError('Decision dependencies must not form a cycle')
+        state[index]=1
+        for dep in graph[index]:
+            visit(dep['index'])
+        state[index]=2
+        order.append(index)
+    for index in graph:
+        visit(index)
+    for index in order:
+        if any(dep['index'] in errors for dep in graph[index]):
+            errors[index]='A required decision dependency is unsupported'
+    return graph,order,errors
+
+
 def inspect_dmn(raw: bytes) -> dict[str, Any]:
-    decisions = _document(raw)
+    decisions,profile = _document(raw)
+    graph,_,errors=_dependency_graph(decisions,profile)
     entries = []
     for index, decision in enumerate(decisions):
         table = _child(decision, "decisionTable")[0]
@@ -295,10 +441,11 @@ def inspect_dmn(raw: bytes) -> dict[str, Any]:
             "index": index, "name": " ".join((decision.get("name") or "").split())[:200],
             "hit_policy": table.get("hitPolicy", "UNIQUE")[:20],
             "rule_count": len(_child(table, "rule")),
-            "unsupported_reason": _unsupported(decision),
+            "unsupported_reason": errors.get(index),
+            "required_decision_indices":[r['index'] for r in graph[index]],
         })
     return {"format": "openworkgraph.dmn-inspection.v1", "document_sha256": hashlib.sha256(raw).hexdigest(),
-            "decisions": entries}
+            "output_convention":"activity_id" if profile else "step_label","decisions": entries}
 
 
 def _unused_id(base: str, existing: set[str]) -> str:
@@ -311,8 +458,10 @@ def _unused_id(base: str, existing: set[str]) -> str:
 
 
 def _propose(model_value: dict[str, Any], decision: ET.Element, decision_activity_id: str,
-             document_sha256: str, effective_from: str, effective_until: str | None) -> dict[str, Any]:
-    unsupported = _unsupported(decision)
+             document_sha256: str, effective_from: str, effective_until: str | None, *,
+             profile=False, dependencies=None, allow_replace_dependencies=False) -> dict[str, Any]:
+    dependencies=dependencies or {}
+    unsupported = _unsupported(decision,allow_dependencies=bool(dependencies))
     if unsupported:
         raise DMNError(unsupported)
     model = ProcessModel.model_validate(model_value)
@@ -322,12 +471,12 @@ def _propose(model_value: dict[str, Any], decision: ET.Element, decision_activit
         raise DMNError("Choose a decision step of the saved design")
     existing_table = next((table for table in model.decision_tables
                            if table.decision_activity_id == decision_activity_id), None)
-    if existing_table is not None and existing_table.required_decisions:
+    if existing_table is not None and existing_table.required_decisions and not allow_replace_dependencies:
         raise DMNError("This design table has required decisions that DMN import cannot preserve")
     targets = {}
     for edge in model.transitions:
         if edge.source == decision_activity_id:
-            label = activities[edge.target].label
+            label = edge.target if profile else activities[edge.target].label
             if label in targets and targets[label] != edge.target:
                 raise DMNError("Each next step must have a distinct label in the saved design")
             targets[label] = edge.target
@@ -351,15 +500,21 @@ def _propose(model_value: dict[str, Any], decision: ET.Element, decision_activit
             raise DMNError("Every rule needs one entry per input and one output entry")
         target_label = _parse_literal(_text_of(out[0]))
         if not isinstance(target_label, str) or target_label not in targets:
-            raise DMNError("Every output entry must name one of the decision's next steps by its label")
+            raise DMNError("Every output entry must name an exact next step using the document output convention")
         target = targets[target_label]
         if target in seen_targets:
             raise DMNError("Each next step may appear in only one rule, as in OWG decision tables")
         seen_targets.add(target)
         try:
-            conditions = [
-                c for c in (unary_test_to_condition(p, _text_of(e)) for p, e in zip(paths, entries)) if c
-            ]
+            conditions=[]
+            for path,entry in zip(paths,entries):
+                dependency=dependencies.get(path)
+                condition=unary_test_to_condition(path,_text_of(entry))
+                if condition is None:
+                    continue
+                if dependency:
+                    condition=_translate_dependency_condition(condition,dependency)
+                conditions.append(condition)
         except DMNError:
             raise
         except ValueError:
@@ -410,7 +565,8 @@ def _propose(model_value: dict[str, Any], decision: ET.Element, decision_activit
         "effective_from": effective_from, "effective_until": effective_until,
         "source_basis": {"label": label, "document_sha256": document_sha256,
                          "basis": "human_declared_document_digest", "independently_verified": False},
-        "rows": rows, "user_confirmed": False, "execution_authorized": False}]
+        "rows": rows, "user_confirmed": False, "execution_authorized": False,
+        **({"required_decisions":[{"table_id":d["table_id"],"fact_path":d["fact_path"]} for d in dependencies.values()]} if dependencies else {})}]
     try:
         proposed = ProcessModel.model_validate(proposed).model_dump()
     except ValueError:
@@ -422,57 +578,143 @@ def _propose(model_value: dict[str, Any], decision: ET.Element, decision_activit
         "hit_policy": hit,
         "proposed_rules": rules,
         "proposed_table_rows": rows,
+        "required_decisions":[{"table_id":d["table_id"],"fact_path":d["fact_path"]} for d in dependencies.values()],
         "warnings": ["dmn_is_untrusted_data", "imported_rules_and_table_are_unconfirmed",
                      "add_effective_dates_and_source_basis_before_saving"],
         "process_model_saved": False, "execution_authorized": False,
     }
 
 
+def _translate_dependency_condition(condition,dependency):
+    op=condition.operator
+    expected=condition.expected
+    if op not in {'eq','ne','in','not_in','exists','not_exists'}:
+        raise DMNError('Decision output references support only equality, membership or existence tests')
+    if op not in {'exists','not_exists'}:
+        values=expected if isinstance(expected,list) else [expected]
+        mapping=dependency['output_mapping']
+        if any(not isinstance(value,str) or value not in mapping for value in values):
+            raise DMNError('A dependency test must reference an exact declared upstream output')
+        converted=[mapping[v] for v in values]
+        expected=converted if isinstance(expected,list) else converted[0]
+    return RuleCondition(path=dependency['fact_path'],operator=op,expected=expected)
+
+
+def _output_mapping(decision,model_value,target,profile):
+    model=ProcessModel.model_validate(model_value)
+    labels={a.id:a.label for a in model.activities}
+    result={}
+    for edge in model.transitions:
+        if edge.source==target:
+            name=edge.target if profile else labels[edge.target]
+            if name in result:
+                raise DMNError('Every upstream output needs a distinct next-step identity')
+            result[name]=edge.target
+    return result
+
+
+def _invalidate_downstream(value,replaced):
+    """Changing a prerequisite invalidates review of all dependent tables."""
+    tables=value.get('decision_tables',[])
+    dirty=set(replaced)
+    changed=True
+    while changed:
+        changed=False
+        for table in tables:
+            if table['id'] not in dirty and any(d['table_id'] in dirty for d in table.get('required_decisions',[])):
+                dirty.add(table['id']);changed=True
+    for table in tables:
+        if table['id'] in dirty:
+            table['user_confirmed']=False
+    return sorted(dirty-replaced)
+
+
 def import_dmn(raw: bytes, model_value: dict[str, Any], decision_activity_id: str, *,
                effective_from: str, effective_until: str | None = None,
                decision_name: str | None = None) -> dict[str, Any]:
-    """Propose unconfirmed rules and a table for one decision."""
-    decisions = _document(raw)
-    if decision_name is not None:
-        decisions = [decision for decision in decisions if decision.get("name") == decision_name]
-    if len(decisions) != 1:
+    """Propose unconfirmed rules and a table for one independent decision."""
+    decisions,profile = _document(raw)
+    graph,_,errors=_dependency_graph(decisions,profile)
+    selected=[i for i,d in enumerate(decisions) if decision_name is None or d.get('name')==decision_name]
+    if len(selected)!=1:
         raise DMNError("Select exactly one DMN decision with a decision table")
-    return _propose(model_value, decisions[0], decision_activity_id, hashlib.sha256(raw).hexdigest(),
-                    effective_from, effective_until)
+    index=selected[0]
+    if index in errors:
+        raise DMNError(errors[index])
+    if graph[index]:
+        raise DMNError('Decision dependencies require batch import with every required table mapped')
+    result=_propose(model_value,decisions[index],decision_activity_id,hashlib.sha256(raw).hexdigest(),
+                    effective_from,effective_until,profile=profile)
+    value=result['proposed_process_model']
+    replaced={t['id'] for t in value['decision_tables'] if t['decision_activity_id']==decision_activity_id}
+    result['downstream_review_invalidated']=_invalidate_downstream(value,replaced)
+    return result
 
 
 def import_dmn_batch(raw: bytes, model_value: dict[str, Any], assignments: Any, *,
                      document_sha256: str, effective_from: str, effective_until: str | None = None) -> dict[str, Any]:
-    """Prepare one validated draft from distinct document-to-design assignments."""
-    decisions = _document(raw)
+    """Prepare one validated dependency-closed draft from distinct assignments."""
+    decisions,profile = _document(raw)
     if hashlib.sha256(raw).hexdigest() != document_sha256:
         raise DMNError("The DMN file changed. Inspect it again before previewing.")
-    if not isinstance(assignments, list) or not 1 <= len(assignments) <= len(decisions):
+    if not isinstance(assignments,list) or not 1<=len(assignments)<=len(decisions):
         raise DMNError("Select one or more DMN tables to import")
-    used_indices, used_targets = set(), set()
-    results = []
+    mapping={};used_targets=set()
     for assignment in assignments:
-        if not isinstance(assignment, dict) or set(assignment) != {"index", "decision_activity_id"}:
+        if not isinstance(assignment,dict) or set(assignment)!={"index","decision_activity_id"}:
             raise DMNError("Choose a design decision for each selected DMN table")
-        index, target = assignment["index"], assignment["decision_activity_id"]
-        if (type(index) is not int or not 0 <= index < len(decisions) or not isinstance(target, str)
-                or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]{0,63}", target)):
+        index,target=assignment["index"],assignment["decision_activity_id"]
+        if (type(index) is not int or not 0<=index<len(decisions) or not isinstance(target,str)
+                or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]{0,63}",target)):
             raise DMNError("Choose a design decision for each selected DMN table")
-        if index in used_indices or target in used_targets:
+        if index in mapping or target in used_targets:
             raise DMNError("Each selected table and design decision must be mapped once")
-        used_indices.add(index)
-        used_targets.add(target)
+        mapping[index]=target;used_targets.add(target)
+    graph,order,errors=_dependency_graph(decisions,profile)
+    for index in mapping:
+        if index in errors:
+            raise DMNError(f"DMN table {index+1}: {errors[index]}")
+        if any(d['index'] not in mapping for d in graph[index]):
+            raise DMNError(f"DMN table {index+1}: map every required decision dependency")
+    value=ProcessModel.model_validate(model_value).model_dump()
+    # Do not silently remove dependencies when importing an unrelated table.
+    existing_by_target={t['decision_activity_id']:t for t in value.get('decision_tables',[])}
+    for index,target in mapping.items():
+        if existing_by_target.get(target,{}).get('required_decisions') and not graph[index]:
+            raise DMNError(f'DMN table {index+1}: replacing a dependent table requires its dependency declaration')
+    # Clear selected tables' old links in the private draft only. Rebuild in
+    # dependency order; keep stable table IDs and invalidate downstream review.
+    replaced={t['id'] for t in value.get('decision_tables',[]) if t['decision_activity_id'] in used_targets}
+    invalidated=_invalidate_downstream(value,replaced)
+    for table in value.get('decision_tables',[]):
+        if table['id'] in replaced:
+            table.pop('required_decisions',None)
+    imported={};results=[]
+    for index in order:
+        if index not in mapping:
+            continue
+        target=mapping[index]
+        dependencies={}
+        for dep in graph[index]:
+            upstream=dep['index']
+            dependencies[dep['input_name']]={**dep,'table_id':imported[upstream],
+                'output_mapping':_output_mapping(decisions[upstream],value,mapping[upstream],profile)}
         try:
-            proposal = _propose(model_value, decisions[index], target, document_sha256,
-                                effective_from, effective_until)
+            proposal=_propose(value,decisions[index],target,document_sha256,effective_from,effective_until,
+                profile=profile,dependencies=dependencies,allow_replace_dependencies=True)
         except DMNError as exc:
-            raise DMNError(f"DMN table {index + 1}: {exc}") from None
-        model_value = proposal["proposed_process_model"]
-        results.append({"index": index, **{key: proposal[key] for key in (
-            "decision_activity_id", "hit_policy", "proposed_rules", "proposed_table_rows")}})
-    return {"format": "openworkgraph.dmn-batch-import-preview.v1",
-            "proposed_process_model": model_value, "proposals": results,
-            "document_sha256": document_sha256, "process_model_saved": False, "execution_authorized": False}
+            raise DMNError(f"DMN table {index+1}: {exc}") from None
+        value=proposal['proposed_process_model']
+        imported[index]=next(t['id'] for t in value['decision_tables'] if t['decision_activity_id']==target)
+        results.append({"index":index,**{k:proposal[k] for k in
+            ("decision_activity_id","hit_policy","proposed_rules","proposed_table_rows","required_decisions")}})
+    try:
+        value=ProcessModel.model_validate(value).model_dump()
+    except ValueError:
+        raise DMNError('The complete imported decision dependency graph does not fit the saved design') from None
+    return {"format":"openworkgraph.dmn-batch-import-preview.v1","proposed_process_model":value,
+            "proposals":results,"downstream_review_invalidated":invalidated,
+            "document_sha256":document_sha256,"process_model_saved":False,"execution_authorized":False}
 
 
 __all__ = ["DMNError", "condition_to_test", "export_dmn", "import_dmn", "import_dmn_batch",

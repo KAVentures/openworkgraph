@@ -91,9 +91,6 @@ def build_runtime_spec(packet: dict) -> dict:
                     execution_schedule='serial_token_valid_node_order')
     if model.decision_tables:
         from .process_decision_tables import runtime_contract
-        if any(t.required_decisions for t in model.decision_tables):
-            raise ValueError('Generated projects do not yet run dependent decision tables; '
-                             'check them against supplied cases instead')
         spec['decision_table_contract'] = runtime_contract(model)
     origin = packet.get('organization_catalog_reference')
     if origin is not None:
@@ -109,7 +106,7 @@ def build_runtime_project(packet: dict) -> bytes:
     spec = build_runtime_spec(packet)
     model = ProcessModel.model_validate(spec['process_model'])
     files = {name: (_TEMPLATES / (name + '.txt')).read_text(encoding='utf-8')
-             for name in ('agent.py', 'runtime.py', 'test_shadow.py', 'test_agent_sdk.py', 'execute.py', 'test_execution.py', 'monitor.py', 'test_monitor.py', 'send_report.py', 'stop.py', 'configure.py', 'test_configuration.py', 'evaluate.py', 'test_evaluation.py', 'plan_sources.py', 'test_source_planning.py', 'evaluate_sources.py', 'test_source_evaluation.py', 'check_runtime.py', 'review_bindings.py', 'test_binding_rehearsal.py')}
+             for name in ('agent.py', 'runtime.py', 'test_shadow.py', 'test_agent_sdk.py', 'execute.py', 'test_execution.py', 'monitor.py', 'test_monitor.py', 'send_report.py', 'stop.py', 'configure.py', 'test_configuration.py', 'evaluate.py', 'test_evaluation.py', 'plan_sources.py', 'test_source_planning.py', 'evaluate_sources.py', 'test_source_evaluation.py', 'check_runtime.py', 'review_bindings.py', 'test_binding_rehearsal.py', 'route_candidates.py', 'review_facts.py')}
     for name in ('run_queue.py', 'test_run_queue.py'):
         files[name] = (_TEMPLATES / (name + '.txt')).read_text(encoding='utf-8')
     files['owg_report_signing.py'] = (Path(__file__).parent/'automation_report_signing.py').read_text(encoding='utf-8')
@@ -119,9 +116,10 @@ def build_runtime_project(packet: dict) -> bytes:
         files['test_decisions.py'] = (_TEMPLATES / 'test_decisions.py.txt').read_text(encoding='utf-8')
         files['decision_runtime.py'] = (_TEMPLATES / 'decision_runtime.py.txt').read_text(encoding='utf-8')
     if spec.get('control_flow_contract') or model.decision_tables:
-        files['owg_model/__init__.py'] = '"""Portable OWG process validation; no source or tool execution."""\n'
-        for name in ('process_model.py','process_parallel.py','process_opportunities.py','process_rule_conditions.py','process_decision_tables.py'):
-            files['owg_model/'+name]=(Path(__file__).parent/name).read_text(encoding='utf-8')
+        files['test_route_parallel.py'] = (_TEMPLATES / 'test_route_parallel.py.txt').read_text(encoding='utf-8')
+    files['owg_model/__init__.py'] = '"""Portable OWG process validation; no source or tool execution."""\n'
+    for name in ('process_model.py','process_parallel.py','process_opportunities.py','process_rule_conditions.py','process_decision_tables.py'):
+        files['owg_model/'+name]=(Path(__file__).parent/name).read_text(encoding='utf-8')
     files['LICENSE'] = (_TEMPLATES / 'LICENSE.txt').read_text(encoding='utf-8')
     files['workflow.spec.json'] = json.dumps(spec, indent=2, ensure_ascii=False) + '\n'
     files['synthetic-cases.json'] = json.dumps(synthetic_routes(model), indent=2) + '\n'
@@ -150,7 +148,8 @@ def build_runtime_project(packet: dict) -> bytes:
         example['decision_table_checks'] = [dict(table_id=t.id, source_type=None, resource_ref_pointer=None,
             mode='first_route_before_each_action' if t.hit_policy=='FIRST' else 'unique_route_before_each_action', record_semantics_reviewed=False,
             non_atomic_reads_reviewed=False, utc_effective_dates_reviewed=False,
-            **({'row_precedence_reviewed':False} if t.hit_policy=='FIRST' else {})) for t in model.decision_tables]
+            **({'row_precedence_reviewed':False} if t.hit_policy=='FIRST' else {}),
+            **({'dependency_semantics_reviewed':False} if t.required_decisions else {})) for t in model.decision_tables]
         files['tool-bindings.example.json'] = json.dumps(example, indent=2) + '\n'
     files['customer-intent.example.json'] = json.dumps({
         'format':'openworkgraph.customer-execution-intent.v1', 'process_reference':process_reference,
@@ -501,6 +500,46 @@ def build_runtime_project(packet: dict) -> bytes:
         "Then add --schemas tool-schemas.json to the offline rehearsal. The bundle must match every inspected schema digest. "
         "Unsupported schema constructs (including references, regex, formats and combinators) block the corresponding route; "
         "this is bounded nested validation, not unrestricted JSON Schema or authorization.\n"
+    )
+    if any(t.required_decisions for t in model.decision_tables):
+        files['README.md'] += (
+            "\n## Current-source dependent decision runtime\n\n"
+            "Review every prerequisite table and its exact observed-record binding, even if its decision activity "
+            "is not visited by the chosen route. Dependent bindings require dependency_semantics_reviewed true. "
+            "The runtime injects selected prerequisite target IDs only at the declared non-source fact paths; "
+            "caller and model values cannot supply those outputs. Before each action and at completion, "
+            "the entire required closure is read and evaluated in dependency order with a single UTC check clock. "
+            "Missing, stale, ambiguous or disagreeing decisions stop further actions. Reads are not atomic.\n"
+        )
+    files['README.md'] += (
+        "\n## Deterministic current-source route planning (no model)\n\n"
+        "Run python plan_sources.py --case case.json --bindings tool-bindings.json "
+        "--deterministic --confirm-source-reads. No model-sharing consent or provider model credential is needed; "
+        "case data stays in the local runtime, although explicitly selected source references are read via OWG. "
+        "The bounded graph/token search proposes only a unique supported schedule, refuses competing or unresolved "
+        "routes and reports search limits. Distinct parallel schedules are not assumed interchangeable. "
+        "A proposal never approves tool mappings or business actions. Review and authorize implementation separately.\n"
+        "\nFor reviewed case suites, run evaluate_sources.py with --deterministic, or --paired-model MODEL "
+        "and --confirm-model-rule-check-sharing to compare both planners on the same per-case receipt snapshot. "
+        "Both modes require --confirm-source-reads, --cases, --bindings and --output. "
+        "Paired disagreement and incomplete deterministic search remain explicit review findings.\n"
+    )
+    files['README.md'] += (
+        "\n## Offline declared-fact scenario review\n\n"
+        "Use a customer-reviewed shadow suite whose input objects contain hypothetical facts. "
+        "Run python review_facts.py --cases reviewed-cases.json --as-of-date YYYY-MM-DD "
+        "--output fact-review.json --confirm-declared-fact-review. "
+        "Checks include arbitrary supported predicates, effective dates and dependent decisions using the shared evaluators. "
+        "No network, source reads or model calls occur. The report is not an execution plan; "
+        "caller facts are not authoritative source evidence. Unresolved searches require review.\n"
+        "\nFor cross-revision review, provide --baseline-release and --candidate-release directories, "
+        "--baseline-manifest-sha256 and --candidate-manifest-sha256 independently recorded pins, "
+        "--baseline-cases OLD_SUITE and --cases NEW_SUITE, with the same scenario date and confirmation. "
+        "Both suites must contain identical ordered case IDs, categories and facts. "
+        "This evaluator reads the two pinned specifications; it never executes historical release code.\n"
+        "\nFor fixed-design effective-period review, add --until-date YYYY-MM-DD (exclusive) to single-date "
+        "scenario review. Each declared policy start/expiry partitions the period; case facts and expectations "
+        "remain fixed. Search-budget exhaustion and behavior changes require review.\n"
     )
     files['verify_release.py'] = Path(release_integrity.__file__).read_text(encoding='utf-8')
     files['release-manifest.json'] = create_manifest(files, spec)

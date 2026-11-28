@@ -192,7 +192,10 @@ def replay_node_ids(node_ids, model, *, max_work=MAX_FIRING_REPLAY_WORK):
     if not complete:
         raise ValueError('Node-firing sequence leaves unfinished branches or no terminal completion')
     used = sorted(set().union(*complete))
+    guaranteed = sorted(set.intersection(*(set(history) for history in complete)))
     return {'transition_indices': used,
+            'guaranteed_transition_indices': guaranteed,
+            'distinct_complete_edge_histories': len(complete),
             'rule_ids': sorted({model.transitions[p].rule_id for p in used if model.transitions[p].rule_id}),
             'work_count': work, 'all_produced_branch_tokens_consumed': True}
 

@@ -338,9 +338,10 @@ rules then test that path, for example `/decisions/credit eq "good"`.
 - The per-rule list in a case check still evaluates each rule against the supplied facts
   only; the decision-table results carry the dependency-aware outcome.
 - BPMN export keeps the declaration in the table's documentation, and BPMN import reads it
-  back. DMN export and generated agent projects refuse designs with dependent tables for
-  now (DMN outputs are step labels, while dependencies pass step IDs); use supplied-case
-  checks instead.
+  back. Dependent DMN interchange now supports the bounded local scalar-decision
+  profile described below. Generated SDK projects use a
+  distinct dependent current-source runtime contract; arbitrary caller facts
+  are not accepted as runtime decision evidence.
 
 In the catalog editor, each decision table has **Add required decision** (choose the
 other table and a fact path). Changing or removing a dependency clears table
@@ -412,8 +413,8 @@ that the file is the same one you inspected. The API uses
 `assignments` query parameter containing an array of
 `{"index":0,"decision_activity_id":"choose"}` entries. Include
 `workflow_id`, `revision`, `document_sha256`, `effective_from`, and optionally
-`effective_until`. A file may contain up to 12 tables. Decision and knowledge
-dependencies and imported definitions are refused in this DMN subset.
+`effective_until`. A file may contain up to 12 tables. Local scalar decision dependencies are supported as a dependency-closed batch.
+Knowledge dependencies and imported definitions remain refused.
 
 Only what maps exactly is accepted, in both directions:
 
@@ -428,6 +429,372 @@ ANY, PRIORITY and other hit policies; several outputs; rows whose OWG predicate
 matches ANY of several conditions or tests one fact twice; and fact paths that are not
 simple identifiers. The DMN file is untrusted data. DOCTYPE and entities are rejected,
 size is bounded, and nothing is evaluated or executed.
+
+
+## Dependent current-source agent runtime (R17/R21)
+
+Generated projects with required decisions use
+`openworkgraph.current-source-dependent-decision.v1`. Independent UNIQUE and
+FIRST designs retain their previous contracts. Example bindings remain
+disabled. Each dependent table additionally requires
+`dependency_semantics_reviewed: true`; every table in the transitive closure
+requires an explicit, separately reviewed current-source record binding,
+including a prerequisite whose graph node is not visited.
+
+A table's supported conditions may refer to the three authenticated source
+fields or the exact declared dependency paths. Dependency paths must be
+outside the /source namespace. The runtime computes prerequisite selected
+target IDs in dependency order and injects them into a private copy of the
+table's own receipt-derived facts. No caller or model value can supply a
+dependency. Even a purely dependency-based table needs a valid current
+receipt under this conservative contract. Arbitrary domain facts such as
+credit scores, unsupported source fields, and unreviewed tables remain
+blocked.
+
+The planner and source-aware shadow evaluation use the same dependency
+closure engine. A missing, stale, ambiguous, unconfirmed or unresolved
+prerequisite withholds the downstream selection; a disagreeing visited
+decision rejects the route. A prerequisite-only check selects an output but
+does not claim that the prerequisite activity was executed.
+
+The customer executor recomputes the entire required closure before tools,
+before write preconditions, before mapped actions and at completion. Each
+distinct record/type is read once per decision checkpoint, and all receipts
+are revalidated against a common UTC consumer clock. No checkpoint is reused
+across actions. Reads are non-atomic and cannot undo an already attempted
+operation. The existing exact intent, review, source consent, conditional
+write, idempotency and independent terminal outcome checks still apply.
+
+The journal records the declared required table IDs and route targets,
+numbered checks in dependency order, unresolved prerequisite IDs and
+selected targets. The monitor validates closure, order, consistency and
+checkpoint presence before reported attempts and successful completion.
+The journal remains a customer assertion, not signed provider evidence or
+proof that the declared route was complete. Source values and references
+are not included in decision check rows.
+
+Generated synthetic tests cover mixed FIRST/UNIQUE dependencies, unvisited
+prerequisites, separate source identity, stale receipts, missing bindings,
+source namespace conflicts, write-precondition drift, omitted journal
+checks and source-aware SDK shadow evaluation. Real provider and customer
+acceptance remain separate.
+
+
+## DMN interchange with required decisions
+
+The existing DMN inspector and batch-import preview now support local
+`informationRequirement/requiredDecision` references between selected
+decision tables. Each referenced decision must have a unique simple name,
+a matching scalar string variable and an exact downstream input expression
+using that name. All prerequisites must be explicitly mapped to existing
+design decisions in the same batch. Cycles, external references, missing
+tables, unsupported expressions and overlapping dependency/fact paths are
+refused. No FEEL execution or remote XML resolution takes place.
+
+For external documents, the existing output convention names a next step
+by its unique label. Dependency equality and membership literals must name
+one of the exact upstream outputs, and are translated to stable OWG activity
+IDs. Derived facts use /dmn_dependencies/<decision_name>. Existence tests
+remain declaration checks; OWG's unknown/unresolved semantics are not
+claimed to match arbitrary FEEL engines.
+
+For exports containing dependencies, OWG uses an explicit
+`https://openworkgraph.local/dmn/dependencies/v1` profile: the definitions
+attribute declares the activity-ID output convention; generated simple
+decision/variable names are referenced through ordinary requiredDecision
+links; an OWG namespaced factPath attribute preserves the original derived
+fact path. This profile round-trips into a design with matching activity IDs.
+Independent exports keep the previous label convention. Third-party
+acceptance of this extension is not certified. Unsupported literals or
+operators are refused rather than silently rewritten.
+
+The inspector reports required table indices and the dashboard shows the
+mapping closure and proposed dependency paths. The import updates one
+unsaved draft, preserves existing table IDs, clears confirmations on
+imported rules/tables and invalidates the review of every transitively
+affected downstream table. Replacing a dependent table without its
+dependency declaration is refused. Review dates and source basis are still
+explicit input; importing is not permission to execute.
+
+Tests exercise dependent export/import round trips through the actual OWG
+decision evaluator, external label-to-ID translation, dependency cycles,
+remote references, incomplete assignments, downstream review invalidation,
+quoted literal whitespace and unsupported literal refusal. Full DMN/FEEL
+interoperability, third-party engine acceptance and arbitrary source facts
+remain outside this scope.
+
+
+## Deterministic source-aware route proposals (no model)
+
+Generated SDK projects also support a local alternative to model planning:
+
+```sh
+python plan_sources.py --case case.json --bindings tool-bindings.json \
+  --deterministic --confirm-source-reads
+```
+
+At least one reviewed source binding is needed. No model is invoked, so no
+model credential or model-sharing consent is required. The existing explicit
+source-read authorization, exact record references, catalog checks and receipt
+freshness checks remain. The case is processed locally; selected record
+references go to the authorized OWG source verifier.
+
+The deterministic search examines linear paths or complete serial token-firing
+schedules. It distinguishes excluded branches, supported schedules and
+unresolved schedules. An unknown source condition, unconfirmed or natural
+language rule, human activity or manual condition withholds support. A
+proposal is emitted only if exactly one schedule is supported, no unresolved
+alternative remains and search completed within the bounds. Parallel firing
+orders are not treated as interchangeable. Work, states, path length and
+candidate limits produce an explicit incomplete result rather than a guessed
+unique route. Reported counts are discovered schedules when search is
+incomplete. The structural replay contract remains authoritative.
+
+The report contains minimized activity IDs, reason codes and search counts,
+not case values or raw receipts. The source snapshot is rechecked for expiry
+after the shared catalog recheck and the existing final route checks still
+apply. A unique route is neither independent policy verification nor a tool
+mapping approval, execution authorization or business outcome attestation.
+Synthetic fixtures cover competing and unresolved alternatives, source
+expiry, no-model consent, dependent tables and parallel schedules.
+
+
+### Reviewed batch comparison
+
+The generated evaluate_sources.py command now supports three mutually
+exclusive planning modes: --model MODEL, --deterministic, and --paired-model MODEL.
+Supply --cases, --bindings, --output and --confirm-source-reads. The model
+and paired modes additionally require --confirm-model-rule-check-sharing.
+Deterministic-only batches never invoke a model.
+
+Paired evaluation runs one model and the deterministic planner on the
+same reviewed case and per-case source receipts. Both candidates are compared
+against customer expectations at the same final receipt-freshness boundary.
+The model saw minimized check results earlier, before inference; this is not
+a controlled timing or accuracy benchmark. The report separates both-match,
+model-only, deterministic-only and neither-match cases and summarizes them
+by case category. Incomplete deterministic search remains a review finding
+even if the clarification itself matches the expectation. No raw case data,
+model text or receipt values appear in the saved report. The eight-case
+and source-record limits still apply. No business execution is authorized.
+
+
+### Dependent execution journal integrity
+
+For the dependent runtime, the initial journal row declares the exact
+activity sequence, its reported plan digest, visited decision routes,
+prerequisite closure and the mapped-action positions requiring preconditions.
+The monitor reconstructs the graph-valid route and its decision visits from
+the specification, checks the required closure, and verifies that recorded
+attempts follow the declared non-human business activity sequence.
+
+Each decision checkpoint identifies its purpose (initial, precondition,
+action or completion), its checkpoint number and, where applicable, the
+mapped-action position. A successful report requires an initial checkpoint,
+the appropriate fresh checkpoint for each recorded precondition and action,
+and a completion checkpoint. Missing initial checks cannot be concealed by
+renumbering the remaining checks; a reported success cannot omit a declared
+action. Incomplete or failed executions remain distinguishable from success.
+
+These checks are internal journal-consistency checks. The route, plan digest
+and precondition declarations are still customer assertions, not independent
+proof of the authorized intent or provider operations. The monitor does not
+reconstruct private case inputs or tool arguments and does not establish
+business outcomes from journal text.
+
+
+## Offline declared-fact scenario review
+
+Generated SDK releases include review_facts.py for local review of hypothetical
+or explicitly supplied business facts, distinct from authenticated source
+planning. Use the existing exact-spec reviewed shadow suite with each input
+object containing the scenario's facts, and run:
+
+```sh
+python review_facts.py --cases reviewed-cases.json --as-of-date 2026-06-01 \
+  --output fact-review.json --confirm-declared-fact-review
+```
+
+The explicit scenario date governs policy effective dates. The shared predicate
+evaluator supports bounded JSON facts, including business fields unavailable
+to current-source adapters; the shared decision evaluator handles required
+decisions and refuses supplied values that conflict with derived dependency
+paths. The same deterministic route search evaluates complete schedules,
+distinguishes excluded routes from unresolved alternatives and compares
+unique candidates with reviewed expectations.
+
+The report has its own format (openworkgraph.declared-fact-route-review.v1)
+and is not an executable planner result or current-source review. It includes
+only rule/table identifiers, status codes, bounded candidate activity sequences,
+case IDs, hashes, scenario date and aggregate agreement counts. No case values,
+model calls, source reads or business operations are included. A 50-case,
+256 KiB suite limit, bounded per-case search and shared 500,000-work budget
+apply; incomplete searches remain unknown rather than agreement or mismatch.
+Review flags and exit status reflect unknown and mismatching cases.
+The command creates a new report only. Hypothetical facts never establish
+policy authority, actual record state, historical truth or permission to act.
+
+The synthetic acceptance suites cover arbitrary numeric facts, missing values,
+dependency conflicts, effective-date expiry, changed suite pins, exhausted
+batch budgets and explicit local review. Actual customer-policy validity and
+source integration must still be independently validated.
+
+
+### Compare two released designs on identical declared facts
+
+For a policy/design upgrade, use a trusted current generated runtime (with
+requirements installed) and two extracted releases whose manifest digests
+were recorded independently:
+
+```sh
+python review_facts.py --baseline-release old-release --candidate-release new-release \
+  --baseline-manifest-sha256 OLD_SHA256 --candidate-manifest-sha256 NEW_SHA256 \
+  --baseline-cases old-reviewed.json --cases new-reviewed.json \
+  --as-of-date 2026-06-01 --output revision-review.json --confirm-declared-fact-review
+```
+
+Both releases must belong to the same workflow and organization scope, with
+the candidate at a newer revision. Each suite must be independently pinned
+to its own specification. Both suites must contain the same ordered case IDs,
+categories and exact fact objects. Only their reviewed route or clarification
+expectations may differ. The current evaluator validates both manifests and
+recomputes both designs at one explicit policy date with equal independent
+search budgets. Neither historical release's code is imported or executed.
+
+The minimized paired report separates stable matches, regressions,
+improvements, persistent mismatches, changed expectations and incomplete
+comparisons. It also detects changed route behavior even when both reviewed
+expectations match. Rule and table IDs with changed check results are
+diagnostic pointers, not a causal attribution. Changed expectations and
+behavior require review; incomplete search never establishes equivalence.
+The report retains manifest, specification and suite digests, not raw facts.
+
+This compares model declarations under the current evaluator, not historic
+runtime semantics, provider behavior, tool mappings, historical ground truth
+or actual operations. An unsigned manifest is not an independent signature.
+The portable graph model is included in all newly generated releases so a
+linear candidate can also compare an older decision-table or token-flow design.
+
+
+### Scenario coverage and regression support
+
+Every declared-fact scenario report includes a coverage inventory for all
+declared activities, transitions, decision tables and decision rows. It
+distinguishes reviewed expected-route support, unique supported-route
+selection and complete unique routes that match a reviewed expectation.
+Counts represent distinct cases, not repeated visits or observed operations.
+Decision tables are evaluated across cases independently of route selection;
+an evaluated or selected row in an unvisited table is not counted as matching
+route coverage. Parallel token schedules distinguish the union of viable structural
+replays (possible support) from their intersection (guaranteed support).
+Strict coverage and revision deltas use only guaranteed transitions, and
+matching decision-row support requires a guaranteed selected transition. Missing support and incomplete search/replay remain visible.
+
+For single-revision review, optionally add
+`--require-all-declared-items-covered` to require matching scenario support
+for every declared item. This is a finite-suite coverage check, not proof of
+reachable branches, exhaustive business-domain coverage or correct policy.
+Some designs intentionally contain manual, unavailable or unresolved routes,
+so use this stricter check only when appropriate.
+
+Paired revision review also reports lost matching support, gained support,
+new items without matching support and removed items using stable IDs.
+Decision row identity includes its target activity ID. Newly uncovered
+items and incomplete comparisons require review even if aggregate case
+agreement does not decline. No raw facts or rule values appear in coverage.
+
+
+### Policy effective-period review
+
+To check a reviewed scenario suite across the effective dates of a fixed
+design, run:
+
+```sh
+python review_facts.py --cases reviewed-cases.json --as-of-date 2026-01-01 \
+  --until-date 2027-01-01 --output effective-period.json --confirm-declared-fact-review
+```
+
+The end date is exclusive. The evaluator partitions the selected period at
+each declared decision-table start or end date and checks the same cases on
+the first date of each interval. Up to 3,660 days and 25 intervals are
+supported, with a single 500,000 search-work allowance across the review.
+The report identifies activating and expiring table IDs, counts of
+agreement/mismatch/unresolved searches, per-case table statuses, and
+changes relative to the preceding interval. Unknown comparisons remain
+explicit when the work bound is reached. Facts and expectations are held
+fixed, so a mismatch after an intended policy change is a review prompt,
+not proof of a policy defect. The command does not infer historical facts,
+verify separate date-specific expectations or account for policy changes
+outside the supplied design. No network reads or model calls occur.
+
+Effective-period mode cannot be combined with paired release comparison
+or the single-date strict item-coverage option. Review those separately.
+
+
+Dependent-runtime journals also bind ordinary structured source invariants
+to the declared route. The executor performs those checks before the initial
+tool inventory, before mapped write preconditions, before every mapped action,
+and at completion. Each check records its rule ID and checkpoint purpose,
+number and attempt position, without recording raw facts. The monitor derives
+the exact required ordinary rule IDs from structural replay, requires all
+matched rows at every relevant checkpoint and refuses a successful report
+with missing, repeated or out-of-order invariant checks. A dependent table
+checkpoint cannot substitute for an ordinary invariant checkpoint. These
+remain non-atomic, customer-reported checks; neither journal validation nor
+a matched predicate independently verifies a provider's business outcome.
+
+
+For a mixed dependent execution checkpoint, ordinary structured rules and
+decision tables consume a single shared receipt per exact (resource reference,
+source type). After all selected records are read, one UTC consumer timestamp
+governs receipt freshness, predicate checks and table effective dates. The
+checkpoint cache is discarded before the next checkpoint; it is not a
+cross-action cache. A record cannot satisfy two contradictory predicates
+by returning different values to different rule checks in the same checkpoint.
+The journal records only the common consumer timestamp, checkpoint scope and
+minimized results, not record references or receipt values. Monitoring
+validates that the timestamps agree within each checkpoint and that the
+reported policy date equals the timestamp's UTC date. Distinct source reads
+remain non-atomic, and neither these timestamps nor journal assertions
+constitute independently signed provider evidence. A successful synthetic
+mixed-route fixture should require five state reads rather than fifteen for
+two rules and two tables bound to the same exact record.
+
+
+Deterministic token-route search charges structural replay firings to the
+same per-case work allowance as graph exploration. A failed or budget-limited
+replay consumes its reserved allowance and makes the search incomplete rather
+than establishing a unique route. Reports separate graph and replay work.
+All transitions in the union of viable structural replays are checked,
+including natural-language rules and contradictory alternate predicates.
+Scenario coverage has a separate bounded 500,000-firing replay allowance
+across the suite, caching each distinct node sequence. An unresolved coverage
+replay remains visible by case ID and requires review even when strict item
+coverage is not requested. These bounds count enumerated firings, not wall
+clock time or all internal computation.
+
+
+A reusable binding set may contain declarations for decisions or ordinary
+structured rules that the selected route does not use. Preparation still
+validates declaration identity, uniqueness, confirmation and supported
+predicate semantics, but resolves case-specific record pointers only for
+visited decisions, their transitive prerequisites and the selected
+route's ordinary invariants. An unused downstream record is therefore
+not required for an otherwise valid short branch. A missing record on a
+required prerequisite or selected route remains blocking. Broad source
+planning still considers all candidate decisions and rules.
+
+
+Read-only source planning and current-source shadow evaluation distinguish
+a missing case record pointer from an invalid binding declaration. Missing
+candidate inputs remain unbound, with their rule/table identifiers exposed
+in the minimized planning report. If a confirmed upstream decision excludes
+that branch, deterministic planning may still propose the uniquely supported
+short route. If the branch remains viable and its source data are unavailable,
+the planner requires clarification. Invalid pointer syntax and malformed
+record references still refuse planning. Actual implementation preparation
+and validation of reviewed expected routes retain strict required-record
+resolution; planning does not create an execution grant.
 
 ## Behavioral regression across saved revisions
 

@@ -1,0 +1,183 @@
+"""Bounded route feasibility over reviewed, minimized current-source checks.
+
+No model, source reads, tool calls, policy approval or execution authorization.
+A route is proposed only when one supported schedule remains and the search
+has ruled out other unresolved or supported schedules within its full bounds.
+"""
+from collections import deque
+from runtime import check_plan, validate_spec
+
+MAX_WORK=25000
+MAX_STATES=10000
+MAX_STEPS=80
+MAX_EXAMPLES=20
+SELECTED={'unique_match','first_match'}
+
+
+def _search(spec,rule_checks,table_checks,*,max_work=MAX_WORK,max_states=MAX_STATES,max_steps=MAX_STEPS):
+    validate_spec(spec)
+    if any(type(v) is not int or not 1<=v<=maximum for v,maximum in
+           ((max_work,MAX_WORK),(max_states,MAX_STATES),(max_steps,MAX_STEPS))):
+        raise ValueError('Choose bounded deterministic route search limits')
+    model=spec['process_model']
+    nodes={n['id']:n for n in model['activities']}
+    rules={r['id']:r for r in model['business_rules']}
+    tables={t['decision_activity_id']:t for t in model.get('decision_tables',[])}
+    rule_status={r['rule_id']:r['status'] for r in rule_checks}
+    table_status={r['table_id']:r for r in table_checks}
+    manual={c['activity_id'] for c in model.get('manual_review_conditions',[])}
+    outgoing={ident:[] for ident in nodes}
+    for i,e in enumerate(model['transitions']):outgoing[e['source']].append(i)
+    edges=model['transitions']
+    token=spec.get('control_flow_contract')=='openworkgraph.parallel-node-firing-plan.v1'
+    if token:
+        from owg_model.process_model import ProcessModel
+        from owg_model.process_parallel import EdgeTokenModel, replay_node_ids
+        portable_model=ProcessModel.model_validate(model)
+        automaton=EdgeTokenModel(portable_model)
+        initial=automaton.initial
+        def moves(mark):
+            for node,following,emitted in automaton.firings(mark):
+                yield node.id,following,tuple(sorted(p for p in emitted if p>=0)),following==automaton.done
+    else:
+        initial=model['entry_activity_id']
+        terminals=set(model['terminal_activity_ids'])
+        def moves(mark):
+            if mark in terminals:
+                yield mark,None,(),True
+            else:
+                for i in outgoing[mark]:
+                    yield mark,edges[i]['target'],(i,),False
+
+    def classify(indices):
+        issues=set()
+        for i in indices:
+            edge=edges[i]
+            table=tables.get(edge['source'])
+            if table:
+                checked=table_status.get(table['id'],{})
+                if checked.get('status') in SELECTED and checked.get('selected_target_activity_id') is not None and table.get('user_confirmed') is True:
+                    if edge['target']!=checked['selected_target_activity_id']:
+                        return None
+                else:
+                    issues.add('decision_unresolved:'+table['id'])
+            rid=edge.get('rule_id')
+            if rid:
+                rule=rules[rid]
+                if rule.get('user_confirmed') is not True:
+                    issues.add('rule_unconfirmed:'+rid)
+                elif not table:
+                    if not rule.get('predicate'):
+                        issues.add('natural_language_rule:'+rid)
+                    elif rule_status.get(rid)=='not_matched':
+                        return None
+                    elif rule_status.get(rid)!='matched':
+                        issues.add('structured_rule_unresolved:'+rid)
+        return issues
+
+    def node_issues(ident):
+        result=set()
+        if ident in manual:result.add('manual_review:'+ident)
+        if nodes[ident].get('implementation')=='human':result.add('human_activity:'+ident)
+        return result
+
+    # Track actual path, not just marking. Distinct schedules are not assumed
+    # interchangeable, even if their terminal or final token state matches.
+    start=(initial,(),frozenset())
+    queue=deque([start]);seen={start}
+    complete=True;limit_reasons=set();work=0;pruned=0;replay_work=0
+    candidates={};replay_cache={}
+    while queue and complete:
+        marking,path,pending=queue.popleft()
+        for ident,next_mark,indices,done in moves(marking):
+            if work>=max_work:
+                complete=False;limit_reasons.add('work_limit');break
+            work+=1
+            issues=classify(indices)
+            if issues is None:
+                pruned+=1;continue
+            next_path=path+(ident,)
+            blocked=pending|frozenset(issues|node_issues(ident))
+            if done:
+                # Token replay may admit multiple histories for one node order.
+                # The actual executor uses its conservative union of rule and
+                # table visits, so certify only that same structural contract.
+                if token:
+                    if next_path not in replay_cache:
+                        # Charge replay against the same finite work allowance
+                        # as the route search; never start an unbounded replay.
+                        allowance=max_work-work
+                        if allowance<=0:
+                            complete=False;limit_reasons.add('token_replay_work_limit');break
+                        replay_issues=set()
+                        try:
+                            replay=replay_node_ids(next_path,portable_model,max_work=allowance)
+                        except ValueError:
+                            # No work count is returned on a failed replay.
+                            # Conservatively charge its entire allowance.
+                            replay_work+=allowance;work+=allowance
+                            complete=False;limit_reasons.add('token_replay_incomplete');break
+                        replay_work+=replay['work_count'];work+=replay['work_count']
+                        # The executor considers the union of viable histories.
+                        # Do not ignore an unresolved language rule or a
+                        # contradicted predicate on an alternative replay.
+                        union_issues=classify(replay['transition_indices'])
+                        if union_issues is None:
+                            replay_issues.add('structural_replay_route_conflict')
+                        else:
+                            replay_issues.update(union_issues)
+                        replay_cache[next_path]=frozenset(replay_issues)
+                    blocked|=replay_cache[next_path]
+                # For duplicate schedules, any unresolved history withholds a
+                # unique-supported claim; never cherry-pick a convenient replay.
+                candidates[next_path]=candidates.get(next_path,frozenset())|blocked
+                if len(candidates)>MAX_EXAMPLES:
+                    complete=False;limit_reasons.add('candidate_limit');break
+                continue
+            if len(next_path)>=max_steps:
+                limit_reasons.add('step_limit')
+                continue
+            state=(next_mark,next_path,blocked)
+            if state in seen:continue
+            if len(seen)>=max_states:
+                complete=False;limit_reasons.add('state_limit');break
+            seen.add(state);queue.append(state)
+    complete=complete and not limit_reasons
+    supported=sorted(p for p,b in candidates.items() if not b)
+    unresolved=sorted(p for p,b in candidates.items() if b)
+    if complete and len(supported)==1 and not unresolved:status='unique_supported_route'
+    elif len(supported)>1:status='competing_supported_routes'
+    elif not complete:status='search_incomplete'
+    elif unresolved:status='unresolved_routes'
+    else:status='no_supported_route'
+    return {'format':'openworkgraph.deterministic-route-search.v1',
+        'status':status,'search_complete':complete,'limit_reasons':sorted(limit_reasons),
+        'work_count':work,'token_replay_work_count':replay_work,
+        'graph_search_work_count':work-replay_work,'states_seen':len(seen),'excluded_transition_count':pruned,
+        'supported_schedule_count':len(supported),'unresolved_schedule_count':len(unresolved),
+        'examples':[{'activity_ids':list(p),'status':'unresolved' if candidates[p] else 'supported',
+                     'requirements':sorted(candidates[p])} for p in (supported+unresolved)[:MAX_EXAMPLES]],
+        'unique_activity_ids':list(supported[0]) if status=='unique_supported_route' else None,
+        'complete_policy_verified':False,'execution_authorized':False,
+        'interpretation':'Distinct node-firing orders are distinct schedules. Bounds, unresolved facts, manual review and alternative supported routes prevent a unique proposal.'}
+
+
+def deterministic_proposal(spec,case,context,*,checked_at=None):
+    """Consume only an exact pinned source planning context, never caller statuses."""
+    model=spec['process_model']
+    tables=model.get('decision_tables',[])
+    rule_ids=[r['id'] for r in model['business_rules'] if r.get('predicate')]
+    checked_at=checked_at if checked_at is not None else context.clock()
+    rules=context.check_rules(rule_ids,spec,case,checked_at=checked_at)
+    checks=context.check_tables([{'table_id':t['id'],'target_activity_ids':[]} for t in tables],
+        spec,case,checked_at=checked_at) if tables else []
+    search=_search(spec,rules,checks)
+    selected=search['unique_activity_ids']
+    plan={'revision':spec['revision'],'content_sha256':spec['content_sha256'],
+        'status':'proposal' if selected is not None else 'needs_clarification',
+        'activity_ids':selected or [],'missing_business_inputs':[] if selected is not None else [search['status']]}
+    result={'plan':plan,'deterministic_route_search':search,'execution_permitted':False,
+        'source_outcome_verified':False,'model_invoked':False}
+    if selected is not None:
+        result['shadow_check']=check_plan(plan,spec)
+    return result
