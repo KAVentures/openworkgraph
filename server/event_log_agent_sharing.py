@@ -1172,21 +1172,34 @@ def unusual_cases(log_id: str, case_type: str | None = None, limit: int = 25,
 
 
 def due_dates(log_id: str, activity: str, case_type: str | None = None, due_attribute: str | None = None,
-              due_days: float | None = None, early_days: float | None = None) -> dict[str, Any]:
-    """Due-date adherence of an activity. Late case IDs only for logs shared at the cases level."""
+              due_days: float | None = None, early_days: float | None = None,
+              case_filter: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Due-date adherence of an activity. Late case IDs only for logs shared at the cases level. An optional
+    case filter (at least AGENT_MIN_FILTERED_CASES cases) measures one group."""
     require(log_id, "aggregates")
     from . import event_log_due_dates as dd
+    if case_filter is not None:
+        if not isinstance(case_filter, dict) or not case_filter:
+            raise EventLogWorkspaceError("case_filter must be a non-empty object of case-filter keys")
+        if workspace.summary(log_id, case_type, case_filter)["cases"] < AGENT_MIN_FILTERED_CASES:
+            raise EventLogWorkspaceError(f"fewer than {AGENT_MIN_FILTERED_CASES} cases match this filter; widen it")
     result = dd.due_dates(log_id, activity, case_type, due_attribute=due_attribute, due_days=due_days,
-                          early_days=early_days, include_case_ids=_level(log_id) == "cases")
+                          early_days=early_days, include_case_ids=_level(log_id) == "cases", cohort=case_filter)
     return {**result, "format": FORMAT, "log_id": log_id}
 
 
 def next_steps(log_id: str, steps: list[str] | None = None, case_type: str | None = None,
-               anchor: str = "start") -> dict[str, Any]:
-    """Path explorer: what happens after a sequence of steps (aggregates level)."""
+               anchor: str = "start", case_filter: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Path explorer: what happens after a sequence of steps (aggregates level). An optional case filter (at
+    least AGENT_MIN_FILTERED_CASES cases) walks one group's paths."""
     require(log_id, "aggregates")
     from . import event_log_path_explorer as px
-    result = px.next_steps(log_id, steps, case_type, anchor=anchor)
+    if case_filter is not None:
+        if not isinstance(case_filter, dict) or not case_filter:
+            raise EventLogWorkspaceError("case_filter must be a non-empty object of case-filter keys")
+        if workspace.summary(log_id, case_type, case_filter)["cases"] < AGENT_MIN_FILTERED_CASES:
+            raise EventLogWorkspaceError(f"fewer than {AGENT_MIN_FILTERED_CASES} cases match this filter; widen it")
+    result = px.next_steps(log_id, steps, case_type, anchor=anchor, cohort=case_filter)
     keep = AGENT_MIN_CELL_CASES
     for step in result["next"]:
         if step["cases"] < keep:
@@ -1545,12 +1558,17 @@ def process_map(log_id: str, case_type: str | None = None, activities: float = 1
 
 
 def duration_distribution(log_id: str, cutoffs_seconds: list[int] | None = None,
-                          case_type: str | None = None) -> dict[str, Any]:
+                          case_type: str | None = None, case_filter: dict[str, Any] | None = None) -> dict[str, Any]:
     """How many cases fall in each duration band, with median and upper percentiles (aggregates level). The
     shortest and longest single case durations are not returned."""
     require(log_id, "aggregates")
     from . import event_log_duration_distribution as dd
-    result = dd.distribution(log_id, cutoffs_seconds or [3600, 14400, 86400, 259200], case_type)
+    if case_filter is not None:
+        if not isinstance(case_filter, dict) or not case_filter:
+            raise EventLogWorkspaceError("case_filter must be a non-empty object of case-filter keys")
+        if workspace.summary(log_id, case_type, case_filter)["cases"] < AGENT_MIN_FILTERED_CASES:
+            raise EventLogWorkspaceError(f"fewer than {AGENT_MIN_FILTERED_CASES} cases match this filter; widen it")
+    result = dd.distribution(log_id, cutoffs_seconds or [3600, 14400, 86400, 259200], case_type, cohort=case_filter)
     observed = {k: v for k, v in (result.get("observed_duration_seconds") or {}).items() if k not in ("minimum", "maximum")}
     out = {k: v for k, v in result.items() if k != "log"}
     return {**out, "format": FORMAT, "log_id": log_id, "observed_duration_seconds": observed}
@@ -1672,12 +1690,18 @@ def rework(log_id: str, case_type: str | None = None, limit: int = 20,
 
 
 def waiting_times(log_id: str, case_type: str | None = None,
-                  working_calendar: dict[str, Any] | None = None) -> dict[str, Any]:
+                  working_calendar: dict[str, Any] | None = None,
+                  case_filter: dict[str, Any] | None = None) -> dict[str, Any]:
     """Processing and waiting time per activity from start/complete lifecycle data (aggregates level). With a
     working calendar (timezone, weekly hours, holidays) the same figures are also measured in working time."""
     require(log_id, "aggregates")
     from . import event_log_waiting as waiting
-    result = waiting.waiting_time(log_id, case_type, working_calendar=working_calendar)
+    if case_filter is not None:
+        if not isinstance(case_filter, dict) or not case_filter:
+            raise EventLogWorkspaceError("case_filter must be a non-empty object of case-filter keys")
+        if workspace.summary(log_id, case_type, case_filter)["cases"] < AGENT_MIN_FILTERED_CASES:
+            raise EventLogWorkspaceError(f"fewer than {AGENT_MIN_FILTERED_CASES} cases match this filter; widen it")
+    result = waiting.waiting_time(log_id, case_type, working_calendar=working_calendar, cohort=case_filter)
     return {**_withhold_small_waits(result), "format": FORMAT, "log_id": log_id}
 
 
@@ -1727,13 +1751,19 @@ def _withhold_small_waits(result: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-def drift(log_id: str, case_type: str | None = None, window: str = "month") -> dict[str, Any]:
+def drift(log_id: str, case_type: str | None = None, window: str = "month",
+          case_filter: dict[str, Any] | None = None) -> dict[str, Any]:
     """When the way cases run changed: change points between windows of cases (aggregates level)."""
     require(log_id, "aggregates")
     from . import event_log_drift as dr
     if window not in ("week", "month"):
         raise EventLogWorkspaceError("window must be week or month")
-    result = dr.drift(log_id, case_type, window=window)
+    if case_filter is not None:
+        if not isinstance(case_filter, dict) or not case_filter:
+            raise EventLogWorkspaceError("case_filter must be a non-empty object of case-filter keys")
+        if workspace.summary(log_id, case_type, case_filter)["cases"] < AGENT_MIN_FILTERED_CASES:
+            raise EventLogWorkspaceError(f"fewer than {AGENT_MIN_FILTERED_CASES} cases match this filter; widen it")
+    result = dr.drift(log_id, case_type, window=window, cohort=case_filter)
     return {**result, "owner_change_markers": _markers_near(log_id, result.get("change_points") or [], window),
             "format": FORMAT, "log_id": log_id}
 
