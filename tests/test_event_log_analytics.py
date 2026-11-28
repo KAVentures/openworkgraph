@@ -89,7 +89,7 @@ def test_conformance_fitness_uses_the_selected_reference_path_length(monkeypatch
 
         def fetchall(self):
             assert not self.is_count
-            return [("A\x1fB\x1fC", 1, 1)]
+            return [(["A", "B", "C"], 1, 1)]
 
     monkeypatch.setattr(workspace, "_query", lambda log_id, case_type, fn: fn(OneVariant()))
     long_path = ["A", "B", "C", "D"]
@@ -132,7 +132,7 @@ def test_conformance_activity_diagnostics_count_cases_not_repeated_moves(monkeyp
 
         def fetchall(self):
             assert not self.is_count
-            return [("B\x1fB\x1fB", 3, 2), ("A", 2, 2)]
+            return [(["B", "B", "B"], 3, 2), (["A"], 2, 2)]
 
     monkeypatch.setattr(workspace, "_query", lambda log_id, case_type, fn: fn(TwoVariants()))
     model = {"format": "openworkgraph.reference-model.v1",

@@ -38,6 +38,8 @@ from .event_log_domain_packs_operations import OPERATIONS_PACKS
 from .event_log_domain_packs_returns import RETURNS_REFUNDS_1_0_0
 from .event_log_domain_packs_claims import INSURANCE_CLAIMS_1_0_0
 from .event_log_domain_packs_service_governance import SERVICE_GOVERNANCE_PACKS
+from .event_log_domain_packs_business_support import BUSINESS_SUPPORT_PACKS
+from .event_log_domain_packs_object_operations import OBJECT_OPERATIONS_PACKS
 
 FORMAT = "openworkgraph.domain-pack.v1"
 INSTALL_FORMAT = "openworkgraph.domain-pack-install.v1"
@@ -760,6 +762,7 @@ EMPLOYEE_ONBOARDING_1_0_0: dict[str, Any] = {
 
 
 PACKS: dict[str, dict[str, dict[str, Any]]] = {**OPERATIONS_PACKS,
+                                              **OBJECT_OPERATIONS_PACKS,
                                               "returns_refunds": {"1.0.0": RETURNS_REFUNDS_1_0_0},
                                               "order_to_cash": {"1.0.0": ORDER_TO_CASH_1_0_0},
                                               "procure_to_pay": {"1.0.0": PROCURE_TO_PAY_1_0_0},
@@ -770,7 +773,8 @@ PACKS: dict[str, dict[str, dict[str, Any]]] = {**OPERATIONS_PACKS,
                                               "employee_onboarding": {"1.0.0": EMPLOYEE_ONBOARDING_1_0_0},
                                               "expense_reimbursement": {"1.0.0": EXPENSE_REIMBURSEMENT_1_0_0},
                                               "insurance_claims": {"1.0.0": INSURANCE_CLAIMS_1_0_0},
-                                              **SERVICE_GOVERNANCE_PACKS}
+                                              **SERVICE_GOVERNANCE_PACKS,
+                                              **BUSINESS_SUPPORT_PACKS}
 
 
 class _Strict(BaseModel):
@@ -792,6 +796,7 @@ class InstallSpec(_Strict):
     version: Annotated[str, Field(pattern=r"^\d{1,4}\.\d{1,4}\.\d{1,4}$")]
     mapping: Mapping
     expected_installation: Annotated[str, Field(pattern=r"^[a-f0-9]{64}$")] | None = None
+    expected_preview: Annotated[str, Field(pattern=r"^[a-f0-9]{64}$")] | None = None
     parameters: dict[Annotated[str, Field(max_length=40)], float] = Field(default_factory=dict, max_length=20)
 
 
@@ -1051,6 +1056,11 @@ def install(log_id: str, pack_id: str, spec: Any) -> dict[str, Any]:
                 current = _installation_token(previous) if previous is not None else None
                 if parsed.expected_installation != current:
                     raise DomainPackConflict("domain pack installation changed; reload setup before saving")
+            if parsed.expected_preview is not None:
+                from .event_log_domain_pack_preflight import basis
+                token, _ = basis(conn, log_id, pack_id, parsed, params, definitions, previous)
+                if token != parsed.expected_preview:
+                    raise DomainPackConflict("domain pack preview changed; rerun the trial before installing")
             saved = {json.loads(d)["metric"]["name"]: m for m, d in conn.execute(
                 "SELECT metric_id, definition FROM metric_definitions WHERE log_id = ?", [log_id]).fetchall()}
             if previous and _version_key(parsed.version) < _version_key(previous["version"]):

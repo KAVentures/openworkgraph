@@ -157,13 +157,36 @@
     previousReview.id='owgCommsReviewPrevious';nextReview.id='owgCommsReviewNext';
     previousReview.disabled=nextReview.disabled=true;
     const reviewOrder=el('div',null,'row');reviewOrder.append(prioritize,diverse,newest,previousReview,nextReview);
-    let triageMode=false,triageOrder='priority',reviewOffset=0,reviewGeneration=0;
+    let triageMode=false,triageOrder='priority',reviewOffset=0,reviewGeneration=0,queuePin=null;
+    const facetControls=el('div',null,'row');facetControls.hidden=true;
+    const facetFields={};
+    for(const [key,label] of [['language','Declared language'],['keyword_intent','Keyword intent'],['priority','Review priority']]){
+      const picker=el('select');picker.setAttribute('aria-label',label);
+      const option=el('option','All');option.value='';picker.append(option);
+      facetFields[key]=picker;facetControls.append(field(label,picker));
+      picker.onchange=()=>{resetQueue();loadReview();};
+    }
+    const resetQueue=()=>{reviewOffset=0;queuePin=null;reviewGeneration++;previousReview.disabled=nextReview.disabled=true;examples.replaceChildren();};
+    const refreshQueue=button('Refresh review queue','secondary');
+    refreshQueue.onclick=()=>{resetQueue();loadReview();};
+    facetControls.append(refreshQueue);facetControls.style.display='none';
+    function drawFacets(page){
+      for(const [key,picker] of Object.entries(facetFields)){
+        const selected=picker.value;picker.replaceChildren();
+        const all=el('option','All');all.value='';picker.append(all);
+        for(const [value,n] of Object.entries(page.eligible_facets?.[key]||{})){
+          const option=el('option',value+' ('+n+')');option.value=value;picker.append(option);}
+        if(selected&&![...picker.options].some(o=>o.value===selected)){
+          const option=el('option',selected+' (0)');option.value=selected;picker.append(option);}
+        picker.value=selected;
+      }
+    }
     const train=button('Train intent model','secondary');train.id='owgCommsTrain';
     const dropModel=button('Delete model','secondary');dropModel.id='owgCommsModelDelete';
     const model=el('div');model.id='owgCommsModel';
     let ackVersion='',intentNames=[];
     review.append(el('div','Off by default. When on, only the messages you choose are kept, with identifiers, contact details and card numbers redacted, for the retention you set (1–90 days). You label them to train and test a local model. One in five examples is held out and only used to measure quality. Message text is treated as data, never as instructions. Turning this off deletes every example and the model.','muted'),
-      ack,field('Keep examples for (days)',retention),saveReview,reviewStatus,reviewOrder,examples,el('div',null,'row'),train,dropModel,model);
+      ack,field('Keep examples for (days)',retention),saveReview,reviewStatus,reviewOrder,facetControls,examples,el('div',null,'row'),train,dropModel,model);
     const names=async()=>{const t=await api('/v1/communications/taxonomy');intentNames=t.taxonomy.intents.map(i=>i.name);};
     function renderModel(m){
       if(!m.trained){model.replaceChildren(el('div','No intent model is trained yet.','muted'));return;}
@@ -221,12 +244,42 @@
             const rows=report.per_intent.map(i=>[i.intent,
               pct(i.keyword.accuracy_all),pct(i.learned.accuracy_all),pct(i.keyword.coverage),pct(i.learned.coverage),
               pct(i.keyword.recall_all_positives),pct(i.learned.recall_all_positives),i.paired.learned_only_correct,i.paired.keyword_only_correct]);
+            const reliability=report.probability_reliability;
+            const reliabilityView=[];
+            if(reliability){
+              const metrics=reliability.per_intent;
+              const fmt=v=>v===null?'—':Number(v).toFixed(3);
+              const chooser=el('select');chooser.setAttribute('aria-label','Probability reliability intent');
+              metrics.filter(x=>x.trained).forEach(x=>{const o=el('option',x.intent);o.value=x.intent;chooser.appendChild(o);});
+              const bins=el('div');
+              function drawBins(){
+                const m=metrics.find(x=>x.intent===chooser.value)?.metrics;
+                bins.replaceChildren(...(m?[table(['Probability interval','Scored','Positive labels','Mean probability','Observed rate'],
+                  m.bins.map(b=>[b.lower.toFixed(1)+'–'+b.upper.toFixed(1),b.count,b.positives,fmt(b.mean_probability),fmt(b.observed_positive_rate)]))]:[]));
+              }
+              chooser.onchange=drawBins;drawBins();
+              reliabilityView.push(el('h4','Learned probability reliability'),
+                el('p','Fixed holdout only. Macro support: '+reliability.macro_supported_intents+
+                  ' trained intents with at least five positive and five negative scores and no missing predictions. No threshold was fitted.','muted'),
+                table(['Supported-intent macro metric','Value','Intents included'],[
+                  ['Brier score','brier_score'],['Brier skill','brier_skill_against_training_prior'],
+                  ['Clipped log loss','log_loss_clipped'],['Calibration error','ece_fixed_10_bins'],
+                  ['AUROC','auroc'],['Average precision','average_precision']
+                ].map(([label,key])=>[label,fmt(reliability.macro[key]),reliability.macro_metric_support[key]])),
+                table(['Intent','Scored / total','Brier','Training prior Brier','Brier skill','Log loss','ECE','AUROC','Average precision','Support'],
+                  metrics.map(x=>{const m=x.metrics;return m?[x.intent,m.scored_examples+' / '+m.holdout_examples,
+                    fmt(m.brier_score),fmt(m.training_prior_brier_score),fmt(m.brier_skill_against_training_prior),fmt(m.log_loss_clipped),
+                    fmt(m.ece_fixed_10_bins),fmt(m.auroc),fmt(m.average_precision),m.sufficient_scored_support&&!m.missing_probabilities?'Supported':'Limited']:
+                    [x.intent,'Not trained','—','—','—','—','—','—','—','—'];})),
+                el('p','Brier and log loss: lower is better. Negative Brier skill means worse than the training prevalence baseline. AUROC/AP are withheld for single-class samples. ECE uses ten fixed bins. Bin means are hidden below five observations. These are descriptive estimates, not deployment approval.','muted'),
+                field('Reliability bins for intent',chooser),bins);
+            }
             body.replaceChildren(el('p',report.message_count+' reviewed messages; '+report.declared_intents+' declared intents.'),
               el('p','Strict complete-message correctness: learned only '+pair.learned_only_correct+' · keyword only '+pair.keyword_only_correct+
                 ' · difference '+pct(pair.paired_correctness_difference)+' · exact paired p '+(pair.unadjusted_exact_mcnemar_p===null?'—':pair.unadjusted_exact_mcnemar_p.toPrecision(3))),
               table(['Intent','Keyword correct','Learned correct','Keyword coverage','Learned coverage','Keyword recall','Learned recall','Learned only correct','Keyword only correct'],rows),
               table(['Keyword result','Learned result','Messages'],pair.transitions.map(t=>[t.keyword,t.learned,t.count])),
-              el('p','Accuracy uses all cases, with abstentions not counted as correct. Recall counts positive abstentions in the denominator. Untrained intents are abstentions.','muted'));
+              el('p','Accuracy uses all cases, with abstentions not counted as correct. Recall counts positive abstentions in the denominator. Untrained intents are abstentions.','muted'),...reliabilityView);
           }
           select.onchange=draw;subset.onchange=draw;draw();
           const download=button('Download aggregate comparison JSON','secondary');
@@ -262,7 +315,7 @@
         box.append(saveLabel,remove);list.appendChild(box);
       });
       const intro=triageMode?
-        page.total+' unlabelled training examples eligible; '+items.length+' prioritized suggestions shown. '+
+        page.total+' matching unlabelled training examples of '+page.total_eligible+' eligible; '+items.length+' prioritized suggestions shown. '+
         page.unlabelled_holdout_excluded+' held-out examples excluded. '+
         (page.learned_predictions_used?'Current learned-model suggestions included.':
           'Keyword-only order; learned model '+page.model_status+'.'):
@@ -280,6 +333,7 @@
       const generation=++reviewGeneration;
       const current=()=>generation===reviewGeneration;
       previousReview.disabled=nextReview.disabled=true;
+      examples.replaceChildren();
       try{
         const st=await api('/v1/communications/review/settings');if(!current())return;
         ackVersion=st.acknowledgement_version;ackText.textContent=' '+st.acknowledgement;
@@ -288,19 +342,24 @@
         const t=await api('/v1/communications/taxonomy');if(!current())return;
         intentNames=t.taxonomy.intents.map(i=>i.name);
         prioritize.disabled=diverse.disabled=newest.disabled=!st.enabled;
-        if(!st.enabled){examples.replaceChildren();reviewOffset=0;}
-        const endpoint=triageMode?'/v1/communications/review/triage?limit=20&offset='+reviewOffset+'&order='+triageOrder:
+        facetControls.hidden=!st.enabled||!triageMode;facetControls.style.display=facetControls.hidden?'none':'';
+        if(!st.enabled){examples.replaceChildren();reviewOffset=0;queuePin=null;}
+        const params=new URLSearchParams({limit:'20',offset:String(reviewOffset),order:triageOrder});
+        for(const [key,picker] of Object.entries(facetFields))if(picker.value)params.set(key,picker.value);
+        if(reviewOffset&&queuePin)params.set('expected_queue_sha256',queuePin);
+        const endpoint=triageMode?'/v1/communications/review/triage?'+params:
           '/v1/communications/review/examples?status=unlabelled&limit=20';
         const data=st.enabled?await api(endpoint):{examples:[],total:0,unlabelled_holdout_excluded:0,model_status:'absent'};
         if(!current())return;
         if(triageMode&&reviewOffset&&reviewOffset>=data.total){reviewOffset=0;return loadReview();}
+        if(triageMode&&st.enabled){queuePin=data.queue_sha256;drawFacets(data);}
         renderExamples(data);
-        const fresh=await api('/v1/communications/review/model');if(current())renderModel(fresh);
-      }catch(error){if(current()){examples.replaceChildren();reviewStatus.textContent=error.message;}}
+        const fresh=await api('/v1/communications/review/model');if(current()){renderModel(fresh);return fresh;}
+      }catch(error){if(current()){examples.replaceChildren();queuePin=null;reviewOffset=0;reviewStatus.textContent=error.message;}}
     }
-    prioritize.onclick=()=>{triageMode=true;triageOrder='priority';reviewOffset=0;loadReview();};
-    diverse.onclick=()=>{triageMode=true;triageOrder='diverse';reviewOffset=0;loadReview();};
-    newest.onclick=()=>{triageMode=false;reviewOffset=0;loadReview();};
+    prioritize.onclick=()=>{triageMode=true;triageOrder='priority';reviewOffset=0;queuePin=null;loadReview();};
+    diverse.onclick=()=>{triageMode=true;triageOrder='diverse';reviewOffset=0;queuePin=null;loadReview();};
+    newest.onclick=()=>{triageMode=false;reviewOffset=0;queuePin=null;loadReview();};
     previousReview.onclick=()=>{reviewOffset=Math.max(0,reviewOffset-20);loadReview();};
     nextReview.onclick=()=>{reviewOffset+=20;loadReview();};
     saveReview.onclick=async()=>{
@@ -309,8 +368,8 @@
       try{await api('/v1/communications/review/settings',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(reviewOn.checked?{enabled:true,acknowledgement_version:ackVersion,retention_days:Number(retention.value)}:{enabled:false})});await loadReview();}
       catch(error){reviewStatus.textContent=error.message;}
     };
-    train.onclick=async()=>{train.disabled=true;reviewStatus.textContent='Training on this computer…';try{renderModel(await api('/v1/communications/review/train',{method:'POST'}));reviewStatus.textContent='Model trained. Choose "Learned model" above to use it.';}catch(error){reviewStatus.textContent=error.message;}finally{train.disabled=false;}};
-    dropModel.onclick=async()=>{try{await api('/v1/communications/review/model/delete',{method:'POST'});renderModel({trained:false});}catch(error){reviewStatus.textContent=error.message;}};
+    train.onclick=async()=>{resetQueue();train.disabled=true;reviewStatus.textContent='Training on this computer…';try{await api('/v1/communications/review/train',{method:'POST'});resetQueue();const fresh=await loadReview();if(fresh?.trained)reviewStatus.textContent='Model trained. Choose "Learned model" above to use it.';}catch(error){resetQueue();reviewStatus.textContent=error.message;}finally{train.disabled=false;}};
+    dropModel.onclick=async()=>{resetQueue();dropModel.disabled=true;try{await api('/v1/communications/review/model/delete',{method:'POST'});resetQueue();await loadReview();}catch(error){resetQueue();reviewStatus.textContent=error.message;}finally{dropModel.disabled=false;}};
     review.addEventListener('toggle',()=>{if(review.open)loadReview();});
 
     function render(r){
