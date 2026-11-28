@@ -615,8 +615,25 @@ async def event_log_petri_language_comparison(request: Request):
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
+@router.post("/v1/event-logs/bpmn-processes")
+async def inspect_bpmn_replay_processes(request: Request):
+    """List independent process identities without asserting conversion support."""
+    from . import event_log_bpmn_replay_import as importer
+    _require_dashboard(request)
+    data = bytearray()
+    async for chunk in request.stream():
+        if len(data) + len(chunk) > importer.MAX_BYTES:
+            raise HTTPException(413, "the BPMN file is larger than 2 MB")
+        data.extend(chunk)
+    try:
+        result = await run_in_threadpool(importer.inspect_processes, bytes(data))
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
 @router.post("/v1/event-logs/bpmn-to-pnml")
-async def convert_bpmn_replay_model(request: Request):
+async def convert_bpmn_replay_model(request: Request, process_id: str | None = Query(default=None, max_length=200)):
     """Convert supported BPMN control flow to an ordinary PNML net. Nothing is stored."""
     from . import event_log_bpmn_replay_import as importer
     _require_dashboard(request)
@@ -626,7 +643,7 @@ async def convert_bpmn_replay_model(request: Request):
             raise HTTPException(413, "the BPMN file is larger than 2 MB")
         data.extend(chunk)
     try:
-        result = await run_in_threadpool(importer.to_pnml, bytes(data))
+        result = await run_in_threadpool(importer.to_pnml, bytes(data), process_id)
     except workspace.EventLogWorkspaceError as exc:
         raise HTTPException(422, str(exc)) from None
     return JSONResponse(result, headers={"Cache-Control": "no-store"})

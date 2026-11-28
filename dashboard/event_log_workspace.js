@@ -9191,7 +9191,24 @@
     const bpmnConversion=el('div');bpmnConversion.id='owgPetriBpmnConversion';
     let conversionEpoch=0;
     const clearBpmnConversion=()=>{conversionEpoch++;bpmnConversion.replaceChildren();};
-    file.addEventListener('change',clearBpmnConversion);
+    const bpmnProcess=select('owgPetriBpmnProcess',[['','Automatic (single process only)']]);
+    const bpmnInspect=button('List BPMN processes','secondary');bpmnInspect.id='owgPetriBpmnInspect';
+    const bpmnPicker=el('div',null,'row');bpmnPicker.append(field('BPMN process ID',bpmnProcess),bpmnInspect);show(bpmnPicker,false);
+    const resetBpmnPicker=()=>{clearBpmnConversion();bpmnProcess.replaceChildren(new Option('Automatic (single process only)',''));show(bpmnPicker,/\.bpmn$/i.test(file.files?.[0]?.name||''));};
+    file.addEventListener('change',resetBpmnPicker);bpmnProcess.onchange=clearBpmnConversion;
+    bpmnInspect.onclick=async()=>{
+      const chosen=file.files?.[0],epoch=++conversionEpoch;
+      if(!chosen||!/\.bpmn$/i.test(chosen.name))return;
+      bpmnConversion.replaceChildren();bpmnInspect.disabled=true;
+      try{
+        if(chosen.size>2*1024*1024)throw new Error('The BPMN file is larger than 2 MB.');
+        const r=await (await api('/v1/event-logs/bpmn-processes',{method:'POST',headers:{'Content-Type':'application/xml'},body:await chosen.arrayBuffer()})).json();
+        if(epoch!==conversionEpoch||sectionGeneration!==state.generation||file.files?.[0]!==chosen)return;
+        bpmnProcess.replaceChildren(new Option('Automatic (single process only)',''),...r.processes.map(p=>new Option(p.name+' ['+p.id+']',p.id)));
+        statusLine.textContent=r.processes.length+' process definitions found. '+(r.processes.length>1?'Select the exact process to replay.':'Select the process or use automatic selection.');
+      }catch(error){if(epoch===conversionEpoch&&sectionGeneration===state.generation)statusLine.textContent=error.message;}
+      finally{bpmnInspect.disabled=false;}
+    };
     const run=button('Replay on this net','secondary');run.id='owgPetriRun';
     const own=button('Replay on the discovered net','secondary');own.id='owgPetriDiscovered';
     const happy=button('Check against the most common path','secondary');happy.id='owgPetriHappy';
@@ -9218,7 +9235,7 @@
         await replay(converted.pnml,'the pasted process tree');
       }catch(error){statusLine.textContent=error.message;}
     };
-    box.append(row,treeRow,statusLine,bpmnConversion,out,aligned,alertRow,alertMessage);
+    box.append(row,bpmnPicker,treeRow,statusLine,bpmnConversion,out,aligned,alertRow,alertMessage);
     // Reference nets saved with this log: keep the net just checked, or check again against a saved one.
     const savedPick=select('owgPetriSaved',[]);const savedRun=button('Replay on saved net','secondary');savedRun.id='owgPetriSavedRun';
     const savedDelete=button('Delete saved net','secondary');savedDelete.id='owgPetriSavedDelete';
@@ -9848,12 +9865,13 @@
         const epoch=++conversionEpoch;bpmnConversion.replaceChildren();
         try{
           statusLine.textContent='Converting supported BPMN control flow…';
-          const converted=await (await api('/v1/event-logs/bpmn-to-pnml',{method:'POST',headers:{'Content-Type':'application/xml'},body:await chosen.arrayBuffer()})).json();
+          const selected=bpmnProcess.value;
+          const converted=await (await api('/v1/event-logs/bpmn-to-pnml'+(selected?'?process_id='+encodeURIComponent(selected):''),{method:'POST',headers:{'Content-Type':'application/xml'},body:await chosen.arrayBuffer()})).json();
           if(epoch!==conversionEpoch||sectionGeneration!==state.generation||file.files?.[0]!==chosen)return;
           const label=chosen.name+' (BPMN control flow)';
           await replay(converted.pnml,label);
           if(conversionEpoch!==epoch+1||sectionGeneration!==state.generation||lastNet?.body!==converted.pnml||lastNet?.label!==label)return;
-          bpmnConversion.append(el('h4','BPMN conversion evidence'),el('div',converted.nodes+' BPMN nodes · '+converted.sequence_flows+' sequence flows · '+Object.keys(converted.parallel_pairs).length+' paired parallel regions · '+Object.keys(converted.subprocess_boundaries||{}).length+' embedded subprocesses. '+converted.caveat,'muted'));
+          bpmnConversion.append(el('h4','BPMN conversion evidence'),el('div',converted.nodes+' BPMN nodes · '+converted.sequence_flows+' sequence flows · '+Object.keys(converted.parallel_pairs).length+' paired parallel regions · '+(converted.subprocess_boundary_instances||[]).length+' embedded subprocesses · '+Object.keys(converted.call_boundaries||{}).length+' expanded calls. '+converted.caveat,'muted'));
           const download=(name,data,mime)=>{
             const url=URL.createObjectURL(new Blob([data],{type:mime}));
             const link=document.createElement('a');link.href=url;link.download=name;document.body.appendChild(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
