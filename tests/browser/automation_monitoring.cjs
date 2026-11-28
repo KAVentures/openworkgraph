@@ -43,6 +43,22 @@ const path=require('node:path');
    await page.locator('#owgMonitorResults [role=alert]').waitFor();
    const alert=await page.locator('#owgMonitorResults [role=alert]').textContent();
    assert.match(alert,/Success rate dropped/);assert.match(alert,/More runs were handed to a person/);
+   // A real retained handoff incident is acknowledged without resolution or rerun.
+   await page.locator('#owgMonitorIncidents').click();
+   const batch=page.locator('#owgMonitorBatchAck');await batch.waitFor({state:'visible'});
+   await batch.locator('summary').click();
+   await batch.getByRole('button',{name:'Select up to 50 visible open incidents'}).click();
+   assert.equal(await batch.locator('#owgMonitorBatchApply').isDisabled(),true);
+   await batch.getByRole('textbox',{name:'Shared acknowledgement note'}).fill('Review started');
+   await batch.locator('#owgMonitorBatchPreview').click();
+   await batch.locator('#owgMonitorBatchStatus').filter({hasText:'Review the listed records'}).waitFor();
+   assert.equal(await batch.locator('#owgMonitorBatchApply').isDisabled(),true);
+   await batch.locator('#owgMonitorBatchConfirm').check();
+   await batch.locator('#owgMonitorBatchApply').click();
+   await page.waitForFunction(()=>!document.querySelector('#owgMonitorBatchAck'));
+   const triaged=await page.evaluate(async()=>(await(await fetch('/v1/automation-monitoring/incidents')).json()).incidents);
+   const handoff=triaged.find(i=>i.kind==='run_handoffs');assert.ok(handoff);assert.equal(handoff.status,'acknowledged');
+   assert.equal(handoff.notes.at(-1).note,'Review started');
    const text=await page.locator('#owgMonitorResults').textContent();
    assert.match(text,/Recent20/);assert.match(text,/100\.0%/);assert.match(text,/Attach the starter/);
 
