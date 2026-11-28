@@ -9317,12 +9317,16 @@
     const box=section('Check against a Petri net');box.id='owgPetri';
     const netsBase=()=>'/v1/event-logs/'+encodeURIComponent(state.logId)+'/reference-nets';
     box.appendChild(el('div','Replay the recorded cases on a Petri net from ProM, PM4Py, Apromore or another tool (a .pnml file), or on the net discovered here. Tokens that are missing or left behind show where the cases and the net disagree. The file is read for this check and not stored.','muted'));
-    const file=input('owgPetriFile','file');file.accept='.pnml,.ptml,application/xml,text/xml';
+    const file=input('owgPetriFile','file');file.accept='.pnml,.ptml,.bpmn,application/xml,text/xml';
+    const bpmnConversion=el('div');bpmnConversion.id='owgPetriBpmnConversion';
+    let conversionEpoch=0;
+    const clearBpmnConversion=()=>{conversionEpoch++;bpmnConversion.replaceChildren();};
+    file.addEventListener('change',clearBpmnConversion);
     const run=button('Replay on this net','secondary');run.id='owgPetriRun';
     const own=button('Replay on the discovered net','secondary');own.id='owgPetriDiscovered';
     const happy=button('Check against the most common path','secondary');happy.id='owgPetriHappy';
     const align=button('Explain each case step by step','secondary');align.id='owgPetriAlign';align.disabled=true;
-    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Petri net (.pnml) or process tree (.ptml)',file),run,own,happy,align);
+    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Petri net (.pnml), process tree (.ptml) or supported BPMN (.bpmn)',file),run,own,happy,align);
     const statusLine=el('div',null,'muted');statusLine.id='owgPetriStatus';statusLine.setAttribute('role','status');statusLine.setAttribute('aria-live','polite');
     const out=el('div');out.id='owgPetriResults';
     const aligned=el('div');aligned.id='owgPetriAlignResults';
@@ -9344,7 +9348,7 @@
         await replay(converted.pnml,'the pasted process tree');
       }catch(error){statusLine.textContent=error.message;}
     };
-    box.append(row,treeRow,statusLine,out,aligned,alertRow,alertMessage);
+    box.append(row,treeRow,statusLine,bpmnConversion,out,aligned,alertRow,alertMessage);
     // Reference nets saved with this log: keep the net just checked, or check again against a saved one.
     const savedPick=select('owgPetriSaved',[]);const savedRun=button('Replay on saved net','secondary');savedRun.id='owgPetriSavedRun';
     const savedDelete=button('Delete saved net','secondary');savedDelete.id='owgPetriSavedDelete';
@@ -9852,6 +9856,7 @@
     const replay=async(body,label)=>{
       if(sectionGeneration!==state.generation||run.disabled)return;
       const generation=sectionGeneration,cohort=globalCohort();
+      clearBpmnConversion();
       run.disabled=own.disabled=happy.disabled=align.disabled=alertSave.disabled=true;aligned.replaceChildren();alertMessage.textContent='';lastNet=null;clearSound();statusLine.textContent='Replaying on '+label+'…';out.replaceChildren();
       try{
         const r=await (await api(logPath('petri-net-replay',{}),{method:'POST',headers:{'Content-Type':'application/xml'},body})).json();
@@ -9967,8 +9972,28 @@
             finally{why.disabled=false;}};}
       }catch(error){status.textContent=error.message;}
       finally{run.disabled=own.disabled=false;align.disabled=!lastNet;}};
-    run.onclick=async()=>{const chosen=file.files&&file.files[0];if(!chosen){statusLine.textContent='Choose a .pnml file first.';return;}
+    run.onclick=async()=>{const chosen=file.files&&file.files[0];if(!chosen){statusLine.textContent='Choose a .pnml, .ptml or .bpmn file first.';return;}
       if(chosen.size>2*1024*1024){statusLine.textContent='The Petri net file is larger than 2 MB.';return;}
+      if(/\.bpmn$/i.test(chosen.name)){
+        const epoch=++conversionEpoch;bpmnConversion.replaceChildren();
+        try{
+          statusLine.textContent='Converting supported BPMN control flow…';
+          const converted=await (await api('/v1/event-logs/bpmn-to-pnml',{method:'POST',headers:{'Content-Type':'application/xml'},body:await chosen.arrayBuffer()})).json();
+          if(epoch!==conversionEpoch||sectionGeneration!==state.generation||file.files?.[0]!==chosen)return;
+          const label=chosen.name+' (BPMN control flow)';
+          await replay(converted.pnml,label);
+          if(conversionEpoch!==epoch+1||sectionGeneration!==state.generation||lastNet?.body!==converted.pnml||lastNet?.label!==label)return;
+          bpmnConversion.append(el('h4','BPMN conversion evidence'),el('div',converted.nodes+' BPMN nodes · '+converted.sequence_flows+' sequence flows · '+Object.keys(converted.parallel_pairs).length+' paired parallel regions. '+converted.caveat,'muted'));
+          const download=(name,data,mime)=>{
+            const url=URL.createObjectURL(new Blob([data],{type:mime}));
+            const link=document.createElement('a');link.href=url;link.download=name;document.body.appendChild(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
+          };
+          const pnmlDownload=button('Download converted PNML','secondary');pnmlDownload.onclick=()=>{if(conversionEpoch===epoch+1)download('converted-'+converted.pnml_sha256.slice(0,12)+'.pnml',converted.pnml,'application/xml');};
+          const mappingDownload=button('Download BPMN conversion evidence (JSON)','secondary');mappingDownload.onclick=()=>{if(conversionEpoch===epoch+1)download('bpmn-conversion-'+converted.bpmn_sha256.slice(0,12)+'.json',JSON.stringify(converted,null,2),'application/json');};
+          bpmnConversion.append(pnmlDownload,mappingDownload);
+        }catch(error){if(epoch===conversionEpoch&&sectionGeneration===state.generation)statusLine.textContent=error.message;}
+        return;
+      }
       // A process tree from PM4Py or ProM is converted to its workflow net first, then replayed as usual.
       if(/\.ptml$/i.test(chosen.name)){
         try{
