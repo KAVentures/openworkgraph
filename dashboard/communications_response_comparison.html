@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Response report comparison · OpenWorkGraph</title>
+<style>
+:root{color-scheme:light dark;font:16px/1.5 system-ui,sans-serif}
+body{margin:0;padding:1rem;background:#fff;color:#17212e}
+main{max-width:76rem;margin:auto} h1{font-size:1.75rem}h2{font-size:1.25rem}
+p{max-width:76ch}a{color:#154da0}fieldset{border:1px solid #8794a2;border-radius:.5rem;padding:1rem;margin:1rem 0;min-width:0}
+label{display:block;margin:.75rem 0}input[type=file]{display:block;margin-top:.35rem;max-width:100%;font:inherit}
+button{font:inherit;padding:.45rem .75rem;margin:.3rem .4rem .3rem 0;border:1px solid #637186;border-radius:.35rem;background:#f4f6f9;color:#17212e}
+button:disabled{opacity:.55}button:focus-visible,a:focus-visible,input:focus-visible,summary:focus-visible{outline:3px solid #1169c6;outline-offset:3px}
+.table-wrap{overflow:auto;max-width:100%;margin:.5rem 0 1rem}
+table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}th,td{text-align:left;padding:.45rem;border-bottom:1px solid #aeb8c2;vertical-align:top}
+th{background:#edf1f6}td:first-child{min-width:9rem}code{overflow-wrap:anywhere}details{margin:.75rem 0}summary{cursor:pointer}#status{min-height:1.5em}
+@media(prefers-color-scheme:dark){body{background:#151a22;color:#e8ecf2}a{color:#a7cdff}button{background:#293343;color:#f2f5fa}th{background:#293343}th,td{border-color:#5b697b}}
+</style>
+<script defer src="./communications_response_comparison.js"></script>
+<script defer src="./communications_response_comparison_ui.js"></script>
+</head><body><main>
+<header><h1>Compare communications response reports</h1>
+<p>Choose two OWG response-episode aggregate JSON exports from the Communications dashboard. Compare observed deadline performance, repeat contacts, workload exposure, coverage, and shared supported intent groups.</p>
+<p>Files are processed in this browser only. No raw messages, thread identifiers, network upload, or saved workspace are needed. Input digests identify the selected bytes, not their authenticity.</p></header>
+<fieldset><legend>Comparison basis</legend>
+<label for="baseline">Baseline aggregate report<input id="baseline" type="file" accept=".json,application/json"></label>
+<label for="comparison">Comparison aggregate report<input id="comparison" type="file" accept=".json,application/json"></label>
+<label><input id="confirm" type="checkbox"> I reviewed both selections and confirm comparable direction, time, inclusion and classification conventions, including intent taxonomy or model. I understand the populations may overlap and these are not matched cases.</label>
+<button id="compare" type="button" disabled>Compare reports</button>
+<button id="clear" type="button">Clear files and report</button>
+<button id="download" type="button" disabled>Download aggregate comparison JSON</button>
+<p id="status" role="status" aria-live="polite"></p>
+</fieldset>
+<div id="results"></div>
+<footer><p>Deadline bounds vary only the potential on-time outcomes of pending episodes. They are not confidence intervals and do not account for missing history. Workload exposure is not staffing time. No production SLA or causal improvement is certified.</p></footer>
+</main></body></html>

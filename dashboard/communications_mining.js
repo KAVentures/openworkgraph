@@ -56,6 +56,8 @@
     const card=el('div',null,'card');card.id='owgCommsCard';
     card.appendChild(el('h2','Communications'));
     card.appendChild(el('div','Analyse an email (mbox or .eml) or ticket (CSV) export you choose. It is read on this computer, sensitive identifiers are redacted, and only counts are kept: intents, entity types, volumes and response times. No message text or entity value is stored or returned. Intents are keyword matches from the taxonomy below, not verified reasons for contact.','muted'));
+    const compareLink=el('a','Compare two response episode reports');compareLink.href='/communications-response-comparison';compareLink.target='_blank';compareLink.rel='noopener noreferrer';
+    card.appendChild(compareLink);
     const file=input('owgCommsFile','file');file.accept='.mbox,.eml,.csv,.tsv,.txt';
     const format=select('owgCommsFormat',[['mbox','Mailbox (mbox)'],['eml','Single email (.eml)'],['csv','Ticket export (CSV)']]);
     const domains=input('owgCommsDomains','text','example.com');

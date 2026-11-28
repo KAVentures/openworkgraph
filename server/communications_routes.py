@@ -58,6 +58,26 @@ def communications_script() -> FileResponse:
     return FileResponse(_SCRIPT, media_type="application/javascript")
 
 
+# Static, offline comparison workbench. No report data is sent to these routes.
+@router.get("/communications-response-comparison")
+def communications_response_comparison_page() -> FileResponse:
+    return FileResponse(_SCRIPT.with_name("communications_response_comparison.html"),
+                        media_type="text/html", headers={"Cache-Control": "no-store",
+                        "Content-Security-Policy": "default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; connect-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"})
+
+
+@router.get("/communications_response_comparison.js")
+def communications_response_comparison_script() -> FileResponse:
+    return FileResponse(_SCRIPT.with_name("communications_response_comparison.js"),
+                        media_type="application/javascript")
+
+
+@router.get("/communications_response_comparison_ui.js")
+def communications_response_comparison_ui() -> FileResponse:
+    return FileResponse(_SCRIPT.with_name("communications_response_comparison_ui.js"),
+                        media_type="application/javascript")
+
+
 @router.get("/v1/communications/taxonomy")
 def get_taxonomy(request: Request):
     _require_dashboard(request)
