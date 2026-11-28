@@ -15,5 +15,5 @@ def test_duration_bands_of_one_group():
     fast = sharing.duration_distribution(log_id, case_filter={"resource": "ana"})
     assert slow["cases"] == fast["cases"] == 6
     assert slow["observed_duration_seconds"]["median"] > fast["observed_duration_seconds"]["median"]
-    with pytest.raises(workspace.EventLogWorkspaceError):
-        sharing.duration_distribution(log_id, case_filter={"case_ids": ["c0"]})
+    with pytest.raises(workspace.EventLogWorkspaceError, match="fewer than 5 cases"):
+        sharing.duration_distribution(log_id, case_filter={"started_before": "2024-03-02T00:00:00Z"})

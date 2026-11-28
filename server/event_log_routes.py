@@ -615,6 +615,23 @@ async def event_log_petri_language_comparison(request: Request):
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
+@router.post("/v1/event-logs/bpmn-to-pnml")
+async def convert_bpmn_replay_model(request: Request):
+    """Convert supported BPMN control flow to an ordinary PNML net. Nothing is stored."""
+    from . import event_log_bpmn_replay_import as importer
+    _require_dashboard(request)
+    data = bytearray()
+    async for chunk in request.stream():
+        if len(data) + len(chunk) > importer.MAX_BYTES:
+            raise HTTPException(413, "the BPMN file is larger than 2 MB")
+        data.extend(chunk)
+    try:
+        result = await run_in_threadpool(importer.to_pnml, bytes(data))
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
 @router.post("/v1/event-logs/ptml-to-pnml")
 async def convert_ptml_process_tree(request: Request):
     """Convert a PTML process tree (ProM, PM4Py) to a PNML workflow net for replay. Nothing is stored."""
@@ -2204,12 +2221,12 @@ def event_log_variants(request: Request, log_id: str, case_type: str | None = Qu
 
 @router.get("/v1/event-logs/{log_id}/variants.csv")
 def event_log_variants_csv(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
-                           cohort: dict[str, Any] = Depends(_case_filter)):
+                           exact_paths: bool = Query(default=False), cohort: dict[str, Any] = Depends(_case_filter)):
     """Every variant as spreadsheet-safe CSV: path, cases, share, running share, durations. Not stored."""
     from . import event_log_variant_export as export
     _require_dashboard(request)
     try:
-        text, meta = export.variants_csv(log_id, case_type, cohort=cohort)
+        text, meta = export.variants_csv(log_id, case_type, cohort=cohort, exact_paths=exact_paths)
     except workspace.EventLogWorkspaceError as exc:
         raise HTTPException(422, str(exc)) from None
     return Response(text, media_type="text/csv; charset=utf-8", headers={
@@ -3109,6 +3126,31 @@ async def event_log_evaluate_prediction_snapshot(request: Request, log_id: str, 
     except workspace.EventLogWorkspaceError as exc:
         raise HTTPException(404 if "unknown" in str(exc) else 422, str(exc)) from None
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+@router.get("/prediction-calibration.js")
+def prediction_calibration_script():
+    return FileResponse(Path(__file__).resolve().parents[1]/"dashboard"/"prediction_calibration.js",media_type="application/javascript")
+
+
+@router.post("/v1/event-logs/{log_id}/prediction-snapshots/{snapshot_id}/calibration")
+async def event_log_prediction_calibration(request: Request,log_id: str,snapshot_id: str):
+    from . import event_log_prediction_calibration as calibration
+    _require_dashboard(request)
+    spec=await _json_body(request,"prospective calibration",strict=True,limit=16384)
+    result=await run_in_threadpool(_respond,calibration.review,log_id,snapshot_id,spec)
+    _require_dashboard(request)
+    return result
+
+
+@router.post("/v1/event-logs/{log_id}/prediction-snapshots/{snapshot_id}/calibration/evidence")
+async def event_log_prediction_calibration_evidence(request: Request,log_id: str,snapshot_id: str):
+    from . import event_log_prediction_calibration as calibration
+    _require_dashboard(request)
+    spec=await _json_body(request,"prospective calibration evidence",strict=True,limit=16384)
+    result=await run_in_threadpool(_respond,calibration.evidence,log_id,snapshot_id,spec)
+    _require_dashboard(request)
+    return result
 
 
 @router.post("/v1/event-logs/{log_id}/prediction-snapshots/{snapshot_id}/delete")

@@ -264,7 +264,10 @@ covered by these tests.
   multi-monitor layouts and lock states.
 - Iframes from other origins are covered only where the content script already runs.
 - The issue's ablation evaluation on independently labeled real sessions has not been
-  run. No reconstruction accuracy gain is claimed until it has.
+  run. The [offline paired pilot workbench](CAPTURE_DETAIL_PAIRED_PILOT.md) prepares
+  the reviewed cohort, two prediction arms and independent annotations, then measures
+  structural-event reconstruction with identical denominators. No reconstruction
+  accuracy gain is claimed until the real-session evaluation has been completed.
 
 ## Reconstruction
 

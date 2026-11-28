@@ -270,6 +270,17 @@
         </label>
         <div class="muted" id="pvScheduleStatus" role="status" aria-live="polite"></div>
         <div id="pvScheduleList" role="region" aria-label="Scheduled jobs"></div>
+        <details id="pvDeliveryPortfolio">
+          <summary>External signal delivery operations</summary>
+          <p class="muted">Inspect the local notification queue across all configured channels. These are queued alerts, not live source facts. Pause retains queues and credentials; dismissal does not review a signal. No action starts or resumes delivery here.</p>
+          <div class="pv-row">
+            <button type="button" class="secondary" id="pvDeliveryRefresh">Refresh delivery portfolio</button>
+            <button type="button" class="secondary" id="pvDeliveryPauseAll" disabled>Pause all enabled channels</button>
+            <button type="button" class="secondary" id="pvDeliveryDismiss" disabled>Dismiss selected paused groups</button>
+          </div>
+          <div id="pvDeliveryStatus" role="status" aria-live="polite" class="muted"></div>
+          <div id="pvDeliveryRows"></div>
+        </details>
       </div>
       <div class="card" id="pvSemantic">
         <h2>AI help with grouping work</h2>
@@ -1186,6 +1197,115 @@
           windowSpec.start === windowSpec.end)
         throw new Error('Enter a timezone and two different valid 24-hour quiet-hour times.');
       return windowSpec;
+    };
+    const deliveryRoot = panel.querySelector('#pvDeliveryPortfolio');
+    const deliveryRefresh = panel.querySelector('#pvDeliveryRefresh');
+    const deliveryPause = panel.querySelector('#pvDeliveryPauseAll');
+    const deliveryDismiss = panel.querySelector('#pvDeliveryDismiss');
+    const deliveryStatus = panel.querySelector('#pvDeliveryStatus');
+    const deliveryRows = panel.querySelector('#pvDeliveryRows');
+    let deliveryGeneration = 0, deliveryPin = null, deliverySelections = [], deliveryBusy = false;
+    const deliveryLabels = {
+      delivery_paused:'Delivery paused', schedule_unknown:'Schedule metadata unavailable',
+      schedule_missing:'No saved schedule', schedule_paused:'Local schedule paused',
+      rule_approval_missing:'Rule approval missing', quiet_hours:'Quiet hours',
+      retry_wait:'Head waiting for retry', head_due:'Head due for independent preflight', queue_empty:'Queue empty'
+    };
+    const deliveryText = (tag, value, cls) => {
+      const node = document.createElement(tag); node.textContent = String(value ?? '—');
+      if (cls) node.className = cls;
+      return node;
+    };
+    const deliveryTime = value => value ? String(value).replace('T',' ').replace('+00:00',' UTC') : '—';
+    const clearDelivery = () => {
+      ++deliveryGeneration; deliveryPin = null; deliverySelections = [];
+      deliveryRows.replaceChildren(); deliveryPause.disabled = deliveryDismiss.disabled = true;
+    };
+    const updateDeliverySelections = () => {
+      const count = deliverySelections.filter(s=>s.box.checked).length;
+      deliveryDismiss.disabled = deliveryBusy || count === 0 || count > 20;
+      deliveryDismiss.textContent = 'Dismiss selected paused groups ('+count+'/20)';
+    };
+    const refreshDelivery = async () => {
+      if (!deliveryRoot.open || deliveryBusy) return;
+      clearDelivery();
+      const epoch = deliveryGeneration;
+      deliveryStatus.textContent = 'Reading the local queue and schedule metadata…';
+      deliveryRefresh.disabled = true;
+      try {
+        const data = await api('/v1/schedules/signal-delivery-portfolio');
+        if (epoch !== deliveryGeneration || !deliveryRoot.open) return;
+        deliveryPin = data.enabled_channels_sha256;
+        deliveryPause.disabled = data.enabled_channels === 0;
+        deliveryStatus.textContent = data.configured_channels+' channels · '+data.enabled_channels+
+          ' enabled · '+data.pending_groups+' pending groups · '+data.previously_attempted_groups+
+          ' previously attempted. Schedule metadata '+data.schedule_metadata_status+
+          '; scheduler '+(data.scheduler_running_at_snapshot===null?'unknown':data.scheduler_running_at_snapshot?'running':'not running')+'.';
+        deliveryRows.append(deliveryText('p', data.interpretation, 'muted'));
+        for (const channel of data.channels) {
+          const box = document.createElement('details');
+          box.append(deliveryText('summary',channel.log_id+' · '+(deliveryLabels[channel.status] || 'Unknown state')+
+            ' · '+channel.pending_group_count+' queued'));
+          box.append(deliveryText('p',channel.enabled?'Channel enabled; sender still checks current conditions.':'Channel paused; queue retained.', 'muted'),
+            deliveryText('p','Next scheduled check: '+deliveryTime(channel.schedule_next_at)+
+              ' · Quiet until: '+deliveryTime(channel.quiet_until)+
+              ' · Consecutive delivery failures: '+channel.consecutive_failures+
+              ' · Recorded receiver acknowledgements: '+channel.recorded_receiver_acknowledgements, 'muted'),
+            deliveryText('p','Last retained delivery record: '+(channel.last_retained_audit_outcome||'none')+
+              ' · '+deliveryTime(channel.last_retained_audit_at)+
+              ' · Remaining dismissal capacity: '+channel.dismissal_capacity_remaining,'muted'));
+          for (const group of channel.pending_groups) {
+            const row = document.createElement('div'); row.className='pv-row';
+            const label = document.createElement('label');
+            const checkbox = document.createElement('input');checkbox.type='checkbox';
+            checkbox.disabled = channel.enabled;
+            label.append(checkbox,document.createTextNode(' Select '+group.notification_id));
+            const summary = deliveryText('span',group.queued_state_count+' queued state occurrences · '+
+              group.attempts+' attempts · created '+deliveryTime(group.created_at)+
+              ' · retry '+deliveryTime(group.next_attempt_at)+
+              (group.previous_delivery_may_have_arrived?' · previous receipt possible':''));
+            row.append(label,summary);box.append(row);
+            deliverySelections.push({box:checkbox,selection:{log_id:channel.log_id,channel_id:channel.channel_id,
+              notification_id:group.notification_id,queue_sha256:group.queue_sha256}});
+            checkbox.onchange=updateDeliverySelections;
+          }
+          deliveryRows.append(box);
+        }
+        updateDeliverySelections();
+      } catch(error) {
+        if(epoch===deliveryGeneration)deliveryStatus.textContent=error.message||'Delivery portfolio unavailable.';
+      } finally {
+        if(epoch===deliveryGeneration)deliveryRefresh.disabled=false;
+      }
+    };
+    deliveryRoot.addEventListener('toggle',()=>{
+      if(deliveryRoot.open)refreshDelivery();
+      else {clearDelivery();deliveryRefresh.disabled=false;}
+    });
+    deliveryRefresh.onclick=refreshDelivery;
+    const mutateDelivery=async(path,payload,message)=>{
+      deliveryBusy=true;clearDelivery();deliveryRefresh.disabled=true;
+      deliveryStatus.textContent='Saving reviewed local operation…';
+      try {
+        const data=await api('/v1/schedules/signal-delivery-portfolio/'+path,send('POST',payload));
+        deliveryBusy=false;await refreshDelivery();
+        if(deliveryRoot.open)deliveryStatus.textContent=message(data)+' '+deliveryStatus.textContent;
+      } catch(error) {
+        deliveryBusy=false;deliveryStatus.textContent=(error.message||'Operation refused.')+' Refresh before retrying.';
+      } finally {deliveryRefresh.disabled=false;}
+    };
+    deliveryPause.onclick=()=>{
+      if(!deliveryPin||deliveryBusy)return;
+      if(!confirm('Pause every currently reviewed enabled external signal channel? Queued groups and credentials stay local; a request already in flight may arrive. Local schedules and signal reviews remain unchanged.'))return;
+      mutateDelivery('pause-all',{expected_enabled_channels_sha256:deliveryPin,confirm_pause:true},
+        result=>result.paused_channels+' channels paused.');
+    };
+    deliveryDismiss.onclick=()=>{
+      const selections=deliverySelections.filter(s=>s.box.checked&&!s.box.disabled).map(s=>s.selection);
+      if(!selections.length||selections.length>20||deliveryBusy)return;
+      if(!confirm('Dismiss exactly these paused notification groups? Their exact states will not be queued again in these channels. Prior delivery may have arrived. This does not acknowledge the underlying signals.'))return;
+      mutateDelivery('dismiss-batch',{selections,confirm_dismiss:true},
+        result=>result.dismissed_groups+' groups dismissed; '+result.previously_attempted_groups+' may previously have arrived.');
     };
     let scheduleRefreshEpoch = 0;
     const refreshSchedules = async () => {
