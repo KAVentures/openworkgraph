@@ -269,3 +269,40 @@ class HttpRuntime(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(result["counts"]["clarification_cases"],1)
         self.assertFalse(self.calls)
         self.assertFalse(self.resolved)
+
+    async def test_suite_wide_field_review_actual_http_contract(self):
+        from suggest_http_fields import review
+        spec,plan,case,bindings,_,doc,ops=self.data
+        suite={"format":"openworkgraph.reviewed-shadow-cases.v1",
+               "process_reference":bindings["process_reference"],"spec_sha256":digest(spec),
+               "reviewed_by_customer":True,"case_inputs_authorized":True,
+               "cases":[{"id":"case_1","category":"normal",
+                         "input":{**case,"unsafe":"/not/a/path"},
+                         "expected":{"status":"proposal","accepted_routes":[plan["activity_ids"]],
+                                     "review_confirmed":True}},
+                        {"id":"case_2","category":"exception",
+                         "input":{**case,"version":-1,"unsafe":"/not/a/path"},
+                         "expected":{"status":"proposal","accepted_routes":[plan["activity_ids"]],
+                                     "review_confirmed":True}}]}
+        selection={"assignments":{"resolve":"resolve_case","readback":"read_case"}}
+        with patch("execute_http.DirectClient",side_effect=AssertionError("Unexpected transport")):
+            result=review(spec,suite,doc,digest(doc),selection)
+            by_id={row["activity_id"]:row for row in result["selected_activities"]}
+            self.assertEqual(by_id["resolve"]["relevant_cases"],2)
+            fields={row["argument"]:row for row in by_id["resolve"]["arguments"]}
+            self.assertEqual(fields["expected_version"]["status"],"no_full_support")
+            self.assertEqual(fields["expected_version"]["best_case_support"],1)
+            self.assertEqual(fields["issue"]["full_support_paths"],["/issue","/request_id"])
+            self.assertNotIn("/unsafe",fields["request_id"]["full_support_paths"])
+            self.assertFalse(by_id["resolve"]["binding_authorized"])
+            self.assertFalse(result["combined_request_validated"])
+            self.assertFalse(result["execution_authorized"])
+            self.assertEqual(result["review_sha256"],digest({k:v for k,v in result.items() if k!="review_sha256"}))
+            for private in ("SYNTHETIC_PRIVATE_RECORD","synthetic-idempotency-key",case["record_ref"]):
+                self.assertNotIn(private,json.dumps(result))
+            with self.assertRaises(ImplementationError):
+                review(spec,suite,doc,"f"*64,selection)
+            with self.assertRaises(ImplementationError):
+                review(spec,suite,doc,digest(doc),{"assignments":{"done":"read_case"}})
+        self.assertFalse(self.calls)
+        self.assertFalse(self.resolved)
