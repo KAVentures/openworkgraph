@@ -3980,6 +3980,13 @@ the current selection. The dashboard checks that
 the saved hidden set has not changed since it loaded. If another view changed
 it, reload before saving; the stale selection is not applied.
 
+### Completion labels in open-case signals
+
+When creating an **are open longer than** signal, add each completion activity
+separately. Labels match exactly, including commas and whitespace. The saved
+rule lists the completion labels used when checking whether a case is open.
+Changing the draft selection clears its preview; saving does not evaluate it.
+
 ### Reusing activity groupings across logs
 
 Under **Group activities**, download a saved mapping as JSON. In another log,
