@@ -1613,7 +1613,195 @@
       }catch(error){if(ticket===reviewSerial){resetReview();reviewOutput.replaceChildren(el('p',error.message,'note'));}}
     }
     revisionPanel.append(previous,oldFile,compareButton,reviewOutput);
-    section.append(sources,add,button('Find open questions across sources',()=>locked(run)),output,revisionPanel);
+    const effectivePanel=el('details');effectivePanel.id='owgEffectivePolicyPanel';
+    effectivePanel.append(el('summary','Effective-dated policy timeline and change review'),
+      el('p','Declare required policy families and exact source versions with effective date intervals. Inspect coverage gaps, ambiguous overlaps and explicitly prioritized revisions. Nothing is retained or automatically approved.','muted'));
+    const labelled=(text,node)=>{const label=el('label',text+' ');label.append(node);return label;};
+    const dateField=(label)=>{const n=el('input');n.type='date';n.setAttribute('aria-label',label);return n;};
+    const startDate=dateField('Timeline start date'),endDate=dateField('Timeline end date exclusive');
+    const asOf=dateField('Policy review date'),compareTo=dateField('Optional previous review date');
+    const familyRows=[],versionRows=[],familiesHost=el('div'),versionsHost=el('div');
+    const timelineOut=el('div');timelineOut.id='owgEffectivePolicyTimeline';timelineOut.setAttribute('role','status');
+    const dateOut=el('div');dateOut.id='owgEffectivePolicyDateReview';dateOut.setAttribute('role','status');
+    let timelineGeneration=0,dateGeneration=0,basis=null,timelineReport=null,dateReport=null;
+    const clearDate=()=>{++dateGeneration;dateReport=null;dateOut.replaceChildren();};
+    function invalidateTimeline(){++timelineGeneration;basis=timelineReport=null;timelineOut.replaceChildren(el('p','Timeline inputs changed. Prepare the exact review again.','muted'));clearDate();}
+    for(const n of [startDate,endDate])n.addEventListener('input',invalidateTimeline);
+    for(const n of [asOf,compareTo])n.addEventListener('input',clearDate);
+    const textField=(label,max,value='')=>{const n=el('input');n.type='text';n.maxLength=max;n.value=value;n.setAttribute('aria-label',label);n.oninput=invalidateTimeline;return n;};
+    const familyChoice=(label,choices)=>{const n=el('select');n.setAttribute('aria-label',label);
+      for(const [key,name] of choices){const o=el('option',name);o.value=key;n.append(o);}n.onchange=invalidateTimeline;return n;};
+    function addFamily(values={}){
+      if(familyRows.length>=5)throw Error('At most five required policy families.');
+      const n=el('fieldset');n.append(el('legend','Required policy family'));
+      const id=textField('Policy family identifier',60,values.family_id||''),label=textField('Policy family label',100,values.label||'');
+      const resolution=familyChoice('Policy family overlap resolution',[['unique_active','Refuse overlapping versions'],['explicit_priority','Use explicitly declared priority']]);
+      resolution.value=values.resolution||'unique_active';
+      const row={n,id,label,resolution};
+      const remove=button('Remove policy family',()=>{familyRows.splice(familyRows.indexOf(row),1);n.remove();invalidateTimeline();});
+      n.append(labelled('Family identifier',id),labelled('Family label',label),labelled('Overlap resolution',resolution),remove);
+      familyRows.push(row);familiesHost.append(n);invalidateTimeline();
+    }
+    function addVersion(values={}){
+      if(versionRows.length>=20)throw Error('At most twenty policy versions.');
+      const n=el('fieldset');n.append(el('legend','Policy version'));
+      const id=textField('Policy version identifier',60,values.version_id||''),family=textField('Version family identifier',60,values.family_id||''),
+        title=textField('Version document title',120,values.title||'');
+      const from=dateField('Version effective from'),until=dateField('Version effective until exclusive');
+      from.value=values.effective_from||'';until.value=values.effective_until||'';
+      from.oninput=until.oninput=invalidateTimeline;
+      const priority=el('input');priority.type='number';priority.min='0';priority.max='1000';priority.step='1';
+      priority.value=values.priority??'';priority.setAttribute('aria-label','Version explicit priority');priority.oninput=invalidateTimeline;
+      const text=el('textarea');text.rows=4;text.maxLength=60000;text.value=values.text||'';text.setAttribute('aria-label','Exact version source text');text.oninput=invalidateTimeline;
+      const file=el('input');file.type='file';file.accept='.txt,.md,text/plain,text/markdown';file.setAttribute('aria-label','Load exact version source text');
+      const row={n,id,family,title,from,until,priority,text};
+      file.onchange=()=>locked(async()=>{const f=file.files?.[0];if(!f)return;
+        if(f.size>65536||!/\.(txt|md)$/i.test(f.name))throw Error('Choose a UTF-8 .txt or .md file of at most 64 KiB.');
+        const value=new TextDecoder('utf-8',{fatal:true}).decode(await f.arrayBuffer());
+        if(!value.trim()||value.length>60000)throw Error('Version text must contain 1–60,000 characters.');
+        if(!n.isConnected)return;text.value=value;if(!title.value)title.value=f.name.slice(0,120);file.value='';invalidateTimeline();
+      });
+      const remove=button('Remove policy version',()=>{versionRows.splice(versionRows.indexOf(row),1);n.remove();invalidateTimeline();});
+      n.append(labelled('Version identifier',id),labelled('Required family identifier',family),labelled('Document title',title),
+        labelled('Effective from (inclusive)',from),labelled('Effective until (exclusive, optional)',until),
+        labelled('Explicit priority (only if family uses priority; higher wins)',priority),labelled('Exact source text',text),
+        labelled('Load source file',file),remove);
+      versionRows.push(row);versionsHost.append(n);invalidateTimeline();
+    }
+    function readTimeline(selected){
+      if(!selected?.workflow_id||!startDate.value||!endDate.value)throw Error('Choose a saved revision and the complete date window.');
+      const families=familyRows.map(r=>({family_id:r.id.value.trim(),label:r.label.value.trim(),resolution:r.resolution.value}));
+      const versions=versionRows.map(r=>({version_id:r.id.value.trim(),family_id:r.family.value.trim(),title:r.title.value.trim(),text:r.text.value,
+        effective_from:r.from.value,effective_until:r.until.value||null,priority:r.priority.value===''?null:Number(r.priority.value)}));
+      if(!families.length||!versions.length)throw Error('Enter at least one family and version.');
+      return {format:'openworkgraph.effective-policy-timeline.v1',expected_content_sha256:selected.content_sha256,
+        start_date:startDate.value,end_date_exclusive:endDate.value,families,versions};
+    }
+    const table=(headers,data)=>{
+      const wrap=el('div');wrap.style.cssText='max-width:100%;overflow-x:auto';
+      const t=el('table'),h=el('thead'),hr=el('tr'),b=el('tbody');
+      for(const label of headers){const th=el('th',label);th.scope='col';hr.append(th);}
+      h.append(hr);for(const row of data){const tr=el('tr');for(const value of row)tr.append(el('td',value??'—'));b.append(tr);}
+      t.append(h,b);wrap.append(t);return wrap;
+    };
+    const exportReport=(data,filename)=>{
+      const url=URL.createObjectURL(new Blob([JSON.stringify(data,null,2)],{type:'application/json'}));
+      const a=el('a');a.href=url;a.download=filename;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
+    };
+    function stillCurrent(candidate){return basis===candidate&&record===candidate.record&&effectivePanel.isConnected;}
+    const runTimeline=button('Prepare effective policy timeline',()=>locked(async()=>{
+      invalidateTimeline();const generation=timelineGeneration,selected=record,payload=readTimeline(selected);
+      timelineOut.replaceChildren(el('p','Calculating exact effective date intervals…'));
+      const data=await request('/v1/process-catalog/clarify/effective-timeline'+queryFor(selected),payload);
+      if(generation!==timelineGeneration||record!==selected||!effectivePanel.isConnected)return;
+      basis={record:selected,payload};timelineReport=data;
+      const c=data.coverage_days;
+      timelineOut.replaceChildren(el('h5','Effective date coverage'),
+        el('p',data.window_days+' days · '+c.resolved_under_declared_assumptions+' resolved · '+c.incomplete+' incomplete · '+c.ambiguous+' ambiguous.'),
+        el('p','Resolved means only that the declared date/priority rules select exactly one version per required family.','muted'),
+        table(['From','Until exclusive','Days','Status','Selected versions'],data.segments.map(s=>[s.start_date,s.end_date_exclusive,s.days,
+          s.status.replaceAll('_',' '),s.selected_version_ids.join(', ')])));
+      const detail=el('details');detail.append(el('summary','Exact per-family overlap and gap evidence'));
+      for(const s of data.segments){
+        detail.append(el('h6',s.start_date+' to '+s.end_date_exclusive),
+          table(['Family','Status','Active versions','Selected','Shadowed'],s.families.map(f=>[f.family_id,f.status.replaceAll('_',' '),
+            f.active_version_ids.join(', '),f.selected_version_id,f.shadowed_version_ids.join(', ')])));
+      }
+      const transitions=el('details');transitions.append(el('summary','Effective date transitions ('+data.transitions.length+')'));
+      for(const t of data.transitions)transitions.append(el('p',t.date+' · '+t.changed_families.map(f=>f.family_id+': '+(f.before_selected||'none')+' → '+(f.after_selected||'none')+' ('+f.after_status.replaceAll('_',' ')+')').join('; ')));
+      const family=el('details');family.append(el('summary','Per-family coverage totals'),
+        table(['Family','Gap days','Unique days','Ambiguous overlap days','Priority tie days','Priority-resolved overlap days'],
+          data.family_coverage.map(f=>[f.family_id,f.coverage_days.gap,f.coverage_days.unique_active,f.coverage_days.ambiguous_overlap,
+            f.coverage_days.ambiguous_priority_tie,f.coverage_days.overlap_resolved_by_declared_priority])));
+      timelineOut.append(detail,transitions,family,
+        el('p','Never active: '+(data.versions_never_active_in_window.join(', ')||'none')+
+          ' · Never selected in a complete bundle: '+(data.versions_never_selected_in_complete_bundle.join(', ')||'none'),'muted'),
+        el('p','Timeline digest '+data.timeline_sha256,'muted'),
+        button('Download timeline manifest (without source text)',()=>{if(timelineReport===data&&stillCurrent(basis))exportReport(data,'owg-effective-policy-timeline.json');}),
+        button('Download reusable timeline input (includes full source text)',()=>{
+          if(timelineReport!==data||!basis||!stillCurrent(basis))return;
+          if(confirm('Download a local copy containing all exact policy source texts? Review and protect this file before sharing.'))
+            exportReport(basis.payload,'owg-effective-policy-input.json');
+        }));
+    }));
+    async function runDate(offset=0,pin=null){
+      const selected=basis,prepared=timelineReport;
+      if(!selected||!prepared||!stillCurrent(selected)||!asOf.value)throw Error('Prepare the timeline and choose a review date first.');
+      const generation=++dateGeneration,point=asOf.value,previous=compareTo.value||null;
+      dateReport=null;dateOut.replaceChildren(el('p','Reviewing the selected policy date…'));
+      const value=await request('/v1/process-catalog/clarify/effective-date-review'+queryFor(selected.record),{
+        ...selected.payload,expected_timeline_sha256:prepared.timeline_sha256,as_of:point,compare_to:previous,
+        question_offset:offset,question_limit:25,...(pin?{expected_review_sha256:pin}:{})});
+      if(generation!==dateGeneration||!stillCurrent(selected)||asOf.value!==point||(compareTo.value||null)!==previous)return;
+      dateReport=value;
+      dateOut.replaceChildren(el('h5','Policy review for '+value.as_of),
+        el('p',value.status.replaceAll('_',' ')+' · selected versions: '+(value.selected_segment.selected_version_ids.join(', ')||'none')));
+      if(!value.clarification){
+        dateOut.append(el('p','The date has unresolved policy coverage. No source bundle is presented for clarification.','note'));return;
+      }
+      const c=value.clarification,p=c.question_page;
+      dateOut.append(el('p',c.question_count+' generated questions · '+c.statement_count+' indexed statements. Existing human decisions are not imported into this date-specific preview.'),
+        el('p',c.source_coverage.document_scan_complete&&c.source_coverage.all_subject_conflict_reviews_complete?
+          'Bounded source and conflict scans completed.':'Source or conflict scan incomplete; inspect the original policy sources.','muted'));
+      if(value.comparison){
+        const d=value.comparison;
+        if(d.status!=='compared')dateOut.append(el('p','Previous date is unresolved; no comparison inferred.','note'));
+        else{
+          dateOut.append(el('p',d.question_ids_new.length+' newly generated questions · '+d.question_ids_changed_evidence.length+
+            ' changed-evidence questions · '+d.question_ids_no_longer_generated.length+' no longer generated. Disappearance is not resolution.'),
+            el('p',d.indexed_statement_occurrence_counts.added+' added and '+d.indexed_statement_occurrence_counts.removed+' removed indexed statement occurrences.'),
+            table(['Subject','Previous matches','Current matches','Review flags'],d.subjects.map(s=>[s.subject_type+' · '+s.target_id,
+              s.baseline_matching_statements,s.candidate_matching_statements,s.review_flags.join(', ')])));
+        }
+      }
+      const changes=value.comparison||{};
+      for(const q of p.rows){
+        const section=el('section');section.append(el('h6',q.prompt));
+        const flag=changes.question_ids_new?.includes(q.question_id)?'Newly generated':
+          changes.question_ids_changed_evidence?.includes(q.question_id)?'Changed evidence':
+          changes.question_ids_same_generated_evidence?.includes(q.question_id)?'Same generated evidence':'';
+        if(flag)section.append(el('p',flag,'muted'));
+        if(q.coverage_blocked)section.append(el('p','Evidence review incomplete.','note'));
+        const citations=el('ul');for(const cite of q.citations)citations.append(el('li',cite.document_title+' · '+cite.start+'–'+cite.end+': '+cite.text));
+        section.append(citations);dateOut.append(section);
+      }
+      const prev=button('Previous effective-date questions',()=>locked(()=>runDate(Math.max(0,p.offset-25),value.review_sha256)));
+      const next=button('Next effective-date questions',()=>locked(()=>runDate(p.next_offset,value.review_sha256)));
+      prev.disabled=p.offset===0;next.disabled=p.next_offset===null;
+      dateOut.append(prev,next,button('Download date review page',()=>{if(dateReport===value&&stillCurrent(selected))exportReport(value,'owg-effective-policy-date-review.json');}),
+        button('Load selected versions into ordinary clarification',()=>locked(async()=>{
+          if(dateReport!==value||!stillCurrent(selected))throw Error('Date review changed; evaluate again.');
+          if(!confirm('Replace the ordinary clarification source fields with the selected exact documents? Existing saved decisions remain content-bound, not date-bound. No decision or model change is recorded.'))return;
+          const byId=new Map(selected.payload.versions.map(v=>[v.version_id,v]));
+          const selectedDocs=value.selected_segment.selected_version_ids.map(id=>byId.get(id));
+          if(selectedDocs.some(d=>!d)||selectedDocs.length>5)throw Error('Selected bundle unavailable.');
+          rows.splice(0,rows.length);refresh();
+          for(const d of selectedDocs)appendDocument({title:d.title,text:d.text});
+          status('Selected policy texts loaded. Run ordinary clarification to inspect content-bound decisions.');
+        })),el('p','Exports may contain exact cited excerpts and document titles. No source authority or legal validity is verified.','muted'));
+    }
+    const file=el('input');file.type='file';file.accept='.json,application/json';file.setAttribute('aria-label','Import effective policy timeline JSON');
+    file.onchange=()=>locked(async()=>{
+      const f=file.files?.[0];if(!f)return;if(f.size>1536*1024)throw Error('Timeline input exceeds 1536 KiB.');
+      const data=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(await f.arrayBuffer()));
+      if(!effectivePanel.isConnected)return;
+      if(!Array.isArray(data.families)||!Array.isArray(data.versions)||data.families.length<1||data.families.length>5||
+          data.versions.length<1||data.versions.length>20||data.versions.some(v=>!v||typeof v.text!=='string'||v.text.length>60000)||
+          data.families.some(f=>!f||typeof f.family_id!=='string'))throw Error('Choose a timeline input containing exact family and source-version definitions, not an exported metadata manifest.');
+      if(!confirm('Replace the temporary timeline inputs with this local JSON file?'))return;
+      familiesHost.replaceChildren();versionsHost.replaceChildren();familyRows.length=versionRows.length=0;
+      startDate.value=data.start_date||'';endDate.value=data.end_date_exclusive||'';
+      for(const f of data.families)addFamily(f);for(const v of data.versions)addVersion(v);
+      invalidateTimeline();file.value='';
+    });
+    effectivePanel.append(labelled('Timeline start',startDate),labelled('Timeline end exclusive',endDate),
+      labelled('Import temporary timeline input (JSON with source text)',file),
+      el('h5','Required policy families'),familiesHost,button('Add required policy family',()=>addFamily()),
+      el('h5','Versioned policy documents'),versionsHost,button('Add policy version',()=>addVersion()),
+      runTimeline,timelineOut,labelled('Review date',asOf),labelled('Previous date for comparison (optional)',compareTo),
+      button('Review effective policies on date',()=>locked(()=>runDate())),dateOut);
+    addFamily();addVersion();
+    section.append(sources,add,button('Find open questions across sources',()=>locked(run)),output,revisionPanel,effectivePanel);
     host.append(section);
     appendDocument();
   }
