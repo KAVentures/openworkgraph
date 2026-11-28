@@ -79,25 +79,11 @@ def reconstruct(rows):
     return sorted(result,key=lambda r:(r["sort_at"],r["log_id"],r["rule_id"],r["sort_id"]),reverse=True)
 
 
-def review(*,start_date,end_date,status="all",offset=0,limit=50,expected_review_sha256=None,
-           log_id=None,rule_id=None):
+def population(start_date,end_date,expected_review_sha256=None):
+    """Read one bounded retained journal population, shared by read-only views."""
     start,end=_date(start_date),_date(end_date)
     if end<=start or end-start>timedelta(days=366):
         raise workspace.EventLogWorkspaceError("Select a positive UTC window of at most 366 days")
-    for value in (log_id,rule_id):
-        if value is not None and (not isinstance(value,str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}",value)):
-            raise workspace.EventLogWorkspaceError("Invalid exact signal log or rule identifier")
-    if rule_id is not None and log_id is None:
-        raise workspace.EventLogWorkspaceError("Select a log before filtering its rule")
-    if status not in ("all",*STATUSES):
-        raise workspace.EventLogWorkspaceError("Unknown episode status")
-    if type(offset) is not int or not 0<=offset<=MAX_TRANSITIONS or type(limit) is not int or not 1<=limit<=MAX_PAGE:
-        raise workspace.EventLogWorkspaceError("Invalid episode evidence page")
-    if expected_review_sha256 is not None and (not isinstance(expected_review_sha256,str)
-            or not re.fullmatch(r"[a-f0-9]{64}",expected_review_sha256)):
-        raise workspace.EventLogWorkspaceError("Invalid episode review digest")
-    if offset and not expected_review_sha256:
-        raise workspace.EventLogWorkspaceError("Review the first episode page before paging")
     with workspace._LOCK:
         conn=workspace._connect()
         try:
@@ -119,6 +105,29 @@ def review(*,start_date,end_date,status="all",offset=0,limit=50,expected_review_
     if expected_review_sha256 and expected_review_sha256!=pin:
         raise workspace.EventLogWorkspaceError("Retained episode evidence changed; refresh the review")
     episodes=reconstruct(rows)
+    return rows,episodes,pin
+
+
+def review(*,start_date,end_date,status="all",offset=0,limit=50,expected_review_sha256=None,
+           log_id=None,rule_id=None):
+    start,end=_date(start_date),_date(end_date)
+    if end<=start or end-start>timedelta(days=366):
+        raise workspace.EventLogWorkspaceError("Select a positive UTC window of at most 366 days")
+    for value in (log_id,rule_id):
+        if value is not None and (not isinstance(value,str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}",value)):
+            raise workspace.EventLogWorkspaceError("Invalid exact signal log or rule identifier")
+    if rule_id is not None and log_id is None:
+        raise workspace.EventLogWorkspaceError("Select a log before filtering its rule")
+    if status not in ("all",*STATUSES):
+        raise workspace.EventLogWorkspaceError("Unknown episode status")
+    if type(offset) is not int or not 0<=offset<=MAX_TRANSITIONS or type(limit) is not int or not 1<=limit<=MAX_PAGE:
+        raise workspace.EventLogWorkspaceError("Invalid episode evidence page")
+    if expected_review_sha256 is not None and (not isinstance(expected_review_sha256,str)
+            or not re.fullmatch(r"[a-f0-9]{64}",expected_review_sha256)):
+        raise workspace.EventLogWorkspaceError("Invalid episode review digest")
+    if offset and not expected_review_sha256:
+        raise workspace.EventLogWorkspaceError("Review the first episode page before paging")
+    rows,episodes,pin=population(start_date,end_date,expected_review_sha256)
     counts=dict.fromkeys(STATUSES,0);counts.update(Counter(r["status"] for r in episodes))
     durations=[r["elapsed_seconds"] for r in episodes if r["status"]=="cleared"]
     trigger_count=sum(r[6]=="triggered" for r in rows)

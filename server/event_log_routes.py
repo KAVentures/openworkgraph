@@ -317,6 +317,10 @@ def event_log_signal_timeline(
     return _respond(signal_timeline.timeline, transition=transition, limit=limit, before=before)
 
 
+from .event_log_signal_rule_history_routes import router as signal_rule_history_router
+router.include_router(signal_rule_history_router)
+
+
 @router.get("/v1/event-logs/signal-episode-review")
 def event_log_signal_episode_review(
     request: Request, start_date: str = Query(max_length=10), end_date: str = Query(max_length=10),
