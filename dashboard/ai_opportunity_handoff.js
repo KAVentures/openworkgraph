@@ -16,7 +16,7 @@ export function mountAiOpportunityHandoff(host, post, onCreated, onStage){
   const controls=[sources,proposal,title,description],order=el('ol');
   let generation=0,basis=null,busy=false,orderedSources=[];
   let packetGeneration=0,preparedPacket=null;
-  let generatedResult=null,selectedGenerated=false,trialPanel=null;
+  let generatedResult=null,selectedGenerated=false,trialPanel=null,evidencePicker=null;
   const budget=el('select');
   for(const [value,label] of [[131072,'128 KiB'],[524288,'512 KiB'],[2097152,'2 MiB'],[8388608,'8 MiB']]){
     const option=el('option',label);option.value=String(value);budget.append(option);
@@ -224,7 +224,7 @@ export function mountAiOpportunityHandoff(host, post, onCreated, onStage){
     busy=value;for(const n of controls)n.disabled=value;preview.disabled=value;
     budget.disabled=prepare.disabled=value;downloadPacket.disabled=downloadGuide.disabled=value||!preparedPacket;
     downloadCompact.disabled=downloadCompactGuide.disabled=value||!preparedPacket?.compact_download;
-    confirmation.disabled=value||!basis;commit.disabled=value||!basis||!confirmation.checked;stage.disabled=value||!basis||typeof onStage!=='function';renderOrder();refreshLocal();
+    confirmation.disabled=value||!basis;commit.disabled=value||!basis||!confirmation.checked;stage.disabled=value||!basis||typeof onStage!=='function';renderOrder();refreshLocal();evidencePicker?.refresh();
   }
   preview.onclick=async()=>{
     if(busy)return;
@@ -277,10 +277,11 @@ export function mountAiOpportunityHandoff(host, post, onCreated, onStage){
     field('Model evidence representation',contextMode),field('Request JSON-object mode',localJsonMode),field('I authorize sending the selected evidence to this configured loopback model service',localConfirm),
     generate,localStatus,field('Generated proposal (unverified interpretation)',generatedText),useGenerated,saveProposal,saveReceipt,trialHost);
   refreshLocal();
+  const evidencePickerHost=el('div');
   const details=el('details');details.id='owgAiOpportunityHandoff';
   details.append(el('summary','Add an external AI proposal to the implementation portfolio'),
     el('p','Preparation and review stay on the local OWG server. The optional local model request sends selected evidence only when explicitly confirmed. Only your entered idea and structural lineage are retained by the pipeline. Nothing is approved or executed.'),
-    field('Original workflow evidence JSON files (ordered as in the portable packet)',sources),order,
+    evidencePickerHost,field('Original workflow evidence JSON files (ordered as in the portable packet)',sources),order,
     el('p','Prepare a packet using the same ordered evidence below, or use an existing exact packet. The byte budget is not a token count. A too-small budget refuses rather than drops events. Download and inspect the files, then share only through an authorized local or cloud AI environment.'),
     field('Context byte budget',budget),prepare,packetStatus,downloadPacket,downloadGuide,
     el('p','Optional compact external handoff: download both matching files, inspect locally and share only with an authorized AI. Compact format is reversible, not redaction.'),downloadCompact,downloadCompactGuide,localSection,
@@ -289,6 +290,13 @@ export function mountAiOpportunityHandoff(host, post, onCreated, onStage){
     ...(typeof onStage==='function'?[el('p','Starting a new shadow skill draft replaces any unfinished skill draft. The skill still requires its own human review and confirmation.'),stage]:[]),
     field('I reviewed the original proposal and want to create an unassessed idea only',confirmation),commit);
   host.append(details);
+  import('/ai-implementation-evidence-picker.js').then(module=>{
+    evidencePicker=module.mountImplementationEvidencePicker(evidencePickerHost,{
+      getBusy:()=>busy,lock,download:downloadLocal,onSelected:file=>{
+        sources.value='';orderedSources=[file];invalidate();invalidatePacket();renderOrder();
+      }
+    });
+  }).catch(()=>{evidencePickerHost.textContent='Direct local evidence selection unavailable; original file import remains available.';});
   import('/ai-context-trial.js').then(module=>{
     trialPanel=module.mountContextTrial(trialHost,{
       getState:()=>({busy,packet:preparedPacket,files:orderedSources.slice(),
