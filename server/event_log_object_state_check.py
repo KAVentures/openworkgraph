@@ -44,6 +44,23 @@ class Spec(BaseModel):
         return value
 
 
+class WitnessSpec(Spec):
+    expected_revision: int = Field(ge=0)
+    event_id: str = Field(min_length=1, max_length=200)
+    after: str | None = Field(default=None, min_length=1, max_length=200)
+    witness_limit: int = Field(default=50, ge=1, le=100)
+
+    @field_validator('event_id', 'after')
+    @classmethod
+    def literal_key(cls, value):
+        if value is not None:
+            try:
+                _exact_key(value)
+            except EventLogFormatError:
+                raise ValueError('Use exact imported identifiers') from None
+        return value
+
+
 def _parse(value):
     try:
         result = Spec.model_validate(value)
@@ -59,10 +76,22 @@ def _stamp(value):
 
 
 def analyze(log_id, value):
-    spec = _parse(value)
+    return _analyze(log_id, _parse(value))
+
+
+def witnesses(log_id, value):
+    try:
+        spec = WitnessSpec.model_validate(value)
+    except ValidationError:
+        raise workspace.EventLogWorkspaceError('invalid event-time state witness request') from None
+    return _analyze(log_id, spec, witness=True)
+
+
+def _analyze(log_id, spec, witness=False):
     with workspace._LOCK:
         conn = workspace._connect()
         try:
+            conn.execute('BEGIN TRANSACTION')
             info = workspace._check_log(conn, log_id)
             if info["source_format"] not in ("ocel", "ocelxml"):
                 raise workspace.EventLogWorkspaceError("event-time object states need a retained OCEL log")
@@ -136,6 +165,24 @@ def analyze(log_id, value):
             where="WHERE status=?" if spec.status else ""
             args=[spec.status] if spec.status else []
             total=conn.execute("SELECT count(*) FROM st_result "+where,args).fetchone()[0]
+            if witness:
+                selected = conn.execute('SELECT n_objects, status FROM st_result WHERE event_id=?' +
+                                        (' AND status=?' if spec.status else ''),
+                                        [spec.event_id, *([spec.status] if spec.status else [])]).fetchone()
+                if not selected:
+                    raise workspace.EventLogWorkspaceError('event is not in the reviewed state-check result')
+                predicate = 'event_id=?' + (' AND object_id>?' if spec.after is not None else '')
+                found = conn.execute('SELECT object_id,valid_from,value_then,status FROM st_object WHERE ' + predicate +
+                                     ' ORDER BY object_id LIMIT ?',
+                                     [spec.event_id, *([spec.after] if spec.after is not None else []), spec.witness_limit + 1]).fetchall()
+                more = len(found) > spec.witness_limit
+                found = found[:spec.witness_limit]
+                return {'format':'openworkgraph.ocel-state-check-witnesses.v1', 'log_id':log_id, 'revision':revision,
+                        'event_id':spec.event_id, 'event_status':selected[1], 'total_objects':selected[0],
+                        'witnesses':[{'object_id':oid, 'valid_from':_stamp(at), 'recorded_value':v, 'status':status}
+                                     for oid,at,v,status in found],
+                        'next_after':found[-1][0] if more else None,
+                        'historical_source_completeness_verified':False, 'policy_compliance_verified':False}
             page=conn.execute("""SELECT event_id,ts,n_objects,n_true,n_false,n_unknown,status FROM st_result """
                 +where+" ORDER BY ts,event_id LIMIT ? OFFSET ?",[*args,spec.limit,spec.offset]).fetchall()
             rows=[]
