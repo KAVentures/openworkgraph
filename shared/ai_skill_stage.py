@@ -69,6 +69,9 @@ def prepare(sources, proposal, spec, *, reviewer=None):
     for heading,key,limit in sections:
         body += '## '+heading+'\n\n'+text(spec[key],limit,key)+'\n\n'
     note = text(spec['review_note'], 2000, 'review note')
+    # Claude Code can run shell substitutions before the model sees the text.
+    require(not re.search(r'!\s*`|`{3,}\s*!', body+'\n'+description),
+            'Dynamic shell injection is not permitted in shadow skills')
     front = '---\nname: '+name+'\ndescription: '+json.dumps(description,ensure_ascii=True)+'\ndisable-model-invocation: true\n---\n\n'
     files = {f'claude/{name}/SKILL.md':(front+body).encode(), 'CHATGPT_INSTRUCTIONS.md':body.encode()}
     manifest = {'format':FORMAT,'name':name,'packet_sha256':review['packet_sha256'],
