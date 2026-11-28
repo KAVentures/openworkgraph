@@ -29,3 +29,19 @@ def test_clean_logs_report_no_stray_dates():
     sharing.set_share(log_id, "aggregates")
     found = sharing.data_quality(log_id)["stray_dates"]
     assert found["events_far_before"] == found["events_far_after"] == 0 and "suggested_case_filter" not in found
+
+
+def test_brief_warns_about_stray_dates_only_when_present():
+    rows = ["case,activity,time,who"]
+    for i in range(200):
+        day = 1 + i % 28
+        rows += [f"c{i},A,2024-03-{day:02d}T08:00:00Z,x", f"c{i},B,2024-03-{day:02d}T09:00:00Z,x"]
+    rows += ["old,A,1948-01-05T08:00:00Z,x", "old,B,1948-01-06T08:00:00Z,x"]
+    log_id = workspace.import_log(BytesIO("\n".join(rows).encode()), name="stray", source_format="csv",
+                                  mapping=MAPPING)["log_id"]
+    sharing.set_share(log_id, "aggregates")
+    warning = sharing.brief(log_id)["data_warnings"][0]
+    assert warning["kind"] == "stray_dates" and warning["cases_far_before"] == 1
+    clean = _log("clean")
+    sharing.set_share(clean, "aggregates")
+    assert "data_warnings" not in sharing.brief(clean)

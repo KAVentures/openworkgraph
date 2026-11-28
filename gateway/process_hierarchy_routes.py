@@ -40,6 +40,12 @@ def add_routes(router,store,human,body,response):
         await run_in_threadpool(response,maps.preflight,p,workflow_id)
         return await run_in_threadpool(response,maps.compare,p,workflow_id,await body(request,MapComparison,maximum=4096))
 
+    @router.post(base+'/reference-refresh')
+    async def reference_refresh(request:Request,workflow_id:str=Path(pattern=ID),p=Depends(human)):
+        from .process_hierarchy_reference_refresh import RefreshRequest, review
+        await run_in_threadpool(response,maps.preflight,p,workflow_id)
+        return await run_in_threadpool(response,review,maps,p,workflow_id,await body(request,RefreshRequest,maximum=16*1024))
+
     @router.get(base+'/export')
     def export(workflow_id:str=Path(pattern=ID),revision:int=Query(ge=1,le=20),p=Depends(human)):
         result=response(maps.detail,p,workflow_id,revision,exporting=True)

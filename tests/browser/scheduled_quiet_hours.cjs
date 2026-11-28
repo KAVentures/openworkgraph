@@ -13,7 +13,7 @@ const path=require('node:path');
   const base='http://127.0.0.1:8792';
   const server=spawn(python,['-m','uvicorn','scheduled_local_backup_app:app',
     '--app-dir','tests/browser','--host','127.0.0.1','--port','8792'],
-    {env:{...process.env,OWG_BROWSER_TEST_DIR:scratch},stdio:['ignore','pipe','pipe']});
+    {env:{...process.env,OWG_BROWSER_TEST_DIR:scratch,OWG_BROWSER_TEST_DELIVERY_PORTFOLIO:'1'},stdio:['ignore','pipe','pipe']});
   let logs='',browser,spawnError;
   server.on('error',e=>{spawnError=e;});
   for(const stream of [server.stdout,server.stderr])
@@ -107,6 +107,33 @@ const path=require('node:path');
     await rows.first().waitFor({state:'detached'});
     assert.equal((await fs.readdir(scratch)).includes('backups'),false);
 
+    // Real local portfolio: two channels, no source reads, no network sends.
+    await page.locator('#pvDeliveryPortfolio > summary').click();
+    await page.locator('#pvDeliveryStatus').filter({hasText:'2 channels · 2 enabled · 2 pending groups'}).waitFor();
+    assert.equal(await page.locator('#pvDeliveryPauseAll').isEnabled(),true);
+    const channelRows=page.locator('#pvDeliveryRows > details');
+    assert.equal(await channelRows.count(),2);
+    await channelRows.first().locator('summary').click();
+    assert.equal(await channelRows.first().getByRole('checkbox').isDisabled(),true);
+    page.once('dialog',dialog=>dialog.accept());
+    await page.locator('#pvDeliveryPauseAll').click();
+    await page.locator('#pvDeliveryStatus').filter({hasText:'2 channels paused.'}).waitFor();
+    assert.equal(await page.locator('#pvDeliveryPauseAll').isDisabled(),true);
+    for(let i=0;i<2;i++){
+      await channelRows.nth(i).locator('summary').click();
+      await channelRows.nth(i).getByRole('checkbox').check();
+    }
+    assert.equal(await page.locator('#pvDeliveryDismiss').isEnabled(),true);
+    page.once('dialog',dialog=>dialog.accept());
+    await page.locator('#pvDeliveryDismiss').click();
+    await page.locator('#pvDeliveryStatus').filter({hasText:'2 groups dismissed'}).waitFor();
+    const portfolio=await page.evaluate(async()=>await (await fetch('/v1/schedules/signal-delivery-portfolio')).json());
+    assert.equal(portfolio.enabled_channels,0);
+    assert.equal(portfolio.pending_groups,0);
+    assert.equal(portfolio.notifications_sent,false);
+    assert.equal(portfolio.channels.every(c=>c.recorded_receiver_acknowledgements===0),true);
+    assert.equal(writes.length,7); // add, update, clear, pause, remove, portfolio pause, dismiss
+    await page.locator('#pvDeliveryPortfolio > summary').click();
     await page.addScriptTag({content:await fs.readFile(require.resolve('axe-core/axe.min.js'),'utf8')});
     const audit=await page.evaluate(()=>window.axe.run(document.querySelector('#pvSchedules'),{
       runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21a','wcag21aa']}

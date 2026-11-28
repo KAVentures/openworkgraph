@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 
 from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import JSONResponse
 
 from . import local_scheduler as scheduler
 from . import signal_notification_delivery as notification_delivery
@@ -79,6 +80,40 @@ async def _delivery_call(fn, *args, **kwargs):
         return await asyncio.to_thread(fn, *args, **kwargs)
     except notification_delivery.DeliveryError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from None
+
+
+# Register the static portfolio route before the log-ID parameter route.
+@router.get("/v1/schedules/signal-delivery-portfolio")
+async def signal_delivery_portfolio(request: Request):
+    _require_dashboard(request)
+    from . import signal_delivery_portfolio as portfolio
+    data = await _delivery_call(portfolio.overview)
+    _require_dashboard(request)
+    return JSONResponse(data, headers={"Cache-Control": "no-store"})
+
+
+@router.post("/v1/schedules/signal-delivery-portfolio/pause-all")
+async def pause_delivery_portfolio(request: Request):
+    _require_dashboard(request)
+    data = await _body(request)
+    if set(data) != {"expected_enabled_channels_sha256", "confirm_pause"} or data["confirm_pause"] is not True:
+        raise HTTPException(status_code=422, detail="explicit pause and enabled-channel digest required")
+    _require_dashboard(request)
+    from . import signal_delivery_portfolio as portfolio
+    result = await _delivery_call(portfolio.pause_all, **data)
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+@router.post("/v1/schedules/signal-delivery-portfolio/dismiss-batch")
+async def dismiss_delivery_portfolio(request: Request):
+    _require_dashboard(request)
+    data = await _body(request, limit=16384)
+    if set(data) != {"selections", "confirm_dismiss"} or data["confirm_dismiss"] is not True:
+        raise HTTPException(status_code=422, detail="explicit exact group dismissal required")
+    _require_dashboard(request)
+    from . import signal_delivery_portfolio as portfolio
+    result = await _delivery_call(portfolio.dismiss_batch, **data)
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
 @router.get("/v1/schedules/signal-delivery/{log_id}")
