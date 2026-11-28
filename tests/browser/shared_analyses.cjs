@@ -69,6 +69,46 @@ const path=require('node:path');
   assert.equal(portfolio.incomparable_count,1);assert.equal(portfolio.case_identities_joined,false);
   await owner.locator('#portfolioClear').click();assert.equal(await owner.locator('#portfolioResult').textContent(),'');
   assert.equal(await owner.locator('#portfolioRun').isDisabled(),true);
+  // A separate complete numeric publication demonstrates target crossings.
+  const historyView=await owner.evaluate(async({base,snapshot})=>{
+    const endpoint=base+'/v1/human/analyses',headers={Authorization:'Bearer alice','Content-Type':'application/json'};
+    let id;
+    for(const [i,n] of [4,8,6].entries()){
+      const doc={...snapshot,columns:[{heading:'Measure 1',kind:'number',aggregation:'count',unit:'cases'}],
+        rows:[[n]],matching_cases:n,matching_rows:n,metric_coverage:[],metric_definition_sha256:[],
+        rows_truncated:false,non_finite_results_withheld:0,source_content_sha256:['a','c','d'][i].repeat(64)};
+      const r=await fetch(endpoint+(id?'/'+id:''),{method:'POST',headers,body:JSON.stringify({
+        title:'Numeric history acceptance',snapshot:doc,expected_revision:i,user_confirmed:true,organization_sharing_confirmed:true})});
+      if(!r.ok)throw new Error(await r.text());id=(await r.json()).view_id;
+    }
+    return id;
+  },{base,snapshot});
+  await owner.locator('#refresh').click();
+  await owner.locator('#inventory button').filter({hasText:'Numeric history acceptance'}).click();
+  await owner.locator('#basis').filter({hasText:'Viewing revision 3 of 3'}).waitFor();
+  await owner.locator('#historyPanel summary').click();await owner.locator('#historyPreview').click();
+  await owner.locator('#historyStatus').filter({hasText:'Exact pins loaded'}).waitFor();
+  await owner.locator('#historyTargets .historyEnabled').check();
+  await owner.locator('#historyTargets .historyLower').fill('6');
+  await owner.locator('#historyRun').click();
+  await owner.locator('#historyStatus').filter({hasText:'Review complete'}).waitFor();
+  assert.match(await owner.locator('#historyResult').textContent(),/2 met, 1 outside, 0 withheld/);
+  const [historyFile]=await Promise.all([owner.waitForEvent('download'),owner.locator('#historyDownload').click()]);
+  const history=JSON.parse(await fs.readFile(await historyFile.path(),'utf8'));
+  assert.equal(history.view_id,historyView);assert.equal(history.reviewed_through_revision,3);
+  assert.deepEqual(history.targets[0].transitions.map(t=>t.status),['entered_target','remained_met']);
+  await owner.locator('#historyTargets .historyLower').fill('9');
+  assert.equal(await owner.locator('#historyDownload').isDisabled(),true);
+  assert.equal(await owner.locator('#historyResult').textContent(),'');
+  await owner.locator('#historyCutoff').selectOption('2');
+  await owner.locator('#historyRun').click();
+  await owner.locator('#historyStatus').filter({hasText:'Review complete'}).waitFor();
+  assert.match(await owner.locator('#historyResult').textContent(),/1 newer revisions excluded/);
+  // Switching publications clears the history and its local target inputs.
+  await owner.locator('#inventory button').filter({hasText:'Portfolio second publication'}).click();
+  await owner.locator('#viewTitle').filter({hasText:'Portfolio second publication'}).waitFor();
+  assert.equal(await owner.locator('#historyResult').textContent(),'');
+  assert.equal(await owner.locator('#historyDownload').isDisabled(),true);
   // A response authorized to the old identity cannot repopulate a new identity's DOM.
   let release,seen;const held=new Promise(r=>seen=r);
   await owner.route('**/v1/human/analyses/'+wid,async route=>{const response=await route.fetch();seen();await new Promise(r=>release=r);await route.fulfill({response});},{times:1});
