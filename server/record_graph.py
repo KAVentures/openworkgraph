@@ -66,7 +66,7 @@ def _source_unknown(reason: str) -> dict[str, Any]:
 def _gh_pr_snapshot(
     ref: str, *, runner: Callable[..., Any] = subprocess.run,
     which: Callable[[str], str | None] = find_gh_cli,
-    resolver: Callable[[str], dict[str, Any] | None] = resolve_resource_reference,
+    resolver: Callable[[str], dict[str, Any] | None] | None = None,
 ) -> dict[str, Any]:
     """Read-only GitHub source status and review audit for a locally observed PR.
 
@@ -76,7 +76,7 @@ def _gh_pr_snapshot(
     """
     if not outcome_tracker.enabled():
         return _source_unknown("existing_github_outcome_tracking_opt_in_off")
-    info = resolver(ref)
+    info = (resolver if resolver is not None else resolve_resource_reference)(ref)
     if not isinstance(info, dict):
         return _source_unknown("approved_local_record_locator_unavailable")
     if info.get("provider") != "github" or info.get("resource_kind") != "pull_request" or info.get("host") != "github.com":
