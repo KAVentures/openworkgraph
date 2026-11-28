@@ -2101,6 +2101,8 @@
                       resultHost.append(details);
                     }
                     resultHost.append(el('p',data.interpretation,'muted'));status.textContent='Conditional business cases evaluated; no actual cash savings verified.';
+                    const stressHost=el('div');resultHost.append(stressHost);
+                    import('/investment-stress.js').then(m=>{if(active()&&n===serial&&stressHost.isConnected)m.mount(stressHost,{investment:body,post:payload=>post(path+'/stress',payload),snapshot:data.snapshot_sha256});}).catch(()=>{if(stressHost.isConnected)stressHost.textContent='Stress review unavailable; original investment report remains available.';});
                   }catch(error){if(active()&&n===serial)status.textContent=error.message;}
                   finally{if(active()&&n===serial)run.disabled=false;}
                 };

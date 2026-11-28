@@ -17,6 +17,8 @@ from . import opportunity_journey
 from .local_auth import dashboard_session_valid
 
 router = APIRouter()
+from .automation_investment_stress_routes import router as investment_stress_router
+router.include_router(investment_stress_router)
 _SCRIPT = Path(__file__).resolve().parents[1] / "dashboard" / "automation_pipeline.js"
 
 

@@ -91,6 +91,27 @@ const path=require('node:path');
    assert.equal(ir.designs[0].cash_npv,'200.000000');
    assert.equal(ir.designs[0].economic_npv,'1700.000000');
    assert.equal(ir.actual_cash_savings_verified,false);
+   const stress=investment.locator('#owgInvestmentStress');await stress.waitFor();
+   await stress.locator('summary').click();
+   await stress.getByLabel('Stress scenario name',{exact:true}).fill('Lower volume');
+   for(const [name,value] of [['Volume factor','0.5'],['Retained effort effect factor','1'],['Cash conversion factor','1'],['Fixed and investment cost factor','1'],['Nonlabor cash change factor','1'],['Monthly discount rate (fraction)','0']])
+     await stress.getByLabel(name,{exact:true}).fill(value);
+   await stress.getByLabel('Maximum peak funding',{exact:true}).fill('1500');
+   await stress.locator('#owgStressPrepare').click();
+   assert.equal(await stress.locator('#owgStressRun').isDisabled(),true);
+   await stress.locator('#owgStressConfirm').check();await stress.locator('#owgStressRun').click();
+   await stress.getByRole('heading',{name:'Common-scenario investment stress review'}).waitFor();
+   const [stressJson]=await Promise.all([page.waitForEvent('download'),stress.locator('#owgStressDownload').click()]);
+   const sr=JSON.parse(await fs.readFile(await stressJson.path(),'utf8'));
+   assert.equal(sr.designs[0].worst_cash_npv.decimal,'-550.000000');
+   assert.equal(sr.designs[0].scenarios[0].cash_npv.decimal,ir.designs[0].cash_npv);
+   assert.equal(sr.snapshot_sha256,ir.snapshot_sha256);
+   assert.equal(sr.actual_cash_savings_verified,false);
+   await stress.getByLabel('Volume factor',{exact:true}).fill('0.6');
+   assert.equal(await stress.locator('#owgStressDownload').isDisabled(),true);
+   assert.equal(await stress.locator('#owgStressResult').textContent(),'');
+   await stress.locator('summary').click();
+
    await investment.getByText('Base · monthly cash flow and sensitivity',{exact:true}).click();
    await investment.getByRole('group',{name:'Discounted cash balance by month for Base'}).waitFor();
    const [investmentCsv]=await Promise.all([page.waitForEvent('download'),page.locator('#owgInvestmentCsv').click()]);
