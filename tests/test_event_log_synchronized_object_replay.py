@@ -31,12 +31,20 @@ def rows(log, model, report, view, **settings):
                              "expected_review_sha256":report["review_sha256"], **settings})["page"]
 
 
+def fixture_distinct_memberships(document):
+    # Independent fixture oracle: qualifier multiplicity is not membership.
+    return len({(event["id"], link["objectId"])
+                for event in document["events"] for link in event["relationships"]})
+
+
 def test_order_to_cash_shared_events_counted_once_and_all_objects_complete(baseline):
     log, model = baseline
     result = sync.review(log, {"model":model})
     assert result["source_population"]["selected_events"] == 11
     assert result["source_population"]["selected_objects"] == 9
-    assert result["source_population"]["distinct_selected_memberships"] == 16
+    # Place: 6 memberships, Pick: 4, Ship: 7, Pay: 2.
+    assert fixture_distinct_memberships(_order_to_cash()) == 19
+    assert result["source_population"]["distinct_selected_memberships"] == 19
     assert result["component_status_counts"] == {
         "complete":2,"unfinished":0,"deviation":0,"unknown":0,"no_events":0}
     assert result["event_status_counts"] == {"accepted":11,"deviation":0,"not_replayed":0,"unknown":0}
@@ -160,7 +168,8 @@ def test_qualifier_multiplicity_does_not_duplicate_participants(baseline):
     log = _ocel(doc)
     result = sync.review(log, {"model":model})
     assert result["component_status_counts"]["complete"] == 2
-    assert result["source_population"]["distinct_selected_memberships"] == 16
+    assert fixture_distinct_memberships(doc) == fixture_distinct_memberships(_order_to_cash()) == 19
+    assert result["source_population"]["distinct_selected_memberships"] == 19
 
 
 def test_shape_multiple_objects_on_single_arc(baseline):

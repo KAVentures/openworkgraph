@@ -21,6 +21,7 @@
   function button(label,fn){const b=el('button',label);b.type='button';b.onclick=fn;return b;}
   function table(headers,rows){
     const wrap=el('div');wrap.className='tablewrap';
+    wrap.tabIndex=0;wrap.setAttribute('role','region');wrap.setAttribute('aria-label','Scrollable '+headers[0].toLowerCase()+' table');
     const t=el('table'),head=el('thead'),hr=el('tr'),body=el('tbody');
     for(const h of headers){const th=el('th',h);th.scope='col';hr.append(th);}
     head.append(hr);t.append(head);

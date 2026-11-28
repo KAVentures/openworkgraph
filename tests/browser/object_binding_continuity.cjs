@@ -155,6 +155,13 @@ const path=require('node:path');
     const syncAxe=await page.evaluate(async()=>window.axe.run(document.querySelector('main'),{
       runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21a','wcag21aa']},resultTypes:['violations']
     }));
+    const scrollRegions=page.locator('main .tablewrap:visible');
+    assert.ok(await scrollRegions.count()>0);
+    for(const region of await scrollRegions.all()){
+      assert.equal(await region.getAttribute('tabindex'),'0');
+      assert.equal(await region.getAttribute('role'),'region');
+      assert.ok(await region.getAttribute('aria-label'));
+    }
     assert.deepEqual(syncAxe.violations.map(v=>v.id),[]);
     assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=document.documentElement.clientWidth+2));
     await page.locator('#clear').click();
