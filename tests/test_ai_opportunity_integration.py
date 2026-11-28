@@ -71,9 +71,20 @@ with TestClient(app) as client:
     bearer={"Authorization":"Bearer "+local_auth.ensure_api_token()}
     assert client.get("/ai-opportunity-handoff.js").status_code==200
     for headers in ({},bearer):
+        assert client.post(base+"/prepare-packet",json={"sources":data["sources"],"max_bytes":131072},headers=headers).status_code in (401,403)
         assert client.post(base+"/preview",json=data,headers=headers).status_code in (401,403)
         assert client.post(base+"/commit",json={},headers=headers).status_code in (401,403)
     assert client.post(base+"/preview",json={**data,"proposal":'{"x":1,"x":2}'},headers=owner).status_code==422
+    packet_request={"sources":data["sources"],"max_bytes":131072}
+    packet_result=client.post(base+"/prepare-packet",json=packet_request,headers=owner)
+    assert packet_result.status_code==200,packet_result.text
+    assert packet_result.headers["cache-control"]=="no-store"
+    prepared=packet_result.json()
+    assert prepared["external_model_invoked"] is False
+    assert prepared["external_sharing_authorized"] is False
+    assert json.loads(prepared["packet_json"])["packet_sha256"]==json.loads(data["proposal"])["packet_sha256"]
+    assert client.post(base+"/prepare-packet",json={**packet_request,"max_bytes":True},headers=owner).status_code==422
+    assert client.post(base+"/prepare-packet",json={**packet_request,"sources":['{"x":1,"x":2}']},headers=owner).status_code==422
     result=client.post(base+"/preview",json=data,headers=owner)
     assert result.status_code==200,result.text
     assert result.headers["cache-control"]=="no-store"

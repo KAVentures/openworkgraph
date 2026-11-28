@@ -7,6 +7,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from starlette.concurrency import run_in_threadpool
 
 from shared import ai_opportunity_handoff as handoff
+from shared import ai_implementation_packet as packet_handoff
 from . import automation_pipeline as pipeline
 from .local_auth import dashboard_session_valid
 
@@ -69,6 +70,23 @@ def _draft(value):
 @router.get("/ai-opportunity-handoff.js")
 def script():
     return FileResponse(SCRIPT, media_type="application/javascript")
+
+
+@router.post("/v1/ai-opportunity-handoff/prepare-packet")
+async def prepare_packet(request: Request):
+    payload = await _body(request)
+    _require_dashboard(request)
+    if not isinstance(payload, dict) or set(payload) != {"sources", "max_bytes"}:
+        raise HTTPException(422, "Select original evidence JSON files and a byte budget")
+    sources = payload["sources"]
+    if not isinstance(sources, list) or not 1 <= len(sources) <= 8 or not all(isinstance(s, str) for s in sources):
+        raise HTTPException(422, "Select one to eight original evidence JSON files")
+    try:
+        result = await run_in_threadpool(packet_handoff.preview, [_decode(s) for s in sources], payload["max_bytes"])
+    except (ValueError, TypeError, KeyError, AttributeError, RecursionError, OverflowError):
+        raise HTTPException(422, "Packet preparation refused; check the original evidence or increase the byte budget. No evidence is silently dropped.") from None
+    _require_dashboard(request)
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
 @router.post("/v1/ai-opportunity-handoff/preview")
