@@ -30,6 +30,8 @@ from .ai_implementation_improvement_routes import router as _improvement_router
 router.include_router(_improvement_router)
 from .ai_implementation_compat_routes import router as _compat_router
 router.include_router(_compat_router)
+from .ai_implementation_knowledge_routes import router as _knowledge_router
+router.include_router(_knowledge_router)
 MAX_BYTES = 8 * 1024 * 1024
 _LOCAL_MODEL_SLOT = Lock()
 SCRIPT = Path(__file__).resolve().parents[1] / "dashboard" / "ai_opportunity_handoff.js"
