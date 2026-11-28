@@ -52,11 +52,16 @@ def _by(result):
     return {a["activity"]: a for a in result["activities"]}
 
 
-@pytest.mark.parametrize("bad_attribute", [None, 12, [], {}, "bad\\nname", "bad\\\"name"])
+@pytest.mark.parametrize("bad_attribute", [None, 12, [], {}, "bad\nname", "bad\x01name"])
 def test_invalid_lifecycle_attribute_is_rejected_as_workspace_error(bad_attribute):
     log = _lifecycle_log()
     with pytest.raises(workspace.EventLogWorkspaceError, match="Attribute names"):
         waiting.waiting_time(log, lifecycle_attribute=bad_attribute)
+
+
+def test_lifecycle_attribute_pointer_preserves_literal_quote_and_backslash():
+    assert waiting._path('bad"name') == '/bad"name'
+    assert waiting._path(r"bad\name") == r"/bad\name"
 
 
 def test_lifecycle_pairs_split_processing_from_waiting():
