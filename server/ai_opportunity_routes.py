@@ -98,6 +98,12 @@ def checkpoint_script():
     return FileResponse(SCRIPT.with_name("ai_implementation_checkpoint.js"), media_type="application/javascript")
 
 
+@router.get("/ai_implementation_first_workflow.js", include_in_schema=False)
+@router.get("/ai-implementation-first-workflow.js")
+def first_workflow_script():
+    return FileResponse(SCRIPT.with_name("ai_implementation_first_workflow.js"), media_type="application/javascript")
+
+
 @router.get("/ai-context-trial.js")
 def trial_script():
     return FileResponse(TRIAL_SCRIPT, media_type="application/javascript")
