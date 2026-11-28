@@ -7,8 +7,8 @@ import pytest
 from shared import native_shadow_roster as roster
 from shared import native_shadow_trace_review as trace_review
 from shared.joint_shadow_source_review import review
-from tests.test_native_shadow_trace_review import run, trace
-from tests.test_project_source_cohort import fixtures
+from test_native_shadow_trace_review import run, trace
+from test_project_source_cohort import fixtures
 
 
 def payload(native_modes, source_modes):
