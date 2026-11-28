@@ -93,6 +93,17 @@ const {tmpdir}=require('node:os'),path=require('node:path');
   await panel.locator('#owgCatalogClarifyAddDocument').click();
   assert.equal(await texts.count(),5);
   assert.equal(await panel.locator('#owgCatalogClarifyAddDocument').isDisabled(),true);
+  await panel.getByText('Compare previous and current policy source bundles',{exact:true}).click();
+  await panel.getByLabel('Previous policy source bundle JSON',{exact:true}).fill(JSON.stringify([
+    {title:'Previous approval policy',text:'A refund amount above 1000 EUR requires manager approval.'}]));
+  await panel.getByRole('button',{name:'Compare exact source bundles',exact:true}).click();
+  const provenance=panel.locator('#owgSourceTitleProvenance');
+  await provenance.waitFor({state:'attached'});
+  await provenance.locator('summary').click();
+  await provenance.getByText('0 maximum same-title retained occurrences · 1 minimum cross-title retained occurrences.',{exact:true}).waitFor();
+  assert.match(await provenance.textContent(),/Previous approval policy/);
+  assert.match(await provenance.textContent(),/SOP 2026/);
+  await panel.getByText('Compare previous and current policy source bundles',{exact:true}).click();
   // Effective dates are a separate temporary review. The previous ordinary
   // clarification decision remains unchanged and is not imported.
   const effective=panel.locator('#owgEffectivePolicyPanel');
