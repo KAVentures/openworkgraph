@@ -70,7 +70,7 @@ def _hotspot_cases(conn, page: _HotspotPage, clock: dict[str, Any] | None) -> di
 
 
 def _path(name: str) -> str:
-    if not _ATTRIBUTE.fullmatch(name or ""):
+    if not isinstance(name, str) or not _ATTRIBUTE.fullmatch(name):
         raise workspace.EventLogWorkspaceError("Attribute names are 1–120 characters without control characters")
     return attribute_pointer(name)
 
@@ -172,10 +172,75 @@ def waiting_time(log_id: str, case_type: str | None = None, *, mode: str = "auto
         calendar_result = calendars.summarize(conn, clock) if clock is not None else None
         kinds = dict(conn.execute("SELECT kind, count(*) FROM inst GROUP BY kind").fetchall())
         total_wait = conn.execute("SELECT coalesce(sum(wait), 0) FROM seq2").fetchone()[0] or 0
+        # Open lifecycle starts are absent from inst; include them in both coverage denominators.
+        # Their waiting gap is not measured by seq2, even though their start timestamp is known.
+        # Otherwise an activity with one completed pair and many unfinished starts appears 100% observed.
+        open_by_activity = {}
+        if used == 'lifecycle':
+            # Use the same k-th pairing rule as unmatched_starts, including
+            # completions timestamped before their corresponding start.
+            open_by_activity = dict(conn.execute("""WITH s AS (
+                SELECT case_id, activity, ts, row_number() OVER (
+                    PARTITION BY case_id, activity ORDER BY ts, event_id) AS k FROM lc WHERE tr = 'start'),
+                c AS (SELECT case_id, activity, ts, row_number() OVER (
+                    PARTITION BY case_id, activity ORDER BY ts, event_id) AS k FROM lc WHERE tr = 'complete')
+                SELECT s.activity, count(*) FROM s LEFT JOIN c
+                    ON s.case_id = c.case_id AND s.activity = c.activity AND s.k = c.k
+                WHERE c.ts IS NULL OR c.ts < s.ts GROUP BY s.activity""").fetchall())
+        # Invalid start/completion pairs already contribute an inst row. They are
+        # also unmatched starts, so subtract them from coverage eligibility once.
+        # Only lifecycle invalid pairs are also counted as unmatched starts.
+        # In end_attribute mode each invalid end belongs to one distinct event
+        # and must remain in the eligible observation denominator.
+        invalid_by_activity = (dict(conn.execute(
+            "SELECT activity, count(*) FROM inst WHERE kind = 'invalid_pair' GROUP BY activity"
+        ).fetchall()) if used == 'lifecycle' else {})
         activities = conn.execute(f"""SELECT activity, count(*), count(DISTINCT case_id), count(proc),
               quantile_cont(proc, 0.5), quantile_cont(proc, 0.9), avg(proc),
-              count(wait), quantile_cont(wait, 0.5), quantile_cont(wait, 0.9), avg(wait), coalesce(sum(wait), 0)
+              count(wait), quantile_cont(wait, 0.5), quantile_cont(wait, 0.9), avg(wait), coalesce(sum(wait), 0),
+              stddev_pop(proc), stddev_pop(wait), quantile_cont(wait, 0.1)
             FROM seq2 GROUP BY activity ORDER BY coalesce(sum(wait), 0) DESC, activity LIMIT {MAX_ACTIVITIES}""").fetchall()
+        # A lifecycle activity with only unfinished starts has no row in inst/seq2.
+        # Keep it visible instead of silently hiding a completely unobserved activity.
+        # Count all cases contributing lifecycle evidence, including cases whose
+        # only evidence for this activity is an unfinished start. Otherwise the
+        # displayed case denominator understates the population being measured.
+        lifecycle_case_counts = {}
+        if used == 'lifecycle':
+            lifecycle_case_counts = dict(conn.execute("""SELECT activity, count(DISTINCT case_id)
+                FROM lc WHERE tr IN ('start', 'complete') OR tr = ''
+                GROUP BY activity""").fetchall())
+        # Keep the documented response cap even when the log has many activities
+        # with starts but no completions. Rank those missing-duration activities
+        # deterministically after the observed waiting-time hotspots.
+        # Count the complete observed population in SQL instead of materializing
+        # every distinct label in Python. Only the bounded result is displayed.
+        observed_activity_total = conn.execute(
+            "SELECT count(DISTINCT activity) FROM seq2"
+        ).fetchone()[0]
+        # A start-only label is open-only only when it is absent from *all*
+        # observed instances, including those omitted by the top-N query.
+        observed_open_labels = set()
+        if open_by_activity:
+            observed_open_labels = {row[0] for row in conn.execute(
+                "SELECT DISTINCT activity FROM seq2 WHERE activity IN (SELECT unnest(?::VARCHAR[]))",
+                [list(open_by_activity)],
+            ).fetchall()}
+        open_only = sorted(set(open_by_activity) - observed_open_labels)
+        # Surface truncation explicitly: a top-100 table is not a complete cohort.
+        activity_total = observed_activity_total + len(open_only)
+        remaining = max(0, MAX_ACTIVITIES - len(activities))
+        if remaining and open_only:
+            activities = list(activities) + [
+                (name, 0, int(lifecycle_case_counts.get(name, 0)), 0, None, None, None,
+                 0, None, None, None, 0, None, None, None)
+                for name in open_only[:remaining]
+            ]
+        # The hotspot list is capped; expose how many distinct observed transitions
+        # were excluded so operators do not mistake a top-N view for the full cohort.
+        transition_total = conn.execute("""SELECT count(*) FROM (
+            SELECT prev_activity, activity FROM seq2 WHERE wait IS NOT NULL
+            GROUP BY prev_activity, activity)""").fetchone()[0]
         transitions = conn.execute(f"""SELECT prev_activity, activity, count(*), quantile_cont(wait, 0.5), sum(wait)
             FROM seq2 WHERE wait IS NOT NULL GROUP BY prev_activity, activity
             ORDER BY sum(wait) DESC, prev_activity, activity LIMIT {MAX_TRANSITIONS}""").fetchall()
@@ -184,10 +249,30 @@ def waiting_time(log_id: str, case_type: str | None = None, *, mode: str = "auto
               SELECT sum(busy) AS busy, epoch(max(en) - min(st)) AS dur, sum(busy) / epoch(max(en) - min(st)) AS eff
               FROM seq2 GROUP BY case_id HAVING count(proc) > 0 AND max(en) > min(st))""").fetchone()
 
+        # Cohort-wide coverage must include activities omitted from the bounded table.
+        # Invalid lifecycle pairs already appear in inst and unmatched_starts;
+        # subtract them once, unlike invalid end-attribute observations.
+        cohort_instances = conn.execute(
+            "SELECT count(*), count(proc), count(wait) FROM seq2"
+        ).fetchone()
+        cohort_eligible = (cohort_instances[0] + int(unmatched_starts)
+                           - (kinds.get("invalid_pair", 0) if used == "lifecycle" else 0))
+        cohort_coverage = {
+            "eligible": cohort_eligible,
+            "processing_observed": cohort_instances[1],
+            "waiting_observed": cohort_instances[2],
+            "processing_share": (cohort_instances[1] / cohort_eligible if cohort_eligible else None),
+            "waiting_share": (cohort_instances[2] / cohort_eligible if cohort_eligible else None),
+        }
+
         def stats(median, p90, mean):
             return {"median_seconds": median, "p90_seconds": p90, "mean_seconds": mean}
         return {
             **base, "available": True, "events": events,
+            "cohort_observation_coverage": cohort_coverage,
+            "activity_result_limit": MAX_ACTIVITIES,
+            "activity_total": activity_total,
+            "activities_omitted": max(0, activity_total - len(activities)),
             **({"working_calendar":calendar_result} if calendar_result is not None else {}),
             "instances": {"total": sum(kinds.values()), "with_processing_time": kinds.get("paired", 0),
                           "complete_without_start": kinds.get("complete_only", 0),
@@ -196,11 +281,21 @@ def waiting_time(log_id: str, case_type: str | None = None, *, mode: str = "auto
                           "unmatched_starts": int(unmatched_starts), "activities_with_open_starts": int(open_starts),
                           "ignored_lifecycle_events": int(ignored)},
             "activities": [{
-                "activity": a, "instances": n, "cases": cases, "instances_with_processing_time": known,
-                "processing": stats(p50, p90, mean), "waiting_before": {**stats(w50, w90, wmean), "instances": waited,
+                "activity": a, "instances": n, "cases": lifecycle_case_counts.get(a, cases), "instances_with_processing_time": known,
+                "processing_observation_share": known / (n + open_by_activity.get(a, 0) - invalid_by_activity.get(a, 0)) if n + open_by_activity.get(a, 0) - invalid_by_activity.get(a, 0) else None,
+                "open_starts": int(open_by_activity.get(a, 0)),
+                "processing_observations": {"observed": known, "eligible": n + open_by_activity.get(a, 0) - invalid_by_activity.get(a, 0)},
+                "waiting_observations": {"observed": waited, "eligible": n + open_by_activity.get(a, 0) - invalid_by_activity.get(a, 0)},
+                "waiting_observation_share": waited / (n + open_by_activity.get(a, 0) - invalid_by_activity.get(a, 0)) if n + open_by_activity.get(a, 0) - invalid_by_activity.get(a, 0) else None,
+                "processing": {**stats(p50, p90, mean), "population_stddev_seconds": pstd},
+                "waiting_before": {**stats(w50, w90, wmean), "p10_seconds": w10,
+                                   "population_stddev_seconds": wstd, "instances": waited,
                                                                        "total_seconds": wsum},
                 "share_of_all_waiting": wsum / total_wait if total_wait else None,
-            } for a, n, cases, known, p50, p90, mean, waited, w50, w90, wmean, wsum in activities],
+            } for a, n, cases, known, p50, p90, mean, waited, w50, w90, wmean, wsum, pstd, wstd, w10 in activities],
+            "waiting_hotspot_result_limit": MAX_TRANSITIONS,
+            "waiting_hotspot_total": transition_total,
+            "waiting_hotspots_omitted": max(0, transition_total - len(transitions)),
             "waiting_hotspots": [{"from": s, "to": d, "count": n, "median_waiting_seconds": med,
                                   "total_waiting_seconds": total,
                                   "share_of_all_waiting": total / total_wait if total_wait else None}
