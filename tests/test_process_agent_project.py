@@ -34,7 +34,7 @@ def test_export_is_deterministic_safe_and_runs_synthetic_shadow_suite(tmp_path):
     assert archive==build_runtime_project(value)
     with ZipFile(BytesIO(archive)) as zipfile:
         assert len(zipfile.namelist())==len(set(zipfile.namelist()))
-        assert {'run_queue.py','test_run_queue.py','execute_http.py','test_execute_http.py','import_openapi.py','test_import_openapi.py','http-operations.example.json','release-manifest.json','verify_release.py','check_runtime.py'} <= set(zipfile.namelist())
+        assert {'run_queue.py','test_run_queue.py','execute_http.py','test_execute_http.py','import_openapi.py','test_import_openapi.py','rehearse_http.py','http-operations.example.json','release-manifest.json','verify_release.py','check_runtime.py'} <= set(zipfile.namelist())
         assert {'review_bindings.py','test_binding_rehearsal.py'} <= set(zipfile.namelist())
         assert 'send_report.py' in zipfile.namelist()
         assert 'stop.py' in zipfile.namelist()

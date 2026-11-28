@@ -4,6 +4,9 @@ on:
     types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - 'shared/process_agent_templates/import_openapi.py.txt'
+      - 'shared/process_agent_templates/rehearse_http.py.txt'
+      - 'shared/process_agent_templates/test_execute_http.py.txt'
+      - 'tests/test_direct_http_rehearsal_core.py'
       - 'shared/process_agent_templates/test_import_openapi.py.txt'
       - 'shared/process_agent_templates/execute_http.py.txt'
       - 'shared/process_agent_templates/execute.py.txt'
@@ -37,4 +40,4 @@ jobs:
           python -m compileall -q .
           python -m unittest -v test_import_openapi
       - name: Verify generated archive and portable acceptance inventory
-        run: python -m pytest --noconftest -q tests/test_process_agent_project.py tests/test_customer_runtime_acceptance.py
+        run: python -m pytest --noconftest -q tests/test_process_agent_project.py tests/test_customer_runtime_acceptance.py tests/test_direct_http_rehearsal_core.py
