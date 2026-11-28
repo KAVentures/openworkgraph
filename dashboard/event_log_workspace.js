@@ -6467,6 +6467,9 @@
     const zone=input('owgPatternZone','text');zone.maxLength=64;
     try{zone.value=Intl.DateTimeFormat().resolvedOptions().timeZone||'UTC';}catch(_){zone.value='UTC';}
     const act=select('owgPatternActivity',[['','All activities'],...activityNames.slice(0,500).map(a=>[a,a])]);
+    const exact=input('owgPatternActivityExact','text','Exact activity label (optional)');exact.maxLength=400;
+    const lookup=activityLabelLookup(exact,{id:part=>'owgPatternActivity'+part,subject:'time pattern activity'});
+    exact.addEventListener('input',lookup.reset);act.addEventListener('change',()=>{exact.value='';lookup.reset();});
     const startH=input('owgPatternStart','number');startH.min='0';startH.max='23';startH.value='8';
     const endH=input('owgPatternEnd','number');endH.min='1';endH.max='24';endH.value='18';
     const workingDays=document.createElement('fieldset');
@@ -6484,15 +6487,19 @@
     const grid=el('div');grid.id='owgPatternDisplay';
     const review=el('div');review.id='owgPatternCaseReview';
     const row=el('div',null,'row');row.style.alignItems='end';
-    row.append(field('Time zone',zone),field('Activity',act),field('Working hours from',startH),field('to',endH),run);
+    row.append(field('Time zone',zone),field('Activity',act),field('Exact activity',exact),lookup.wrap,field('Working hours from',startH),field('to',endH),run);
     const gridControl=field('Show in the grid',mode);gridControl.hidden=true;
     box.append(row,workingDays,out,gridControl,grid,review);
     const generation=state.generation,endpoint='/v1/event-logs/'+encodeURIComponent(state.logId)+'/time-patterns';
     const number=n=>Number(n).toLocaleString();
     const hourText=h=>String(h).padStart(2,'0')+':00';
     const dateTime=value=>value.replace('T',' ').replace('Z',' UTC');
-    let reviewTurn=0,report=null;
+    let reviewTurn=0,reportTurn=0,report=null;
     const clearReview=()=>{++reviewTurn;review.replaceChildren();};
+    for(const control of [zone,act,exact,startH,endH,...dayChecks])control.addEventListener('input',()=>{
+      ++reportTurn;run.disabled=false;report=null;grid.replaceChildren();gridControl.hidden=true;clearReview();
+      out.replaceChildren(el('div','Settings changed. Show the time pattern again.','muted'));
+    });
     const request=async(suffix,spec)=>(await api(endpoint+suffix,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)})).json();
     function inspect(spec,group,label,cell={}){
       const turn=++reviewTurn,current=()=>generation===state.generation&&turn===reviewTurn;
@@ -6558,21 +6565,24 @@
     }
     mode.onchange=drawGrid;
     run.onclick=async()=>{
+      const ticket=++reportTurn,current=()=>generation===state.generation&&box.isConnected&&ticket===reportTurn;
       run.disabled=true;report=null;grid.replaceChildren();gridControl.hidden=true;clearReview();
       out.replaceChildren(el('div','Calculating time patterns…','muted'));
       try{
         const spec={time_zone:zone.value.trim()||'UTC',work_start_hour:Number(startH.value),work_end_hour:Number(endH.value),
           work_days:dayChecks.flatMap((check,i)=>check.checked?[i+1]:[])};
-        if(act.value)spec.activity=act.value;if(state.caseType)spec.case_type=state.caseType;
+        const chosen=exact.value||act.value;
+        if(Array.from(chosen).length>200)throw new Error('Choose an activity label of at most 200 characters.');
+        if(chosen)spec.activity=chosen;if(state.caseType)spec.case_type=state.caseType;
         if(filterOn())spec.cohort=globalCohort();
         const r=await request('',spec);
-        if(generation!==state.generation)return;
+        if(!current())return;
         report={r,spec};gridControl.hidden=false;drawGrid();
         const outside=button('Inspect outside-hours events','secondary');outside.onclick=()=>inspect(spec,'outside_working_hours','Outside-hours events');
         out.replaceChildren(el('div',number(r.total_events)+' events and '+number(r.total_case_arrivals)+' new cases in '+r.settings.time_zone+'. '+(r.outside_working_hours_share===null?'':pct(r.outside_working_hours_share)+' of events fell outside '+hourText(r.settings.work_start_hour)+'–'+hourText(r.settings.work_end_hour)+' on working days.')),
           ...(r.outside_working_hours_events?[outside]:[]),el('div',r.interpretation,'muted'));
-      }catch(error){if(generation===state.generation)out.replaceChildren(el('div',error.message,'muted'));}
-      finally{run.disabled=false;}
+      }catch(error){if(current())out.replaceChildren(el('div',error.message,'muted'));}
+      finally{if(current())run.disabled=false;}
     };
     return box;
   }
@@ -8254,7 +8264,11 @@
     const measures=[['cases','Cases'],['share','Share of cases'],['median_hours','Median duration'],['p90_hours','90th percentile duration'],['rework_rate','Share of cases with rework'],['events_per_case','Events per case'],['with_activity_share','Share doing an activity']];
     const measurePick=select('owgBreakdownMeasure',measures);
     const activityPick=select('owgBreakdownActivity',activityNames.slice(0,500).map(a=>[a,a]));
-    const activityField=field('Activity',activityPick);activityField.hidden=true;
+    const exact=input('owgBreakdownActivityExact','text','Exact activity label (optional)');exact.maxLength=400;
+    const lookup=activityLabelLookup(exact,{id:part=>'owgBreakdownActivity'+part,subject:'breakdown activity'});
+    exact.addEventListener('input',lookup.reset);activityPick.addEventListener('change',()=>{exact.value='';lookup.reset();});
+    const selectedActivity=()=>exact.value||activityPick.value;
+    const activityField=field('Activity',activityPick);activityField.append(field('Exact activity',exact),lookup.wrap);activityField.hidden=true;
     measurePick.onchange=()=>{activityField.hidden=measurePick.value!=='with_activity_share';};
     const run=button('Show breakdown','secondary');run.id='owgBreakdownRun';
     const csv=button('Download as CSV','secondary');csv.id='owgBreakdownCsv';
@@ -8277,7 +8291,11 @@
     const pct=x=>x===null||x===undefined?'—':Math.round(x*1000)/10+'%';
     const hrs=x=>x===null||x===undefined?'—':(x<48?(Math.round(x*10)/10)+' h':(Math.round(x/24*10)/10)+' d');
     const show={cases:x=>Number(x).toLocaleString(),share:pct,median_hours:hrs,p90_hours:hrs,rework_rate:pct,events_per_case:x=>String(Math.round(x*10)/10),with_activity_share:pct};
-    let reviewTurn=0;
+    let reviewTurn=0,reportTurn=0;
+    for(const control of [rowsPick,colsPick,measurePick,activityPick,exact])control.addEventListener('input',()=>{
+      ++reviewTurn;++reportTurn;run.disabled=false;out.replaceChildren();review.replaceChildren();
+      statusLine.textContent='Settings changed. Show the breakdown again.';
+    });
     function inspect(url,cell,label,withActivity){
       const turn=++reviewTurn,current=()=>generation===state.generation&&turn===reviewTurn;
       const title=el('h4',label);title.tabIndex=-1;
@@ -8312,7 +8330,7 @@
     csv.onclick=async()=>{
       if(colsPick.value&&colsPick.value===rowsPick.value){statusLine.textContent='Choose two different dimensions.';return;}
       const params={rows:rowsPick.value};if(colsPick.value)params.columns=colsPick.value;
-      if(measurePick.value==='with_activity_share'&&activityPick.value)params.with_activity=activityPick.value;
+      if(measurePick.value==='with_activity_share'){const chosen=selectedActivity();if(!chosen||Array.from(chosen).length>200){statusLine.textContent='Choose an activity label of 1 to 200 characters.';return;}params.with_activity=chosen;}
       csv.disabled=true;
       try{const response=await api(logPath('breakdown.csv',params));const blob=await response.blob();
         const link=document.createElement('a');link.href=URL.createObjectURL(blob);link.download=(state.logId||'log')+'-breakdown.csv';
@@ -8322,14 +8340,15 @@
       finally{csv.disabled=false;}};
     run.onclick=async()=>{
       ++reviewTurn;review.replaceChildren();
+      const ticket=++reportTurn,current=()=>generation===state.generation&&box.isConnected&&ticket===reportTurn;
       if(colsPick.value&&colsPick.value===rowsPick.value){statusLine.textContent='Choose two different dimensions.';out.replaceChildren();return;}
       const measure=measurePick.value;
       const params={rows:rowsPick.value};if(colsPick.value)params.columns=colsPick.value;
-      if(measure==='with_activity_share'){if(!activityPick.value){statusLine.textContent='Choose an activity.';return;}params.with_activity=activityPick.value;}
+      if(measure==='with_activity_share'){const chosen=selectedActivity();if(!chosen||Array.from(chosen).length>200){statusLine.textContent='Choose an activity label of 1 to 200 characters.';return;}params.with_activity=chosen;}
       run.disabled=true;statusLine.textContent='Grouping cases…';out.replaceChildren();
       try{
         const url=logPath('breakdown',params),r=await getJSON(url);
-        if(generation!==state.generation)return;
+        if(!current())return;
         const endpoint=new URL(url,window.location.origin);endpoint.pathname+='/cases';
         const evidenceURL=endpoint.pathname+endpoint.search;
         const fmt=show[measure],cols=r.columns?r.column_values:['All cases'];
@@ -8352,8 +8371,8 @@
         body.push([r.total_label,...(r.columns?cols.map(c=>shown(colTotals.get(c))):[]),shown(r.overall)]);
         statusLine.textContent=measures.find(m=>m[0]===measure)[1]+' by '+r.rows.label+(r.columns?' and '+r.columns.label:'')+', over '+Number(r.cases).toLocaleString()+' cases. Overall: '+fmt(r.overall[measure])+'.';
         out.append(table(header,body),el('div',r.caveat,'muted'));
-      }catch(error){if(generation===state.generation)statusLine.textContent=error.message;}
-      finally{run.disabled=false;}};
+      }catch(error){if(current())statusLine.textContent=error.message;}
+      finally{if(current())run.disabled=false;}};
     return box;
   }
 
@@ -8688,7 +8707,11 @@
     const box=section('Due dates');box.id='owgDue';
     box.appendChild(el('div','Did the step that matters (a payment, a shipment) happen by the date it was due? The due date comes from an attribute such as a payment due date column, or is a fixed number of days after the case started.','muted'));
     const activity=select('owgDueActivity',activityNames.slice(0,500).map(a=>[a,a]));
-    if(activityNames.length)activity.value=activityNames[activityNames.length-1];
+    if(activity.options.length)activity.selectedIndex=activity.options.length-1;
+    const exact=input('owgDueActivityExact','text','Exact activity label (optional)');exact.maxLength=400;
+    const lookup=activityLabelLookup(exact,{id:part=>'owgDueActivity'+part,subject:'due activity'});
+    const selectedActivity=()=>exact.value||activity.value;
+    exact.addEventListener('input',lookup.reset);activity.addEventListener('change',()=>{exact.value='';lookup.reset();});
     const mode=select('owgDueMode',[['attribute','From an attribute'],['days','Days after the case starts']]);
     const attribute=input('owgDueAttribute','text','e.g. due_date');attribute.maxLength=200;attribute.autocomplete='off';
     const days=input('owgDueDays','number');days.min='0.01';days.step='any';days.value='30';
@@ -8697,7 +8720,7 @@
     const attributeField=field('Due-date attribute',attribute),daysField=field('Days after start',days);
     const sync=()=>{attributeField.hidden=mode.value!=='attribute';daysField.hidden=mode.value!=='days';};mode.onchange=sync;sync();
     const run=button('Check due dates','secondary');run.id='owgDueRun';
-    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Activity that is due',activity),field('Due date',mode),attributeField,daysField,field('Early window',early),field('As of (UTC, optional)',asOf),run);
+    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Activity that is due',activity),field('Exact due activity',exact),lookup.wrap,field('Due date',mode),attributeField,daysField,field('Early window',early),field('As of (UTC, optional)',asOf),run);
     const statusLine=el('div',null,'muted');statusLine.id='owgDueStatus';statusLine.setAttribute('role','status');statusLine.setAttribute('aria-live','polite');
     const out=el('div');out.id='owgDueResults';
     const review=el('div');review.id='owgDueCaseReview';
@@ -8707,10 +8730,12 @@
     const alertRow=el('div',null,'row');alertRow.style.alignItems='end';alertRow.append(field('Signal when open overdue cases are more than',alertCount),alertSave);
     box.append(row,statusLine,out,review,alertRow,alertMessage);
     alertSave.onclick=async()=>{
-      const when={kind:'due_date',activity:activity.value,metric:'open_overdue_cases',operator:'above',threshold:Math.max(0,Math.floor(Number(alertCount.value)||0))};
+      const chosen=selectedActivity();
+      if(!chosen||Array.from(chosen).length>200){alertMessage.textContent='Choose an activity label of 1 to 200 characters.';return;}
+      const when={kind:'due_date',activity:chosen,metric:'open_overdue_cases',operator:'above',threshold:Math.max(0,Math.floor(Number(alertCount.value)||0))};
       if(mode.value==='attribute'){if(!attribute.value.trim()){alertMessage.textContent='Enter the name of the due-date attribute.';return;}when.due_attribute=attribute.value.trim();}
       else{if(!(Number(days.value)>0)){alertMessage.textContent='Enter a number of days above 0.';return;}when.due_days=Number(days.value);}
-      const sig={name:('Overdue '+activity.value).slice(0,120),when};if(state.caseType)sig.case_type=state.caseType;
+      const sig={name:('Overdue '+chosen).slice(0,120),when};if(state.caseType)sig.case_type=state.caseType;
       alertSave.disabled=true;
       try{await api('/v1/event-logs/'+encodeURIComponent(state.logId)+'/signals',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(sig)});
         document.querySelectorAll('#owgEventLogSignals').forEach(node=>node.dispatchEvent(new CustomEvent('owg-signals-changed')));
@@ -8720,7 +8745,7 @@
     const pct=x=>x===null||x===undefined?'—':Math.round(x*1000)/10+'%';
     const names={on_time:'On time',early:'Early',late:'Late',open_overdue:'Open, overdue',open_not_due:'Open, not yet due',no_due_date:'No due date',unreadable_due_date:'Unreadable due date'};
     const generation=state.generation;let reviewTurn=0,reportTurn=0;
-    for(const control of [activity,mode,attribute,days,early,asOf])control.addEventListener('input',()=>{
+    for(const control of [activity,exact,mode,attribute,days,early,asOf])control.addEventListener('input',()=>{
       ++reviewTurn;++reportTurn;run.disabled=false;out.replaceChildren();review.replaceChildren();
       statusLine.textContent='Settings changed. Check due dates again.';
     });
@@ -8764,7 +8789,9 @@
     run.onclick=async()=>{
       ++reviewTurn;review.replaceChildren();
       const turn=++reportTurn,current=()=>generation===state.generation&&box.isConnected&&turn===reportTurn;
-      const params={due_activity:activity.value};
+      const chosen=selectedActivity();
+      if(!chosen||Array.from(chosen).length>200){statusLine.textContent='Choose an activity label of 1 to 200 characters.';out.replaceChildren();return;}
+      const params={due_activity:chosen};
       if(mode.value==='attribute'){if(!attribute.value.trim()){statusLine.textContent='Enter the name of the due-date attribute.';out.replaceChildren();return;}params.due_attribute=attribute.value.trim();}
       else{if(!(Number(days.value)>0)){statusLine.textContent='Enter a number of days above 0.';out.replaceChildren();return;}params.due_days=days.value;}
       if(early.value)params.early_days=early.value;

@@ -3980,6 +3980,14 @@ the current selection. The dashboard checks that
 the saved hidden set has not changed since it loaded. If another view changed
 it, reload before saving; the stale selection is not applied.
 
+### Exact activity labels in due-date and breakdown reports
+
+Due-date checks, time patterns and the activity-share breakdown can use an exact activity label
+instead of a suggestion. Use **Find labels** to search the current case notion,
+then choose a match. The due-date report, evidence and saved signal use the same
+label; the breakdown report, case evidence and CSV use the same label. Time
+patterns and their case evidence use the selected exact label.
+
 ### Reusing activity groupings across logs
 
 Under **Group activities**, download a saved mapping as JSON. In another log,

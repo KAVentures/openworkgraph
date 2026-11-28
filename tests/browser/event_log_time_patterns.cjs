@@ -54,6 +54,22 @@ const path=require('node:path');
    await out.getByRole('button',{name:'Inspect outside-hours events'}).click();
    await review.getByRole('button',{name:'Open case c',exact:true}).waitFor();
    assert.equal(await review.getByRole('button',{name:'Open case b',exact:true}).count(),0);
+   await page.locator('#owgPatternActivity option[value=Approve]').evaluate(option=>option.remove());
+   await page.locator('#owgPatternActivityExact').fill('App');
+   assert.equal(await review.textContent(),'');assert.equal(await grid.count(),0);
+   await page.locator('#owgPatternActivityFind').click();
+   await page.locator('#owgPatternActivityMatches').selectOption('Approve');
+   await page.locator('#owgPatternActivityUse').click();
+   const [exactResponse]=await Promise.all([page.waitForResponse(r=>r.url().endsWith('/time-patterns')&&r.request().method()==='POST'),
+     page.locator('#owgPatternRun').click()]);
+   assert.equal(exactResponse.request().postDataJSON().activity,'Approve');
+   await out.getByText(/2 events and 3 new cases/).waitFor();
+   await page.locator('#owgPatternMode').selectOption('events');
+   const [evidenceResponse]=await Promise.all([page.waitForResponse(r=>r.url().endsWith('/time-patterns/cases')),
+     grid.getByRole('button',{name:'Inspect 1 event for Monday 17:00',exact:true}).click()]);
+   assert.equal(evidenceResponse.request().postDataJSON().activity,'Approve');
+   await review.getByRole('status').filter({hasText:'1 event in 1 case.'}).waitFor();
+   await page.locator('#owgPatternActivityExact').fill('');
    await page.addScriptTag({content:axeSource});
    const audit=await page.evaluate(async()=>window.axe.run(document.querySelector('#owgEventLogTimePatterns'),{runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21aa']}}));
    assert.deepEqual(audit.violations.map(v=>v.id+': '+v.nodes.map(n=>n.target).join(',')),[]);

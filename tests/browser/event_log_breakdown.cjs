@@ -63,7 +63,13 @@ const path=require('node:path');
    await page.locator('#owgBreakdownRows').selectOption('start_month');await page.locator('#owgBreakdownColumns').selectOption('');
    await page.locator('#owgBreakdownMeasure').selectOption('with_activity_share');
    assert.equal(await page.locator('#owgBreakdownActivity').isVisible(),true);
-   await page.locator('#owgBreakdownActivity').selectOption('Reject');
+   await page.locator('#owgBreakdownActivity').selectOption('Done');
+   await page.locator('#owgBreakdownActivity option[value=Reject]').evaluate(option=>option.remove());
+   await page.locator('#owgBreakdownActivityExact').fill('Rej');
+   await page.locator('#owgBreakdownActivityFind').click();
+   await page.locator('#owgBreakdownActivityMatches').selectOption('Reject');
+   await page.locator('#owgBreakdownActivityUse').click();
+   assert.equal(await page.locator('#owgBreakdownActivityExact').inputValue(),'Reject');
    await page.locator('#owgBreakdownRun').click();
    await page.locator('#owgBreakdownStatus').filter({hasText:'Share doing an activity by month the case started, over 24 cases. Overall: 33.3%.'}).waitFor();
    const months=await page.locator('#owgBreakdownResults tbody tr').evaluateAll(trs=>trs.map(tr=>[...tr.cells].map(td=>td.textContent)));
@@ -71,6 +77,11 @@ const path=require('node:path');
    await out.getByRole('button',{name:'Inspect cases for 2024-01 (33.3%)',exact:true}).click();
    await review.getByRole('columnheader',{name:'Did Reject',exact:true}).waitFor();
    assert.equal(await review.locator('tbody tr').count(),12);
+   const [csvResponse]=await Promise.all([page.waitForResponse(r=>new URL(r.url()).pathname.endsWith('/breakdown.csv')),
+     page.locator('#owgBreakdownCsv').click()]);
+   assert.equal(new URL(csvResponse.url()).searchParams.get('with_activity'),'Reject');
+   await page.locator('#owgBreakdownActivityExact').fill('Done');
+   assert.equal(await out.textContent(),'');assert.equal(await review.textContent(),'');
    // Duration bands: red cases take 2 h and blue 6 h, both in the 1 to 24 hour band.
    await page.locator('#owgBreakdownRows').selectOption('duration_band');await page.locator('#owgBreakdownMeasure').selectOption('cases');
    await page.locator('#owgBreakdownRun').click();
