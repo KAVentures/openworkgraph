@@ -26,6 +26,8 @@ from .ai_implementation_portfolio_handoff_routes import router as _portfolio_han
 router.include_router(_portfolio_handoff_router)
 from .ai_implementation_forecast_routes import router as _forecast_router
 router.include_router(_forecast_router)
+from .ai_implementation_improvement_routes import router as _improvement_router
+router.include_router(_improvement_router)
 MAX_BYTES = 8 * 1024 * 1024
 _LOCAL_MODEL_SLOT = Lock()
 SCRIPT = Path(__file__).resolve().parents[1] / "dashboard" / "ai_opportunity_handoff.js"
