@@ -91,6 +91,10 @@ async def portfolio_budget_scenario(request: Request):
     return await run_in_threadpool(_respond, scenario.solve, spec)
 
 
+from .deadline_schedule_routes import router as deadline_schedule_router
+router.include_router(deadline_schedule_router)
+
+
 @router.get("/v1/automation-pipeline/resource-schedule/inventory")
 async def resource_schedule_inventory(request: Request):
     from . import automation_resource_schedule as schedule
