@@ -104,6 +104,11 @@ def first_workflow_script():
     return FileResponse(SCRIPT.with_name("ai_implementation_first_workflow.js"), media_type="application/javascript")
 
 
+@router.get("/ai-implementation-source-inventory.js")
+def source_inventory_script():
+    return FileResponse(SCRIPT.with_name("ai_implementation_source_inventory.js"), media_type="application/javascript")
+
+
 @router.get("/ai-context-trial.js")
 def trial_script():
     return FileResponse(TRIAL_SCRIPT, media_type="application/javascript")
