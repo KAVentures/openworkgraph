@@ -1,0 +1,201 @@
+name: enterprise-stack-acceptance
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - 'server/enterprise_*'
+      - 'server/*_feed.py'
+      - 'server/google_workspace_audit.py'
+      - 'gateway/connector_*'
+      - 'shared/connector_*'
+      - 'shared/enterprise_connector_contract.py'
+      - 'dashboard/enterprise_connectors.*'
+      - 'dashboard/enterprise_bundle_import.*'
+      - 'server/event_log_workspace.py'
+      - 'tests/test_enterprise_*'
+      - 'tests/test_connector_*'
+      - 'tests/test_*_feed.py'
+      - 'tests/test_enterprise_ingestion_tuning.py'
+      - 'tests/browser/enterprise_connectors.cjs'
+      - 'tests/browser/connector_crosswalks*'
+      - '.github/workflows/enterprise-stack-acceptance.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: enterprise-stack-acceptance-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  integrated-contract:
+    # Validate the consolidated candidate even while it remains a draft.
+    # Ordinary feature drafts continue to use the existing cheap smoke path.
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.head_ref, 'integration/enterprise-connectors-') || github.head_ref == 'feat/enterprise-databricks-approved-views' || github.head_ref == 'feat/enterprise-snowflake-approved-views' || github.head_ref == 'feat/enterprise-netsuite-suiteql-events' || github.head_ref == 'feat/enterprise-workday-raas-events' || github.head_ref == 'feat/enterprise-oracle-fusion-procurement' || github.head_ref == 'feat/enterprise-new-provider-crosswalk-batch' || github.head_ref == 'feat/enterprise-bigquery-approved-views' || github.head_ref == 'feat/enterprise-reviewed-ingestion-tuning' || github.head_ref == 'feat/enterprise-ingestion-run-ledger' || github.head_ref == 'feat/enterprise-source-onboarding-readiness' || github.head_ref == 'feat/enterprise-retained-integrity-review' || github.head_ref == 'feat/enterprise-zendesk-ticket-audits' || github.head_ref == 'feat/enterprise-committed-window-coverage' || github.head_ref == 'feat/enterprise-reviewed-case-exclusions' || github.head_ref == 'integration/enterprise-historical-recovery-current' || github.head_ref == 'integration/enterprise-monitoring-recovery-current' || github.head_ref == 'integration/enterprise-fleet-current' || github.head_ref == 'feat/enterprise-reviewed-catchup' || github.head_ref == 'feat/enterprise-routine-intent-reconciliation' || github.head_ref == 'feat/enterprise-reviewed-followup-packets-20261127' || github.head_ref == 'feat/enterprise-followup-evidence-reassessment-20261127' || github.head_ref == 'feat/enterprise-guided-reassessment-20261127'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: owg_test
+          POSTGRES_PASSWORD: synthetic-ci-password
+          POSTGRES_DB: owg_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U owg_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install existing Gateway and test dependencies
+        run: python -m pip install -e ".[dev,gateway]"
+      - name: Compile integrated Python modules and check dashboard JavaScript
+        run: |
+          python -m compileall -q server gateway shared
+          node --check dashboard/enterprise_connectors.js
+          node --check tests/browser/enterprise_connectors.cjs
+          node --check tests/browser/connector_crosswalks.cjs
+          node --check tests/browser/connector_fleet.cjs
+          python - <<'PY'
+          from pathlib import Path
+          import re, subprocess, tempfile
+          for p in Path("gateway").glob("connector_*.html"):
+              scripts = re.findall(r"<script[^>]*>(.*?)</script>", p.read_text(encoding="utf-8"), flags=re.S)
+              for script in scripts:
+                  with tempfile.NamedTemporaryFile(suffix=".js", mode="w", encoding="utf-8") as f:
+                      f.write(script); f.flush()
+                      subprocess.run(["node", "--check", f.name], check=True)
+          PY
+      - name: Exercise all native connector and integrated lifecycle tests
+        env:
+          OWG_PROCESS_TEST_DATABASE_URL: postgresql://owg_test:synthetic-ci-password@127.0.0.1:5432/owg_test
+        run: |
+          python -m pytest -q --tb=short \
+            tests/test_enterprise_rest_feed.py \
+            tests/test_enterprise_sql_feed.py \
+            tests/test_google_workspace_audit.py \
+            tests/test_slack_native_feed.py \
+            tests/test_salesforce_history_feed.py \
+            tests/test_servicenow_operations_feed.py \
+            tests/test_sap_procurement_feed.py \
+            tests/test_dataverse_audit_feed.py \
+            tests/test_hubspot_history_feed.py \
+            tests/test_databricks_event_feed.py \
+            tests/test_snowflake_event_feed.py \
+            tests/test_netsuite_event_feed.py \
+            tests/test_workday_raas_feed.py \
+            tests/test_oracle_fusion_procurement_feed.py \
+            tests/test_bigquery_event_feed.py \
+            tests/test_enterprise_ingestion_tuning.py \
+            tests/test_enterprise_ingestion_run_history.py \
+            tests/test_enterprise_source_onboarding.py \
+            tests/test_enterprise_retained_integrity.py \
+            tests/test_zendesk_ticket_audit_feed.py \
+            tests/test_enterprise_ingestion_coverage.py \
+            tests/test_enterprise_case_exclusions.py \
+            tests/test_enterprise_connector_history.py \
+            tests/test_connector_fleet.py \
+            tests/test_enterprise_integrated_lifecycle.py \
+            tests/test_enterprise_routine_reconciliation.py \
+            tests/test_enterprise_reviewed_catchup.py \
+            tests/test_enterprise_ingestion_service_levels.py \
+            tests/test_gateway_connector_jobs.py \
+            tests/test_enterprise_connector_worker.py \
+            tests/test_connector_event_publications.py \
+            tests/test_connector_case_review.py \
+            tests/test_connector_crosswalks.py \
+            tests/test_enterprise_crosswalk_batch.py \
+            tests/test_enterprise_connector_credentials.py \
+            tests/test_enterprise_connector_deployment.py \
+            tests/test_connector_bundle_import.py \
+            tests/test_connector_portable_linkage.py \
+            tests/test_connector_quality_verified_import.py \
+            tests/test_connector_quality_verifier_pure.py \
+            tests/test_connector_publication_quality.py \
+            tests/test_connector_linked_conformance.py \
+            tests/test_connector_exception_triage.py \
+            tests/test_connector_exception_followups.py \
+            tests/test_connector_followup_reassessment.py \
+            tests/test_connector_guided_reassessment.py \
+            tests/test_enterprise_evidence_journey.py \
+            tests/test_connector_temporal_review.py \
+            tests/test_enterprise_connector_integration.py
+      - name: Install isolated Chromium runtime
+        if: success() || failure()
+        run: |
+          npm install --prefix "$RUNNER_TEMP/owg-browser" playwright@1.64.1 axe-core@4.10.3
+          node "$RUNNER_TEMP/owg-browser/node_modules/playwright/cli.js" install chromium
+      - name: Enterprise connector configuration acceptance
+        if: success() || failure()
+        run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/enterprise_connectors.cjs
+      - name: Crosswalk and saved review acceptance
+        if: success() || failure()
+        run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/connector_crosswalks.cjs
+      - name: Fleet owner console acceptance
+        if: success() || failure()
+        run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/connector_fleet.cjs
+      - name: Verify repository database isolation
+        if: success() || failure()
+        run: |
+          test ! -e data/workflow_observer.db
+          test ! -e data/gateway/openworkgraph_gateway.db
+
+  verified-bundle-import:
+    if: github.event_name == 'pull_request' && (startsWith(github.head_ref, 'feat/enterprise-verified-bundle-import-') || startsWith(github.head_ref, 'feat/enterprise-portable-linked-evidence-') || startsWith(github.head_ref, 'feat/enterprise-quality-verified-import-') || github.head_ref == 'integration/enterprise-connectors-quality-20261127' || github.head_ref == 'integration/enterprise-connectors-process-20261127' || github.head_ref == 'feat/enterprise-followup-evidence-reassessment-20261127' || github.head_ref == 'feat/enterprise-guided-reassessment-20261127')
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: owg_test
+          POSTGRES_PASSWORD: synthetic-ci-password
+          POSTGRES_DB: owg_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U owg_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install existing Gateway and test dependencies
+        run: python -m pip install -e ".[dev,gateway]"
+      - name: Compile exact import and check dashboard JavaScript
+        run: |
+          python -m py_compile shared/connector_publication_quality.py shared/connector_quality_verification.py shared/connector_bundle_import.py shared/connector_case_projection.py shared/connector_portable_linkage.py gateway/connector_portable_linkage.py gateway/connector_case_review.py server/enterprise_connector_bundle_import.py server/enterprise_connector_routes.py server/event_log_workspace.py
+          node --check dashboard/enterprise_bundle_import.js
+          node --check tests/browser/enterprise_connectors.cjs
+      - name: Verify published bundle roundtrip and atomic local import
+        env:
+          OWG_PROCESS_TEST_DATABASE_URL: postgresql://owg_test:synthetic-ci-password@127.0.0.1:5432/owg_test
+        run: python -m pytest -q --tb=short tests/test_connector_bundle_import.py tests/test_connector_event_publications.py tests/test_connector_case_review.py tests/test_connector_portable_linkage.py tests/test_connector_quality_verified_import.py tests/test_connector_quality_verifier_pure.py tests/test_connector_publication_quality.py
+      - name: Install isolated Chromium runtime
+        if: success() || failure()
+        run: |
+          npm install --prefix "$RUNNER_TEMP/owg-browser" playwright@1.64.1 axe-core@4.10.3
+          node "$RUNNER_TEMP/owg-browser/node_modules/playwright/cli.js" install chromium
+      - name: Verify local bundle import and receipt lifecycle
+        if: success() || failure()
+        run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/enterprise_connectors.cjs
+      - name: Verify Gateway portable linked evidence disclosure
+        if: success() || failure()
+        run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/connector_crosswalks.cjs

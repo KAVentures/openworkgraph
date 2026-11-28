@@ -1,0 +1,208 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Exception triage · OpenWorkGraph</title>
+<style>body{font:16px/1.5 system-ui,sans-serif;margin:0;color:#23372b;background:#f3f6f3}main{max-width:1120px;margin:auto;padding:20px}section,article,fieldset{background:white;border:1px solid #aebcb1;border-radius:10px;padding:16px;margin:12px 0;min-width:0}article{background:#f8faf8}a{color:#245b46}label{display:block;font-weight:600}select,button{font:inherit;padding:8px;margin:5px 0;max-width:100%}button:disabled{opacity:.6}table{width:100%;border-collapse:collapse;table-layout:fixed}td,th{padding:7px;border-bottom:1px solid #aebcb1;text-align:left;overflow-wrap:anywhere;vertical-align:top}th{width:40%}h2,h3,p,li{overflow-wrap:anywhere}[hidden]{display:none!important}button:focus-visible,select:focus-visible,input:focus-visible,a:focus-visible{outline:3px solid #3268ba;outline-offset:3px}</style></head>
+<body><main><a href="/admin/connector-case-review">Back to reviewed cross-source cases</a><h1>Evidence exception triage</h1><p id="identity">Checking owner session…</p><p>Review exceptions from exact linked-case conformance reports. A disposition records a human review decision, not actual remediation, misconduct or compliance. Queues expire with their underlying publication grants.</p><p id="status" role="status"></p><div id="work" hidden>
+<section><h2>Active review queues</h2><button id="refresh" type="button">Refresh queues</button><div id="queues"></div></section>
+<section id="queuePanel" hidden><h2>Selected queue</h2><div id="queueSummary"></div><label>Filter by state<select id="filter"><option value="all">All states</option><option value="open">Open</option><option value="investigating">Investigating</option><option value="reviewed">Reviewed</option><option value="deferred">Deferred</option></select></label><p id="pageInfo"></p><div id="items"></div><button id="prev" type="button">Previous page</button> <button id="next" type="button">Next page</button>
+<fieldset><legend>Apply disposition to selected items</legend><p id="selected">0 selected</p><label>New state<select id="state"><option value="investigating">Investigating</option><option value="reviewed">Reviewed</option><option value="deferred">Deferred</option><option value="open">Open / reopen</option></select></label><label id="reasonLabel" hidden>Review reason<select id="reason"><option value="">Select a reason</option><option value="source_gap_suspected">Source gap suspected</option><option value="expected_sample_variation">Expected sample variation</option><option value="process_followup_needed">Process follow-up needed</option><option value="timestamp_uncertainty">Timestamp uncertainty</option><option value="scope_or_rule_needs_review">Scope or rule needs review</option><option value="other_reviewed_reason">Other reviewed reason</option></select></label><label><input id="confirm" type="checkbox"> I reviewed the selected evidence exceptions and authorize this disposition.</label><button id="apply" type="button" disabled>Apply selected dispositions</button></fieldset>
+<fieldset><legend>Reviewed operational follow-up</legend><p>Create internal work requests from selected reviewed or deferred exceptions. Requests expire with the evidence queue, do not contact providers or authorize external execution, and a human completion report is not verified remediation.</p><button id="followupPreview" type="button" disabled>Review selected follow-up actions</button><button id="followupRefresh" type="button" disabled>Refresh follow-up packets</button><div id="followupPlan"></div><div id="followupPackets"></div></fieldset><fieldset><legend>Export current dispositions</legend><p>Download the complete current queue revision with evidence outcome, review disposition, and digest provenance.</p><label><input id="exportConfirm" type="checkbox"> I approve disclosure of all current dispositions in this queue.</label><button id="export" type="button" disabled>Download dispositions CSV</button></fieldset><fieldset><legend>Delete queue</legend><label><input id="deleteConfirm" type="checkbox"> Delete this review queue and its disposition history. Published evidence remains unchanged.</label><button id="delete" type="button" disabled>Delete selected queue</button></fieldset></section>
+</div></main><script nonce="__NONCE__">
+(()=>{'use strict';const $=id=>document.getElementById(id),el=(tag,value)=>{const n=document.createElement(tag);if(value!==undefined)n.textContent=String(value);return n};
+const session=()=>[sessionStorage.getItem('owg_admin_token')||'',sessionStorage.getItem('owg_admin_org')||''];const [token,org]=session(),valid=()=>session()[0]===token&&session()[1]===org,base='/v1/admin/connector-events/'+encodeURIComponent(org)+'/exception-queues';
+let active=null,page=null,selected=new Map(),busy=false,followupPlan=null;
+function table(rows){const t=el('table'),b=el('tbody');for(const [k,v] of rows){const tr=el('tr'),th=el('th',k);th.scope='row';tr.append(th,el('td',v===null||v===undefined?'—':typeof v==='object'?JSON.stringify(v):v));b.append(tr);}t.append(b);return t;}
+function btn(label,fn){const b=el('button',label);b.type='button';b.onclick=()=>action(fn);return b;}
+function needsReason(){return ['reviewed','deferred'].includes($('state').value);}
+function controls(){const n=selected.size;$('followupPreview').disabled=busy||!active||!n||n>50||[...selected.values()].some(i=>!['reviewed','deferred'].includes(i.state)||!i.disposition||i.disposition==='expected_sample_variation');$('followupRefresh').disabled=busy||!active;$('selected').textContent=n+' selected (maximum 50)';$('reasonLabel').hidden=!needsReason();$('apply').disabled=busy||!active||!n||!$('confirm').checked||(needsReason()&&!$('reason').value);$('delete').disabled=busy||!active||!$('deleteConfirm').checked;$('export').disabled=busy||!active||!$('exportConfirm').checked;$('prev').disabled=busy||!page||page.offset===0;$('next').disabled=busy||!page||page.next_offset===null;$('refresh').disabled=busy;}
+function resetFollowupPlan(){followupPlan=null;$('followupPlan').replaceChildren();}
+function resetSelection(){resetFollowupPlan();selected.clear();$('confirm').checked=false;controls();}
+function closeQueue(){$('followupPackets').replaceChildren();active=null;page=null;resetSelection();$('deleteConfirm').checked=false;$('exportConfirm').checked=false;$('queuePanel').hidden=true;$('items').replaceChildren();$('queueSummary').replaceChildren();}
+function clear(){closeQueue();$('queues').replaceChildren();$('work').hidden=true;$('identity').textContent='Administrator session changed. Return to administration.';}
+async function api(path,body){if(!valid()){clear();throw Error('Session changed');}const r=await fetch(path,{method:body===undefined?'GET':'POST',cache:'no-store',headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},body:body===undefined?undefined:JSON.stringify(body)});if(!valid()){clear();throw Error('Session changed');}if(r.status===401||r.status===403){clear();throw Error('Session expired or owner access required');}if(!r.ok){const d=await r.json().catch(()=>({}));if(r.status===404||r.status===409)closeQueue();throw Error((typeof d.detail==='string'?d.detail:'Request failed')+' — refresh queues before continuing.');}const d=await r.json();if(!valid()){clear();throw Error('Session changed');}return d;}
+async function action(fn){if(busy)return;busy=true;const items=[...$('work').querySelectorAll('input,select')].map(n=>[n,n.disabled]);for(const [n] of items)n.disabled=true;controls();try{await fn();}catch(e){$('status').textContent=e.message;}finally{for(const [n,d] of items)n.disabled=d;busy=false;controls();}}
+function summary(q){return table([['Queue',q.queue_id],['Revision',q.revision],['Conformance SHA-256',q.conformance_sha256],['Linkage SHA-256',q.review_sha256],['Expiry',new Date(q.expires_at*1000).toLocaleString()],['Exceptions',q.exception_count],...Object.entries(q.states)]);}
+async function load(){closeQueue();const r=await api(base);const rows=[];for(const q of r.queues){const a=el('article');a.append(el('h3',q.queue_id),summary(q),btn('Open queue',async()=>{active=q;$('filter').value='all';await loadPage(0,false);}));rows.push(a);}$('queues').replaceChildren(...(rows.length?rows:[el('p','No active queues. Create one from an exact reviewed conformance result.')]));$('status').textContent=r.retention_cleanup_ok?'Active grant-bound queues loaded.':'Retention cleanup reported an error; invalid grants remain inaccessible.';}
+async function loadPage(at,pinned){if(!active)throw Error('Select a queue first');resetSelection();const r=await api(base+'/'+active.queue_id+'/page',{state:$('filter').value,offset:at,limit:50,expected_revision:pinned?active.revision:null});active=r.queue;page=r;$('queueSummary').replaceChildren(summary(active));$('pageInfo').textContent='Showing '+r.items.length+' of '+r.total+' matching items.';const rows=[];for(const item of r.items){const a=el('article');const l=el('label'),check=el('input');check.type='checkbox';check.onchange=()=>{if(busy){check.checked=selected.has(item.item_id);return;}if(check.checked)selected.set(item.item_id,item);else selected.delete(item.item_id);resetFollowupPlan();$('confirm').checked=false;controls();};l.append(check,document.createTextNode(' Select '+item.rule_id+' · '+item.state));a.append(l,table([['Linked case',item.linked_case_id],['Observed outcome',item.status],['Observed reason',item.reason],['Left count',item.left_count],['Right count',item.right_count],['Review disposition',item.disposition],['Item revision',item.revision]]));const h=el('details');h.append(el('summary','Recent review history'));for(const x of item.history)h.append(el('p',new Date(x.at*1000).toLocaleString()+' · '+x.previous.state+' → '+x.state+' · '+(x.disposition??'no disposition')));a.append(h);rows.push(a);}$('items').replaceChildren(...(rows.length?rows:[el('p','No items in this filter.')]));$('queuePanel').hidden=false;await loadFollowups();controls();}
+$('refresh').onclick=()=>action(load);$('filter').onchange=()=>action(()=>loadPage(0,true));$('prev').onclick=()=>action(()=>loadPage(Math.max(0,page.offset-50),true));$('next').onclick=()=>action(()=>loadPage(page.next_offset,true));
+$('state').onchange=$('reason').onchange=()=>{$('confirm').checked=false;controls();};$('confirm').onchange=$('deleteConfirm').onchange=$('exportConfirm').onchange=controls;
+$('apply').onclick=()=>action(async()=>{if(!active||!selected.size||!$('confirm').checked)throw Error('Review selected items first.');const state=$('state').value,reason=needsReason()?$('reason').value:null;const r=await api(base+'/'+active.queue_id+'/change',{expected_queue_revision:active.revision,edits:[...selected.values()].map(item=>({item_id:item.item_id,expected_revision:item.revision,state,reason})),confirm_disposition:true});active=r.queue;$('deleteConfirm').checked=false;$('exportConfirm').checked=false;await loadPage(0,true);$('status').textContent=r.items.length+' dispositions updated.';});
+$('export').onclick=()=>action(async()=>{
+if(!active||!$('exportConfirm').checked||!valid())throw Error('Explicit export approval required.');
+const r=await fetch(base+'/'+active.queue_id+'/export',{method:'POST',cache:'no-store',headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},body:JSON.stringify({expected_revision:active.revision,confirm_disposition_export:true})});
+if(!valid()){clear();throw Error('Session changed');}
+if(!r.ok){const d=await r.json().catch(()=>({}));if([401,403,404,409].includes(r.status))closeQueue();throw Error(typeof d.detail==='string'?d.detail:'Export failed');}
+const pin=r.headers.get('X-OWG-Disposition-SHA256');if(!/^[a-f0-9]{64}$/.test(pin||''))throw Error('Missing disposition export digest');
+const blob=await r.blob();if(!valid()){clear();throw Error('Session changed');}const url=URL.createObjectURL(blob);try{const a=el('a');a.href=url;a.download='owg-evidence-dispositions.csv';a.click();}finally{URL.revokeObjectURL(url);}
+$('exportConfirm').checked=false;$('status').textContent='Exact disposition revision exported: '+pin;
+});
+function approval(label){const l=el('label'),input=el('input');input.type='checkbox';l.append(input,document.createTextNode(' '+label));return {l,input};}
+function packetPath(){if(!active)throw Error('Select a queue first');return base+'/'+active.queue_id+'/followups';}
+async function loadFollowups(){
+  if(!active)return;
+  const r=await api(packetPath());
+  if(r.queue.revision!==active.revision)throw Error('Queue revision changed — refresh queues.');
+  const nodes=[];
+  for(const p of r.packets){
+    const a=el('article');
+    a.append(el('h3',p.packet_id),table([['State',p.state],['Packet revision',p.revision],['Item pins current',p.item_pins_current],['Requested items',p.items.length],['Plan digest',p.plan_sha256],['Remediation verified',false]]));
+    const details=el('details');details.append(el('summary','Requested actions and status history'));
+    for(const i of p.items)details.append(table([['Rule',i.rule_id],['Linked case',i.linked_case_id],['Evidence outcome',i.status],['Disposition',i.disposition],['Requested action',i.requested_action],['Item revision',i.revision]]));
+    for(const h of p.history)details.append(el('p',h.previous+' → '+h.state+' · '+new Date(h.at*1000).toLocaleString()));
+    a.append(details);
+    const targets=p.state==='requested'?['in_progress','cancelled']:p.state==='in_progress'?['completed_unverified','cancelled']:[];
+    for(const state of targets.filter(s=>s==='cancelled'||p.item_pins_current)){
+      const check=approval(state==='completed_unverified'?'I report completion without independent source verification.':'I authorize this human status change: '+state);
+      const b=btn('Mark '+state,async()=>{
+        if(!check.input.checked)throw Error('Explicit status approval required.');
+        const result=await api(packetPath()+'/'+p.packet_id+'/change',{expected_queue_revision:active.revision,expected_packet_revision:p.revision,state,confirm_human_status:true});
+        active=result.queue;await loadPage(0,true);$('status').textContent='Follow-up status recorded: '+state;
+      });b.disabled=true;check.input.onchange=()=>b.disabled=busy||!check.input.checked;a.append(check.l,b);
+    }
+    if(p.item_pins_current&&p.state!=='cancelled'){
+      const check=approval('I authorize disclosure of this exact follow-up packet.');
+      const b=btn('Download follow-up JSON',async()=>{
+        if(!check.input.checked)throw Error('Explicit export approval required.');
+        const report=await api(packetPath()+'/'+p.packet_id+'/export',{expected_queue_revision:active.revision,expected_packet_revision:p.revision,confirm_export:true});
+        const url=URL.createObjectURL(new Blob([JSON.stringify(report,null,2)],{type:'application/json'}));
+        try{const link=el('a');link.href=url;link.download='owg-reviewed-exception-followup.json';link.click();}finally{URL.revokeObjectURL(url);}
+        check.input.checked=false;b.disabled=true;
+      });b.disabled=true;check.input.onchange=()=>b.disabled=busy||!check.input.checked;a.append(check.l,b);
+    }
+    if(p.state==='completed_unverified'&&p.item_pins_current){
+      const review=el('details');
+      review.append(el('summary','Compare independently reviewed later evidence'),
+        el('p','Use a separate later linked-case review with publication windows starting after reported completion. Both original and later grants must remain active. Case and coded-selector correspondence is human asserted.'),
+        el('p','Download baseline and later linkage requests from the linked review console. Complete the comparison template with the baseline request, later request and mapped rules, sources and cases.'),
+        table([['Queue revision',active.revision],['Packet revision',p.revision],['Required baseline cases',[...new Set(p.items.map(i=>i.linked_case_id))].join(', ')],['Required rules',[...new Set(p.items.map(i=>i.rule_id))].join(', ')]]));
+      const template=btn('Download comparison input template',async()=>{
+        const value={expected_queue_revision:active.revision,expected_packet_revision:p.revision,
+          baseline:{},subsequent:{},jobs:[],cases:[...new Set(p.items.map(i=>i.linked_case_id))].map(before=>({before,after:''})),
+          confirm_case_and_selector_correspondence:false};
+        const url=URL.createObjectURL(new Blob([JSON.stringify(value,null,2)],{type:'application/json'}));
+        try{const l=el('a');l.href=url;l.download='owg-followup-reassessment-input.json';l.click();}finally{URL.revokeObjectURL(url);}
+      });
+      const label=el('label','Reviewed comparison input (JSON)'),file=el('input');file.type='file';file.accept='.json,application/json';label.append(file);
+      const consent=approval('I assert the exact mapped cases and activity selectors correspond; this is not independently verified.');
+      const report=el('div');let selectedInput=null,selectedReport=null;
+      const preview=btn('Preview later evidence comparison',async()=>{
+        if(!file.files[0]||file.files[0].size>2*1024*1024||!consent.input.checked)throw Error('Choose a bounded reviewed JSON file and approve correspondence.');
+        selectedInput=JSON.parse(await file.files[0].text());
+        selectedInput={...selectedInput,expected_queue_revision:active.revision,expected_packet_revision:p.revision,confirm_case_and_selector_correspondence:true};
+        selectedReport=await api(packetPath()+'/'+p.packet_id+'/reassessment-preview',selectedInput);
+        report.replaceChildren(el('h4','Later sample assessment'),el('p',selectedReport.interpretation),
+          table(Object.entries(selectedReport.summary)),el('p','Review SHA-256: '+selectedReport.reassessment_sha256));
+        for(const row of selectedReport.rows)report.append(table([['Rule',row.rule_id],['Baseline',row.baseline_status],['Later sample',row.subsequent_status],['Observed reason',row.subsequent_reason]]));
+        const exact=approval('I approve recording this exact comparison digest and downloading the report.');
+        const sample=approval('I understand this does not verify corrective action, case identity, causation or completeness.');
+        const record=btn('Record reassessment and download report',async()=>{
+          if(!selectedReport||!exact.input.checked||!sample.input.checked)throw Error('Review the exact comparison first.');
+          const result=await api(packetPath()+'/'+p.packet_id+'/reassessment-record',{...selectedInput,
+            expected_reassessment_sha256:selectedReport.reassessment_sha256,confirm_record_reassessment:true,confirm_sample_only:true});
+          const url=URL.createObjectURL(new Blob([JSON.stringify(result.report,null,2)],{type:'application/json'}));
+          try{const l=el('a');l.href=url;l.download='owg-followup-reassessment-report.json';l.click();}finally{URL.revokeObjectURL(url);}
+          active=result.queue;await loadPage(0,true);$('status').textContent='Exact reassessment receipt recorded. Remediation remains unverified.';
+        });
+        record.disabled=true;exact.input.onchange=sample.input.onchange=()=>record.disabled=busy||!exact.input.checked||!sample.input.checked;
+        report.append(exact.l,sample.l,record);
+      });
+      preview.disabled=true;
+      file.onchange=consent.input.onchange=()=>{selectedReport=selectedInput=null;report.replaceChildren();preview.disabled=busy||!file.files[0]||!consent.input.checked;};
+      const guided=el('details');guided.append(el('summary','Guided comparison — no manual JSON editing'),
+        el('p','Select the baseline request and later linkage request exported from the linked case review console. Choose all corresponding sources, cases and activities. Nothing is matched automatically.'));
+      const inputFile=(title)=>{const l=el('label',title),i=el('input');i.type='file';i.accept='.json,application/json';l.append(i);return {l,i};};
+      const baselineFile=inputFile('Baseline conformance request'),laterFile=inputFile('Later reviewed linkage request');
+      const inspect=approval('I approve inspection of these exact original and later publication scopes.');
+      const mappingRoot=el('div'),resultRoot=el('div');let catalog=null,scope=null;
+      function resetGuided(){catalog=scope=null;mappingRoot.replaceChildren();resultRoot.replaceChildren();}
+      const discover=btn('Load mapping candidates',async()=>{
+        resetGuided();
+        for(const x of [baselineFile,laterFile])if(!x.i.files[0]||x.i.files[0].size>1024*1024)throw Error('Choose both bounded request files.');
+        if(!inspect.input.checked)throw Error('Approve inspection first.');
+        const baseline=JSON.parse(await baselineFile.i.files[0].text()).request;
+        const later=JSON.parse(await laterFile.i.files[0].text()).request;
+        if(!baseline||!later)throw Error('Use request files exported from the linked review console.');
+        const {expected_review_sha256,...subsequent}=later;
+        scope={expected_queue_revision:active.revision,expected_packet_revision:p.revision,baseline,subsequent,
+          expected_subsequent_review_sha256:expected_review_sha256,confirm_catalog_inspection:true};
+        catalog=await api(packetPath()+'/'+p.packet_id+'/reassessment-catalog',scope);
+        const sourceInputs=new Map(),caseInputs=new Map(),activityInputs=new Map();
+        const makeSelect=(title,options)=>{const l=el('label',title),s=el('select');const blank=el('option','Choose explicitly');blank.value='';s.append(blank);
+          for(const [value,name] of options){const o=el('option',name);o.value=value;s.append(o);}l.append(s);return {l,s};};
+        const sourceBox=el('div'),caseBox=el('div'),activityBox=el('div');
+        const assertMapping=approval('I assert these exact correspondences; none independently establish identity.');
+        const clearResult=()=>{resultRoot.replaceChildren();assertMapping.input.checked=false;build.disabled=true;};
+        const rebuild=()=>{
+          clearResult();caseInputs.clear();activityInputs.clear();caseBox.replaceChildren(el('h4','Linked case correspondence'));activityBox.replaceChildren(el('h4','Activity correspondence'));
+          const m=Object.fromEntries([...sourceInputs].map(([k,v])=>[k,v.value]));
+          if(Object.values(m).some(v=>!v)||new Set(Object.values(m)).size!==sourceInputs.size){caseBox.append(el('p','Choose distinct later sources first.'));return;}
+          for(const g of catalog.original_groups){
+            const shape=Object.fromEntries(Object.entries(g.source_counts).map(([k,v])=>[m[k],v]));
+            const candidates=catalog.later_groups.filter(x=>x.basis===g.basis&&Object.keys(shape).length===Object.keys(x.source_counts).length&&Object.entries(shape).every(([k,v])=>x.source_counts[k]===v));
+            const input=makeSelect(g.linked_case_id+' · '+g.event_count+' original events',candidates.map(x=>[x.linked_case_id,x.linked_case_id+' · '+x.event_count+' later events']));
+            caseInputs.set(g.linked_case_id,input.s);input.s.onchange=clearResult;caseBox.append(input.l);
+          }
+          for(const sel of catalog.required_selectors){
+            const target=m[sel.job_id],source=catalog.original_sources.find(x=>x.job_id===sel.job_id);
+            const l=el('label',sel.job_id+' / '+sel.activity),i=el('input');i.type='text';i.maxLength=160;
+            const key=JSON.stringify([sel.job_id,sel.activity]);
+            if(source.activity_mode==='labels'){i.value=sel.activity;i.readOnly=true;}
+            else {const observed=makeSelect('Observed later activities in '+target,(catalog.later_activities[target]||[]).map(x=>[x.activity,x.activity+' · '+x.count+' observations']));
+              observed.s.onchange=()=>{i.value=observed.s.value;clearResult();};activityBox.append(observed.l);i.placeholder='Choose or explicitly enter an absent A_ code';}
+            i.oninput=clearResult;l.append(i);activityInputs.set(key,i);activityBox.append(l);
+          }
+        };
+        const build=btn('Build and preview exact comparison',async()=>{
+          if(!assertMapping.input.checked)throw Error('Approve correspondence first.');
+          const jobs=[...sourceInputs].map(([before,s])=>({before,after:s.value}));
+          const cases=[...caseInputs].map(([before,s])=>({before,after:s.value}));
+          const selectors=[...activityInputs].map(([key,i])=>{const [before_job,before_activity]=JSON.parse(key);return {before_job,before_activity,after_job:sourceInputs.get(before_job).value,after_activity:i.value};});
+          if(jobs.some(x=>!x.after)||cases.some(x=>!x.after)||selectors.some(x=>!x.after_activity))throw Error('Every mapping must be explicitly supplied.');
+          const built=await api(packetPath()+'/'+p.packet_id+'/reassessment-build',{...scope,expected_catalog_sha256:catalog.catalog_sha256,jobs,cases,selectors,confirm_case_and_selector_correspondence:true});
+          const r=built.report;
+          resultRoot.replaceChildren(el('h4','Exact later-sample outcomes'),el('p',r.interpretation),table(Object.entries(r.summary)),el('p','Review digest: '+r.reassessment_sha256));
+          for(const row of r.rows)resultRoot.append(table([['Rule',row.rule_id],['Baseline',row.baseline_status],['Later',row.subsequent_status],['Reason',row.subsequent_reason]]));
+          const exact=approval('I approve recording and downloading this exact report.'),sample=approval('I understand the sample does not establish correction, causation or completeness.');
+          const save=btn('Record guided reassessment',async()=>{
+            if(!exact.input.checked||!sample.input.checked)throw Error('Approve exact report first.');
+            const r=await api(packetPath()+'/'+p.packet_id+'/reassessment-record',{...built.request,expected_reassessment_sha256:built.report.reassessment_sha256,confirm_record_reassessment:true,confirm_sample_only:true});
+            const url=URL.createObjectURL(new Blob([JSON.stringify(r.report,null,2)],{type:'application/json'}));try{const a=el('a');a.href=url;a.download='owg-followup-reassessment-report.json';a.click();}finally{URL.revokeObjectURL(url);}
+            active=r.queue;await loadPage(0,true);$('status').textContent='Guided reassessment recorded. Remediation remains unverified.';
+          });save.disabled=true;exact.input.onchange=sample.input.onchange=()=>save.disabled=busy||!exact.input.checked||!sample.input.checked;
+          resultRoot.append(exact.l,sample.l,save);
+        });build.disabled=true;assertMapping.input.onchange=()=>build.disabled=busy||!assertMapping.input.checked;
+        sourceBox.append(el('h4','Source correspondence'));
+        for(const s of catalog.original_sources){
+          const options=catalog.source_candidates[s.job_id].map(id=>{const x=catalog.later_sources.find(y=>y.job_id===id);return [id,id+' · '+x.provider+' · '+x.event_count+' events'];});
+          const input=makeSelect(s.job_id+' · '+s.provider,options);sourceInputs.set(s.job_id,input.s);input.s.onchange=rebuild;sourceBox.append(input.l);
+        }
+        mappingRoot.append(el('p','Candidate digest: '+catalog.catalog_sha256),sourceBox,caseBox,activityBox,assertMapping.l,build);rebuild();
+      });
+      discover.disabled=true;baselineFile.i.onchange=laterFile.i.onchange=inspect.input.onchange=()=>{resetGuided();discover.disabled=busy||!baselineFile.i.files[0]||!laterFile.i.files[0]||!inspect.input.checked;};
+      guided.append(baselineFile.l,laterFile.l,inspect.l,discover,mappingRoot,resultRoot);
+      review.append(guided,template,label,consent.l,preview,report);
+      for(const receipt of p.reassessment_receipts||[])review.append(el('p','Recorded comparison digest: '+receipt.reassessment_sha256+' · '+new Date(receipt.recorded_at*1000).toLocaleString()));
+      a.append(review);
+    }
+    nodes.push(a);
+  }
+  $('followupPackets').replaceChildren(...(nodes.length?nodes:[el('p','No follow-up packets in this queue.')]));
+}
+$('followupRefresh').onclick=()=>action(()=>loadPage(0,false));
+$('followupPreview').onclick=()=>action(async()=>{
+  resetFollowupPlan();
+  const payload={expected_queue_revision:active.revision,items:[...selected.values()].map(i=>({item_id:i.item_id,expected_revision:i.revision}))};
+  const plan=await api(packetPath()+'/preview',payload);followupPlan=plan;
+  const root=$('followupPlan');
+  root.append(el('h3','Exact proposed follow-up'),el('p','Plan SHA-256: '+plan.plan_sha256));
+  for(const i of plan.items)root.append(table([['Rule',i.rule_id],['Linked case',i.linked_case_id],['Disposition',i.disposition],['Requested action',i.requested_action]]));
+  const review=approval('I approve these exact internal work requests.'),noExec=approval('I understand no external execution or remediation is authorized.');
+  const b=btn('Create reviewed follow-up packet',async()=>{
+    if(!review.input.checked||!noExec.input.checked||followupPlan!==plan)throw Error('Review this exact plan first.');
+    const result=await api(packetPath(),{...payload,expected_plan_sha256:plan.plan_sha256,confirm_followup_request:true,confirm_no_execution_authority:true});
+    active=result.queue;await loadPage(0,true);$('status').textContent='Follow-up requested: '+result.packet.packet_id;
+  });b.disabled=true;review.input.onchange=noExec.input.onchange=()=>b.disabled=busy||!review.input.checked||!noExec.input.checked;
+  root.append(review.l,noExec.l,b);
+});
+$('delete').onclick=()=>action(async()=>{if(!active||!$('deleteConfirm').checked)throw Error('Explicit deletion approval required.');await api(base+'/'+active.queue_id+'/delete',{expected_revision:active.revision,confirm_delete:true});await load();$('status').textContent='Review queue deleted; publications unchanged.';});
+window.addEventListener('pagehide',clear);window.addEventListener('pageshow',()=>{if(!valid())clear();});(async()=>{if(!token||!org){clear();return;}try{const me=await api('/v1/admin/auth/me');if(!me.is_owner)throw Error('Gateway owner approval required');$('identity').textContent='Organization: '+org+' · Owner';$('work').hidden=false;await action(load);}catch(e){clear();$('status').textContent=e.message;}})();
+})();
+</script></body></html>
