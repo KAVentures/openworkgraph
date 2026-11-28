@@ -99,6 +99,41 @@ const path=require('node:path');
   assert.notEqual(moved.log.log_id,first.log.log_id);
   assert.equal(moved.calibration.calibrated_cases,2);
   assert.equal(moved.scenario.activities.Close.resources,2);
+  // Use an actual capacity-grid response, then run a browser-only finite review.
+  const sourceLog=moved.log.log_id;
+  const gridInput={format:'openworkgraph.simulation-capacity-grid.v1',baseline:{cases:50,seed:7,distribution:'fixed'},
+    designs:[{label:'Alternative',activities:{Close:{resources:2}}}],arrival_rates_per_hour:[0.5,1],
+    replications:2,target:{cycle_time_minutes:10000,minimum_completion_share:.01}};
+  const grid=await page.evaluate(async({sourceLog,gridInput})=>{
+    const response=await fetch('/v1/event-logs/'+encodeURIComponent(sourceLog)+'/simulation/capacity-grid',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(gridInput)});
+    if(!response.ok)throw Error(await response.text());return response.json();
+  },{sourceLog,gridInput});
+  const [planner]=await Promise.all([page.context().waitForEvent('page'),panel.getByRole('link',{name:'Plan staffing changes across tested demand periods'}).click()]);
+  const plannerErrors=[];planner.on('pageerror',e=>plannerErrors.push(e.message));await planner.waitForLoadState('load');
+  const network=[];planner.on('request',req=>network.push(req.url()));
+  await planner.locator('#source').setInputFiles(file('capacity.json',grid));
+  await planner.locator('#status').filter({hasText:'Source grid loaded'}).waitFor();
+  await planner.locator('#currency').fill('SEK');await planner.locator('#target').fill('1');
+  await planner.getByRole('spinbutton',{name:'Baseline hourly minor-unit cost'}).fill('100');
+  await planner.getByRole('spinbutton',{name:'Alternative hourly minor-unit cost'}).fill('200');
+  await planner.locator('#cap').fill('1');await planner.locator('#fee').fill('0');
+  await planner.getByRole('combobox',{name:'Period 1 demand rate'}).selectOption('0.5');
+  await planner.getByRole('spinbutton',{name:'Period 1 duration minutes'}).fill('60');
+  assert.equal(await planner.locator('#run').isDisabled(),true);
+  await planner.locator('#confirm').check();await planner.locator('#run').click();
+  await planner.locator('#status').filter({hasText:'Finite planning review complete'}).waitFor();
+  const [planFile]=await Promise.all([planner.waitForEvent('download'),planner.locator('#download').click()]);
+  const plan=JSON.parse(await fs.readFile(await planFile.path(),'utf8'));
+  assert.equal(plan.format,'openworkgraph.capacity-transition-plan.v1');
+  assert.equal(plan.queue_carryover_simulated,false);assert.equal(plan.execution_authorized,false);
+  assert.equal(plan.period_eligibility[0].designs.length,2);
+  assert.equal(network.length,0);
+  await planner.setViewportSize({width:390,height:844});
+  assert.equal(await planner.evaluate(()=>document.body.scrollWidth>window.innerWidth),false);
+  await planner.locator('#fee').fill('1');assert.equal(await planner.locator('#download').isDisabled(),true);
+  assert.equal(await planner.locator('#results').textContent(),'');
+  await planner.locator('#clear').click();assert.equal(await planner.locator('#source').inputValue(),'');
+  assert.deepEqual(plannerErrors,[]);await planner.close();
   await page.setViewportSize({width:390,height:844});assert.ok(await panel.getByRole('button',{name:'Compare reports'}).isVisible());
   assert.deepEqual(errors,[]);console.log('Simulation report comparison and replay passed, including input review, exact download, report rerun, edited inputs and the original form.');
  }finally{if(browser)await browser.close();server.kill('SIGTERM');await Promise.race([new Promise(r=>server.once('exit',r)),new Promise(r=>setTimeout(r,5000))]);if(server.exitCode===null)server.kill('SIGKILL');await fs.rm(scratch,{recursive:true,force:true});}

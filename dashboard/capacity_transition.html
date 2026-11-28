@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Demand-period capacity planning · OpenWorkGraph</title>
+<style>
+:root{color-scheme:light dark;font:16px/1.5 system-ui,sans-serif}
+body{margin:0;padding:1rem;background:#fff;color:#17212e}main{max-width:76rem;margin:auto}h1{font-size:1.75rem}h2{font-size:1.25rem}
+p{max-width:78ch}fieldset{border:1px solid #8794a2;border-radius:.5rem;padding:1rem;margin:1rem 0;min-width:0}
+label{display:block;margin:.6rem 0}input,select,button{font:inherit;max-width:100%;box-sizing:border-box}
+input[type=file]{display:block;margin-top:.35rem}input[type=number]{width:13rem}input[type=text]{width:8rem}
+button{padding:.45rem .75rem;margin:.3rem .4rem .3rem 0;border:1px solid #637186;border-radius:.35rem;background:#f4f6f9;color:#17212e}
+button:disabled{opacity:.55}button:focus-visible,input:focus-visible,select:focus-visible,summary:focus-visible{outline:3px solid #1169c6;outline-offset:3px}
+.table-wrap{overflow:auto;max-width:100%;margin:.5rem 0 1rem}table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}th,td{text-align:left;padding:.45rem;border-bottom:1px solid #aeb8c2;vertical-align:top}th{background:#edf1f6}code{overflow-wrap:anywhere}details{margin:.75rem 0}summary{cursor:pointer}
+.period{display:flex;flex-wrap:wrap;gap:.5rem;align-items:end;border-bottom:1px solid #aeb8c2;padding:.4rem 0}.period label{margin:0}.period input{width:7rem}
+[hidden]{display:none!important}
+@media(prefers-color-scheme:dark){body{background:#151a22;color:#e8ecf2}button{background:#293343;color:#f2f5fa}th{background:#293343}th,td,.period{border-color:#5b697b}}
+</style>
+<script defer src="./capacity_transition.js"></script><script defer src="./capacity_transition_ui.js"></script>
+</head><body><main>
+<h1>Demand-period capacity planning</h1>
+<p>Reuse one existing OWG capacity-grid report to explore a sequence of hypothetical demand periods. Find the minimum declared cost among tested designs that pass the reviewed deadline target in every seed, subject to a switch limit and optional budget.</p>
+<p>Independent demand runs do not simulate transitions, carryover queues, shifts, training, or availability. This is a finite scenario calculation, not an actual staffing schedule, observed savings, or certified service guarantee. All files and calculations stay in this browser.</p>
+<fieldset><legend>Source report</legend><label for="source">Capacity-grid or multi-SLA capacity JSON export<input id="source" type="file" accept=".json,application/json"></label><button id="clear" type="button">Clear report and assumptions</button><div id="basis"></div></fieldset>
+<fieldset id="settings" hidden><legend>Declare the planning assumptions</legend>
+<p>Only exact tested demand rates are available. Costs are whole minor currency units per staffed hour (for SEK, use öre); each switch can have a separate modeled cost. No costs or demand frequencies are inferred.</p>
+<label>Currency code <input id="currency" type="text" maxlength="3" placeholder="SEK"></label>
+<label>Minimum completion share (%) <input id="target" type="number" min=".01" max="100" step=".01"></label>
+<div id="costs"></div>
+<label>Initial design <select id="initial"></select></label>
+<label>Maximum number of switches <input id="cap" type="number" min="0" max="32" step="1"></label>
+<label>Cost per switch (minor units) <input id="fee" type="number" min="0" max="1000000000" step="1"></label>
+<label>Optional total budget (minor units) <input id="budget" type="number" min="0" max="100000000000000" step="1"></label>
+<h2>Ordered demand periods</h2><div id="periods"></div><button id="add" type="button">Add demand period</button>
+<label><input id="confirm" type="checkbox"> I reviewed the exact source report, assumed costs, target, demand sequence and switching assumptions. I understand the report is unsigned and transitions are not simulated.</label>
+<button id="run" type="button" disabled>Calculate finite plan</button><button id="download" type="button" disabled>Download planning evidence JSON</button>
+</fieldset><p id="status" role="status" aria-live="polite"></p><div id="results"></div>
+</main></body></html>

@@ -1,0 +1,47 @@
+name: capacity-transition-acceptance
+on:
+  pull_request:
+    paths:
+      - "dashboard/capacity_transition*"
+      - "dashboard/simulation_report_compare.js"
+      - "server/capacity_transition_routes.py"
+      - "tests/test_capacity_transition_contract.py"
+      - "tests/js/capacity_transition.test.mjs"
+      - "tests/browser/simulation_report_compare.cjs"
+      - ".github/workflows/capacity-transition-acceptance.yml"
+  push:
+    branches: ["main"]
+    paths:
+      - "dashboard/capacity_transition*"
+      - "dashboard/simulation_report_compare.js"
+      - "server/capacity_transition_routes.py"
+      - "tests/test_capacity_transition_contract.py"
+      - "tests/js/capacity_transition.test.mjs"
+      - "tests/browser/simulation_report_compare.cjs"
+      - ".github/workflows/capacity-transition-acceptance.yml"
+permissions:
+  contents: read
+jobs:
+  capacity-transition-acceptance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install local app and tests
+        run: python -m pip install -e ".[dev,gateway]"
+      - name: Verify the exact finite planning engine
+        run: node --test tests/js/capacity_transition.test.mjs
+      - name: Verify actual capacity report and static delivery contract
+        run: python -m pytest -q tests/test_capacity_transition_contract.py
+      - name: Install isolated Chromium
+        run: |
+          npm install --prefix "$RUNNER_TEMP/owg-browser" playwright@1.64.1
+          node "$RUNNER_TEMP/owg-browser/node_modules/playwright/cli.js" install --with-deps chromium || node "$RUNNER_TEMP/owg-browser/node_modules/playwright/cli.js" install chromium
+      - name: Exercise original simulation comparison, replay, and local planning
+        run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/simulation_report_compare.cjs

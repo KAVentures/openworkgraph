@@ -87,7 +87,8 @@
       finally{if(current===generation&&panel.isConnected)run.disabled=false;}
     };
     csv.onclick=()=>{if(!reports.length)return;const url=URL.createObjectURL(new Blob([toCsv(reports)],{type:'text/csv'}));const a=el('a');a.href=url;a.download='owg-simulation-comparison.csv';document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);};
-    panel.append(heading,note,label,run,csv,status,output);anchor.insertAdjacentElement('afterend',panel);
+    const capacityLink=el('a','Plan staffing changes across tested demand periods');capacityLink.href='/capacity-transition';capacityLink.target='_blank';capacityLink.rel='noopener noreferrer';
+    panel.append(heading,note,capacityLink,label,run,csv,status,output);anchor.insertAdjacentElement('afterend',panel);
   }
   function mountServiceReview(){
     const anchor=document.getElementById('owgEventLogSimLoad');

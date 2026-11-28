@@ -67,6 +67,8 @@ from .db import DATA_DIR
 from .local_auth import dashboard_session_valid
 
 router = APIRouter()
+from .capacity_transition_routes import router as capacity_transition_router
+router.include_router(capacity_transition_router)
 XLSX_MAX_BYTES = 64 * 1024 * 1024
 SQLITE_MAX_BYTES = 256 * 1024 * 1024
 _SCRIPT = Path(__file__).resolve().parents[1] / "dashboard" / "event_log_workspace.js"
