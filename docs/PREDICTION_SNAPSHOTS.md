@@ -117,4 +117,10 @@ estimates and absent pairs are disclosed. No new stored data, threshold
 selection, execution authorization, or statistical confidence claim is added.
 
 
+## Prospective capacity-matched triage policy review
+
+Freeze and later score a capacity-limited ranking against a same-capacity naive
+baseline. See [prospective triage policies](PROSPECTIVE_TRIAGE_POLICIES.md).
+
+
 For censoring-aware quantile and fixed-bin outcome calibration over exact frozen populations, see [Prospective calibration review](PROSPECTIVE_CALIBRATION_REVIEW.md).

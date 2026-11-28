@@ -46,6 +46,12 @@ def _connect() -> sqlite3.Connection:
         snapshot_id TEXT PRIMARY KEY, log_id TEXT NOT NULL, created_at TEXT NOT NULL, as_of TEXT NOT NULL,
         settings TEXT NOT NULL, summary TEXT NOT NULL, cases TEXT NOT NULL)""")
     conn.execute("CREATE INDEX IF NOT EXISTS snapshots_by_log ON snapshots(log_id)")
+    conn.execute("""CREATE TABLE IF NOT EXISTS triage_policies (
+        policy_id TEXT PRIMARY KEY, log_id TEXT NOT NULL, snapshot_id TEXT NOT NULL,
+        created_at TEXT NOT NULL, snapshot_sha256 TEXT NOT NULL,
+        policy_sha256 TEXT NOT NULL, definition TEXT NOT NULL,
+        UNIQUE(log_id,snapshot_id,policy_sha256))""")
+    conn.execute("CREATE INDEX IF NOT EXISTS triage_policies_by_snapshot ON triage_policies(log_id,snapshot_id)")
     return conn
 
 
@@ -118,6 +124,7 @@ def listing(log_id: str) -> dict[str, Any]:
 def delete(log_id: str, snapshot_id: str) -> dict[str, Any]:
     _row(log_id, snapshot_id)
     with _LOCK, closing(_connect()) as db, db:
+        db.execute("DELETE FROM triage_policies WHERE log_id = ? AND snapshot_id = ?", [log_id, snapshot_id])
         db.execute("DELETE FROM snapshots WHERE log_id = ? AND snapshot_id = ?", [log_id, snapshot_id])
     return {"deleted": True, "snapshot_id": snapshot_id}
 
@@ -213,6 +220,7 @@ def evaluate(log_id: str, snapshot_id: str) -> dict[str, Any]:
 
 def erase_log(log_id: str) -> None:
     with _LOCK, closing(_connect()) as db, db:
+        db.execute("DELETE FROM triage_policies WHERE log_id = ?", [log_id])
         db.execute("DELETE FROM snapshots WHERE log_id = ?", [log_id])
 
 
