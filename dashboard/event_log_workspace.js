@@ -2692,16 +2692,18 @@
         update.disabled=!filterOn();
         update.onclick=async()=>{
           if(!window.confirm('Replace the saved filter “'+set.name+'” with the current active filter?'))return;
-          update.disabled=true;
+          update.disabled=true;list.inert=true;preview.replaceChildren();
+          message.textContent='Updating saved filter…';
           try{
             const body={name:set.name,cohort:globalCohort(),case_type:state.caseType||null,
               expected_definition_sha256:set.definition_sha256};
             await api(base()+'/'+encodeURIComponent(set.set_id)+'/update',{
               method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
             if(generation!==state.generation)return;
-            message.textContent='Updated "'+set.name+'" from the active filter.';await refresh();
+            await refresh();
+            if(generation===state.generation)message.textContent='Updated "'+set.name+'" from the active filter.';
           }catch(error){if(generation===state.generation){message.textContent=error.message;await refresh();}}
-          finally{if(generation===state.generation&&update.isConnected)update.disabled=!filterOn();}
+          finally{list.inert=false;if(generation===state.generation&&update.isConnected)update.disabled=!filterOn();}
         };
         const del=button('Delete','secondary');del.setAttribute('aria-label','Delete saved filter '+set.name);
         del.onclick=async()=>{try{await api(base()+'/'+encodeURIComponent(set.set_id)+'/delete',{method:'POST'});message.textContent='Saved filter deleted.';await refresh();}catch(error){message.textContent=error.message;}};
@@ -4370,6 +4372,97 @@
   }
   const OBJECT_ARC_ISSUES={missing_object:'No object of the type',several_objects_on_single_arc:'Several objects where one is expected',type_without_arc:'Type involved without an arc'};
   // Plain reading of an object-centric conformance result.
+  function objectStateCheckSection(){
+    const box=el('div');box.id='owgObjectStateCheck';
+    box.append(el('h4','Event-time object state check'),el('p','Check recorded object attribute values at each event of an exact stored activity. This uses the whole retained object log, not the case filter or activity mappings. Missing, future-only and conflicting values are unknown; recorded values do not verify policy compliance or business state.','muted'));
+    const activity=input('owgObjectStateActivity','text','Exact stored activity');activity.maxLength=400;
+    const types=(state.objectTypes||[]).map(t=>[t.object_type,t.object_type.trim()===t.object_type?t.object_type:JSON.stringify(t.object_type)]);
+    const objectType=select('owgObjectStateType',types);if(state.caseType&&types.some(([value])=>value===state.caseType))objectType.value=state.caseType;
+    const attribute=input('owgObjectStateAttribute','text','Exact attribute name');attribute.maxLength=400;
+    const operator=select('owgObjectStateOperator',[['eq','Equals'],['ne','Does not equal']]);
+    const value=input('owgObjectStateValue','text','Exact recorded value');value.maxLength=8192;
+    const quantifier=select('owgObjectStateQuantifier',[['all','All linked objects'],['any','Any linked object']]);
+    const exact=input('owgObjectStateExactQualifier','checkbox'),qualifier=input('owgObjectStateQualifier','text','Exact qualifier');qualifier.maxLength=160;
+    const qualifierField=field('Qualifier (empty is a valid exact label)',qualifier);show(qualifierField,false);
+    const run=button('Check recorded state');run.id='owgObjectStateRun';
+    const form=el('div',null,'row');form.style.alignItems='end';
+    form.append(field('Stored activity',activity),field('Object type',objectType),field('Attribute',attribute),field('Comparison',operator),field('Expected value (empty is allowed)',value),field('Match',quantifier),field('Match an exact event-link qualifier',exact),qualifierField,run);
+    const notice=el('div',null,'muted');notice.id='owgObjectStateStatus';notice.setAttribute('role','status');
+    const summary=el('div');summary.id='owgObjectStateSummary';
+    const resultFilter=select('owgObjectStateResultFilter',[['','All results'],['matched','Matched'],['not_matched','Not matched'],['unknown','Unknown'],['no_linked_object','No linked object']]);
+    const resultControls=el('div',null,'row'),previous=button('Previous state results','secondary'),next=button('Next state results','secondary');
+    resultControls.append(field('Result status',resultFilter),previous,next);show(resultControls,false);
+    const results=el('div');results.id='owgObjectStateResults';
+    const witness=el('div');witness.id='owgObjectStateWitness';
+    box.append(form,notice,summary,resultControls,results,witness);
+    const generation=state.generation,logId=state.logId,base='/v1/event-logs/'+encodeURIComponent(logId)+'/object-state-check';
+    let turn=0,witnessTurn=0,settings=null,revision=null,offset=0,following=null;
+    const current=t=>generation===state.generation&&box.isConnected&&t===turn;
+    const clear=()=>{++turn;settings=null;revision=null;offset=0;following=null;run.disabled=false;notice.textContent='';summary.replaceChildren();results.replaceChildren();witness.replaceChildren();show(resultControls,false);};
+    form.addEventListener('input',clear);form.addEventListener('change',clear);
+    exact.addEventListener('change',()=>show(qualifierField,exact.checked));
+    const statusLabel={matched:'Matched',not_matched:'Not matched',unknown:'Unknown',no_linked_object:'No linked object',missing_history:'No timed history',before_first_value:'Before first value',ambiguous_value:'Conflicting values'};
+    const read=()=>{
+      for(const [name,entry] of [['Activity',activity],['Object type',objectType],['Attribute',attribute]]){
+        if(!entry.value.trim())throw new Error('Enter '+name.toLowerCase()+'.');
+        if(Array.from(entry.value).length>200)throw new Error(name+' must have at most 200 characters.');
+      }
+      if(Array.from(value.value).length>4096)throw new Error('Expected value must have at most 4,096 characters.');
+      if(exact.checked&&Array.from(qualifier.value).length>80)throw new Error('Qualifier must have at most 80 characters.');
+      return {activity:activity.value,object_type:objectType.value,attribute:attribute.value,expected_value:value.value,
+        operator:operator.value,quantifier:quantifier.value,...(exact.checked?{event_qualifier:qualifier.value}:{})};
+    };
+    function inspectWitnesses(item,spec,filter,basis,reviewTurn){
+      const ticket=++witnessTurn,active=()=>current(reviewTurn)&&ticket===witnessTurn;
+      const heading=el('h4','Object evidence for event '+item.event_id);heading.tabIndex=-1;
+      const status=el('div',null,'muted');status.setAttribute('role','status');
+      const rows=el('div'),nav=el('div',null,'row'),prev=button('Previous objects','secondary'),nextPage=button('Next objects','secondary');nav.append(prev,nextPage);
+      witness.replaceChildren(heading,status,rows,nav);heading.focus();
+      const cursors=[null];let index=0,following=null;
+      async function page(target){
+        prev.disabled=nextPage.disabled=true;rows.replaceChildren();status.textContent='Loading object evidence…';
+        const payload={...spec,event_id:item.event_id,expected_revision:basis,witness_limit:50,
+          ...(filter?{status:filter}:{}),...(cursors[target]!==null?{after:cursors[target]}:{})};
+        try{
+          const response=await (await api(base+'/witnesses',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)})).json();
+          if(!active())return;
+          index=target;following=response.next_after;
+          const start=index*50;status.textContent=response.total_objects?'Showing '+(start+1).toLocaleString()+'–'+(start+response.witnesses.length).toLocaleString()+' of '+Number(response.total_objects).toLocaleString()+' linked objects.':'No objects of the selected type are linked to this event.';
+          if(response.witnesses.length)rows.replaceChildren(table(['Object ID','Result','Recorded from (UTC)','Value'],response.witnesses.map(w=>[w.object_id,statusLabel[w.status]||w.status,w.valid_from||'—',w.recorded_value===null?'—':JSON.stringify(w.recorded_value)])));
+          prev.disabled=index===0;nextPage.disabled=following===null;
+        }catch(error){if(active())status.textContent=error.message;}
+      }
+      prev.onclick=()=>page(index-1);nextPage.onclick=()=>{cursors[index+1]=following;page(index+1);};page(0);
+    }
+    async function load(spec,start,filter,pin){
+      const request=++turn;run.disabled=true;resultFilter.disabled=previous.disabled=next.disabled=true;
+      notice.textContent='Checking recorded state…';summary.replaceChildren();results.replaceChildren();witness.replaceChildren();
+      try{
+        const payload={...spec,offset:start,limit:30,...(filter?{status:filter}:{}),...(pin!==null?{expected_revision:pin}:{})};
+        const response=await (await api(base,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)})).json();
+        if(!current(request))return;
+        settings=spec;revision=response.revision;offset=start;following=response.next_offset;
+        notice.textContent='Checked '+Number(response.selected_events).toLocaleString()+' recorded events; '+Number(response.matching_events).toLocaleString()+' match the result filter.';
+        summary.replaceChildren(table(['Matched','Not matched','Unknown','No linked object'],[[...['matched','not_matched','unknown','no_linked_object'].map(key=>Number(response.event_counts[key]).toLocaleString())]]),
+          ...(response.selected_events===0?[el('p','No events have this stored activity. This does not establish compliance.','muted')]:[]),
+          el('p','Values at the event timestamp apply immediately. 1970-01-01 denotes an initial value without a known time. Counts describe retained data, not verified source completeness or compliance.','muted'));
+        const headers=['Event','Timestamp (UTC)','Result','Linked objects','Matched','Not matched','Unknown','Evidence'];
+        results.replaceChildren(response.rows.length?table(headers,response.rows.map(item=>{
+          const inspect=button('View object evidence','secondary');inspect.setAttribute('aria-label','View object evidence for event '+JSON.stringify(item.event_id));
+          inspect.onclick=()=>inspectWitnesses(item,spec,filter,response.revision,request);
+          return [item.event_id,item.at,statusLabel[item.status]||item.status,Number(item.linked_objects).toLocaleString(),Number(item.matched_objects).toLocaleString(),Number(item.not_matched_objects).toLocaleString(),Number(item.unknown_objects).toLocaleString(),inspect];
+        })):el('p','No events match this result filter.','muted'));
+        show(resultControls,true);resultFilter.disabled=false;previous.disabled=offset===0;next.disabled=following===null;
+      }catch(error){if(current(request)){settings=null;revision=null;notice.textContent=error.message;show(resultControls,false);}}
+      finally{if(current(request))run.disabled=false;}
+    }
+    run.onclick=()=>{try{const spec=read();resultFilter.value='';load(spec,0,'',null);}catch(error){notice.textContent=error.message;}};
+    resultFilter.onchange=()=>{if(settings)load(settings,0,resultFilter.value,revision);};
+    previous.onclick=()=>{if(settings)load(settings,Math.max(0,offset-30),resultFilter.value,revision);};
+    next.onclick=()=>{if(settings&&following!==null)load(settings,following,resultFilter.value,revision);};
+    return box;
+  }
+
   function objectModelText(r){
     const s=r.summary,ratio=(n,d)=>Number(n).toLocaleString()+' of '+Number(d).toLocaleString();
     const deviating=t=>Object.entries({...t.missing_tokens_by_activity}).slice(0,3).map(([a,n])=>a+' ('+n+')').join(', ')||'—';
@@ -5901,7 +5994,8 @@
       if(state.caseType)pick.value=state.caseType;
       const touching=g.activities_touching_several_types||[];
       shared.replaceChildren(el('p','Showing '+g.object_types.length+' of '+g.object_type_count+' object types.','muted'),...(touching.length?[el('h4','Activities shared by several object types'),table(['Activity','Object types','Events'],touching.slice(0,15).map(a=>[a.activity,a.object_types.join(', '),Number(a.events).toLocaleString()]))]:[]),
-        ...((g.object_types||[]).length>1||state.objectTypes.length>1||g.log&&(g.log.object_relationships||['ocel','ocelxml'].includes(g.log.source_format))?[objectRuleSection(g),objectModelSection()]:[]));
+        ...((g.object_types||[]).length>1||state.objectTypes.length>1||g.log&&(g.log.object_relationships||['ocel','ocelxml'].includes(g.log.source_format))?[objectRuleSection(g),objectModelSection()]:[]),
+        ...(g.log&&['ocel','ocelxml'].includes(g.log.source_format)?[objectStateCheckSection()]:[]));
       render();
     }).catch(error=>{if(current())out.replaceChildren(el('div',error.message,'muted'));});
     getJSON(logPath('object-flattening').replace(/\?.*$/,'')).then(f=>{if(current()){flat=f;renderFlat();}}).catch(()=>{});
