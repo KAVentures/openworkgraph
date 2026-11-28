@@ -1229,6 +1229,9 @@
     };
     card.append(row,resumeSection,auditSection,tools,planningFilters,status,counts,portfolioButton,portfolioHost,budgetScenarioButton,budgetScenarioHost,benefitOverlapButton,benefitOverlapHost,benefitReadinessButton,benefitReadinessHost,dependencyScheduleButton,dependencyScheduleHost,capacityButton,capacityHost,viewCount,list,comparison,detail);
     panel.appendChild(card);
+    const nativeSkillHost=el('div');card.appendChild(nativeSkillHost);
+    import('/native-skill-download.js').then(m=>m.mountNativeSkillDownload(nativeSkillHost,api))
+      .catch(()=>{nativeSkillHost.textContent='Native shadow skill preparation unavailable.';});
 
     let latestIdeas=[],refreshGeneration=0,resumeGeneration=0,auditGeneration=0,auditPageIndex=0,auditAbort=null;
     let loadedState=null,currentView=null;
