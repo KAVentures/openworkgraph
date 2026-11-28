@@ -15,7 +15,7 @@ export function mountAiOpportunityHandoff(host, post, onCreated, onStage){
   const summary=el('pre');summary.style.whiteSpace='pre-wrap';summary.style.overflowWrap='anywhere';
   const controls=[sources,proposal,title,description],order=el('ol');
   let generation=0,basis=null,busy=false,orderedSources=[];
-  let packetGeneration=0,preparedPacket=null,firstWorkflow=null,createdIdea=null,sourceInventory=null;
+  let packetGeneration=0,preparedPacket=null,firstWorkflow=null,createdIdea=null,sourceInventory=null,knowledgePanel=null;
   let generatedResult=null,selectedGenerated=false,trialPanel=null,evidencePicker=null,batchPanel=null,batchProposal=null,compatPanel=null,compatProposal=null,checkpointPanel=null;
   const budget=el('select');
   for(const [value,label] of [[131072,'128 KiB'],[524288,'512 KiB'],[2097152,'2 MiB'],[8388608,'8 MiB']]){
@@ -29,7 +29,7 @@ export function mountAiOpportunityHandoff(host, post, onCreated, onStage){
   const packetStatus=el('div','Choose original evidence files and a context byte budget. Nothing is sent to an AI.');
   packetStatus.setAttribute('role','status');packetStatus.setAttribute('aria-live','polite');
   function invalidatePacket(){
-    packetGeneration++;preparedPacket=null;downloadPacket.disabled=downloadGuide.disabled=downloadCompact.disabled=downloadCompactGuide.disabled=true;
+    packetGeneration++;preparedPacket=null;knowledgePanel?.invalidate();downloadPacket.disabled=downloadGuide.disabled=downloadCompact.disabled=downloadCompactGuide.disabled=true;
     contextMode.value='original';clearLocal();trialPanel?.invalidate();batchPanel?.invalidate();compatPanel?.invalidate();
     packetStatus.textContent='Evidence selection or budget changed. Prepare a new packet.';firstWorkflow?.refresh();
   }
@@ -96,7 +96,7 @@ export function mountAiOpportunityHandoff(host, post, onCreated, onStage){
   }
   function acceptPrepared(response){
     const compact=response.compaction,compactDownload=response.compact_download;
-      preparedPacket=response;firstWorkflow?.refresh();
+      preparedPacket=response;firstWorkflow?.refresh();knowledgePanel?.refresh();
       packetStatus.textContent='Packet ready: '+response.event_count+' events, '+response.coverage_gap_count+' coverage gaps, '+response.packet_bytes+' bytes. SHA-256: '+response.packet_sha256+'. Review before sharing with your chosen AI. No upload or inference occurred.'+(compact?(compact.available?' Optional compact representation saves '+compact.bytes_saved+' evidence bytes; token savings unmeasured.':' Compaction does not reduce evidence bytes.'):'')+(compactDownload?' Compact external handoff saves '+compactDownload.total_bytes_saved+' combined evidence/instruction bytes. Use the matching compact instructions; token savings and model quality remain unverified.':'');
   }
   prepare.onclick=async()=>{
@@ -233,7 +233,7 @@ export function mountAiOpportunityHandoff(host, post, onCreated, onStage){
     busy=value;for(const n of controls)n.disabled=value;preview.disabled=value;
     budget.disabled=prepare.disabled=value;downloadPacket.disabled=downloadGuide.disabled=value||!preparedPacket;
     downloadCompact.disabled=downloadCompactGuide.disabled=value||!preparedPacket?.compact_download;
-    confirmation.disabled=value||!basis;commit.disabled=value||!basis||!confirmation.checked;stage.disabled=value||!basis||typeof onStage!=='function';renderOrder();refreshLocal();evidencePicker?.refresh();batchPanel?.refresh();compatPanel?.refresh();checkpointPanel?.refresh();firstWorkflow?.refresh();
+    confirmation.disabled=value||!basis;commit.disabled=value||!basis||!confirmation.checked;stage.disabled=value||!basis||typeof onStage!=='function';renderOrder();refreshLocal();evidencePicker?.refresh();batchPanel?.refresh();compatPanel?.refresh();checkpointPanel?.refresh();firstWorkflow?.refresh();knowledgePanel?.refresh();
   }
   preview.onclick=async()=>{
     if(busy)return;
@@ -286,13 +286,13 @@ export function mountAiOpportunityHandoff(host, post, onCreated, onStage){
     field('Model evidence representation',contextMode),field('Request JSON-object mode',localJsonMode),field('I authorize sending the selected evidence to this configured loopback model service',localConfirm),
     generate,localStatus,field('Generated proposal (unverified interpretation)',generatedText),useGenerated,saveProposal,saveReceipt,trialHost);
   refreshLocal();
-  const evidencePickerHost=el('div'),batchHost=el('div'),compatHost=el('div'),checkpointHost=el('div'),firstWorkflowHost=el('div'),inventoryHost=el('div');
+  const evidencePickerHost=el('div'),batchHost=el('div'),compatHost=el('div'),checkpointHost=el('div'),firstWorkflowHost=el('div'),inventoryHost=el('div'),knowledgeHost=el('div');
   const details=el('details');details.id='owgAiOpportunityHandoff';
   details.append(el('summary','Add an external AI proposal to the implementation portfolio'),
     el('p','Preparation and review stay on the local OWG server. The optional local model request sends selected evidence only when explicitly confirmed. Only your entered idea and structural lineage are retained by the pipeline. Nothing is approved or executed.'),
     firstWorkflowHost,evidencePickerHost,field('Original workflow evidence JSON files (ordered as in the portable packet)',sources),order,inventoryHost,
     el('p','Prepare a packet using the same ordered evidence below, or use an existing exact packet. The byte budget is not a token count. A too-small budget refuses rather than drops events. Download and inspect the files, then share only through an authorized local or cloud AI environment.'),
-    field('Context byte budget',budget),prepare,packetStatus,downloadPacket,downloadGuide,checkpointHost,
+    field('Context byte budget',budget),prepare,packetStatus,downloadPacket,downloadGuide,knowledgeHost,checkpointHost,
     el('p','Optional compact external handoff: download both matching files, inspect locally and share only with an authorized AI. Compact format is reversible, not redaction.'),downloadCompact,downloadCompactGuide,localSection,batchHost,compatHost,
     field('External AI proposal JSON',proposal),field('Human-reviewed opportunity title',title),
     field('Human-reviewed opportunity details',description),preview,status,summary,
@@ -317,6 +317,12 @@ export function mountAiOpportunityHandoff(host, post, onCreated, onStage){
     if(module)sourceInventory=module.mountSourceInventory(inventoryHost,{getFiles:()=>orderedSources.slice()});
     else inventoryHost.textContent='Source coverage inventory unavailable; existing packet preparation remains available.';
   });
+  import('/ai-implementation-knowledge-context.js').then(module=>{
+    knowledgePanel=module.mountKnowledgeContext(knowledgeHost,{
+      getState:()=>({busy,packet:preparedPacket,files:orderedSources.slice()}),
+      post,lock,download:downloadLocal
+    });
+  }).catch(()=>{knowledgeHost.textContent='Reviewed knowledge companion unavailable; original evidence handoff remains available.';});
   import('/ai-implementation-evidence-picker.js').then(module=>{
     evidencePicker=module.mountImplementationEvidencePicker(evidencePickerHost,{
       getBusy:()=>busy,lock,download:downloadLocal,onSelected:file=>{
