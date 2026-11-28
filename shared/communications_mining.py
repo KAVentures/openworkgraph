@@ -250,7 +250,7 @@ def _themes(texts: list[list[str]]) -> list[dict[str, Any]]:
 
 
 def analyze(messages: Iterable[Message], taxonomy: Any = None, *, learned: Any = None,
-            review_sample: int = 0) -> dict[str, Any]:
+            review_sample: int = 0, response_episode_settings: tuple | None = None) -> dict[str, Any]:
     """Aggregate an export.
 
     ``learned`` is an optional ``predict(text) -> {intent: probability}`` from a
@@ -277,7 +277,7 @@ def analyze(messages: Iterable[Message], taxonomy: Any = None, *, learned: Any =
     second_choice: Counter[str] = Counter()
     unclassified_words: list[list[str]] = []
     threads: dict[str, list[tuple[datetime | None, str, str]]] = defaultdict(list)
-    total = undated = 0
+    total = undated = unthreaded = 0
     events: list[tuple[str, str, datetime, str]] = []
     for message in messages:
         total += 1
@@ -347,6 +347,8 @@ def analyze(messages: Iterable[Message], taxonomy: Any = None, *, learned: Any =
             threads[message.thread].append((message.timestamp, message.direction, label))
             if message.timestamp:
                 events.append((message.thread, label, message.timestamp, message.direction or "unknown"))
+        else:
+            unthreaded += 1
     if not total:
         raise CommunicationsError("no messages found")
     classified = total - intent_counts["outbound reply"]
@@ -362,7 +364,13 @@ def analyze(messages: Iterable[Message], taxonomy: Any = None, *, learned: Any =
         if sum(1 for _, d, _ in items if d == "inbound") > 1:
             recontacts += 1
     shared_domains = {d: n for d, n in domains.most_common() if n >= MIN_DOMAIN_MESSAGES}
+    episode_report = {}
+    if response_episode_settings is not None:
+        from . import communications_response_episodes as episode
+        cutoff, deadlines = response_episode_settings
+        episode_report["response_episodes"] = episode.analyze(threads,cutoff=cutoff,deadlines=deadlines,unthreaded_messages=unthreaded)
     return {
+        **episode_report,
         "messages": total,
         "classified_messages": classified,
         # Shares are of inbound/undirected messages; outbound replies are counted but not classified.

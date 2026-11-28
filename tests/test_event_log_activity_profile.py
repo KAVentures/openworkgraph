@@ -60,3 +60,28 @@ def test_literal_start_and_end_labels_are_separate_from_boundaries():
         boundary = [row for row in rows if row.get("boundary")]
         assert actual == [{"activity": label, "times": 1, "share": 0.5, "median_hours": hours}]
         assert boundary == [{"activity": label, "times": 1, "share": 0.5, "median_hours": None, "boundary": True}]
+
+
+def test_profile_counts_ties_repeats_and_selected_cases():
+    rows = [
+        'case,activity,time',
+        'a,Open,2024-01-01T00:00:00Z',
+        'a,Check,2024-01-01T00:00:00Z',
+        'a,Check,2024-01-01T01:00:00Z',
+        'a,Done,2024-01-01T03:00:00Z',
+        'b,Open,2024-01-02T00:00:00Z',
+        'b,Check,2024-01-02T02:00:00Z',
+        'b,Done,2024-01-02T03:00:00Z',
+        'c,Open,2024-01-03T00:00:00Z',
+        'c,Done,2024-01-03T10:00:00Z',
+    ]
+    log = workspace.import_log(BytesIO('\n'.join(rows).encode()), name='ties', source_format='csv',
+        mapping={'case_column': 'case', 'activity_column': 'activity', 'timestamp_column': 'time'})['log_id']
+    report = ap.activity_profile(log, 'Check')
+    assert (report['cases'], report['cases_with_activity'], report['occurrences'], report['cases_repeating_it']) == (3, 2, 3, 1)
+    assert report['hours_from_case_start_to_first'] == {'median': 1.0, 'p90': 1.8}
+    assert report['case_hours']['without_activity'] == {'median': 10.0, 'p90': 10.0}
+    assert report['comes_after'][0] == {'activity': 'Open', 'times': 2, 'share': 0.6667, 'median_hours': 1.0}
+    filtered = ap.activity_profile(log, 'Check', cohort={'activity': 'Check'})
+    assert filtered['cases'] == 2 and filtered['case_hours']['without_activity'] == {'median': None, 'p90': None}
+    assert 'log' not in filtered and 'cohort' not in filtered  # preserve the original response contract

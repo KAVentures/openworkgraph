@@ -19,7 +19,7 @@
   function select(data){clear();selected=data;status=el('p');status.id='implementationStatus';status.setAttribute('role','status');host.append(el('h3','Implementation phase baseline and reports'),el('p','Review a phase baseline over the existing opportunity, then separately report costs, effort and remaining estimates. Reports stay human declarations. Frozen plans grant no spending or execution permission and do not enter benefit totals.'),button('Load implementation plan','implementationLoad',()=>work(load)),status);}
   function writable(){return !sourceStale&&view?.permissions.edit&&!selected.viewing_historical_revision&&!view.viewing_historical_revision;}
   function update(){if(baselineGroup)baselineGroup.disabled=!writable()||reportDirty.size>0;if(reportList)reportList.disabled=!writable()||!view?.artifact||baselineDirty;if(save)save.disabled=!writable()||!baseline||reportDirty.size>0||!baselineConfirm.checked;if(saveReports)saveReports.disabled=!writable()||!view?.artifact||baselineDirty||!reportDirty.size||!reportConfirm.checked;if(freeze)freeze.disabled=sourceStale||!view?.can_freeze||baselineDirty||reportDirty.size>0||!freezeConfirm.checked;if(exportButton)exportButton.disabled=sourceStale||!view?.artifact||!view.integrity_ok||baselineDirty||reportDirty.size>0;}
-  function changed(id){if(id)reportDirty.add(id);else baselineDirty=true;for(const box of [baselineConfirm,reportConfirm,freezeConfirm])if(box)box.checked=false;update();note('Unsaved changes. Review the exact baseline or human report and confirm sharing.');}
+  function changed(id){if(id)reportDirty.add(id);else baselineDirty=true;const history=host.querySelector('#implementationHistoryControls');if(history){history.remove();}for(const box of [baselineConfirm,reportConfirm,freezeConfirm])if(box)box.checked=false;update();note('Unsaved changes. Review the exact baseline or human report and confirm sharing.');}
   async function latestOpportunity(ok){const r=await call('/v1/human/processes/'+encodeURIComponent(selected.process.workflow_id)+'/opportunity');if(!ok())return null;if(!r.integrity_ok||!r.artifact?.data.assessment)throw new Error('Save a current opportunity assessment before planning phases.');return r.artifact;}
   async function load(ok,revision){const r=await call('/v1/human/processes/'+encodeURIComponent(selected.process.workflow_id)+'/implementation-plan'+(revision?'?revision='+revision:''));if(!ok())return;view=r;sourceStale=false;baseline=r.artifact?structuredClone(r.artifact.baseline):null;reports=new Map((r.artifact?.reports||[]).map(row=>[row.phase_id,structuredClone(row)]));baselineDirty=false;reportDirty.clear();render();note(!r.integrity_ok?'Plan integrity failed. An owner can erase its history.':r.artifact?'Opened implementation-plan revision '+r.artifact.revision+'.':'No phase baseline saved. Start from the current opportunity assessment.');}
   function input(value,type,change,max=120){const n=el('input');n.type=type;n.maxLength=max;n.value=value??'';n.disabled=!writable();n.oninput=()=>change(n.type==='checkbox'?n.checked:n.value);return n;}
@@ -37,6 +37,75 @@
      const n=input(report[key],type,value=>{report[key]=value===''?null:value;reports.set(phase.id,report);changed(phase.id);},40);n.setAttribute('aria-label',title+' '+phase.id);reportRow.append(label(title+' '+phase.id,n));}
     const completed=check('implementationCompleted_'+phase.id);completed.checked=report.completion_self_report_confirmed;completed.disabled=!writable();completed.onchange=()=>{report.completion_self_report_confirmed=completed.checked;reports.set(phase.id,report);changed(phase.id);};reportRow.append(label('I explicitly confirm this completion/cancellation self-report '+phase.id,completed));reportList.append(reportRow);
    }update();
+  }
+  function historyControls(){
+   const panel=el('details');panel.id='implementationHistoryControls';panel.append(el('summary','Implementation forecast history and calendar controls'));
+   const loadHistory=button('Load exact implementation history','implementationHistoryLoad',()=>work(async ok=>{
+    reset();const r=await call(base+'/history');if(!ok()||!panel.isConnected)return;
+    inventory=r;options(before,r.revisions.map(x=>[String(x.revision),'r'+x.revision+' · '+x.saved_at]));options(after,r.revisions.map(x=>[String(x.revision),'r'+x.revision+' · '+x.saved_at]));
+    before.value=String(r.revisions[0].revision);after.value=String(r.latest_revision);
+    review.disabled=r.revisions.length<2;message.textContent=r.revisions.length+' exact saved revisions. Select two ordered revisions and a review date.';
+   }));
+   const base='/v1/human/processes/'+encodeURIComponent(selected.process.workflow_id)+'/implementation-plan';
+   const before=el('select');before.id='implementationHistoryBefore';const after=el('select');after.id='implementationHistoryAfter';
+   const day=el('input');day.id='implementationHistoryDate';day.type='date';day.value=new Date().toISOString().slice(0,10);day.max=day.value;
+   const message=el('p');message.id='implementationHistoryStatus';message.setAttribute('role','status');
+   const out=el('div');out.id='implementationHistoryOutput';
+   let inventory=null,result=null;
+   const review=button('Compare exact implementation revisions','implementationHistoryCompare',()=>work(async ok=>{
+    clearReport();if(!inventory||!day.value||!day.checkValidity()||Number(before.value)>=Number(after.value)){message.textContent='Select ordered revisions and a valid UTC review date.';return;}
+    const r=await call(base+'/history/compare',{before_revision:Number(before.value),after_revision:Number(after.value),as_of_date:day.value,expected_history_sha256:inventory.history_sha256});
+    if(!ok()||!panel.isConnected)return;
+    if(r.history_sha256!==inventory.history_sha256||r.root_workflow_id!==selected.process.workflow_id)throw Error('Unexpected history review basis.');
+    result=r;draw(r);exportHistory.disabled=false;message.textContent='Exact saved history reviewed. Human reports remain unverified.';
+   }));
+   const exportHistory=button('Download implementation history review','implementationHistoryDownload',()=>{
+    if(!result||!panel.isConnected||sourceStale||baselineDirty||reportDirty.size)return;
+    const url=URL.createObjectURL(new Blob([JSON.stringify(result,null,2)],{type:'application/json'})),a=el('a');a.href=url;a.download='owg-implementation-history-review.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
+   });
+   function clearReport(){result=null;exportHistory.disabled=true;out.replaceChildren();}
+   function reset(){clearReport();inventory=null;review.disabled=true;before.replaceChildren();after.replaceChildren();}
+   for(const n of [before,after,day])n.oninput=()=>{clearReport();message.textContent='Review the changed selection again.';};
+   function grid(headers,rows){
+    const wrapper=el('div');wrapper.style.cssText='max-width:100%;overflow-x:auto';wrapper.tabIndex=0;
+    wrapper.setAttribute('role','region');wrapper.setAttribute('aria-label','Table: '+headers.join(', ').slice(0,120));
+    const t=el('table'),h=el('thead'),hr=el('tr'),b=el('tbody');for(const name of headers){const th=el('th',name);th.scope='col';hr.append(th);}h.append(hr);
+    for(const row of rows){const tr=el('tr');for(const v of row)tr.append(el('td',v??'Unknown'));b.append(tr);}t.append(h,b);wrapper.append(t);return wrapper;
+   }
+   function draw(r){
+    const c=r.comparison;
+    out.replaceChildren(el('h4','Saved implementation forecast history'),el('p','Selected comparison r'+c.before.revision+' → r'+c.after.revision+'; latest r'+r.latest_revision+'.'),
+     grid(['Revision','Currency','Baseline','Known actual lower bound','Known forecast lower bound','Complete forecast','Unknown forecast phases','Stored review','Reassessed'],
+      r.timeline.map(x=>[x.revision,x.currency,x.cost.baseline.complete_total,x.cost.actual.nonnegative_known_lower_bound,x.cost.forecast.nonnegative_known_lower_bound,x.cost.forecast.complete_total,x.cost.forecast.unknown_phases,x.stored_independent_review?'Yes':'No',x.baseline_reassessed_since_previous?'Yes':'No'])),
+     el('p','Stored review transition: '+c.stored_review_transition+' · baseline reassessed: '+c.baseline_reassessed+' · opportunity reference changed: '+c.opportunity_reference_changed+'.'));
+    if(r.currency_warning)out.append(el('p',r.currency_warning));
+    for(const [name,b] of [['Cost',c.cost_bridge],['Effort',c.effort_bridge]]){
+     out.append(el('h4',name+' revision bridge'));
+     if(!b.comparable){out.append(el('p','Not comparable: '+b.reason));continue;}
+     out.append(grid(['Measure','Retained change','Added scope','Removed scope (signed)','Complete change','Unresolved phases'],
+      Object.entries(b.amounts).map(([k,x])=>[k,x.retained_phase_change,x.added_phase_amount,x.removed_phase_amount_signed,x.complete_change,x.unresolved_phase_ids.join(', ')||'None'])));
+    }
+    const detail=el('details');detail.append(el('summary','Exact phase changes and attribution'));
+    for(const p of c.phases){
+     detail.append(el('h5',p.phase_id+' · '+p.membership),el('p','Baseline changes: '+(p.baseline_changed_fields.join(', ')||'none')+'; report changes: '+(p.report_changed_fields.join(', ')||'none')+'.'),
+      el('p','Status: '+p.before_status+' → '+p.after_status+'; reported by '+(p.before_attribution?.actor_id??'none')+' → '+(p.after_attribution?.actor_id??'none')+'.'),
+      el('p','Planned start shift: '+(p.planned_start_shift_days??'not comparable')+' days; finish shift: '+(p.planned_finish_shift_days??'not comparable')+' days.'),
+      grid(['Metric','Measure','Before','After','Change'],Object.entries(p.metrics).flatMap(([name,x])=>Object.entries(x).map(([k,v])=>[name,k,v.before,v.after,v.change]))));
+    }
+    out.append(detail,el('h4','Calendar review at '+r.calendar.as_of_date),el('p',r.calendar.interpretation),
+     grid(['Phase','Planned start','Planned finish','Reported status','Reported start','Reported finish','Days past finish','Flags'],
+      r.calendar.phases.map(p=>[p.name,p.planned_start,p.planned_finish,p.reported_status,p.reported_start,p.reported_finish,p.days_past_planned_finish_without_terminal_report,p.flags.join(', ')||'None'])));
+    const b=r.current_budget_review;
+    if(b)out.append(el('h4','Current opportunity budget exposure'),grid(['Budget context','Known forecast lower bound','Complete forecast','Lower bound exceeds budget','Minimum excess'],
+      [[b.budget_context,b.forecast_lower_bound,b.forecast_complete?'Yes':'No',b.known_lower_bound_exceeds_budget?'Yes':'No',b.minimum_excess_over_budget]]),
+      el('p',b.headroom_not_established_if_unknown?'Unknown amounts prevent establishing budget headroom.':'Forecast amounts are complete human declarations.'),
+      el('p','Current approved assessment: '+b.current_approved_assessment+'; blockers: '+(b.source_blockers.join(', ')||'none')));
+    else out.append(el('p','Current budget comparison unavailable for this selection.'));
+    out.append(el('p',r.interpretation),el('p','Review digest: '+r.review_sha256));
+   }
+   panel.append(el('p','Compare immutable saved revisions, including forecast completeness, scope changes, recorded independent reviews and planned dates. This is not a reconstruction of past knowledge.'),
+    loadHistory,label('Earlier plan revision',before),label('Later plan revision',after),label('UTC calendar review date',day),review,exportHistory,message,out);
+   reset();message.textContent='Load exact saved revisions first.';return panel;
   }
   function render(){if(form)form.remove();form=el('fieldset');form.id='implementationEditor';form.append(el('legend','Implementation planning'));
    if(!view.integrity_ok){const erase=button('Erase all implementation-plan history','implementationDelete',()=>work(remove));erase.disabled=!view.permissions.delete;form.append(erase);host.append(form);return;}
@@ -58,6 +127,7 @@
    exportButton=button('Download saved implementation plan','implementationExport',()=>work(async ok=>{if(!view.artifact||baselineDirty||reportDirty.size)return;const r=await call('/v1/human/processes/'+encodeURIComponent(selected.process.workflow_id)+'/implementation-plan/export?revision='+view.artifact.revision);if(ok())download(r);}));
    const history=el('select');history.id='implementationRevision';options(history,Array.from({length:Math.min(50,view.latest_revision)},(_,i)=>[String(i+1),'Plan revision '+(i+1)]));if(view.artifact)history.value=String(view.artifact.revision);
    const erase=button('Erase all implementation-plan history','implementationDelete',()=>work(remove));erase.disabled=!view.permissions.delete||!view.latest_revision;
+   if(view.artifact)form.append(historyControls());
    form.append(exportButton,label('Implementation plan history',history),button('Open implementation-plan revision','implementationHistory',()=>work(ok=>load(ok,Number(history.value)))),erase);host.append(form);drawPhases();if(busy)form.disabled=true;
   }
   async function remove(ok){if(!window.confirm('Erase all phase baselines, reports and review history? Source opportunity/process records remain.'))return;await call('/v1/human/processes/'+encodeURIComponent(selected.process.workflow_id)+'/implementation-plan/delete',{expected_revision:view.latest_revision,expected_access_revision:view.access_revision,user_confirmed:true});if(ok()){await load(ok);if(ok())note('Implementation-plan history erased. Opportunity and process records remain.');}}

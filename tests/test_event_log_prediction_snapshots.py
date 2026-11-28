@@ -164,6 +164,20 @@ with TestClient(app) as client:
     scored = client.get(f"{base}/{sid}/evaluation", headers=owner)
     assert scored.status_code == 200 and scored.json()["still_open_cases"] == 1, scored.text
     assert client.get(f"{base}/psnap_x/evaluation", headers=owner).status_code == 404
+    cal=f"{base}/{sid}/calibration"
+    body={"settings":{"bins":5,"minimum_cases":5,"group_by":"activity"}}
+    assert client.post(cal,json=body,headers=bearer).status_code==403
+    result=client.post(cal,json=body,headers=owner)
+    assert result.status_code==200,result.text
+    assert result.headers["cache-control"]=="no-store"
+    r=result.json()
+    assert r["overall"]["cases"]==1 and r["groups"]==[]
+    evidence={**body,"evidence":{"expected_review_sha256":r["review_sha256"]}}
+    assert client.post(cal+"/evidence",json=evidence,headers=bearer).status_code==403
+    assert client.post(cal+"/evidence",json=evidence,headers=owner).json()["matching_cases"]==1
+    assert client.post(cal+"/evidence",json={**body,"evidence":{"expected_review_sha256":"0"*64}},headers=owner).status_code==422
+    assert client.post(cal,content=b'{"settings":{},"settings":{}}',headers={**owner,"Content-Type":"application/json"}).status_code==422
+    assert client.get("/prediction-calibration.js").status_code==200
     assert client.post(f"{base}/{sid}/delete", headers=owner).status_code == 200
     assert client.post(f"{base}/{sid}/delete", headers=owner).status_code == 404
 '''
