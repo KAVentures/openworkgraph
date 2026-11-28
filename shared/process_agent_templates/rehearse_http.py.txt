@@ -1,0 +1,114 @@
+"""Offline exact direct-HTTP route rehearsal; never sends a request."""
+import argparse
+from collections import Counter
+import json
+from pathlib import Path
+
+FORMAT = "openworkgraph.direct-http-case-rehearsal.v1"
+MAX_INPUT_BYTES = 262144
+MAX_REPORT_BYTES = 4 * 1024 * 1024
+
+
+def review_cases(spec, cases, bindings, *, prepare, check_prepared):
+    """Use validated cases and the same preparation/contract checks as execution.
+
+    Callbacks are the existing runtime functions in production. No intent,
+    provider credential, HTTP transport, or source receipt is involved.
+    """
+    totals, issues, rows = Counter(), Counter(), []
+    for case in cases:
+        route_rows = []
+        for index, route in enumerate(case["expected"]["accepted_routes"]):
+            totals["reviewed_routes"] += 1
+            plan = {"revision": spec["revision"], "content_sha256": spec["content_sha256"],
+                    "status": "proposal", "activity_ids": route}
+            reason = None
+            counts = None
+            try:
+                prepared = prepare(spec, plan, case["input"], bindings)
+            except (ValueError, TypeError, KeyError, IndexError, OverflowError, RecursionError):
+                reason = "offline_preparation_rejected"
+            else:
+                counts = {"actions": len(prepared["actions"]),
+                          "read_actions": sum(a["operation_kind"] == "read" for a in prepared["actions"]),
+                          "write_actions": sum(a["operation_kind"] == "write" for a in prepared["actions"]),
+                          "human_activities": len(prepared["human_activity_ids"]),
+                          "manual_conditions": len(prepared["manual_condition_ids"]),
+                          "source_rules": len(prepared["source_rules"]),
+                          "decision_tables": len(prepared.get("decision_tables", [])),
+                          "terminal_source_checks": len(prepared["outcomes"]),
+                          "preparation_requirements": len(prepared["requirements"])}
+                if prepared["requirements"]:
+                    reason = "offline_preparation_requirements"
+                else:
+                    try:
+                        check_prepared(prepared, bindings)
+                    except (ValueError, TypeError, KeyError, IndexError, OverflowError, RecursionError):
+                        reason = "direct_http_contract_rejected"
+            status = "blocked" if reason else "offline_contract_matches"
+            totals["blocked_routes" if reason else "matching_routes"] += 1
+            if reason:
+                issues[reason] += 1
+            route_rows.append({"route_index": index, "status": status, "reason": reason,
+                               "counts": counts})
+        if not route_rows:
+            status = "clarification_not_rehearsed"
+            totals["clarification_cases"] += 1
+        elif any(r["status"] == "blocked" for r in route_rows):
+            status = "blocked"
+            totals["blocked_cases"] += 1
+        else:
+            status = "all_routes_match_offline"
+            totals["matching_cases"] += 1
+        rows.append({"case_id": case["id"], "category": case["category"],
+                     "status": status, "routes": route_rows})
+    return {"counts": dict(sorted(totals.items())), "reason_route_counts": dict(sorted(issues.items())),
+            "cases": rows,
+            "all_cases_match_offline": bool(rows) and totals["matching_cases"] == len(rows)}
+
+
+def review(spec, suite, bindings, catalog, expected_catalog_sha256):
+    from execute import ImplementationError, digest, reference, prepare
+    from evaluate import validate_suite
+    from execute_http import Operations
+    operations = Operations(spec, catalog, expected_catalog_sha256)
+    if bindings.get("tool_server_url") != operations.origin:
+        raise ImplementationError("Exact reviewed direct HTTP origin required")
+    cases = validate_suite(spec, suite, allow_current_source_rules=True)
+    result = review_cases(spec, cases, bindings, prepare=prepare,
+                          check_prepared=operations.check_prepared)
+    body = {"format": FORMAT, "process_reference": reference(spec), "spec_sha256": digest(spec),
+            "suite_sha256": digest(suite), "bindings_sha256": digest(bindings),
+            "operations_sha256": expected_catalog_sha256, **result,
+            "case_values_returned": False, "provider_contract_verified": False,
+            "live_preconditions_evaluated": False, "business_tools_called": False,
+            "source_reads_performed": False, "business_outcomes_verified": False,
+            "execution_authorized": False,
+            "interpretation": "Offline exact direct HTTP request construction and mapping checks only. Human approvals, provider availability, actual responses, source checks and outcomes are not evaluated. Matching routes do not authorize execution."}
+    return {**body, "review_sha256": digest(body)}
+
+
+def main(argv=None):
+    from execute import load_object
+    from configure import write_new
+    p = argparse.ArgumentParser(description=__doc__)
+    p.add_argument("--spec", default=str(Path(__file__).parent / "workflow.spec.json"))
+    for name in ("cases", "bindings", "operations", "operations-sha256", "output"):
+        p.add_argument("--" + name, required=True)
+    p.add_argument("--confirm-local-case-review", action="store_true", required=True)
+    args = p.parse_args(argv)
+    try:
+        spec, suite, bindings, catalog = (load_object(Path(path), MAX_INPUT_BYTES) for path in
+                                         (args.spec, args.cases, args.bindings, args.operations))
+        result = review(spec, suite, bindings, catalog, args.operations_sha256)
+        write_new(Path(args.output), result, limit=MAX_REPORT_BYTES)
+    except (ValueError, OSError, TypeError, KeyError, IndexError, RecursionError, OverflowError, ImportError):
+        p.exit(2, "Direct HTTP rehearsal refused; check exact reviewed inputs and use a new output file.\n")
+    print(json.dumps(result["counts"], sort_keys=True))
+    if result["counts"].get("blocked_routes", 0):
+        return 1
+    return 0 if result["all_cases_match_offline"] else 3
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
