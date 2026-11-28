@@ -14,6 +14,7 @@ from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictFloat, Stri
 
 from . import automation_pipeline as pipeline
 from .automation_budget_sensitivity import Sensitivity
+from . import automation_portfolio_frontier as frontier
 
 MAX_CANDIDATES = 18
 MAX_ALTERNATIVES = 5
@@ -43,6 +44,7 @@ class Scenario(BaseModel):
     candidates: list[Candidate] = Field(min_length=1, max_length=MAX_CANDIDATES)
     include_sensitivity: StrictBool = False
     priority_targets: list[Annotated[StrictInt, Field(ge=0, le=1800)]] = Field(default_factory=list, max_length=12)
+    frontier_review: frontier.FrontierSpec | None = None
 
 
 def _digest(value):
@@ -82,6 +84,11 @@ def _parse(value):
         raise pipeline.PipelineError("select distinct priority targets")
     if result.priority_targets and not result.include_sensitivity:
         raise pipeline.PipelineError("enable sensitivity to review priority targets")
+    if result.frontier_review is not None:
+        try:
+            frontier.check(result.frontier_review)
+            frontier.preferences.validate(result.frontier_review.preference_profiles,ids)
+        except ValueError as exc:raise pipeline.PipelineError(str(exc)) from None
     return result
 
 
@@ -100,7 +107,10 @@ def solve(value):
     # the full decimal range when adding up to 18 costs.
     with localcontext() as context:
         context.prec = 400
-        return _solve(value)
+        if not frontier.GUARD.acquire(blocking=False):
+            raise pipeline.PipelineError("another local portfolio search is running")
+        try:return _solve(value)
+        finally:frontier.GUARD.release()
 
 
 def _solve(value):
@@ -169,6 +179,7 @@ def _solve(value):
     n = len(ids)
     priorities = [c.priority for c in choices]
     sensitivity = Sensitivity(ids) if spec.include_sensitivity else None
+    review=frontier.Frontier(ids,cap,spec.frontier_review.priority_targets,spec.frontier_review.budget_checkpoints,spec.frontier_review.preference_profiles) if spec.frontier_review is not None else None
 
     def packet(mask, total, points):
         return {"selected_idea_ids":[ids[j] for j in range(n) if mask & (1 << j)],
@@ -202,6 +213,8 @@ def _solve(value):
         if count > spec.max_selected:
             rejected["count_limit"] += 1
             return
+        if review is not None:
+            review.visit(mask,total,points)
         if total > cap:
             rejected["budget_limit"] += 1
             return
@@ -226,7 +239,7 @@ def _solve(value):
             required_closure |= closure[j]
     required_cost = sum((costs[j] for j in range(n) if required_closure & (1<<j)),Decimal(0))
     result = {"format":"openworkgraph.portfolio-budget-scenario.v1",
-            "snapshot_sha256":snapshot["snapshot_sha256"],"scenario_sha256":_digest(spec.model_dump(exclude={"include_sensitivity", "priority_targets"}) if not spec.include_sensitivity else spec.model_dump()),
+            "snapshot_sha256":snapshot["snapshot_sha256"],"scenario_sha256":_digest(spec.model_dump(exclude=({"frontier_review"} if review is None else set()) | ({"include_sensitivity", "priority_targets"} if sensitivity is None else set()))),
             "currency":spec.currency,"budget_basis":spec.budget_basis,"budget_limit":_decimal(cap),
             "max_selected":spec.max_selected,"candidates":[{**by_id[c.idea_id], "priority":c.priority,
                     "required":c.required,"blockers":blocked.get(j,[]),
@@ -244,6 +257,11 @@ def _solve(value):
             "objective":"maximize_reviewed_priority_points_then_minimize_cost_then_count_then_ids",
             "priority_points_are_user_entered_not_measured_benefits":True,
             "no_currency_conversion":True,**CLAIMS}
+
     if sensitivity is not None:
         result["sensitivity"] = sensitivity.report(cap, sorted(spec.priority_targets))
+    if review is not None:
+        result["frontier_review"]=review.report()
+    if _snapshot()["snapshot_sha256"]!=spec.snapshot_sha256:
+        raise pipeline.PipelineError("portfolio changed during search; reload and review")
     return result

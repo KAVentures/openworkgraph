@@ -769,15 +769,23 @@
         const max=el('input');max.type='number';max.min='1';max.max='18';max.value='18';max.id='owgBudgetMax';
         const labelled=(label,node)=>{const wrapper=el('label',label+' ');wrapper.append(node);return wrapper;};
         const controls=el('div',null,'row');controls.append(labelled('Currency',currency),labelled('Budget basis',basis),labelled('Budget limit',limit),labelled('Maximum selected ideas',max));
-        const sensitivity=el('input');sensitivity.type='checkbox';sensitivity.id='owgBudgetSensitivity';sensitivity.checked=true;
-        const targets=el('input');targets.type='text';targets.id='owgBudgetPriorityTargets';targets.maxLength=80;targets.placeholder='50, 100, 150';
-        controls.append(labelled('Include exact frontier and candidate sensitivity',sensitivity),labelled('Optional priority targets (comma-separated)',targets));
+        const sensitivity=el('input');sensitivity.type='checkbox';sensitivity.id='owgBudgetSensitivity';sensitivity.checked=false;
+        const sensitivityTargets=el('input');sensitivityTargets.type='text';sensitivityTargets.id='owgBudgetPriorityTargets';sensitivityTargets.maxLength=80;sensitivityTargets.placeholder='50, 100, 150';sensitivityTargets.disabled=true;
+        controls.append(labelled('Include within-budget tie-break sensitivity',sensitivity),labelled('Optional within-budget priority targets (comma-separated)',sensitivityTargets));
+        const frontierOn=el('input');frontierOn.type='checkbox';frontierOn.id='owgBudgetFrontier';
+        const targets=el('input');targets.type='text';targets.id='owgBudgetFrontierTargets';targets.value='50,100,200';targets.maxLength=80;targets.disabled=true;
+        const checkpoints=el('input');checkpoints.type='text';checkpoints.id='owgBudgetFrontierCheckpoints';checkpoints.maxLength=200;checkpoints.disabled=true;checkpoints.placeholder='Optional: 10000,50000,100000';
+        const profileInput=el('textarea');profileInput.id='owgBudgetPreferenceProfiles';profileInput.rows=6;profileInput.maxLength=8192;profileInput.disabled=true;profileInput.value='[]';profileInput.style.cssText='width:100%;box-sizing:border-box';
+        const profileTemplate=button('Create editable alternate preference profile','secondary');profileTemplate.disabled=true;
+        const frontierControls=el('div');frontierControls.append(labelled('Include exact budget frontier and candidate sensitivity',frontierOn),
+          labelled('Priority targets (0–1800, comma separated)',targets),labelled('Optional budget checkpoints, comma separated',checkpoints),profileTemplate,labelled('Optional preference profiles JSON (up to three, 16 candidates maximum)',profileInput));
+        frontierOn.onchange=()=>{targets.disabled=checkpoints.disabled=profileInput.disabled=profileTemplate.disabled=!frontierOn.checked;invalidate();};targets.oninput=checkpoints.oninput=profileInput.oninput=()=>invalidate();
         const options=el('div'),out=el('div'),status=el('p');status.setAttribute('role','status');
         const run=button('Evaluate exact portfolio combinations','secondary'),download=button('Download scenario report','secondary');download.disabled=true;
         let attempt=0,report=null;const controlsById=new Map();
         function invalidate(){attempt++;report=null;download.disabled=true;out.replaceChildren();status.textContent='Review inputs and evaluate again.';run.disabled=false;}
-        for(const control of [currency,basis,limit,max,sensitivity,targets])control.addEventListener('input',invalidate);
-        sensitivity.onchange=()=>{targets.disabled=!sensitivity.checked;invalidate();};
+        for(const control of [currency,basis,limit,max,sensitivity,sensitivityTargets])control.addEventListener('input',invalidate);
+        sensitivity.onchange=()=>{sensitivityTargets.disabled=!sensitivity.checked;invalidate();};
         const query=el('input');query.type='search';query.placeholder='Find opportunity by name or ID';query.setAttribute('aria-label','Find opportunities');
         function renderChoices(){
           options.replaceChildren();
@@ -801,6 +809,7 @@
           }
         }
         query.oninput=renderChoices;renderChoices();
+        profileTemplate.onclick=()=>{const selected=[...controlsById.values()].filter(x=>x.selected.checked);if(!selected.length||selected.length>16){status.textContent='Select 1–16 candidates first.';return;}if(profileInput.value.trim()!=='[]'&&!window.confirm('Replace existing alternate preference profiles?'))return;profileInput.value=JSON.stringify([{label:'Alternate stakeholder',priorities:Object.fromEntries(selected.map(x=>[x.idea.idea_id,Number(x.priority.value)]))}],null,2);invalidate();};
         download.onclick=()=>{if(!report)return;const url=URL.createObjectURL(new Blob([JSON.stringify(report,null,2)],{type:'application/json'}));const a=el('a');a.href=url;a.download='owg-portfolio-budget-scenario.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);};
         run.onclick=async()=>{
           invalidate();const k=attempt;
@@ -809,14 +818,32 @@
             [...controlsById.values()].some(c=>c.selected.checked&&!c.priority.value)){
             status.textContent='Enter an uppercase currency, budget, selection limit and priorities for 1–18 candidates.';return;
           }
-          const parts=sensitivity.checked&&targets.value.trim()?targets.value.split(',').map(v=>v.trim()):[];
+          const parts=sensitivity.checked&&sensitivityTargets.value.trim()?sensitivityTargets.value.split(',').map(v=>v.trim()):[];
           if(parts.length>12||parts.some(v=>!/^\d{1,4}$/.test(v)||Number(v)>1800)||new Set(parts.map(Number)).size!==parts.length){
             status.textContent='Enter up to 12 distinct integer priority targets from 0 to 1800.';return;
+          }
+          let frontierReview;
+          if(frontierOn.checked){
+            const values=targets.value.split(',').map(x=>x.trim());
+            if(values.length>12||values.some(x=>!/^\d{1,4}$/.test(x)||Number(x)>1800)||new Set(values.map(Number)).size!==values.length){
+              status.textContent='Enter one to twelve distinct integer targets from 0 to 1800.';return;
+            }
+            const budgets=checkpoints.value.trim()?checkpoints.value.split(',').map(x=>x.trim()):[];
+            if(budgets.length>12||budgets.some(x=>!/^\d+(?:\.\d+)?$/.test(x)||!Number.isFinite(Number(x))||Number(x)>1e12)||new Set(budgets.map(Number)).size!==budgets.length){
+              status.textContent='Enter up to twelve distinct nonnegative budget checkpoints.';return;
+            }
+            let profiles;
+            try{profiles=JSON.parse(profileInput.value);}
+            catch(_){status.textContent='Invalid preference profile JSON.';return;}
+            if(!Array.isArray(profiles)||profiles.length>3||(profiles.length&&candidates.length>16)){
+              status.textContent='Use at most three alternate profiles and sixteen candidates.';return;
+            }
+            frontierReview={priority_targets:values.map(Number),budget_checkpoints:budgets.map(Number),preference_profiles:profiles};
           }
           run.disabled=true;status.textContent='Evaluating all bounded candidate subsets…';
           try{
             const data=await(await api('/v1/automation-pipeline/budget-scenario',{method:'POST',headers:{'Content-Type':'application/json'},
-              body:JSON.stringify({snapshot_sha256:inv.snapshot_sha256,currency:currency.value,budget_basis:basis.value,budget_limit:Number(limit.value),max_selected:Number(max.value),candidates,include_sensitivity:sensitivity.checked,priority_targets:parts.map(Number)})})).json();
+              body:JSON.stringify({snapshot_sha256:inv.snapshot_sha256,currency:currency.value,budget_basis:basis.value,budget_limit:Number(limit.value),max_selected:Number(max.value),candidates,...(frontierReview?{frontier_review:frontierReview}:{}),...(sensitivity.checked?{include_sensitivity:true,priority_targets:parts.map(Number)}:{})})})).json();
             if(!active()||k!==attempt)return;
             if(data.snapshot_sha256!==inv.snapshot_sha256)throw Error('Unexpected portfolio snapshot.');
             report=data;download.disabled=false;status.textContent=data.feasible_subsets+' feasible subsets of '+data.subsets_considered+' examined.';
@@ -826,6 +853,53 @@
               el('p',row.budget_remaining+' '+data.currency+' remaining; '+row.selected_count+' ideas','muted'));return item;};
             out.replaceChildren(el('h4',data.status==='feasible'?'Highest-ranked feasible alternatives':'No feasible portfolio under these constraints'),
               ...data.alternatives.map(show));
+            if(data.frontier_review){
+              const f=data.frontier_review,host=el('div');host.id='owgBudgetFrontierResult';
+              const grid=(headers,rows)=>{const wrap=el('div',null,'table-wrap');wrap.tabIndex=0;wrap.setAttribute('role','region');wrap.setAttribute('aria-label','Table: '+headers.join(', ').slice(0,120));
+                const t=el('table'),h=el('thead'),hr=el('tr'),b=el('tbody');for(const x of headers){const th=el('th',x);th.scope='col';hr.append(th);}h.append(hr);
+                for(const row of rows){const tr=el('tr');for(const x of row)tr.append(el('td',String(x??'—')));b.append(tr);}t.append(h,b);wrap.append(t);return wrap;};
+              const names=r=>r?r.selected_idea_ids.map(id=>titles.get(id)||id).join('; ')||'Empty portfolio':'Infeasible';
+              host.append(el('h4','Exact spending versus priority frontier'),
+                el('p',f.structurally_feasible_subsets+' structurally feasible subsets; '+f.current_budget_feasible_subsets+' within budget. '+f.frontier.length+' nondominated cost/priority points.'),
+                el('p',f.maximum_priority_portfolios+' portfolios tie for maximum priority within current budget (before cost/count/ID tie-breaks).'),
+                grid(['Target points','Minimum budget ('+data.currency+')','Extra budget required','Representative portfolio'],
+                  f.priority_targets.map(x=>[x.minimum_priority_points,x.least_cost_portfolio?.budget_used,x.least_cost_portfolio?.additional_budget_required,names(x.least_cost_portfolio)])));
+              if(f.budget_checkpoints.length)host.append(el('h4','Budget checkpoint sensitivity'),
+                grid(['Budget','Best priority','Used budget','Unused budget','Priority delta vs current budget','Extra to next breakpoint','Best portfolio'],
+                  f.budget_checkpoints.map(x=>[x.budget_limit,x.best_portfolio?.priority_points,x.best_portfolio?.budget_used,x.unused_budget,
+                    x.priority_delta_vs_current_budget,x.additional_budget_to_next_breakpoint,names(x.best_portfolio)])));
+              const view=el('div'),prev=button('Previous frontier page','secondary'),next=button('Next frontier page','secondary');let offset=0;
+              const page=()=>{view.replaceChildren(el('p',(offset+1)+'–'+Math.min(offset+30,f.frontier.length)+' of '+f.frontier.length+' frontier points.'),
+                grid(['Priority points','Minimum cost','Within budget','Representative portfolio'],f.frontier.slice(offset,offset+30).map(x=>[x.priority_points,x.budget_used,x.within_current_budget?'Yes':'No',names(x)])));
+                prev.disabled=offset===0;next.disabled=offset+30>=f.frontier.length;};
+              prev.onclick=()=>{offset=Math.max(0,offset-30);page();};next.onclick=()=>{offset+=30;page();};
+              if(f.frontier.length){page();host.append(view,prev,next);}else host.append(el('p','No structurally feasible portfolio.'));
+              host.append(el('h4','Candidate inclusion and exclusion sensitivity'),
+                grid(['Opportunity','In all/some/no maximum-priority portfolios','Feasible with','Feasible without','Priority loss if required','Priority loss if excluded'],
+                  f.candidate_sensitivity.map(x=>[titles.get(x.idea_id)||x.idea_id,x.membership_among_max_priority_portfolios,x.feasible_subsets_including,x.feasible_subsets_excluding,
+                    x.forced_in.priority_loss_vs_optimum??'Infeasible',x.forced_out.priority_loss_vs_optimum??'Infeasible'])));
+              const details=el('details');details.append(el('summary','Exact forced-in and forced-out alternatives'));
+              for(const x of f.candidate_sensitivity)details.append(el('h5',titles.get(x.idea_id)||x.idea_id),
+                grid(['Constraint','Points','Budget used','Budget delta vs ranked optimum','Selected opportunities'],
+                  [['Required',x.forced_in.best_portfolio?.priority_points,x.forced_in.best_portfolio?.budget_used,x.forced_in.budget_delta_vs_ranked_optimum,names(x.forced_in.best_portfolio)],
+                   ['Excluded',x.forced_out.best_portfolio?.priority_points,x.forced_out.best_portfolio?.budget_used,x.forced_out.budget_delta_vs_ranked_optimum,names(x.forced_out.best_portfolio)]]),
+                grid(['Structural constraint (any budget)','Feasible subsets','Minimum cost','Extra budget required','Least-cost portfolio'],
+                  [['Required',x.structural_subsets_including,x.least_cost_portfolio_including?.budget_used,x.least_cost_portfolio_including?.additional_budget_required,names(x.least_cost_portfolio_including)],
+                   ['Excluded',x.structural_subsets_excluding,x.least_cost_portfolio_excluding?.budget_used,x.least_cost_portfolio_excluding?.additional_budget_required,names(x.least_cost_portfolio_excluding)]]));
+              if(f.preference_review){
+                const r=f.preference_review,display=el('details');display.open=true;display.append(el('summary','Stakeholder preference robustness'),
+                  el('p',r.feasible_subsets+' identical feasible portfolios evaluated against '+r.profiles.length+' declared profiles.'));
+                if(r.status==='feasible'){
+                  const showProfile=(label,p)=>[label,p.priority_points,p.worst_profile_priority_points,p.maximum_regret_points,p.total_regret_points,p.budget_used,names(p)];
+                  display.append(el('p',r.simultaneously_optimal_portfolios+' portfolios achieve every individual profile optimum.'),
+                    grid(['Choice rule','Original points','Worst profile points','Maximum regret','Total regret','Budget used','Selected portfolio'],
+                      [...r.individual_optima.map(x=>showProfile('Optimum: '+x.label,x.portfolio)),showProfile('Minimax regret',r.minimax_regret_portfolio),showProfile('Maximin priority',r.maximin_priority_portfolio)]),
+                    grid(['Choice rule','Profile','Score','Regret'],[['Minimax regret',r.minimax_regret_portfolio],['Maximin priority',r.maximin_priority_portfolio]].flatMap(([label,p])=>p.profile_scores.map(x=>[label,x.label,x.priority_points,x.regret_points]))),el('p',r.interpretation,'muted'));
+                }else display.append(el('p','No feasible portfolio within the original budget.'));
+                host.append(display);
+              }
+              host.append(details,grid(['Selected count','Feasible subsets'],f.feasible_subset_counts_by_size.map(x=>[x.selected_count,x.count])),el('p',f.interpretation,'muted'));out.append(host);
+            }
             const details=el('details');details.append(el('summary','Best feasible alternative by selected count'),...data.best_by_selected_count.map(show));out.append(details);
             if(data.sensitivity){
               const d=data.sensitivity;
@@ -835,7 +909,7 @@
                 t.append(head,body);wrap.append(t);return wrap;};
               const summary=el('section');summary.id='owgBudgetSensitivityResults';
               const names=row=>row?.selected_idea_ids.map(id=>titles.get(id)||id).join('; ')||'No ideas selected';
-              summary.append(el('h4','Exact budget–priority frontier'),
+              summary.append(el('h4','Exact within-budget tie-break sensitivity'),
                 el('p',d.frontier_point_count+' non-dominated points within the reviewed cap. '+d.maximum_priority_subset_count+
                   ' maximum-priority subsets; '+d.maximum_priority_min_cost_subset_count+' also achieve minimum cost.'),
                 table(['Budget used ('+data.currency+')','Priority points','Selected ideas','Witness'],
@@ -864,8 +938,168 @@
           }catch(e){if(active()&&k===attempt)status.textContent=e.message;}
           finally{if(active()&&k===attempt)run.disabled=false;}
         };
-        root.replaceChildren(heading,description,controls,query,options,run,download,status,out);
+        root.replaceChildren(heading,description,controls,frontierControls,query,options,run,download,status,out);
       }catch(e){if(active())root.replaceChildren(el('p',e.message,'muted'));}
+    };
+    const capacityButton=button('Plan resource-constrained implementation','secondary');
+    capacityButton.id='owgPipelineResourceSchedule';
+    const capacityHost=el('div');capacityHost.id='owgPipelineResourceScheduleResult';
+    let capacityGeneration=0;
+    capacityButton.onclick=async()=>{
+      const generation=++capacityGeneration, root=el('section');capacityHost.replaceChildren(root);
+      const active=()=>generation===capacityGeneration&&root.isConnected;
+      root.append(el('p','Loading exact opportunity revisions…','muted'));
+      try{
+        const inv=await(await api('/v1/automation-pipeline/resource-schedule/inventory')).json();
+        if(!active())return;
+        const chosen=new Map(), options=el('div'), output=el('div'), status=el('p');
+        status.setAttribute('role','status');
+        const find=input('owgCapacityFind','search','Find opportunities');
+        find.setAttribute('aria-label','Find implementation opportunities');
+        const pools=el('textarea');pools.id='owgCapacityPools';pools.rows=3;pools.style.width='100%';
+        pools.placeholder='{"engineering":2,"operations":1}';
+        const alternatives=el('textarea');alternatives.id='owgCapacityAlternatives';alternatives.rows=3;alternatives.style.width='100%';
+        alternatives.value='[]';
+        const prepare=button('Prepare reviewed capacity input','secondary'),run=button('Evaluate implementation schedules','secondary'),
+          save=button('Download schedule report','secondary');
+        prepare.id='owgCapacityPrepare';run.id='owgCapacityRun';save.id='owgCapacityDownload';
+        const reviewed=el('textarea');reviewed.id='owgCapacityReviewed';reviewed.readOnly=true;reviewed.rows=9;reviewed.style.width='100%';
+        run.disabled=save.disabled=true;
+        let version=0, draft=null, report=null;
+        function invalidate(){
+          version++;draft=report=null;reviewed.value='';run.disabled=save.disabled=true;output.replaceChildren();
+          status.textContent='Review assumptions and prepare the exact input again.';
+        }
+        const label=(title,node)=>{const wrapper=el('label',title+' ');wrapper.append(node);return wrapper;};
+        const number=(name,min,max,value='')=>{
+          const node=el('input');node.type='number';node.min=String(min);node.max=String(max);node.step='1';
+          node.value=value;node.setAttribute('aria-label',name);node.oninput=invalidate;return node;
+        };
+        function drawChoices(){
+          options.replaceChildren();
+          const term=find.value.toLowerCase(), eligible=inv.ideas.filter(i=>['idea','assessing','approved','on_hold'].includes(i.state));
+          const matches=eligible.filter(i=>(i.title+' '+i.idea_id).toLowerCase().includes(term));
+          options.append(el('p',matches.length+' matching opportunities; showing up to 100. Selected: '+[...chosen.values()].filter(x=>x.check.checked).length+'.','muted'));
+          for(const idea of matches.slice(0,100)){
+            let c=chosen.get(idea.idea_id);
+            if(!c){
+              const check=el('input');check.type='checkbox';check.setAttribute('aria-label','Schedule '+idea.title);
+              const pool=el('input');pool.type='text';pool.maxLength=40;pool.placeholder='engineering';
+              pool.setAttribute('aria-label','Resource pool for '+idea.title);pool.oninput=invalidate;
+              const duration=number('Duration days for '+idea.title,1,180),units=number('Resource units for '+idea.title,1,50),
+                release=number('Release day for '+idea.title,0,730,'0'),deadline=number('Deadline day for '+idea.title,1,730);
+              const controls=[pool,duration,units,release,deadline];controls.forEach(node=>node.disabled=true);
+              check.onchange=()=>{controls.forEach(node=>node.disabled=!check.checked);invalidate();};
+              c={idea,check,pool,duration,units,release,deadline};chosen.set(idea.idea_id,c);
+            }
+            const box=el('fieldset');box.append(el('legend',idea.title),label('Include opportunity',c.check),
+              el('p',idea.idea_id+' · revision '+idea.revision+' · '+idea.state+' · declared team '+(idea.team||'none'),'muted'),
+              label('Resource pool',c.pool),label('Duration days',c.duration),label('Units throughout task',c.units),
+              label('Earliest start day',c.release),label('Deadline day (optional)',c.deadline));
+            if(idea.depends_on.length)box.append(el('p','Prerequisites: '+idea.depends_on.map(id=>inv.ideas.find(i=>i.idea_id===id)?.title||id).join('; '),'muted'));
+            options.append(box);
+          }
+        }
+        find.oninput=drawChoices;pools.oninput=alternatives.oninput=invalidate;drawChoices();
+        prepare.onclick=()=>{
+          invalidate();
+          try{
+            const selected=[...chosen.values()].filter(c=>c.check.checked);
+            if(!selected.length||selected.length>30)throw Error('Select 1–30 opportunities and include every unfinished prerequisite.');
+            const integer=(node,name,optional=false)=>{
+              if(!node.value){if(optional)return null;throw Error('Enter '+name+' for each selected opportunity.');}
+              const value=Number(node.value);
+              if(!Number.isInteger(value)||value<Number(node.min)||value>Number(node.max))throw Error('Invalid '+name+'.');
+              return value;
+            };
+            const tasks=selected.map(c=>{
+              if(!/^[A-Za-z0-9][A-Za-z0-9_-]{0,39}$/.test(c.pool.value))throw Error('Enter an exact pool identifier for each selected opportunity.');
+              return {idea_id:c.idea.idea_id,revision:c.idea.revision,pool:c.pool.value,
+                duration_days:integer(c.duration,'duration'),units:integer(c.units,'resource units'),
+                release_day:integer(c.release,'release day'),deadline_day:integer(c.deadline,'deadline',true)};
+            });
+            draft={format:'openworkgraph.portfolio-resource-schedule.v1',snapshot_sha256:inv.snapshot_sha256,
+              tasks,capacities:JSON.parse(pools.value),alternatives:JSON.parse(alternatives.value)};
+            reviewed.value=JSON.stringify(draft,null,2);run.disabled=false;
+            status.textContent='Review the exact assumptions above, then evaluate. No opportunity will be modified.';
+          }catch(error){status.textContent=error.message;}
+        };
+        const table=(headers,rows)=>{
+          const wrap=el('div',null,'table-wrap'), table=el('table'),head=el('thead'),hr=el('tr'),body=el('tbody');
+          headers.forEach(h=>{const cell=el('th',h);cell.scope='col';hr.append(cell);});head.append(hr);
+          for(const row of rows){const tr=el('tr');row.forEach(value=>tr.append(el('td',value??'—')));body.append(tr);}
+          table.append(head,body);wrap.append(table);return wrap;
+        };
+        const timeline=(scenario,name)=>{
+          const chart=el('div');chart.setAttribute('role','group');chart.setAttribute('aria-label','Relative planning-day timeline for '+scenario.label);
+          chart.append(el('p','Day 0 to '+scenario.makespan_days+'; bar positions show relative time, not calendar dates. Exact dates are in the table below.','muted'));
+          for(const row of scenario.schedule){
+            const item=el('div');item.style.cssText='display:grid;grid-template-columns:minmax(0,1fr) minmax(0,2fr);gap:8px;align-items:center;margin:5px 0';
+            const title=el('span',name(row.idea_id)+' · '+row.pool);title.style.overflowWrap='anywhere';
+            const track=el('div');track.style.cssText='height:22px;border:1px solid var(--line);border-radius:4px;position:relative;background:var(--soft)';
+            const bar=el('div');bar.style.cssText='height:100%;position:absolute;border-radius:3px;background:var(--green)';
+            bar.style.left=(100*row.start_day/scenario.makespan_days)+'%';
+            bar.style.width=(100*row.duration_days/scenario.makespan_days)+'%';
+            bar.title='Day '+row.start_day+' to '+row.finish_day_exclusive+' (exclusive)';
+            track.setAttribute('aria-hidden','true');track.append(bar);item.append(title,track);chart.append(item);
+          }
+          return chart;
+        };
+        run.onclick=async()=>{
+          if(!draft)return;
+          const n=++version, spec=draft;report=null;save.disabled=true;run.disabled=true;output.replaceChildren();
+          status.textContent='Evaluating feasible schedules and makespan bounds…';
+          try{
+            const data=await(await api('/v1/automation-pipeline/resource-schedule',{method:'POST',
+              headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)})).json();
+            if(!active()||n!==version)return;
+            if(data.snapshot_sha256!==inv.snapshot_sha256)throw Error('Unexpected portfolio snapshot.');
+            report=data;save.disabled=false;
+            const titles=new Map(data.selected_ideas.map(i=>[i.idea_id,i.title]));
+            const name=id=>titles.get(id)||id;
+            status.textContent=data.blockers.length?'Selected portfolio has unresolved prerequisite blockers.':'Schedule scenarios evaluated. No saved plan changed.';
+            if(data.blockers.length){
+              output.append(el('h4','Resolve prerequisite blockers'));
+              for(const b of data.blockers)output.append(el('p',(b.idea_id?name(b.idea_id)+': ':'')+b.code.replaceAll('_',' ')+(b.dependency_id?' · '+name(b.dependency_id):'')));
+            }
+            if(data.scenarios.length){
+              output.append(el('h4','Resource capacity comparison'),table(
+                ['Design','Makespan (days)','Optimum bounds','Proof','Deadline misses','Change vs baseline'],
+                data.scenarios.map(s=>[s.label,s.makespan_days,s.optimization?s.optimization.lower_bound_days+'–'+s.optimization.upper_bound_days:null,
+                  s.optimization?(s.optimization.optimal_makespan_proven?'Proven makespan':'Feasible heuristic'):s.status.replaceAll('_',' '),
+                  s.deadline_misses_in_returned_schedule,s.makespan_change_vs_baseline_days])));
+              for(const s of data.scenarios){
+                const section=el('details');section.append(el('summary',s.label+' schedule and resource load'));
+                if(!s.schedule){section.append(el('p','Demand exceeds capacity for: '+s.oversized_task_ids.map(name).join('; ')));output.append(section);continue;}
+                section.append(el('p','Resource-free precedence bound '+s.resource_free_precedence_bound_days+
+                  ' days; returned makespan '+s.makespan_days+' days. '+s.deadline_misses_even_without_resource_constraints+
+                  ' declared deadlines missed even without resource constraints.','muted'),timeline(s,name),
+                  table(['Opportunity','Pool','Units','Start day','Finish (exclusive)','Duration','Wait after prerequisites','Deadline','Late days','Precedence slack'],
+                    s.schedule.map(t=>[name(t.idea_id),t.pool,t.units,t.start_day,t.finish_day_exclusive,t.duration_days,
+                      t.delay_after_dependency_ready_days,t.deadline_day,t.deadline_lateness_days,t.resource_free_total_slack_days])),
+                  table(['Pool','Capacity','Peak','Used unit-days','Available unit-days','Utilization','Fully occupied days'],
+                    s.resource_load.map(p=>[p.pool,p.capacity_units,p.peak_units,p.used_unit_days,p.available_unit_days,
+                      (p.utilization*100).toFixed(1)+'%',p.fully_occupied_days])),
+                  el('p','Optimum change bounds versus baseline: '+(s.optimal_makespan_change_bounds_days?s.optimal_makespan_change_bounds_days.join(' to ')+' days.':'Unavailable because the baseline is infeasible.'),'muted'));
+                output.append(section);
+              }
+            }
+            output.append(el('p',data.interpretation,'muted'));
+          }catch(error){if(active()&&n===version)status.textContent=error.message;}
+          finally{if(active()&&n===version)run.disabled=false;}
+        };
+        save.onclick=()=>{
+          if(!report)return;
+          const url=URL.createObjectURL(new Blob([JSON.stringify(report,null,2)],{type:'application/json'}));
+          const a=el('a');a.href=url;a.download='owg-portfolio-resource-schedule.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
+        };
+        root.replaceChildren(el('h4','Resource-constrained implementation planning'),
+          el('p','Select opportunities and enter explicit uninterrupted planning-day durations and units of one resource pool. Include unfinished prerequisites. No default durations or capacity are assumed. Deadlines are diagnostics; only makespan is optimized.','muted'),
+          find,options,field('Baseline pool capacities (JSON object)',pools),
+          field('Optional alternatives (JSON array of label and capacities objects)',alternatives),
+          el('p','Example alternative: [{"label":"More engineering","capacities":{"engineering":3,"operations":1}}]. Every alternative uses the same pools.','muted'),
+          prepare,field('Exact reviewed input',reviewed),run,save,status,output);
+      }catch(error){if(active())root.replaceChildren(el('p',error.message,'muted'));}
     };
     const benefitOverlapButton=button('Review overlapping benefit evidence','secondary');
     benefitOverlapButton.id='owgPipelineBenefitOverlap';
@@ -1032,7 +1266,7 @@
       }catch(e){if(generation===refreshGeneration)dependencyScheduleHost.replaceChildren(el('p',e.message,'muted'));}
       finally{dependencyScheduleButton.disabled=false;}
     };
-    card.append(row,resumeSection,auditSection,tools,planningFilters,status,counts,portfolioButton,portfolioHost,budgetScenarioButton,budgetScenarioHost,benefitOverlapButton,benefitOverlapHost,benefitReadinessButton,benefitReadinessHost,dependencyScheduleButton,dependencyScheduleHost,viewCount,list,comparison,detail);
+    card.append(row,resumeSection,auditSection,tools,planningFilters,status,counts,portfolioButton,portfolioHost,budgetScenarioButton,budgetScenarioHost,benefitOverlapButton,benefitOverlapHost,benefitReadinessButton,benefitReadinessHost,dependencyScheduleButton,dependencyScheduleHost,capacityButton,capacityHost,viewCount,list,comparison,detail);
     panel.appendChild(card);
 
     let latestIdeas=[],refreshGeneration=0,resumeGeneration=0,auditGeneration=0,auditPageIndex=0,auditAbort=null;
@@ -1441,6 +1675,7 @@
 
     async function refresh(){
       clearCumulative('Portfolio review cleared; explicitly check again after the list refresh.');
+      capacityGeneration++;if(capacityHost.childNodes.length)capacityHost.replaceChildren(el('p','Resource plan cleared; reload the portfolio before preparing another scenario.','muted'));
       if(dependencyScheduleHost.childNodes.length)dependencyScheduleHost.replaceChildren(el('p','Dependency review cleared; run it again after the portfolio refresh.','muted'));
       const generation=++refreshGeneration;
       const requested=filter.value;
@@ -1737,6 +1972,185 @@
               }catch(e){if(active())scenarioHost.replaceChildren(el('p',e.message));}
             };
             parts.push(launch,scenarioHost);
+            const investmentLaunch=button('Compare phased investment business cases','secondary');
+            investmentLaunch.id='owgInvestmentOpen';
+            const investmentHost=el('div');investmentHost.id='owgInvestmentResult';
+            let investmentGeneration=0;
+            investmentLaunch.onclick=async()=>{
+              const generationId=++investmentGeneration;
+              investmentHost.replaceChildren(el('p','Reading exact retained measurement inventory…','muted'));
+              const active=()=>generationId===investmentGeneration&&generation===detailGeneration&&investmentHost.isConnected;
+              const path='/v1/automation-pipeline/'+encodeURIComponent(idea.idea_id)+'/investment-case';
+              try{
+                const inv=await(await api(path+'/inventory')).json();
+                if(!active())return;
+                if(inv.idea_revision!==idea.revision)throw Error('Idea changed; reopen before evaluating.');
+                const status=el('p');status.id='owgInvestmentStatus';status.setAttribute('role','status');
+                const resultHost=el('div'),selectionHost=el('div'),designHost=el('div'),review=el('textarea');
+                resultHost.id='owgInvestmentReport';review.id='owgInvestmentReviewed';review.readOnly=true;review.rows=8;review.style.width='100%';
+                const labelled=(text,node)=>{const label=el('label',text+' ');label.append(node);return label;};
+                const numeric=(label,min,max,step='any')=>{const n=el('input');n.type='number';n.min=String(min);n.max=String(max);n.step=step;
+                  n.required=true;n.setAttribute('aria-label',label);return n;};
+                const currency=el('input');currency.maxLength=3;currency.placeholder='SEK';currency.setAttribute('aria-label','Investment currency');
+                const hourly=numeric('Declared labor hour value',0,1e12),discount=numeric('Monthly discount rate percent',0,100),
+                  horizon=numeric('Investment horizon months',1,60,'1');
+                const sensitivity=el('input');sensitivity.value='0,25,50,75,100';sensitivity.setAttribute('aria-label','Cash conversion sensitivity percentages');
+                const prepare=button('Prepare exact investment assumptions','secondary'),run=button('Evaluate phased business cases','secondary'),
+                  download=button('Download investment scenario JSON','secondary'),csv=button('Download monthly cash flows CSV','secondary');
+                prepare.id='owgInvestmentPrepare';run.id='owgInvestmentRun';download.id='owgInvestmentDownload';csv.id='owgInvestmentCsv';
+                let serial=0,draft=null,report=null;
+                const invalidate=()=>{serial++;draft=report=null;review.value='';run.disabled=download.disabled=csv.disabled=true;
+                  resultHost.replaceChildren();status.textContent='Review assumptions and prepare again.';};
+                const inputFields=el('div',null,'row');
+                inputFields.append(labelled('Currency',currency),labelled('Labor hour value',hourly),
+                  labelled('Monthly discount rate (%)',discount),labelled('Horizon months',horizon),
+                  labelled('Cash conversion sensitivity (%)',sensitivity));
+                const choices=[];
+                for(const m of inv.measurements){
+                  const check=el('input');check.type='checkbox';check.setAttribute('aria-label','Include '+m.period+' measurement '+m.start+' '+m.end);
+                  selectionHost.append(labelled(m.period+' · '+m.start+' to '+m.end+' · '+m.cases+' cases · '+m.source,check));
+                  choices.push({m,check});
+                }
+                const designs=[];
+                function addDesign(){
+                  if(designs.length>=4){status.textContent='At most four designs.';return;}
+                  const group=el('fieldset');group.append(el('legend','Investment design'));
+                  const name=el('input');name.maxLength=80;name.setAttribute('aria-label','Investment design name');
+                  const conversion=numeric('Cash conversion percent',0,100),initial=numeric('Initial cash cost',0,1e12);
+                  const phaseHost=el('div'),phases=[];
+                  const design={group,name,conversion,initial,phases};
+                  function addPhase(){
+                    if(phases.length>=12){status.textContent='At most 12 phases per design.';return;}
+                    const panel=el('fieldset');panel.append(el('legend','Monthly phase'));
+                    const start=numeric('Phase start month',1,60,'1'),end=numeric('Phase end month',1,60,'1'),
+                      cases=numeric('Phase monthly cases',0,1e8,'1'),effect=numeric('Retained effort effect percent',0,100),
+                      nonlabor=numeric('Nonlabor cash change per case',-1e12,1e12),fixed=numeric('Recurring fixed cash cost',0,1e12),
+                      oneTime=numeric('One-time cost at phase start',0,1e12);
+                    const row={panel,start,end,cases,effect,nonlabor,fixed,oneTime};
+                    const remove=button('Remove phase','secondary');remove.onclick=()=>{phases.splice(phases.indexOf(row),1);panel.remove();invalidate();};
+                    panel.append(labelled('Start month',start),labelled('End month (inclusive)',end),labelled('Monthly cases',cases),
+                      labelled('Retained effort effect (%)',effect),labelled('Nonlabor cash change per case (positive = reduction)',nonlabor),
+                      labelled('Recurring fixed cost per month',fixed),labelled('One-time cost at phase start',oneTime),remove);
+                    phases.push(row);phaseHost.append(panel);invalidate();
+                  }
+                  const add=button('Add monthly phase','secondary');add.onclick=addPhase;
+                  const remove=button('Remove design','secondary');remove.onclick=()=>{designs.splice(designs.indexOf(design),1);group.remove();invalidate();};
+                  group.append(labelled('Design name',name),labelled('Cash conversion of positive capacity value (%)',conversion),
+                    labelled('Initial cash cost at month zero',initial),phaseHost,add,remove);
+                  designs.push(design);designHost.append(group);addPhase();
+                }
+                const add=button('Add alternative investment design','secondary');add.onclick=addDesign;
+                for(const node of [inputFields,selectionHost,designHost]){
+                  node.addEventListener('input',invalidate);node.addEventListener('change',invalidate);
+                }
+                function read(n){
+                  if(n.value===''||!n.checkValidity()||!Number.isFinite(Number(n.value)))throw Error('Enter every numerical assumption explicitly, including zeros.');
+                  return Number(n.value);
+                }
+                prepare.onclick=()=>{
+                  invalidate();
+                  try{
+                    const measurement_ids=choices.filter(c=>c.check.checked).map(c=>c.m.measurement_id);
+                    if(!choices.some(c=>c.check.checked&&c.m.period==='baseline')||!choices.some(c=>c.check.checked&&c.m.period==='after'))throw Error('Select comparable baseline and after measurements.');
+                    if(!/^[A-Z]{3}$/.test(currency.value)||!designs.length)throw Error('Enter one uppercase currency and at least one design.');
+                    const shares=sensitivity.value.split(',').map(x=>{if(!x.trim()||!Number.isFinite(Number(x))||Number(x)<0||Number(x)>100)throw Error('Enter valid comma-separated percentages.');return Number(x)/100;});
+                    draft={snapshot_sha256:inv.snapshot_sha256,measurement_ids,currency:currency.value,
+                      labor_hour_value:read(hourly),monthly_discount_rate:read(discount)/100,horizon_months:read(horizon),
+                      conversion_sensitivity:shares,designs:designs.map(d=>{
+                        if(!d.name.value.trim()||!d.phases.length)throw Error('Every design needs a name and explicit monthly phases.');
+                        return {label:d.name.value.trim(),cash_conversion_share:read(d.conversion)/100,initial_cash_cost:read(d.initial),
+                          phases:d.phases.map(p=>({start_month:read(p.start),end_month:read(p.end),monthly_cases:read(p.cases),
+                            retained_effort_effect_share:read(p.effect)/100,nonlabor_cash_change_per_case:read(p.nonlabor),
+                            recurring_fixed_cash_cost:read(p.fixed),one_time_cash_cost_at_phase_start:read(p.oneTime)}))};
+                      })};
+                    review.value=JSON.stringify(draft,null,2);run.disabled=false;
+                    status.textContent='Review the exact assumptions, then evaluate. No financial record or implementation state will change.';
+                  }catch(error){status.textContent=error.message;}
+                };
+                function table(headers,rows){
+                  const wrap=el('div');wrap.style.cssText='max-width:100%;overflow-x:auto';
+                  const t=el('table'),h=el('thead'),hr=el('tr'),b=el('tbody');
+                  headers.forEach(x=>{const th=el('th',x);th.scope='col';hr.append(th);});h.append(hr);
+                  for(const row of rows){const tr=el('tr');row.forEach(x=>tr.append(el('td',x??'Not within horizon')));b.append(tr);}
+                  t.append(h,b);wrap.append(t);return wrap;
+                }
+                function cashChart(d){
+                  const section=el('div');section.setAttribute('role','group');section.setAttribute('aria-label','Discounted cash balance by month for '+d.label);
+                  const values=d.months.map(m=>Number(m.cumulative_discounted_cash_flow));
+                  const scale=Math.max(1,...values.map(Math.abs));
+                  section.append(el('p','Discounted cumulative cash balance; zero is the center line. Exact values are in the monthly table.','muted'));
+                  for(const [i,v] of values.entries()){
+                    const row=el('div');row.style.cssText='display:grid;grid-template-columns:52px minmax(0,1fr);align-items:center;gap:8px;margin:3px 0';
+                    row.append(el('span','M'+i));
+                    const track=el('div');track.style.cssText='position:relative;height:12px;border:1px solid currentColor;border-radius:3px;opacity:.85';
+                    const zero=el('div');zero.style.cssText='position:absolute;left:50%;height:100%;border-left:1px solid currentColor';
+                    const bar=el('div');bar.style.cssText='position:absolute;height:100%;background:currentColor';
+                    const width=50*Math.abs(v)/scale;
+                    bar.style.left=(v<0?50-width:50)+'%';bar.style.width=width+'%';
+                    track.title=d.months[i].cumulative_discounted_cash_flow;track.setAttribute('aria-hidden','true');track.append(zero,bar);row.append(track);section.append(row);
+                  }
+                  return section;
+                }
+                function exportFile(value,type,name){
+                  const url=URL.createObjectURL(new Blob([value],{type})),a=el('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
+                }
+                download.onclick=()=>{if(report&&active())exportFile(JSON.stringify(report,null,2),'application/json','owg-phased-investment.json');};
+                csv.onclick=()=>{
+                  if(!report||!active())return;
+                  const fields=['month','cases','released_hours','additional_hours','converted_positive_labor_value','unconverted_capacity_value',
+                    'additional_labor_cash_cost','nonlabor_cash_change','fixed_cash_cost','one_time_cash_cost','net_cash_flow','net_economic_value',
+                    'discounted_cash_flow','discounted_economic_value','cumulative_cash_flow','cumulative_discounted_cash_flow','cumulative_economic_value'];
+                  const quote=v=>'"'+String(v??'').replaceAll('"','""')+'"';
+                  const safeLabel=v=>/^[=+\-@\t\r\n]/.test(v)?"'"+v:v;
+                  const rows=[['design','currency',...fields],...report.designs.flatMap(d=>d.months.map(m=>[safeLabel(d.label),report.currency,...fields.map(k=>m[k])]))];
+                  exportFile(rows.map(r=>r.map(quote).join(',')).join('\r\n'),'text/csv','owg-phased-investment-months.csv');
+                };
+                run.onclick=async()=>{
+                  if(!draft)return;
+                  const n=++serial,body=draft;report=null;run.disabled=download.disabled=csv.disabled=true;resultHost.replaceChildren();
+                  status.textContent='Evaluating exact phased cash-flow scenarios…';
+                  try{
+                    const data=await post(path,body);
+                    if(!active()||n!==serial)return;
+                    if(data.snapshot_sha256!==inv.snapshot_sha256||data.idea_id!==idea.idea_id)throw Error('Unexpected measurement basis.');
+                    report=data;download.disabled=csv.disabled=false;
+                    const b=data.retained_effort_basis;
+                    resultHost.append(el('h5','Phased investment comparison'),
+                      el('p','Reported effort: '+b.baseline.minutes_per_case+' → '+b.after.minutes_per_case+
+                        ' minutes/case. '+data.selected_measurement_ids.length+' measurements included; '+data.excluded_measurement_ids.length+' excluded.'),
+                      el('p','Currency '+data.currency+' · first design is the explicit comparison baseline. Economic value includes released capacity; cash flow includes only declared cash conversion.','muted'),
+                      table(['Design','Cash NPV','Economic NPV','Peak cash funding','Released hours','Discounted cash sustained break-even month'],
+                        data.designs.map(d=>[d.label,d.cash_npv,d.economic_npv,d.peak_undiscounted_cash_funding_requirement,d.released_hours,
+                          d.discounted_cash_break_even.sustained_nonnegative_from_month])));
+                    for(const d of data.designs){
+                      const details=el('details');details.append(el('summary',d.label+' · monthly cash flow and sensitivity'));
+                      const s=d.cash_conversion_review;
+                      details.append(el('p','Cash NPV change vs first design: '+d.change_vs_first_design.cash_npv+
+                        ' · minimum conversion for nonnegative cash NPV: '+(s.minimum_cash_conversion_share_for_nonnegative_npv??'Not attainable')+
+                        ' (fraction). '+s.status.replaceAll('_',' ')+'.'),
+                        el('p','Unconverted released hours: '+d.unconverted_released_hours+'; additional hours: '+d.additional_hours+
+                          '. Initial investment and additional phase costs are included.'),
+                        table(['Cash conversion fraction','Cash NPV','Nonnegative'],s.sensitivity.map(x=>[x.cash_conversion_share,x.cash_npv,x.cash_npv_nonnegative?'Yes':'No'])),
+                        cashChart(d),table(['Month','Cases','Released hours','Extra hours','Cash flow','Economic value','Cumulative cash','Discounted cumulative cash'],
+                          d.months.map(m=>[m.month,m.cases,m.released_hours,m.additional_hours,m.net_cash_flow,m.net_economic_value,
+                            m.cumulative_cash_flow,m.cumulative_discounted_cash_flow])),
+                        el('p','First discounted cash crossing: '+(d.discounted_cash_break_even.first_nonnegative_month??'none')+
+                          '; sustained crossing within horizon: '+(d.discounted_cash_break_even.sustained_nonnegative_from_month??'none')+
+                          '; later reversal: '+String(d.discounted_cash_break_even.returns_below_zero_after_first_crossing)+'.','muted'));
+                      resultHost.append(details);
+                    }
+                    resultHost.append(el('p',data.interpretation,'muted'));status.textContent='Conditional business cases evaluated; no actual cash savings verified.';
+                  }catch(error){if(active()&&n===serial)status.textContent=error.message;}
+                  finally{if(active()&&n===serial)run.disabled=false;}
+                };
+                addDesign();invalidate();
+                investmentHost.replaceChildren(el('h5','Phased investment business cases'),
+                  el('p','Select exact before/after measurements. Enter every monthly phase and alternative explicitly. The retained effort difference is not causal and no quality/adoption assessment is inferred. Cash flow and economic capacity value are separate.','muted'),
+                  selectionHost,inputFields,designHost,add,prepare,field('Exact reviewed investment assumptions',review),run,download,csv,status,resultHost);
+              }catch(error){if(active())investmentHost.replaceChildren(el('p',error.message));}
+            };
+            parts.push(investmentLaunch,investmentHost);
+
           }
           parts.push(el('p',r.interpretation,'muted'));host.replaceChildren(...parts);
         };
