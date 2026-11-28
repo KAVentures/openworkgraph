@@ -769,6 +769,9 @@
         const max=el('input');max.type='number';max.min='1';max.max='18';max.value='18';max.id='owgBudgetMax';
         const labelled=(label,node)=>{const wrapper=el('label',label+' ');wrapper.append(node);return wrapper;};
         const controls=el('div',null,'row');controls.append(labelled('Currency',currency),labelled('Budget basis',basis),labelled('Budget limit',limit),labelled('Maximum selected ideas',max));
+        const sensitivity=el('input');sensitivity.type='checkbox';sensitivity.id='owgBudgetSensitivity';sensitivity.checked=false;
+        const sensitivityTargets=el('input');sensitivityTargets.type='text';sensitivityTargets.id='owgBudgetPriorityTargets';sensitivityTargets.maxLength=80;sensitivityTargets.placeholder='50, 100, 150';sensitivityTargets.disabled=true;
+        controls.append(labelled('Include within-budget tie-break sensitivity',sensitivity),labelled('Optional within-budget priority targets (comma-separated)',sensitivityTargets));
         const frontierOn=el('input');frontierOn.type='checkbox';frontierOn.id='owgBudgetFrontier';
         const targets=el('input');targets.type='text';targets.id='owgBudgetFrontierTargets';targets.value='50,100,200';targets.maxLength=80;targets.disabled=true;
         const checkpoints=el('input');checkpoints.type='text';checkpoints.id='owgBudgetFrontierCheckpoints';checkpoints.maxLength=200;checkpoints.disabled=true;checkpoints.placeholder='Optional: 10000,50000,100000';
@@ -781,7 +784,8 @@
         const run=button('Evaluate exact portfolio combinations','secondary'),download=button('Download scenario report','secondary');download.disabled=true;
         let attempt=0,report=null;const controlsById=new Map();
         function invalidate(){attempt++;report=null;download.disabled=true;out.replaceChildren();status.textContent='Review inputs and evaluate again.';run.disabled=false;}
-        for(const control of [currency,basis,limit,max])control.addEventListener('input',invalidate);
+        for(const control of [currency,basis,limit,max,sensitivity,sensitivityTargets])control.addEventListener('input',invalidate);
+        sensitivity.onchange=()=>{sensitivityTargets.disabled=!sensitivity.checked;invalidate();};
         const query=el('input');query.type='search';query.placeholder='Find opportunity by name or ID';query.setAttribute('aria-label','Find opportunities');
         function renderChoices(){
           options.replaceChildren();
@@ -814,6 +818,10 @@
             [...controlsById.values()].some(c=>c.selected.checked&&!c.priority.value)){
             status.textContent='Enter an uppercase currency, budget, selection limit and priorities for 1–18 candidates.';return;
           }
+          const parts=sensitivity.checked&&sensitivityTargets.value.trim()?sensitivityTargets.value.split(',').map(v=>v.trim()):[];
+          if(parts.length>12||parts.some(v=>!/^\d{1,4}$/.test(v)||Number(v)>1800)||new Set(parts.map(Number)).size!==parts.length){
+            status.textContent='Enter up to 12 distinct integer priority targets from 0 to 1800.';return;
+          }
           let frontierReview;
           if(frontierOn.checked){
             const values=targets.value.split(',').map(x=>x.trim());
@@ -835,7 +843,7 @@
           run.disabled=true;status.textContent='Evaluating all bounded candidate subsets…';
           try{
             const data=await(await api('/v1/automation-pipeline/budget-scenario',{method:'POST',headers:{'Content-Type':'application/json'},
-              body:JSON.stringify({snapshot_sha256:inv.snapshot_sha256,currency:currency.value,budget_basis:basis.value,budget_limit:Number(limit.value),max_selected:Number(max.value),candidates,...(frontierReview?{frontier_review:frontierReview}:{})})})).json();
+              body:JSON.stringify({snapshot_sha256:inv.snapshot_sha256,currency:currency.value,budget_basis:basis.value,budget_limit:Number(limit.value),max_selected:Number(max.value),candidates,...(frontierReview?{frontier_review:frontierReview}:{}),...(sensitivity.checked?{include_sensitivity:true,priority_targets:parts.map(Number)}:{})})})).json();
             if(!active()||k!==attempt)return;
             if(data.snapshot_sha256!==inv.snapshot_sha256)throw Error('Unexpected portfolio snapshot.');
             report=data;download.disabled=false;status.textContent=data.feasible_subsets+' feasible subsets of '+data.subsets_considered+' examined.';
@@ -893,6 +901,37 @@
               host.append(details,grid(['Selected count','Feasible subsets'],f.feasible_subset_counts_by_size.map(x=>[x.selected_count,x.count])),el('p',f.interpretation,'muted'));out.append(host);
             }
             const details=el('details');details.append(el('summary','Best feasible alternative by selected count'),...data.best_by_selected_count.map(show));out.append(details);
+            if(data.sensitivity){
+              const d=data.sensitivity;
+              const table=(headers,rows)=>{const wrap=el('div',null,'table-wrap'),t=el('table'),head=el('thead'),hr=el('tr'),body=el('tbody');
+                for(const h of headers){const th=el('th',h);th.scope='col';hr.append(th);}head.append(hr);
+                for(const values of rows){const row=el('tr');for(const v of values)row.append(el('td',v==null?'—':String(v)));body.append(row);}
+                t.append(head,body);wrap.append(t);return wrap;};
+              const summary=el('section');summary.id='owgBudgetSensitivityResults';
+              const names=row=>row?.selected_idea_ids.map(id=>titles.get(id)||id).join('; ')||'No ideas selected';
+              summary.append(el('h4','Exact within-budget tie-break sensitivity'),
+                el('p',d.frontier_point_count+' non-dominated points within the reviewed cap. '+d.maximum_priority_subset_count+
+                  ' maximum-priority subsets; '+d.maximum_priority_min_cost_subset_count+' also achieve minimum cost.'),
+                table(['Budget used ('+data.currency+')','Priority points','Selected ideas','Witness'],
+                  d.frontier.map(r=>[r.budget_used,r.priority_points,r.selected_count,names(r)])));
+              if(d.priority_targets.length)summary.append(el('h5','Minimum budget for declared priority targets'),
+                table(['Priority target','Status','Minimum budget ('+data.currency+')','Witness'],
+                  d.priority_targets.map(r=>[r.target_priority_points,r.status.replaceAll('_',' '),r.minimum_budget,r.witness?names(r.witness):null])));
+              summary.append(el('h5','Exact opportunity inclusion sensitivity'),
+                table(['Opportunity','Feasible with','Feasible without','All feasible','Max priority','Max priority / min cost'],
+                  d.candidate_sensitivity.map(r=>[titles.get(r.idea_id)||r.idea_id,r.feasible_with_count,r.feasible_without_count,
+                    r.membership_in_all_feasible,r.membership_among_max_priority,r.membership_among_max_priority_min_cost])));
+              const picker=el('select');picker.id='owgBudgetSensitivityCandidate';
+              for(const r of d.candidate_sensitivity){const o=el('option',titles.get(r.idea_id)||r.idea_id);o.value=r.idea_id;picker.append(o);}
+              const result=el('div');result.setAttribute('aria-live','polite');
+              const inspect=()=>{const r=d.candidate_sensitivity.find(x=>x.idea_id===picker.value);if(!r)return;
+                result.replaceChildren(table(['Constraint','Status','Best priority','Priority loss','Cost difference ('+data.currency+')','Witness'],
+                  [['Force inclusion',r.force_include],['Force exclusion',r.force_exclude]].map(([label,v])=>
+                    [label,v.status,v.best?.priority_points,v.priority_loss,v.additional_budget_at_best,v.best?names(v.best):null])));};
+              picker.onchange=inspect;summary.append(el('h5','Inspect forced inclusion or exclusion'),labelled('Opportunity',picker),result);inspect();
+              for(const note of d.interpretation)summary.append(el('p',note,'muted'));
+              out.append(summary);
+            }
             for(const candidate of data.candidates.filter(c=>c.blockers.length))out.append(el('p',candidate.title+': '+candidate.blockers.map(b=>b.code+(b.dependency_id?' ('+(titles.get(b.dependency_id)||b.dependency_id)+')':'')).join('; ')));
             out.append(el('p','Required ideas and unfinished selected prerequisites: '+data.required_closure_ids.map(id=>titles.get(id)||id).join('; ')));
             out.append(el('p','Priority points are entered by you; no measured or modeled savings are summed. This scenario makes no changes to the portfolio.','muted'));
