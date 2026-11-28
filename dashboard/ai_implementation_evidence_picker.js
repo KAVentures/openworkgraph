@@ -1,4 +1,5 @@
 /* Explicit local evidence selection; candidate groups are navigation, not truth. */
+import {recentWindow,RECENT_HOURS} from './ai_implementation_first_workflow.js';
 const LIMIT = 2 * 1024 * 1024;
 const RUN = /^execution:[a-f0-9]{16}$/;
 const WINDOW = /^\d{4}-\d\d-\d\dT\d\d:\d\d(?::\d\d(?:\.\d{1,3})?)?(?:Z|[+-]\d\d:\d\d)$/;
@@ -68,10 +69,11 @@ export function mountImplementationEvidencePicker(host,{getBusy,lock,onSelected,
   const discover=button('Find local execution candidates'),load=button('Use selected executions (replace sources)'),save=button('Download last selected original evidence');
   const status=el('p','Set the explicit time window. No capture, query or sharing occurs automatically.');
   status.setAttribute('role','status');status.setAttribute('aria-live','polite');
-  const candidates=el('div'),selection=el('p');let rows=[],last=null,epoch=0;
+  const candidates=el('div'),selection=el('p'),presets=el('div');let rows=[],last=null,epoch=0;
+  const presetButtons=RECENT_HOURS.map(hours=>{const n=button(hours===168?'Last 7 days':'Last '+hours+(hours===1?' hour':' hours'));n.onclick=()=>{if(getBusy())return;const w=recentWindow(hours);since.value=w.since;until.value=w.until;resetWindow();};presets.append(n);return n;});
   function parsed(){try{return {window:evidenceWindow(since.value.trim(),until.value.trim()),ids:selectedExecutionIds(ids.value)};}catch(_){return null;}}
   function refresh(){
-    const busy=getBusy();for(const n of [since,until,ids])n.disabled=busy;
+    const busy=getBusy();for(const n of [since,until,ids,...presetButtons])n.disabled=busy;
     let validWindow=false;try{evidenceWindow(since.value.trim(),until.value.trim());validWindow=true;}catch(_){}
     discover.disabled=busy||!validWindow;load.disabled=busy||!parsed();save.disabled=busy||!last;
     let selected=[];try{selected=selectedExecutionIds(ids.value);}catch(_){}
@@ -137,7 +139,7 @@ export function mountImplementationEvidencePicker(host,{getBusy,lock,onSelected,
   const details=el('details');details.id='owgImplementationEvidencePicker';
   details.append(el('summary','Select observed work directly from OWG'),
     el('p','Optional alternative to importing files. Search within seven days; derived families and limited examples are navigation only. Select the actual executions you want the external AI to interpret. Editing the picker does not replace existing handoff sources until you explicitly click Use selected executions. No automatic upload.'),
-    field('Evidence window start (ISO 8601 with offset)',since),field('Evidence window end (ISO 8601 with offset)',until),discover,candidates,
+    el('p','Choose a recent window or enter exact timestamps. Presets do not query or replace evidence.'),presets,field('Evidence window start (ISO 8601 with offset)',since),field('Evidence window end (ISO 8601 with offset)',until),discover,candidates,
     field('Exact execution IDs (one per line or comma separated)',ids),selection,load,status,save);
   host.append(details);refresh();return {refresh};
 }
