@@ -122,6 +122,23 @@ async function reviewPrerequisites(browser,base,session,bearer){
   const [projectDownload]=await Promise.all([page.waitForEvent('download'),page.getByRole('button',{name:'Download OpenAI Agents project',exact:true}).click()]);
   assert.equal((await fs.readFile(await projectDownload.path())).subarray(0,2).toString(),'PK');
   const result=await page.evaluate(async id=>{const r=await fetch('/v1/process-catalog/agent-project?'+new URLSearchParams({workflow_id:id,revision:2}));return {status:r.status,type:r.headers.get('content-type'),bytes:(await r.arrayBuffer()).byteLength};},saved.workflow_id);assert.equal(result.status,200);assert.match(result.type,/zip/);assert.ok(result.bytes>10000);
+  // Compare missing-table r1 with the explicitly confirmed table in r2.
+  await page.getByRole('button',{name:'Load revision history',exact:true}).click();
+  await page.getByRole('button',{name:'Compare r1 with opened r2',exact:true}).click();
+  const differential=page.locator('#owgDecisionDifferential');
+  await differential.locator('summary').first().click();
+  await differential.getByLabel('Differential test dates',{exact:true}).fill('2026-10-26,2026-01-01');
+  await differential.getByLabel('Differential synthetic dimensions JSON',{exact:true}).fill(JSON.stringify([{path:'/amount',choices:[{value:99},{value:100},{missing:true}]}]));
+  await differential.getByRole('button',{name:'Compare exact finite decision domains'}).click();
+  await differential.getByText('6 / 6 dated input points changed. 6 table/input evaluations compared.',{exact:true}).waitFor();
+  await differential.getByLabel('Differential evidence filter',{exact:true}).selectOption('selection_gained');
+  await differential.getByText('4 matching points; 4 shown at offset 0.',{exact:true}).waitFor();
+  const [diffDownload]=await Promise.all([page.waitForEvent('download'),differential.getByRole('button',{name:'Download minimized differential report'}).click()]);
+  const diff=JSON.parse(await fs.readFile(await diffDownload.path(),'utf8'));
+  assert.equal(diff.nonexclusive_flag_counts.selection_gained,4);assert.equal(diff.human_expectations_reviewed,false);
+  await differential.getByLabel('Compact witness budget',{exact:true}).fill('1');
+  assert.equal(await differential.getByRole('button',{name:'Download minimized differential report'}).count(),0);
+  await differential.locator('summary').first().click();
   const axe=await fs.readFile(require.resolve('axe-core/axe.min.js'),'utf8');await page.addScriptTag({content:axe});assert.deepEqual(await page.evaluate(async()=>{const r=await axe.run(document.querySelector('#owgCatalogEditor'),{runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21aa']}});return r.violations.map(v=>v.id);}),[]);
   await page.setViewportSize({width:390,height:844});assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+2));
   const multi={...model,

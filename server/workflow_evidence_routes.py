@@ -1147,6 +1147,32 @@ async def decision_domain_coverage(request: Request, workflow_id: str = Query(pa
     return JSONResponse(result, headers={'Cache-Control': 'no-store'})
 
 
+@app.post('/v1/process-catalog/decision-domain/compare')
+async def compare_decision_domains(request: Request, workflow_id: str = Query(pattern=_PROCESS_ID),
+        before_revision: int = Query(ge=1), after_revision: int = Query(ge=1),
+        before_sha256: str = Query(pattern=r'^[a-f0-9]{64}$'),
+        after_sha256: str = Query(pattern=r'^[a-f0-9]{64}$')) -> Response:
+    from .local_source_routes import _require_dashboard
+    from shared.process_decision_differential import compare
+    from starlette.concurrency import run_in_threadpool
+    _require_dashboard(request)
+    payload = await _process_json(request, maximum=65536)
+    before = _domain_assurance_packet(workflow_id,before_revision,before_sha256)
+    after = _domain_assurance_packet(workflow_id,after_revision,after_sha256)
+    try:
+        result = await run_in_threadpool(compare,before,after,payload)
+    except ValueError as exc:
+        # Never relay Pydantic error values or supplied synthetic input.
+        message = str(exc) if type(exc) is ValueError and len(str(exc))<200 else 'Invalid bounded differential decision review'
+        if message.startswith('review inputs changed'):
+            raise HTTPException(409,message) from None
+        raise HTTPException(422,'Invalid bounded differential decision review; check dates, dimensions, limits and saved references') from None
+    _domain_assurance_packet(workflow_id,before_revision,before_sha256)
+    _domain_assurance_packet(workflow_id,after_revision,after_sha256)
+    _require_dashboard(request)
+    return JSONResponse(result,headers={'Cache-Control':'no-store'})
+
+
 @app.get('/v1/process-catalog/revision')
 def get_process_catalog_revision(workflow_id: str = Query(pattern=_PROCESS_ID), revision: int | None = Query(default=None, ge=1)) -> Response:
     return JSONResponse(_catalog_record(workflow_id, revision), headers={'Cache-Control': 'no-store'})

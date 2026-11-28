@@ -191,6 +191,23 @@ with TestClient(app) as client:
     assert result.json()["tables"][0]["status_counts"] == {"overlap":1,"unique_match":2}
     assert client.post(url, params={**ref,"content_sha256":"0"*64},json=spec(0),headers=dashboard).status_code==409
     assert client.post(url, params={**ref,"revision":99},json=spec(0),headers=dashboard).status_code==404
+    changed=model()
+    changed.business_rules[0].predicate.conditions[0].expected=1
+    changed.business_rules[1].predicate.conditions[0].expected=2
+    second=client.post("/v1/process-catalog",json={"workflow_id":ref["workflow_id"],"title":"Coverage",
+        "expected_revision":1,"process_model":changed.model_dump(),"user_confirmed":True},headers=dashboard)
+    assert second.status_code==200,second.text
+    pair={"workflow_id":ref["workflow_id"],"before_revision":1,"after_revision":2,
+          "before_sha256":ref["content_sha256"],"after_sha256":second.json()["content_sha256"]}
+    diff=url+"/compare"
+    body={"dates":["2026-06-01"],"dimensions":spec(-1,0,1,2)["dimensions"]}
+    assert client.post(diff,params=pair,json=body,headers=bearer).status_code in (401,403)
+    result=client.post(diff,params=pair,json=body,headers=dashboard)
+    assert result.status_code==200,result.text
+    assert result.headers["cache-control"]=="no-store" and result.json()["changed_points"]==2
+    assert client.post(diff,params={**pair,"before_sha256":"0"*64},json=body,headers=dashboard).status_code==409
+    assert client.post(diff,params=pair,json={**body,"expected_review_sha256":"0"*64},headers=dashboard).status_code==409
+    assert client.post(diff,params=pair,content=b'{"dates":[],"dates":[]}',headers={**dashboard,"Content-Type":"application/json"}).status_code==422
 """
     env = {**os.environ, "WORKFLOW_OBSERVER_DATA": str(tmp_path / "data"),
            "WORKFLOW_OBSERVER_AUTH_DIR": str(tmp_path / "auth"),

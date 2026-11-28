@@ -93,3 +93,7 @@ The synthetic fixtures cover threshold overlap, FIRST shadowing, gaps,
 unknowns, dependencies, date/confirmation boundaries, malformed and oversized
 domains, minimized reproducible output and local HTTP authorization. This
 feature neither proves general DMN/FEEL coverage nor authorizes agent action.
+
+
+For paired behavior across two saved revisions and several effective dates,
+see [Differential decision-domain review](DECISION_DIFFERENTIAL_REVIEW.md).
