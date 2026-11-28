@@ -3050,6 +3050,10 @@
               field('Exported project for source check',selected),field('Confirmed source-state expectation',expectation),field('Reported run (only runs that reported this project\'s exact specification, from linked reports)',runChoice),field('Observed record reference (owg:r:…)',sourceRef),consentText,run,note,history,
               el('h5','Review a previous download'),el('p','Select the unchanged original file to compare its bytes with the retained export hash. This local review does not retain the file or contact a provider.','muted'),
               field('Original source-check JSON file',reviewFile),reviewButton,reviewResult);
+            const cohortHost=el('div');checkHost.appendChild(cohortHost);
+            import('/project-source-cohort.js').then(m=>{if(generation===detailGeneration&&view===sourceView)m.mountProjectSourceCohort(cohortHost,
+              {api,base,revision:idea.revision,expectations:()=>entries,isCurrent:()=>generation===detailGeneration&&view===sourceView,projectSelect:selected});})
+              .catch(()=>{cohortHost.textContent='Source-check cohort review unavailable.';});
             await loadOptions();
           }catch(e){if(generation===detailGeneration&&view===sourceView)status.textContent=e.message;}
         };
