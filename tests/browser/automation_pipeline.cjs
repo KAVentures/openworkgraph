@@ -969,6 +969,27 @@ with zipfile.ZipFile(sys.argv[1]) as z:
    await page.getByRole('button',{name:'Reconcile original downloaded check',exact:true}).click();
    await page.getByText('document does not match a retained export for this project',{exact:false}).waitFor();
    assert.equal(sourceDownloads,1);
+   // Reconcile a complete declared cohort using the actual unknown receipt and a missing case.
+   const cohortPanel=page.locator('#owgProjectSourceCohort');
+   await cohortPanel.locator('summary').click();
+   await cohortPanel.getByRole('button',{name:'Load confirmed project expectations',exact:true}).click();
+   await cohortPanel.getByLabel('Declared case ID',{exact:true}).fill('case_1');
+   await cohortPanel.getByLabel('Case observed record reference',{exact:true}).fill(sourceB);
+   await cohortPanel.getByLabel('Original case source-check document (optional)',{exact:true}).setInputFiles({name:'original.json',mimeType:'application/json',buffer:checkBytes});
+   await cohortPanel.getByRole('button',{name:'Add declared source-check case',exact:true}).click();
+   await cohortPanel.getByText('case_1 ·', {exact:false}).first().waitFor();
+   await cohortPanel.getByLabel('Declared case ID',{exact:true}).fill('case_2');
+   await cohortPanel.getByRole('button',{name:'Add declared source-check case',exact:true}).click();
+   await cohortPanel.getByRole('button',{name:'Reconcile declared cohort',exact:true}).click();
+   await cohortPanel.getByText('2 declared cases · 0 historical operations reported verified · 1 not established · 1 missing documents',{exact:true}).waitFor();
+   const [cohortDownload]=await Promise.all([page.waitForEvent('download'),cohortPanel.getByRole('button',{name:'Download cohort review JSON',exact:true}).click()]);
+   const cohortReport=JSON.parse(await fs.readFile(await cohortDownload.path(),'utf8'));
+   assert.equal(cohortReport.business_outcomes_verified,false);assert.equal(cohortReport.case_association_verified,false);
+   assert.equal(cohortReport.cases[0].document_sha256,checkHistory.exports[0].document_sha256);
+   assert(!JSON.stringify(cohortReport).includes(sourceB));
+   await cohortPanel.getByRole('button',{name:'Remove case_2',exact:true}).click();
+   assert(await cohortPanel.getByRole('button',{name:'Download cohort review JSON',exact:true}).isDisabled());
+   await cohortPanel.locator('summary').click();
    const sourceAudit=await page.evaluate(async()=>window.axe.run(document.querySelector('#owgPipelineCard'),{
      runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21a','wcag21aa']},resultTypes:['violations']}));
    assert.deepEqual(sourceAudit.violations.map(v=>v.id),[]);
