@@ -11,7 +11,7 @@ _FIELDS = {'sources', 'expected_packet_sha256', 'max_bytes', 'model', 'port',
 
 
 def generate(payload):
-    if not isinstance(payload, dict) or set(payload) != _FIELDS:
+    if not isinstance(payload, dict) or set(payload) not in (_FIELDS, _FIELDS | {'context_representation'}):
         raise ValueError('exact local inference request required')
     if payload['confirm_local_inference'] is not True:
         raise ValueError('explicit local inference confirmation required')
@@ -25,7 +25,8 @@ def generate(payload):
     proposal, receipt = adapter.propose(sources, model=payload['model'],
         port=payload['port'], max_context_bytes=budget,
         max_output_tokens=payload['max_output_tokens'], json_mode=payload['json_mode'],
-        confirm_local_inference=True, timeout=120)
+        confirm_local_inference=True, timeout=120,
+        context_representation=payload.get('context_representation', 'original'))
     return {'format': FORMAT, 'packet_sha256': packet['packet_sha256'],
             'proposal_json': contract._json(proposal).decode('utf-8'),
             'receipt': receipt, 'human_review_required': True,

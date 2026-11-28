@@ -109,7 +109,8 @@ def _generate_local(payload, request):
 async def generate_local(request: Request):
     payload = await _body(request)
     _require_dashboard(request)
-    if not isinstance(payload, dict) or set(payload) != {"sources", "expected_packet_sha256", "max_bytes", "model", "port", "max_output_tokens", "json_mode", "confirm_local_inference"}:
+    required = {"sources", "expected_packet_sha256", "max_bytes", "model", "port", "max_output_tokens", "json_mode", "confirm_local_inference"}
+    if not isinstance(payload, dict) or set(payload) not in (required, required | {"context_representation"}):
         raise HTTPException(422, "Exact local model request required")
     sources = payload["sources"]
     if not isinstance(sources, list) or not 1 <= len(sources) <= 8 or not all(isinstance(s, str) for s in sources):

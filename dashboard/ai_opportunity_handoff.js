@@ -28,7 +28,7 @@ export function mountAiOpportunityHandoff(host, post, onCreated){
   packetStatus.setAttribute('role','status');packetStatus.setAttribute('aria-live','polite');
   function invalidatePacket(){
     packetGeneration++;preparedPacket=null;downloadPacket.disabled=downloadGuide.disabled=true;
-    clearLocal();
+    contextMode.value='original';clearLocal();
     packetStatus.textContent='Evidence selection or budget changed. Prepare a new packet.';
   }
   budget.addEventListener('change',invalidatePacket);
@@ -69,12 +69,25 @@ export function mountAiOpportunityHandoff(host, post, onCreated){
         packet.packet_sha256!==response.packet_sha256||packet.event_count!==response.event_count||
         !Array.isArray(packet.coverage_gaps)||packet.coverage_gaps.length!==response.coverage_gap_count)
         throw Error('Unexpected evidence packet.');
+      const compact=response.compaction;
+      if(maxBytes<=524288){
+        if(!compact||!/^[0-9a-f]{64}$/.test(compact.compact_sha256)||
+          !Number.isSafeInteger(compact.compact_bytes)||compact.compact_bytes<1||
+          !Number.isSafeInteger(compact.bytes_saved)||compact.bytes_saved!==response.packet_bytes-compact.compact_bytes||
+          compact.available!==(compact.bytes_saved>0)||compact.token_savings_measured!==false)
+          throw Error('Unexpected compaction preview.');
+      }else if(compact!==null)throw Error('Unexpected compaction scope.');
       preparedPacket=response;
-      packetStatus.textContent='Packet ready: '+response.event_count+' events, '+response.coverage_gap_count+' coverage gaps, '+response.packet_bytes+' bytes. SHA-256: '+response.packet_sha256+'. Review before sharing with your chosen AI. No upload or inference occurred.';
+      packetStatus.textContent='Packet ready: '+response.event_count+' events, '+response.coverage_gap_count+' coverage gaps, '+response.packet_bytes+' bytes. SHA-256: '+response.packet_sha256+'. Review before sharing with your chosen AI. No upload or inference occurred.'+(compact?(compact.available?' Optional compact representation saves '+compact.bytes_saved+' evidence bytes; token savings unmeasured.':' Compaction does not reduce evidence bytes.'):'');
     }catch(error){if(ticket===packetGeneration)packetStatus.textContent=error.message;}
     finally{lock(false);}
   };
   const localModel=el('input'),localPort=el('input'),localTokens=el('input'),localJsonMode=el('input'),localConfirm=el('input');
+  const contextMode=el('select');
+  for(const [value,label] of [['original','Original evidence (default)'],['compact','Lossless compact evidence (experimental)']]){
+    const option=el('option',label);option.value=value;contextMode.append(option);
+  }
+  contextMode.value='original';
   localModel.maxLength=120;localModel.placeholder='Exact configured model ID';
   localPort.type=localTokens.type='number';localPort.min='1';localPort.max='65535';localPort.value='11434';
   localTokens.min='128';localTokens.max='16384';localTokens.value='4096';
@@ -86,15 +99,17 @@ export function mountAiOpportunityHandoff(host, post, onCreated){
   localStatus.setAttribute('role','status');localStatus.setAttribute('aria-live','polite');
   const generatedText=el('textarea');generatedText.readOnly=true;generatedText.rows=8;
   generatedText.hidden=true;
-  const localControls=[localModel,localPort,localTokens,localJsonMode,localConfirm];
+  const localControls=[localModel,localPort,localTokens,localJsonMode,localConfirm,contextMode];
   function localReady(){
     return !!preparedPacket&&preparedPacket.max_packet_bytes<=524288&&localConfirm.checked&&
+      (contextMode.value==='original'||(contextMode.value==='compact'&&preparedPacket.compaction?.available===true))&&
       /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,119}$/.test(localModel.value)&&
       Number.isInteger(Number(localPort.value))&&Number(localPort.value)>=1&&Number(localPort.value)<=65535&&
       Number.isInteger(Number(localTokens.value))&&Number(localTokens.value)>=128&&Number(localTokens.value)<=16384;
   }
   function refreshLocal(){
     for(const n of localControls)n.disabled=busy||!preparedPacket||preparedPacket.max_packet_bytes>524288;
+    contextMode.options[1].disabled=preparedPacket?.compaction?.available!==true;
     generate.disabled=busy||!localReady();
     useGenerated.disabled=saveProposal.disabled=saveReceipt.disabled=busy||!generatedResult;
   }
@@ -107,6 +122,7 @@ export function mountAiOpportunityHandoff(host, post, onCreated){
     refreshLocal();
   }
   for(const n of [localModel,localPort,localTokens,localJsonMode])n.addEventListener('input',clearLocal);
+  contextMode.addEventListener('change',clearLocal);
   localConfirm.addEventListener('change',refreshLocal);
   useGenerated.onclick=()=>{
     if(busy||!generatedResult)return;
@@ -118,7 +134,7 @@ export function mountAiOpportunityHandoff(host, post, onCreated){
   generate.onclick=async()=>{
     if(busy||!localReady())return;
     const packet=preparedPacket,ticket=packetGeneration,files=orderedSources.slice();
-    const settings={model:localModel.value,port:Number(localPort.value),max_output_tokens:Number(localTokens.value),json_mode:localJsonMode.checked};
+    const settings={model:localModel.value,port:Number(localPort.value),max_output_tokens:Number(localTokens.value),json_mode:localJsonMode.checked,context_representation:contextMode.value};
     clearLocal();lock(true);localStatus.textContent='Requesting one draft from the confirmed loopback model service…';
     try{
       const response=await post('/v1/ai-opportunity-handoff/generate-local',{
@@ -134,6 +150,12 @@ export function mountAiOpportunityHandoff(host, post, onCreated){
         receipt.packet_sha256!==packet.packet_sha256||receipt.requested_model!==settings.model||receipt.endpoint_reported_model!==settings.model||
         receipt.endpoint_is_loopback!==true||receipt.inference_location_verified!==false||
         receipt.execution_authorized!==false||receipt.actual_cost_verified!==false||receipt.semantic_correctness_verified!==false||
+        receipt.context_representation!==settings.context_representation||receipt.original_context_bytes!==packet.packet_bytes||
+        receipt.requested_output_tokens!==settings.max_output_tokens||receipt.json_mode!==settings.json_mode||
+        receipt.token_savings_verified!==false||receipt.model_quality_equivalence_verified!==false||
+        receipt.transmitted_context_bytes!==(settings.context_representation==='compact'?packet.compaction?.compact_bytes:packet.packet_bytes)||
+        receipt.compact_sha256!==(settings.context_representation==='compact'?packet.compaction?.compact_sha256:null)||
+        receipt.context_bytes_saved!==receipt.original_context_bytes-receipt.transmitted_context_bytes||
         !/^[0-9a-f]{64}$/.test(receipt.proposal_sha256)||receipt.review_status!=='structural_review_only'||
         !Number.isSafeInteger(receipt.elapsed_ms)||receipt.elapsed_ms<0||!receipt.usage||
         !['prompt_tokens','completion_tokens','total_tokens'].every(k=>receipt.usage[k]===null||
@@ -145,7 +167,7 @@ export function mountAiOpportunityHandoff(host, post, onCreated){
       generatedResult=response;generatedText.value=JSON.stringify(parsed,null,2);generatedText.hidden=false;
       const usage=receipt.usage,display=value=>value===null?'unknown':String(value);
       localStatus.textContent='Local model draft ready: '+display(usage.prompt_tokens)+' input, '+display(usage.completion_tokens)+
-        ' output, '+display(usage.total_tokens)+' total reported tokens; '+receipt.elapsed_ms+' ms. Costs and inference location are unverified. Inspect the proposal before using it.';
+        ' output, '+display(usage.total_tokens)+' total reported tokens; '+receipt.elapsed_ms+' ms. '+receipt.context_representation+' context: '+receipt.transmitted_context_bytes+' bytes, '+receipt.context_bytes_saved+' bytes saved. Token savings, costs, quality equivalence and inference location are unverified. Inspect the proposal before using it.';
     }catch(error){if(ticket===packetGeneration)localStatus.textContent=error.message;}
     finally{lock(false);}
   };
@@ -215,7 +237,7 @@ export function mountAiOpportunityHandoff(host, post, onCreated){
   localSection.append(el('summary','Optional: generate a draft with your local model'),
     el('p','Prepare a packet of at most 512 KiB. OWG makes one request to the configured port on the OWG server’s IPv4 loopback, not necessarily the browser machine. A loopback service may proxy or retain data; verify the service, egress and permissions first. No remote fallback.'),
     field('Local model ID',localModel),field('Local model port',localPort),field('Maximum output tokens',localTokens),
-    field('Request JSON-object mode',localJsonMode),field('I authorize sending the selected evidence to this configured loopback model service',localConfirm),
+    field('Model evidence representation',contextMode),field('Request JSON-object mode',localJsonMode),field('I authorize sending the selected evidence to this configured loopback model service',localConfirm),
     generate,localStatus,field('Generated proposal (unverified interpretation)',generatedText),useGenerated,saveProposal,saveReceipt);
   refreshLocal();
   const details=el('details');details.id='owgAiOpportunityHandoff';

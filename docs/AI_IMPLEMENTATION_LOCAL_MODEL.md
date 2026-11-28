@@ -70,3 +70,7 @@ citations, stale digests, malformed JSON, refusals, mismatched model identity,
 redirects, size bounds, no-consent rejection, and exclusive output creation.
 These do not constitute a real local-model quality benchmark or integrated
 product acceptance.
+
+## Experimental lossless compact transport
+
+Pass `--context-representation compact` explicitly to request a smaller lossless representation of the same original evidence. The default is `original`. The original evidence must fit the selected byte budget and the compact representation must be strictly smaller. OWG verifies exact expansion before contacting the service; it never silently falls back. The model receives instructions to resolve payload hashes and cite the original occurrence references and packet pin. The receipt records representation, original/transmitted evidence bytes, compact digest, requested output-token budget, JSON mode and endpoint-reported tokens. This is not a verified token saving or quality-equivalence claim; compare independently reviewed outcomes before choosing compact mode.

@@ -31,7 +31,7 @@ const path=require('node:path');
    await page.locator('#owgPipelineCounts').filter({hasText:'No ideas yet.'}).waitFor();
 
    // External AI proposal: select original evidence, review and add only an unassessed idea.
-   const portable=spawnSync(python,['-c',"import sys,json;sys.path.insert(0,'tests');from test_ai_implementation_review import source,proposal;s=[source(True)];print(json.dumps({'source':s[0],'proposal':proposal(s)}))"],{encoding:'utf8'});
+   const portable=spawnSync(python,['-c',"import sys,json;sys.path.insert(0,'tests');from test_ai_implementation_review import proposal;from test_ai_implementation_compact_inference import repetitive_sources;s=repetitive_sources();print(json.dumps({'source':s[0],'proposal':proposal(s)}))"],{encoding:'utf8'});
    assert.equal(portable.status,0,portable.stderr);
    const fixture=JSON.parse(portable.stdout),handoff=page.locator('#owgAiOpportunityHandoff');
    await handoff.locator('summary').click();
@@ -57,7 +57,9 @@ const path=require('node:path');
      let body='';req.on('data',chunk=>{body+=chunk;});req.on('end',()=>{
        localCalls++;const payload=JSON.parse(body);
        assert.equal(req.url,'/v1/chat/completions');assert.equal(payload.model,'local-test:1');
-       assert.equal(JSON.parse(payload.messages[1].content).packet_sha256,fixture.proposal.packet_sha256);
+       const context=JSON.parse(payload.messages[1].content);
+       if(localCalls===1)assert.equal(context.packet_sha256,fixture.proposal.packet_sha256);
+       else {assert.equal(context.original_packet_sha256,fixture.proposal.packet_sha256);assert.equal(context.packet_skeleton.event_count,10);}
        res.writeHead(200,{'Content-Type':'application/json'});
        res.end(JSON.stringify({model:'local-test:1',choices:[{finish_reason:'stop',message:{role:'assistant',content:JSON.stringify(modelAnswer)}}],usage:{prompt_tokens:120,completion_tokens:30,total_tokens:150}}));
      });
@@ -74,7 +76,18 @@ const path=require('node:path');
      await local.getByText('Local model draft ready:',{exact:false}).waitFor();
      assert.equal(localCalls,1);assert(await gen.isDisabled());
      const [receiptFile]=await Promise.all([page.waitForEvent('download'),local.getByRole('button',{name:'Download local model receipt',exact:true}).click()]);
-     assert.equal(JSON.parse(await fs.readFile(await receiptFile.path(),'utf8')).usage.total_tokens,150);
+     const originalReceipt=JSON.parse(await fs.readFile(await receiptFile.path(),'utf8'));
+     assert.equal(originalReceipt.usage.total_tokens,150);assert.equal(originalReceipt.context_representation,'original');
+     await local.getByLabel('Model evidence representation',{exact:true}).selectOption('compact');
+     assert(await gen.isDisabled());
+     await local.getByLabel('I authorize sending the selected evidence to this configured loopback model service',{exact:true}).check();
+     await gen.click();await local.getByText('Local model draft ready:',{exact:false}).waitFor();
+     assert.equal(localCalls,2);
+     const [compactReceiptFile]=await Promise.all([page.waitForEvent('download'),local.getByRole('button',{name:'Download local model receipt',exact:true}).click()]);
+     const compactReceipt=JSON.parse(await fs.readFile(await compactReceiptFile.path(),'utf8'));
+     assert.equal(compactReceipt.context_representation,'compact');
+     assert(compactReceipt.transmitted_context_bytes<originalReceipt.transmitted_context_bytes);
+     assert.equal(compactReceipt.packet_sha256,originalReceipt.packet_sha256);assert.equal(compactReceipt.token_savings_verified,false);
      await local.getByRole('button',{name:'Use generated proposal for review',exact:true}).click();
      await handoff.getByLabel('Human-reviewed opportunity title',{exact:true}).fill('Local model draft');
      await handoff.getByRole('button',{name:'Review exact proposal',exact:true}).click();

@@ -1,5 +1,6 @@
 """Prepare the existing external-AI packet for a deliberate local dashboard handoff."""
 from . import ai_implementation_review as contract
+from . import ai_context_compaction as compaction
 
 FORMAT = 'openworkgraph.ai-implementation-packet-preview.v1'
 GUIDE = '''Design an AI implementation proposal from the attached OWG evidence packet.
@@ -43,7 +44,16 @@ def preview(sources, max_bytes):
     encoded = contract._json(packet)
     # Keep the canonical JSON as text: browser JSON reserialization may change
     # numeric representations (e.g. 1.0 -> 1) and invalidate the packet pin.
+    compact_preview = None
+    if max_bytes <= 512 * 1024:
+        _, report = compaction.compact(packet, packet['packet_sha256'])
+        compact_preview = {'compact_sha256': report['compact_sha256'],
+                           'compact_bytes': report['compact_canonical_bytes'],
+                           'bytes_saved': report['canonical_bytes_saved'],
+                           'available': report['canonical_bytes_saved'] > 0,
+                           'token_savings_measured': False}
     return {'format': FORMAT, 'packet_json': encoded.decode('utf-8'), 'instructions': GUIDE,
+            'compaction': compact_preview,
             'packet_sha256': packet['packet_sha256'], 'event_count': packet['event_count'],
             'coverage_gap_count': len(packet['coverage_gaps']),
             'packet_bytes': len(encoded), 'max_packet_bytes': max_bytes,
