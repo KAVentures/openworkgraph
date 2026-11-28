@@ -98,6 +98,25 @@ def listing(log_id: str) -> dict[str, Any]:
     return _with_conn(log_id, run)
 
 
+def search_original_activities(log_id: str, payload: Any) -> dict[str, Any]:
+    """Look up original event labels, independently of case filters and applied mappings."""
+    from .event_log_activity_lookup import _literal
+    if (not isinstance(payload, dict) or set(payload) - {"search", "after"}
+            or not _literal(payload.get("search"), allow_empty=False)
+            or not _literal(payload.get("after", ""), allow_empty=True)):
+        raise workspace.EventLogWorkspaceError("enter valid activity search text and cursor")
+    search, after = payload["search"], payload.get("after", "")
+
+    def run(conn):
+        rows = conn.execute("""SELECT activity, count(*) FROM events
+            WHERE log_id = ? AND contains(activity, ?) AND activity > ?
+            GROUP BY activity ORDER BY activity LIMIT 101""", [log_id, search, after]).fetchall()
+        return {"activities": [{"activity": label, "events": count} for label, count in rows[:100]],
+                "next_after": rows[99][0] if len(rows) > 100 else None,
+                "limit": 100, "stable_snapshot": False}
+    return _with_conn(log_id, run)
+
+
 def create(log_id: str, payload: Any) -> dict[str, Any]:
     mapping = _parse(payload)
 
@@ -134,6 +153,36 @@ def preview_template(log_id: str, document: Any) -> dict[str, Any]:
                   for group in mapping.groups]
         return {"format": TEMPLATE_FORMAT, "mapping": definition, "groups": groups,
                 "applied": False}
+    return _with_conn(log_id, run)
+
+
+class MappingConflict(workspace.EventLogWorkspaceError):
+    """The reviewed mapping changed or became active before saving."""
+
+
+def update(log_id: str, mapping_id: str, payload: Any) -> dict[str, Any]:
+    if (not isinstance(payload, dict) or set(payload) != {"expected_sha256", "mapping"}
+            or not isinstance(payload["expected_sha256"], str)
+            or len(payload["expected_sha256"]) != 64
+            or any(c not in "0123456789abcdef" for c in payload["expected_sha256"])):
+        raise workspace.EventLogWorkspaceError("send an expected mapping revision and definition")
+    definition = _parse(payload["mapping"]).model_dump()
+
+    def run(conn):
+        row = conn.execute("SELECT mapping_id, created_at, definition, applied FROM activity_mappings "
+                           "WHERE log_id = ? AND mapping_id = ?", [log_id, mapping_id]).fetchone()
+        if row is None:
+            raise workspace.EventLogWorkspaceError("unknown activity mapping")
+        current = _describe(*row)
+        if current["definition_sha256"] != payload["expected_sha256"]:
+            raise MappingConflict("mapping changed since it was loaded; reload it before saving")
+        if current["applied"]:
+            raise MappingConflict("stop applying this mapping before editing it")
+        known = {r[0] for r in conn.execute("SELECT DISTINCT activity FROM events WHERE log_id = ?", [log_id]).fetchall()}
+        unknown = sorted({a for g in definition["groups"] for a in g["activities"]} - known)
+        conn.execute("UPDATE activity_mappings SET definition = ? WHERE log_id = ? AND mapping_id = ?",
+                     [json.dumps(definition), log_id, mapping_id])
+        return {**_describe(row[0], row[1], json.dumps(definition), False), "activities_not_in_log": unknown[:50]}
     return _with_conn(log_id, run)
 
 

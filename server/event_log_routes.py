@@ -4192,6 +4192,31 @@ async def event_log_preview_activity_mapping(request: Request, log_id: str):
     return response
 
 
+@router.post("/v1/event-logs/{log_id}/activity-mappings/activities/search")
+async def event_log_mapping_original_activity_search(request: Request, log_id: str):
+    from . import event_log_activity_mappings as activity_mappings
+    _require_dashboard(request)
+    spec = await _json_body(request, "original activity search", strict=True, limit=4096)
+    response = await run_in_threadpool(_respond, activity_mappings.search_original_activities, log_id, spec)
+    _require_dashboard(request)
+    return response
+
+
+@router.post("/v1/event-logs/{log_id}/activity-mappings/{mapping_id}/update")
+async def event_log_update_activity_mapping(request: Request, log_id: str, mapping_id: str):
+    from . import event_log_activity_mappings as activity_mappings
+    _require_dashboard(request)
+    spec = await _json_body(request, "activity mapping update", strict=True, limit=262144)
+    try:
+        result = await run_in_threadpool(activity_mappings.update, log_id, mapping_id, spec)
+    except activity_mappings.MappingConflict as exc:
+        raise HTTPException(409, str(exc)) from None
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(404 if "unknown activity mapping" in str(exc) else 422, str(exc)) from None
+    _require_dashboard(request)
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
 @router.post("/v1/event-logs/{log_id}/activity-mappings/applied")
 async def event_log_apply_activity_mapping(request: Request, log_id: str):
     """Body ``{"mapping_id": "amap_..."}`` applies one mapping; ``{"mapping_id": null}`` removes it."""

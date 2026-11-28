@@ -114,6 +114,51 @@ def test_validation_one_applied_at_a_time_delete_and_erase():
         mappings.listing(log)
 
 
+def test_find_original_labels_beyond_initial_choices_even_when_mapping_is_applied():
+    out = StringIO()
+    writer = csv.writer(out)
+    writer.writerow(["case", "activity", "time"])
+    for i in range(2050):
+        writer.writerow([f"case{i}", f"Label {i:04}", START.isoformat()])
+    log = workspace.import_log(BytesIO(out.getvalue().encode()), name="large label set", source_format="csv", mapping=MAPPING)["log_id"]
+    initial = mappings.listing(log)["original_activities"]
+    assert len(initial) == 2000
+    assert "Label 2049" not in {row["activity"] for row in initial}
+    made = mappings.create(log, {"name": "Group", "groups": [{"label": "Grouped", "activities": ["Label 2049"]}]})
+    mappings.apply_mapping(log, made["mapping_id"])
+    result = mappings.search_original_activities(log, {"search": "Label 2049"})
+    assert result["activities"] == [{"activity": "Label 2049", "events": 1}]
+    page = mappings.search_original_activities(log, {"search": "Label"})
+    assert len(page["activities"]) == 100 and page["next_after"] == "Label 0099"
+    following = mappings.search_original_activities(log, {"search": "Label", "after": page["next_after"]})
+    assert following["activities"][0]["activity"] == "Label 0100"
+    for bad in ({"search": ""}, {"search": "Label", "extra": True}, {"search": "Label", "after": None}):
+        with pytest.raises(workspace.EventLogWorkspaceError):
+            mappings.search_original_activities(log, bad)
+
+
+def test_edit_requires_reviewed_revision_and_inactive_mapping():
+    log = _log()
+    made = mappings.create(log, ENTER)
+    mid, revision = made["mapping_id"], made["definition_sha256"]
+    replacement = {**ENTER, "name": "Revised", "collapse_repeats": False}
+    mappings.apply_mapping(log, mid)
+    with pytest.raises(mappings.MappingConflict, match="stop applying"):
+        mappings.update(log, mid, {"expected_sha256": revision, "mapping": replacement})
+    assert mappings.listing(log)["mappings"][0]["name"] == "Data entry"
+    mappings.apply_mapping(log, None)
+    updated = mappings.update(log, mid, {"expected_sha256": revision, "mapping": replacement})
+    assert updated["mapping_id"] == mid and updated["created_at"] == made["created_at"]
+    assert updated["applied"] is False and updated["definition_sha256"] != revision
+    with pytest.raises(mappings.MappingConflict, match="changed since"):
+        mappings.update(log, mid, {"expected_sha256": revision, "mapping": ENTER})
+    assert mappings.listing(log)["mappings"][0]["name"] == "Revised"
+    assert "activity_mapping" not in workspace.variants(log)
+    mappings.apply_mapping(log, mid)
+    assert ("Open form", "Enter data", "Enter data", "Submit", "Approve") in {
+        tuple(v["path"]) for v in workspace.variants(log)["variants"]}
+
+
 def test_portable_mapping_preview_does_not_save_or_apply():
     source, destination = _log(), _log()
     saved = mappings.create(source, ENTER)
@@ -155,6 +200,10 @@ with TestClient(app) as client:
     base = f"/v1/event-logs/{log}/activity-mappings"
     body = {"name": "B steps", "groups": [{"label": "B", "activities": ["B1", "B2"]}], "collapse_repeats": True}
     assert client.post(base, json=body, headers=bearer).status_code == 403
+    assert client.post(base + "/activities/search", json={"search": "B"}, headers=bearer).status_code == 403
+    found = client.post(base + "/activities/search", json={"search": "B"}, headers=owner)
+    assert found.status_code == 200 and len(found.json()["activities"]) == 2
+    assert found.headers["cache-control"] == "no-store"
     template = {"format": "openworkgraph.activity-mapping.v1", "mapping": body}
     assert client.post(base + "/template/preview", json=template, headers=bearer).status_code == 403
     preview = client.post(base + "/template/preview", json=template, headers=owner)
@@ -165,10 +214,18 @@ with TestClient(app) as client:
     made = client.post(base, json=body, headers=owner)
     assert made.status_code == 200, made.text
     mid = made.json()["mapping_id"]
+    revision = made.json()["definition_sha256"]
+    update = {"expected_sha256": revision, "mapping": {**body, "name": "Revised"}}
+    assert client.post(f"{base}/{mid}/update", json=update, headers=bearer).status_code == 403
+    assert client.post(f"{base}/{mid}/update", json=update, headers=owner).status_code == 200
+    assert client.post(f"{base}/{mid}/update", json=update, headers=owner).status_code == 409
     assert client.post(base + "/applied", json={"mapping_id": mid}, headers=bearer).status_code == 403
     assert client.post(base + "/applied", json={"mapping_id": 5}, headers=owner).status_code == 422
     assert client.post(base + "/applied", json={"mapping_id": "amap_x"}, headers=owner).status_code == 404
     assert client.post(base + "/applied", json={"mapping_id": mid}, headers=owner).status_code == 200
+    current = client.get(base, headers=owner).json()["mappings"][0]
+    assert client.post(f"{base}/{mid}/update", json={"expected_sha256": current["definition_sha256"], "mapping": body}, headers=owner).status_code == 409
+    assert client.post(f"{base}/{mid}/update", json={"expected_sha256": "bad", "mapping": body}, headers=owner).status_code == 422
     variants = client.get(f"/v1/event-logs/{log}/variants", headers=owner).json()
     assert [v["path"] for v in variants["variants"]] == [["A", "B", "C"]] and variants["activity_mapping"]["mapping_id"] == mid
     assert client.get(base, headers=bearer).status_code == 403

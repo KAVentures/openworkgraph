@@ -3999,6 +3999,20 @@ separately. Labels match exactly, including commas and whitespace. The saved
 rule lists the completion labels used when checking whether a case is open.
 Changing the draft selection clears its preview; saving does not evaluate it.
 
+### Editing saved activity groupings
+
+Use **Edit** on an inactive saved activity mapping to load its groups into a
+draft. Save changes to update that mapping, or cancel to discard the draft.
+Stop applying a mapping before editing it; saving never applies it. A change
+made elsewhere since the draft was loaded is refused, so reload before saving.
+The update endpoint accepts the reviewed `expected_sha256` and a `mapping`
+definition at `POST /v1/event-logs/{log_id}/activity-mappings/{id}/update`.
+
+The grouping editor initially lists up to 2,000 frequent original activities.
+Search original labels to add further choices, paging through up to 100 matches
+at a time. Search uses the stored event labels even when an activity mapping is
+applied; it does not change the current selection or apply any grouping.
+
 ### Reusing activity groupings across logs
 
 Under **Group activities**, download a saved mapping as JSON. In another log,

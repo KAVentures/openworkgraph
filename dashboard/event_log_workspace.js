@@ -1324,9 +1324,15 @@
     const name=input('owgActivityMappingName','text','For example: Data entry steps');name.maxLength=200;
     const label=input('owgActivityGroupLabel','text','Higher-level name');label.maxLength=200;
     const pick=document.createElement('select');pick.id='owgActivityGroupPick';pick.multiple=true;pick.size=6;
+    const search=input('owgActivityMappingSearch','search','Search original activities');search.maxLength=200;
+    const find=button('Find activities','secondary');find.id='owgActivityMappingFind';
+    const more=button('More activities','secondary');more.id='owgActivityMappingMore';more.disabled=true;
+    const searchStatus=el('div',null,'muted');searchStatus.id='owgActivityMappingSearchStatus';searchStatus.setAttribute('role','status');
     const collapse=input('owgActivityMappingCollapse','checkbox');
     const addGroup=button('Add group','secondary');addGroup.id='owgActivityGroupAdd';
     const save=button('Save mapping','secondary');save.id='owgActivityMappingSave';
+    const cancel=button('Cancel editing','secondary');cancel.id='owgActivityMappingCancel';cancel.hidden=true;
+    let editing=null;
     const msg=el('div',null,'muted');msg.id='owgActivityMappingStatus';msg.setAttribute('role','status');msg.setAttribute('aria-live','polite');
     const generation=state.generation;
     const base=()=>'/v1/event-logs/'+encodeURIComponent(state.logId)+'/activity-mappings';
@@ -1347,7 +1353,15 @@
           format:'openworkgraph.activity-mapping.v1',
           mapping:{name:m.name,groups:m.groups,collapse_repeats:m.collapse_repeats}
         },null,2),'application/json');
-        li.append(toggle,del,exportMapping);list.appendChild(li);
+        const edit=button('Edit','secondary');edit.setAttribute('aria-label','Edit mapping '+m.name);edit.disabled=m.applied;
+        edit.title=m.applied?'Stop applying this mapping before editing.':'';
+        edit.onclick=()=>{
+          if(groups.length&&!window.confirm('Replace the current mapping draft?'))return;
+          editing={id:m.mapping_id,revision:m.definition_sha256};groups.splice(0,groups.length,...m.groups.map(g=>({label:g.label,activities:[...g.activities]})));
+          name.value=m.name;collapse.checked=m.collapse_repeats;drawDraft();save.textContent='Save changes';cancel.hidden=false;
+          msg.textContent='Editing “'+m.name+'”. Changes are saved only when you choose Save changes.';
+        };
+        li.append(toggle,del,edit,exportMapping);list.appendChild(li);
       });
       host.replaceChildren(r.mappings.length?list:el('div','No saved mappings.','muted'));
     };
@@ -1358,11 +1372,36 @@
     };
     save.onclick=async()=>{
       if(!groups.length){msg.textContent='Add at least one group.';return;}
-      try{const m=await post(base(),{name:name.value.trim()||'Activity mapping',groups,collapse_repeats:collapse.checked});
-        groups.length=0;drawDraft();msg.textContent='Saved “'+m.name+'”. Apply it to see it in every analysis.'+(m.activities_not_in_log.length?' Not in this log: '+m.activities_not_in_log.join(', ')+'.':'');
+      try{const definition={name:name.value.trim()||'Activity mapping',groups,collapse_repeats:collapse.checked};
+        const m=editing?await post(base()+'/'+encodeURIComponent(editing.id)+'/update',{expected_sha256:editing.revision,mapping:definition}):await post(base(),definition);
+        editing=null;save.textContent='Save mapping';cancel.hidden=true;groups.length=0;drawDraft();msg.textContent='Saved “'+m.name+'”. Apply it to see it in every analysis.'+(m.activities_not_in_log.length?' Not in this log: '+m.activities_not_in_log.join(', ')+'.':'');
         render(await (await api(base())).json());}
       catch(e){msg.textContent=e.message;}
     };
+    cancel.onclick=()=>{editing=null;groups.length=0;drawDraft();name.value='';collapse.checked=false;save.textContent='Save mapping';cancel.hidden=true;msg.textContent='Editing cancelled.';};
+    const searchRow=el('div',null,'row');searchRow.style.alignItems='end';searchRow.append(field('Find original activity labels',search),find,more);
+    let lookupTurn=0,lookupQuery='',nextAfter=null;
+    const searchPage=async(after)=>{
+      const ticket=++lookupTurn,query=lookupQuery;
+      const current=()=>ticket===lookupTurn&&generation===state.generation&&box.isConnected;
+      find.disabled=more.disabled=true;searchStatus.textContent='Searching original activities…';
+      try{
+        const result=await post(base()+'/activities/search',{search:query,...(after?{after}:{})});
+        if(!current())return;
+        const present=new Set([...pick.options].map(o=>o.value));let added=0;
+        for(const activity of result.activities){
+          if(present.has(activity.activity))continue;
+          const option=el('option',activity.activity+' ('+Number(activity.events).toLocaleString()+')');
+          option.value=activity.activity;pick.appendChild(option);present.add(option.value);added++;
+        }
+        nextAfter=result.next_after;
+        searchStatus.textContent=result.activities.length+' matching labels found; '+added+' added to the activity choices.'+(nextAfter?' More matches are available.':'');
+      }catch(error){if(current()){nextAfter=null;searchStatus.textContent=error.message;}}
+      finally{if(current()){find.disabled=false;more.disabled=nextAfter===null;}}
+    };
+    search.addEventListener('input',()=>{++lookupTurn;nextAfter=null;more.disabled=true;find.disabled=false;searchStatus.textContent='';});
+    find.onclick=()=>{lookupQuery=search.value;nextAfter=null;if(!lookupQuery){searchStatus.textContent='Enter activity search text.';return;}searchPage(null);};
+    more.onclick=()=>{if(nextAfter!==null)searchPage(nextAfter);};
     const row=el('div',null,'row');row.style.alignItems='end';
     const collapseWrap=el('div');const collapseLabel=el('label',' Collapse consecutive repeats into the first');collapseLabel.htmlFor=collapse.id;collapseWrap.append(collapse,collapseLabel);
     row.append(field('Mapping name',name),field('Group name',label),field('Activities in the group',pick),addGroup);
@@ -1424,6 +1463,7 @@
     apply.onclick=()=>{
       if(!preview)return;
       if(groups.length&&!window.confirm('Replace the current mapping draft?'))return;
+      editing=null;save.textContent='Save mapping';cancel.hidden=true;
       name.value=preview.name;collapse.checked=preview.collapse_repeats;
       groups.splice(0,groups.length,...preview.groups);drawDraft();
       preview=null;apply.disabled=true;file.value='';inspect.disabled=true;
@@ -1431,7 +1471,7 @@
     };
     transfer.append(el('summary','Import activity mapping'),field('Activity mapping JSON',file),
       inspect,apply,transferStatus,transferRows);
-    box.append(host,row,suggest,suggestions,draft,collapseWrap,save,msg,transfer);
+    box.append(host,el('div','Activity choices begin with up to 2,000 frequent original labels. Search to add others.','muted'),searchRow,searchStatus,row,suggest,suggestions,draft,collapseWrap,save,cancel,msg,transfer);
     api(base()).then(r=>r.json()).then(render).catch(e=>{msg.textContent=e.message;});
     return box;
   }
