@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 from mcp.types import ToolAnnotations
 
-from . import knowledge_discovery
+from . import knowledge_discovery_page
 
 
 _REGISTERED_SERVER_IDS: set[int] = set()
@@ -155,21 +155,24 @@ def register_workflow_evidence_tools(mcp: Any, runtime_module: Any) -> None:
 
     @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False))
     def get_workflow_knowledge(workflow_id: str = "", limit: int = 50,
-                               query: str = "", summary_only: bool = False) -> dict[str, Any]:
+                               query: str = "", summary_only: bool = False,
+                               after: str | None = None, scan_limit: int = 100) -> dict[str, Any]:
         """Read portable user-reviewed procedures and decision rules before asking again.
 
         If you do not know the workflow ID, supply a literal query or set
         summary_only=true to receive metadata for matching saved workflows
-        within a bounded 100-record inventory. No semantic ranking; incomplete
-        inventory is explicit. Retrieve the relevant exact workflow ID without
+        within one bounded catalog page (scan_limit 1–100). Continue with the
+        returned next_after and the same query, even when a page has zero matches.
+        No semantic ranking or atomic catalog snapshot; incomplete scans are explicit. Retrieve the relevant exact workflow ID without
         discovery arguments and check its revision and digest before reuse.
         Knowledge is explicitly supplied, not captured evidence or execution
         permission. Check unresolved questions and evidence dates before reuse.
         """
         runtime_module.authorize_tool("get_workflow_knowledge")
-        if query or summary_only:
-            params, terms = knowledge_discovery.request_args(workflow_id, limit, query, summary_only)
-            result = knowledge_discovery.discover(runtime_module.secure_get("/v1/workflow-knowledge", params), terms, limit)
+        if query or summary_only or after is not None:
+            cursor = "" if after is None else after
+            params, terms = knowledge_discovery_page.request_args(workflow_id, limit, query, summary_only, cursor, scan_limit)
+            result = knowledge_discovery_page.discover(runtime_module.secure_get("/v1/workflow-knowledge", params), terms, limit, cursor, scan_limit)
             return runtime_module.core._finish_reviewed_knowledge("get_workflow_knowledge", result)
         return runtime_module.core._finish_reviewed_knowledge("get_workflow_knowledge", runtime_module.secure_get("/v1/workflow-knowledge", {"workflow_id": workflow_id, "limit": limit}))
 

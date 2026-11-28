@@ -710,8 +710,15 @@ from .local_process_catalog import knowledge as _knowledge, catalog as _catalog
 
 
 @app.get("/v1/workflow-knowledge")
-def get_workflow_knowledge(workflow_id: str = "", limit: int = 50) -> dict[str, Any]:
-    return _knowledge.list("local", workflow_id, limit)
+def get_workflow_knowledge(workflow_id: str = "", limit: int = 50, after: str | None = None) -> dict[str, Any]:
+    if after is None:
+        return _knowledge.list("local", workflow_id, limit)
+    if workflow_id or (after and not re.fullmatch(r"[a-zA-Z0-9_-]{1,80}", after)) or not 1 <= limit <= 100:
+        raise HTTPException(422, "Invalid knowledge page cursor, limit or exact-ID combination")
+    page = _knowledge.page("local", after=after, limit=limit)
+    return {"format": "openworkgraph.workflow-knowledge.v1", **page,
+            "returned": len(page["workflows"]), "knowledge_is_observed_evidence": False,
+            "knowledge_is_execution_authorization": False}
 
 
 @app.post("/v1/workflow-knowledge")
