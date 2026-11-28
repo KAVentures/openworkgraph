@@ -1,0 +1,63 @@
+name: synthetic enterprise ingestion acceptance
+
+on:
+  workflow_dispatch:
+    inputs:
+      cases:
+        description: "Synthetic cases (4 events per case)"
+        required: true
+        default: "25000"
+        type: choice
+        options:
+          - "2500"
+          - "25000"
+          - "250000"
+          - "2500000"
+      max_seconds:
+        description: "Optional total measured stage seconds budget"
+        required: false
+        type: string
+      max_rss_mib:
+        description: "Optional sampled parent RSS budget (MiB)"
+        required: false
+        type: string
+      min_import_rate:
+        description: "Optional minimum initial input rows/second"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  acceptance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install existing workspace dependencies
+        run: python -m pip install -e ".[dev]"
+      - name: Run exact synthetic acceptance
+        env:
+          CASES: ${{ inputs.cases }}
+          MAX_SECONDS: ${{ inputs.max_seconds }}
+          MAX_RSS_MIB: ${{ inputs.max_rss_mib }}
+          MIN_IMPORT_RATE: ${{ inputs.min_import_rate }}
+        shell: bash
+        run: |
+          args=(--cases "$CASES" --crash-timeout 2400 --report "$RUNNER_TEMP/enterprise-ingestion-acceptance.json")
+          if [[ -n "$MAX_SECONDS" ]]; then args+=(--max-seconds "$MAX_SECONDS"); fi
+          if [[ -n "$MAX_RSS_MIB" ]]; then args+=(--max-rss-mib "$MAX_RSS_MIB"); fi
+          if [[ -n "$MIN_IMPORT_RATE" ]]; then args+=(--min-import-rate "$MIN_IMPORT_RATE"); fi
+          python -m scripts.enterprise_ingestion_acceptance "${args[@]}"
+      - name: Retain minimized synthetic report even on a failed gate
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: synthetic-enterprise-ingestion-acceptance
+          path: ${{ runner.temp }}/enterprise-ingestion-acceptance.json
+          if-no-files-found: warn
+          retention-days: 30
