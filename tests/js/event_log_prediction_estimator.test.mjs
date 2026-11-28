@@ -8,8 +8,15 @@ vm.runInNewContext(fs.readFileSync(new URL('../../dashboard/event_log_workspace.
 const {predictionSpec}=scope.window.__owgEventLogModel;
 
 test('the censoring-aware estimator is opt-in and validated',()=>{
-  assert.equal(predictionSpec({ends:'Close'}).estimator,undefined);
-  assert.equal(predictionSpec({ends:'Close',estimator:'completed_cases'}).estimator,undefined);
-  assert.equal(predictionSpec({ends:'Close, Cancel',estimator:'survival'}).estimator,'survival');
-  assert.throws(()=>predictionSpec({ends:'Close',estimator:'neural'}),/what to learn from/);
+  assert.equal(predictionSpec({ends:['Close']}).estimator,undefined);
+  assert.equal(predictionSpec({ends:['Close'],estimator:'completed_cases'}).estimator,undefined);
+  assert.equal(predictionSpec({ends:['Close','Cancel'],estimator:'survival'}).estimator,'survival');
+  assert.throws(()=>predictionSpec({ends:['Close'],estimator:'neural'}),/what to learn from/);
+});
+
+test('prediction completion labels retain exact punctuation and whitespace',()=>{
+  const spec=predictionSpec({ends:['Close, archived',' Cancel '],estimator:'survival'});
+  assert.deepEqual(Array.from(spec.end_activities),['Close, archived',' Cancel ']);
+  assert.throws(()=>predictionSpec({ends:'Close, Cancel'}),/activities that end a case/);
+  assert.throws(()=>predictionSpec({ends:[]}),/activities that end a case/);
 });

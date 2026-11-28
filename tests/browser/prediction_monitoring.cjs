@@ -37,13 +37,14 @@ const path=require('node:path');
   await page.locator('#owgEventLogStatus').filter({hasText:'Imported 3,600 events'}).waitFor();
   await page.locator('#owgEventLogAnalyze').click();
   await page.locator('#owgEventLogPredictions').waitFor();
-  await page.locator('#owgPredictEnds').fill('Close');
+  await page.locator('#owgPredictEnds').fill('Close');await page.locator('#owgPredictAddEnd').click();
+  await page.locator('#owgPredictEnds').fill('Close, archived');await page.locator('#owgPredictAddEnd').click();
   // The live estimator setting does not change what monitoring scores.
   await page.locator('#owgPredictEstimator').selectOption('survival');
   const [watched]=await Promise.all([page.waitForResponse(r=>r.url().endsWith('/predictions/monitoring')),page.locator('#owgPredictMonitor').click()]);
   assert.equal(watched.status(),200,await watched.text());
   const sent=JSON.parse(watched.request().postData());
-  assert.deepEqual(sent.end_activities,['Close']);assert.equal(sent.windows,6);assert.equal('estimator' in sent,false);
+  assert.deepEqual(sent.end_activities,['Close','Close, archived']);assert.equal(sent.windows,6);assert.equal('estimator' in sent,false);
   const out=page.locator('#owgPredictMonitoring');
   await out.getByText(/^In the latest window ranges have become too narrow and typical error has risen\./).waitFor();
   assert.equal(await out.locator('table').first().locator('tbody tr').count(),6);
@@ -66,6 +67,7 @@ const path=require('node:path');
 
   assert.match(await out.textContent(),/Proposal, not applied: scale each range around its median by \d\.\d\d×/);
   await page.locator('#owgPredictOutcome').selectOption('duration_over');
+  assert.equal(await out.textContent(),'','changing settings clears stale monitoring');
   await page.locator('#owgPredictHours').fill('24');
   const [outcomeChecked]=await Promise.all([
     page.waitForResponse(r=>r.url().endsWith('/predictions/monitoring')),
