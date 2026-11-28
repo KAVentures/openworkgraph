@@ -38,7 +38,6 @@ FORMAT = "openworkgraph.event-log-insights.v1"
 MIN_CASES = 5
 MAX_SEGMENTS = 3
 NUMERIC_DISTINCT = 10  # numeric case attributes with more distinct values are grouped by quartile
-_SEP = "\x1f"
 
 
 class InsightSpec(BaseModel):
@@ -75,7 +74,7 @@ def insights(log_id: str, spec: Any = None) -> dict[str, Any]:
         cohorts.restrict(conn, cohorts.parse_cohort(settings.cohort), log_id)
         conn.execute(f"""CREATE OR REPLACE TEMP TABLE ins_cases AS
             SELECT case_id, min(ts) AS started, epoch(max(ts) - min(ts)) AS duration, count(*) AS events,
-                   string_agg(activity, '{_SEP}' ORDER BY ts, event_id) AS path
+                   list(activity ORDER BY ts, event_id) AS path
             FROM ce GROUP BY case_id""")
         cases, total_time = conn.execute("SELECT count(*), coalesce(sum(duration), 0) FROM ins_cases").fetchone()
         data: dict[str, Any] = {"cases": cases, "total_time": float(total_time or 0)}

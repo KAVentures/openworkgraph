@@ -84,3 +84,10 @@ against an independent reachability oracle and four long-chain checks
 (1,000 and 10,000 vertices, with and without a cycle). The local tested file
 matches Git blob db72e9175355374c52f2b9aba8e05cf81ebf80e4.
 Full application/browser checks still require CI.
+
+
+## Resource-constrained implementation planning
+
+For explicitly entered duration, capacity, release and deadline assumptions,
+see [resource schedule scenarios](AUTOMATION_RESOURCE_SCHEDULE.md). The existing
+quarter and wave review remains a separate declared-plan consistency check.

@@ -57,7 +57,7 @@ class AnalysisJobs:
         # Remove dead queue references even if the worker is waiting for the workspace.
         self._queue = deque(i for i in self._queue if i in self._jobs)
 
-    def submit(self, owner, log_id, spec):
+    def submit(self, owner, log_id, spec, *, source_bound=False):
         # Validate before allocating a queue slot. Copy the definition; callers cannot mutate it.
         parsed = analysis.parse(spec).model_dump(mode='json')
         if not workspace._LOG_ID.fullmatch(str(log_id)):
@@ -75,6 +75,7 @@ class AnalysisJobs:
             job_id = 'job_' + secrets.token_hex(16)
             job = {'job_id': job_id, 'owner': owner, 'log_id': log_id, 'spec': parsed,
                    'spec_sha256': hashlib.sha256(definition.encode('utf-8')).hexdigest(),
+                   'source_bound': source_bound,
                    'deadline_seconds': DEADLINE_SECONDS, 'retention_seconds': RETENTION_SECONDS,
                    'state': 'queued', 'submitted_at': _at(), 'started_at': None, 'finished_at': None,
                    'expires': now + RETENTION_SECONDS, 'control': ExecutionControl(now + DEADLINE_SECONDS),
@@ -94,6 +95,8 @@ class AnalysisJobs:
             'result_available': job['state'] == 'succeeded',
             'retention_seconds': job['retention_seconds'], 'deadline_seconds': job['deadline_seconds'],
             'source_version_pinned_at_submission': False, 'durable': False,
+            'source_bound_result_requested': job['source_bound'],
+            'source_bound_result_available': job['source_bound'] and job['state'] == 'succeeded',
             'execution_authorized': False}
 
     def _get(self, owner, log_id, job_id):
@@ -166,7 +169,11 @@ class AnalysisJobs:
             result = None
             try:
                 control.check()
-                value = analysis.run(job['log_id'], job['spec'], control=control)
+                if job['source_bound']:
+                    from . import event_log_analysis_review as review
+                    value = review.source_bound(job['log_id'], job['spec'], control=control)
+                else:
+                    value = analysis.run(job['log_id'], job['spec'], control=control)
                 control.check()
                 parts, size = [], 0
                 for part in json.JSONEncoder(ensure_ascii=True, allow_nan=False, separators=(',', ':')).iterencode(value):

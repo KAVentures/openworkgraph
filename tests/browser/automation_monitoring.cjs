@@ -78,6 +78,28 @@ const path=require('node:path');
    await page.locator('#owgMonitorReleasePanel').getByText(/Latest declaration: pilot_reported/).waitFor();
 
 
+   await page.locator('#owgMonitorRecoveryPatterns').click();
+   await page.locator('#owgRecoveryStart').fill(report.runs[0].started_at.slice(0,10));
+   const recoveryEnd=new Date(Math.max(...report.runs.map(r=>Date.parse(r.started_at)))+86400000).toISOString().slice(0,10);
+   await page.locator('#owgRecoveryEnd').fill(recoveryEnd);
+   await page.locator('#owgRecoverySpec').fill(report.deployment.workflow_spec_sha256);
+   const [recoveryResponse]=await Promise.all([page.waitForResponse(r=>r.url().includes('/recovery-patterns')),
+     page.locator('#owgRecoveryRun').click()]);
+   assert.equal(recoveryResponse.status(),200,await recoveryResponse.text());
+   const recoveryData=await recoveryResponse.json();
+   assert.equal(recoveryData.summary.runs,60);
+   assert.equal(recoveryData.summary.episode_summary.episodes,10);
+   await page.locator('#owgRecoveryStatus').filter({hasText:'60 retained runs · 10 with issues · 10 issue episodes.'}).waitFor();
+   await page.locator('#owgRecoveryView').selectOption('steps');
+   await page.locator('#owgRecoveryOutput').getByRole('button',{name:'Inspect step episode runs'}).click();
+   await page.locator('#owgRecoveryOutput').getByText('10 matching rows; 10 shown at offset 0.',{exact:true}).waitFor();
+   await page.locator('#owgRecoveryOutput details summary').first().click();
+   await page.locator('#owgRecoveryOutput details').first().getByRole('button',{name:'Inspect exact retained run'}).click();
+   await page.locator('#owgRecoveryOutput details').first().getByRole('columnheader',{name:'Reported activity'}).waitFor();
+   await page.locator('#owgRecoveryView').selectOption('patterns');
+   await page.locator('#owgRecoveryOutput').getByRole('button',{name:'Inspect pattern runs'}).first().waitFor();
+   await page.locator('#owgRecoverySpec').fill('b'.repeat(64));
+   assert.equal(await page.locator('#owgRecoveryOutput').textContent(),'');
    await page.addScriptTag({content:axeSource});
    const audit=await page.evaluate(async()=>window.axe.run(document.querySelector('#owgMonitorCard'),{
      runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21a','wcag21aa']},resultTypes:['violations']}));

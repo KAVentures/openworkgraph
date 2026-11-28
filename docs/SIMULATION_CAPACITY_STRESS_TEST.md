@@ -93,3 +93,7 @@ Cost arithmetic uses a private high-precision decimal context covering the
 entire accepted finite numeric range, including very small positive rates.
 Budget comparisons and dominance cost differences do not depend on the
 caller's decimal context or silently round away such costs.
+
+
+For evaluating multiple service deadlines on the same simulated population,
+including inverse deadline bounds, see [Multi-SLA capacity review](SIMULATION_SERVICE_LEVEL_REVIEW.md).
