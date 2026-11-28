@@ -138,11 +138,10 @@ def run(frozen, pin, slot_id, raw, root, *, port=11434, timeout=120, confirmed=F
     return receipt
 
 
-def collect(frozen,pin,root,reviews):
+def verified_attempts(frozen,pin,root):
     require(frozen == ablation.plan(frozen['cases'],frozen['settings'],frozen['replicates']) and frozen['plan_sha256']==pin,'Plan changed')
     root = root_dir(root)
-    require(isinstance(reviews,dict) and len(reviews)<=len(frozen['slots']),'Invalid review map')
-    rows, interrupted, used = [], [], set()
+    rows, interrupted = [], []
     for slot in frozen['slots']:
         sid=slot['slot_id']; dest=root/sid
         if not dest.exists():
@@ -155,7 +154,7 @@ def collect(frozen,pin,root,reviews):
         require(receipt.get('format')=='openworkgraph.task-context-attempt.v1' and receipt.get('plan_sha256')==pin and all(receipt.get(k)==v for k,v in lineage.items()) and receipt.get('status') in ('completed','failed','timeout') and receipt.get('execution_authorized') is False,'Invalid attempt receipt')
         raw=load(dest/'request.json',MAX_REQUEST)
         require(sha(raw)==slot['request_sha256'] and request_settings(raw,lineage['model_id'])==lineage['settings_sha256'],'Saved request changed')
-        status=receipt['status']; output_pin=receipt.get('output_sha256'); review=None
+        status=receipt['status']; output_pin=receipt.get('output_sha256')
         if receipt.get('response_sha256') is not None:
             body=load(dest/'response.json',MAX_REPLY)
             require(sha(body)==receipt['response_sha256'],'Saved response changed')
@@ -163,12 +162,18 @@ def collect(frozen,pin,root,reviews):
             require(receipt.get('response_sha256') is not None and ablation.pin(output_pin),'Missing completed output')
             output=load(dest/'output.txt',MAX_REPLY)
             require(sha(output)==output_pin and output==completion(body,lineage['model_id']),'Saved output changed')
-            require(sid in reviews,'Completed output requires independent review')
-            review=reviews[sid];used.add(sid)
         else:
             require(output_pin is None,'Failed attempt cannot have graded output')
-        rows.append({**lineage,'status':status,'output_sha256':output_pin,'review':review})
-    require(used==set(reviews),'Unexpected review for uncompleted or unknown slot')
+        rows.append({**lineage,'status':status,'output_sha256':output_pin})
+    return rows, interrupted
+
+
+def collect(frozen,pin,root,reviews):
+    rows, interrupted = verified_attempts(frozen,pin,root)
+    require(isinstance(reviews,dict) and len(reviews)<=len(frozen['slots']),'Invalid review map')
+    completed = {r['slot_id'] for r in rows if r['status']=='completed'}
+    require(completed==set(reviews),'Completed outputs require independent review; no other reviews allowed')
+    rows = [{**r,'review':reviews.get(r['slot_id'])} for r in rows]
     report=ablation.score(frozen,pin,rows)
     return {'format':'openworkgraph.task-context-collected-evaluation.v1','report':report,'interrupted_slot_ids':interrupted,'attempts':rows,'transport_attested':False}
 
