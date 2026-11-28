@@ -60,3 +60,6 @@ async def review(request: Request, idea_id: str, project_id: str):
         raise HTTPException(422, 'Cohort review refused; check the declared cases, exact original documents and project revision') from None
     _require_dashboard(request)
     return JSONResponse(result, headers={'Cache-Control':'no-store'})
+
+from .joint_shadow_source_routes import router as _joint_review_router
+router.include_router(_joint_review_router)
