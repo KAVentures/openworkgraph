@@ -46,6 +46,8 @@ const path=require('node:path');
    assert.equal(Date.parse(untilPreset)-Date.parse(sincePreset),4*3600000);
    assert(await firstPicker.getByRole('button',{name:'Find local execution candidates',exact:true}).isEnabled());
    assert(await firstPicker.getByRole('button',{name:'Use selected executions (replace sources)',exact:true}).isDisabled());
+   await firstPicker.getByLabel('Evidence window start (ISO 8601 with offset)',{exact:true}).fill('');
+   await firstPicker.getByLabel('Evidence window end (ISO 8601 with offset)',{exact:true}).fill('');
    await firstPicker.locator(':scope > summary').click();
    // Earlier sectioned proposal compatibility uses the actual two local reviewers.
    {
@@ -121,7 +123,7 @@ const path=require('node:path');
    const missing='execution:'+'c'.repeat(16);
    liveSource.selector={selection_mode:'explicit_executions',family_selection_is_ground_truth:false,selected_execution_count:1,execution_ids:[eid]};
    Object.assign(liveSource.provenance,{source:'canonical_local_event_store',requested_window:window,selected_execution_ids:[eid],source_limit_reached:true});
-   const liveText=JSON.stringify(liveSource,null,2);let discoveryCalls=0,evidenceCalls=0;
+   const liveText=JSON.stringify(liveSource,null,2);let discoveryCalls=0,evidenceCalls=0,evidenceResponse=liveText;
    const familyPattern='**/v1/workflow-evidence/families?*',evidencePattern='**/v1/workflow-evidence?*';
    await page.route(familyPattern,async route=>{
      discoveryCalls++;const q=new URL(route.request().url()).searchParams;
@@ -134,7 +136,7 @@ const path=require('node:path');
      evidenceCalls++;const q=new URL(route.request().url()).searchParams;
      assert.equal(q.get('since'),window.since);assert.equal(q.get('until'),window.until);
      assert.equal(q.get('include_canonical_evidence'),'true');assert.equal(q.get('max_runs'),'1');
-     await route.fulfill({status:200,contentType:'application/json',body:liveText});
+     await route.fulfill({status:200,contentType:'application/json',body:evidenceResponse});
    });
    try{
      await picker.locator('summary').click();
@@ -154,6 +156,20 @@ const path=require('node:path');
      const [selectedPacket]=await Promise.all([page.waitForEvent('download'),handoff.getByRole('button',{name:'Download evidence packet',exact:true}).click()]);
      const expected=spawnSync(python,['-c',"import sys,json;from shared.ai_implementation_review import prepare;print(prepare([json.load(sys.stdin)])['packet_sha256'])"],{input:liveText,encoding:'utf8'});
      assert.equal(expected.status,0,expected.stderr);assert.equal(JSON.parse(await fs.readFile(await selectedPacket.path(),'utf8')).packet_sha256,expected.stdout.trim());
+     const append=picker.getByRole('button',{name:'Append selected executions to sources',exact:true});
+     await append.click();await picker.getByText('This exact original evidence file is already selected.',{exact:false}).waitFor();
+     assert(await handoff.getByRole('button',{name:'Download evidence packet',exact:true}).isEnabled());
+     const secondSource=structuredClone(liveSource);secondSource.provenance.source_limit_reached=false;
+     evidenceResponse=JSON.stringify(secondSource,null,2);
+     await append.click();await picker.getByText('Original source appended to the ordered handoff.',{exact:false}).waitFor();
+     const inventory=handoff.locator('#owgImplementationSourceInventory');
+     await inventory.getByText('Possible overlap: sources 1 and 2 share 1 execution IDs', {exact:false}).waitFor();
+     assert(await handoff.getByRole('button',{name:'Download evidence packet',exact:true}).isDisabled());
+     await handoff.getByRole('button',{name:'Remove evidence file 2',exact:true}).click();
+     await inventory.getByText('1 sources; 1 execution occurrences;',{exact:false}).waitFor();
+     await handoff.getByRole('button',{name:'Prepare evidence packet',exact:true}).click();
+     await handoff.getByText('Packet ready:',{exact:false}).waitFor();
+     evidenceResponse=liveText;
      await picker.getByLabel('Exact execution IDs (one per line or comma separated)',{exact:true}).fill(missing);
      await use.click();await picker.getByText('Returned evidence does not match every explicitly selected', {exact:false}).waitFor();
      // A refused replacement leaves the previously prepared packet available.

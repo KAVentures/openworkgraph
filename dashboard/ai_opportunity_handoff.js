@@ -15,7 +15,7 @@ export function mountAiOpportunityHandoff(host, post, onCreated, onStage){
   const summary=el('pre');summary.style.whiteSpace='pre-wrap';summary.style.overflowWrap='anywhere';
   const controls=[sources,proposal,title,description],order=el('ol');
   let generation=0,basis=null,busy=false,orderedSources=[];
-  let packetGeneration=0,preparedPacket=null,firstWorkflow=null,createdIdea=null;
+  let packetGeneration=0,preparedPacket=null,firstWorkflow=null,createdIdea=null,sourceInventory=null;
   let generatedResult=null,selectedGenerated=false,trialPanel=null,evidencePicker=null,batchPanel=null,batchProposal=null,compatPanel=null,compatProposal=null,checkpointPanel=null;
   const budget=el('select');
   for(const [value,label] of [[131072,'128 KiB'],[524288,'512 KiB'],[2097152,'2 MiB'],[8388608,'8 MiB']]){
@@ -206,8 +206,8 @@ export function mountAiOpportunityHandoff(host, post, onCreated, onStage){
   function renderOrder(){
     order.replaceChildren();
     orderedSources.forEach((f,i)=>{
-      const row=el('li',f.name+' '),up=el('button','Move earlier'),down=el('button','Move later');
-      up.type=down.type='button';up.disabled=busy||i===0;down.disabled=busy||i===orderedSources.length-1;
+      const row=el('li',f.name+' '),up=el('button','Move earlier'),down=el('button','Move later'),remove=el('button','Remove');
+      up.type=down.type=remove.type='button';up.disabled=busy||i===0;down.disabled=busy||i===orderedSources.length-1;remove.disabled=busy;
       up.setAttribute('aria-label','Move evidence file '+(i+1)+' earlier');
       down.setAttribute('aria-label','Move evidence file '+(i+1)+' later');
       const move=delta=>{
@@ -215,8 +215,11 @@ export function mountAiOpportunityHandoff(host, post, onCreated, onStage){
         [orderedSources[i],orderedSources[i+delta]]=[orderedSources[i+delta],orderedSources[i]];
         invalidate();invalidatePacket();renderOrder();
       };
-      up.onclick=()=>move(-1);down.onclick=()=>move(1);row.append(up,down);order.append(row);
+      up.onclick=()=>move(-1);down.onclick=()=>move(1);remove.setAttribute('aria-label','Remove evidence file '+(i+1));
+      remove.onclick=()=>{if(busy)return;sources.value='';orderedSources=orderedSources.filter((_,index)=>index!==i);invalidate();invalidatePacket();renderOrder();};
+      row.append(up,down,remove);order.append(row);
     });
+    sourceInventory?.refresh();
   }
   function invalidate(){
     generation++;basis=null;createdIdea=null;confirmation.checked=false;confirmation.disabled=true;commit.disabled=true;stage.disabled=true;
@@ -283,11 +286,11 @@ export function mountAiOpportunityHandoff(host, post, onCreated, onStage){
     field('Model evidence representation',contextMode),field('Request JSON-object mode',localJsonMode),field('I authorize sending the selected evidence to this configured loopback model service',localConfirm),
     generate,localStatus,field('Generated proposal (unverified interpretation)',generatedText),useGenerated,saveProposal,saveReceipt,trialHost);
   refreshLocal();
-  const evidencePickerHost=el('div'),batchHost=el('div'),compatHost=el('div'),checkpointHost=el('div'),firstWorkflowHost=el('div');
+  const evidencePickerHost=el('div'),batchHost=el('div'),compatHost=el('div'),checkpointHost=el('div'),firstWorkflowHost=el('div'),inventoryHost=el('div');
   const details=el('details');details.id='owgAiOpportunityHandoff';
   details.append(el('summary','Add an external AI proposal to the implementation portfolio'),
     el('p','Preparation and review stay on the local OWG server. The optional local model request sends selected evidence only when explicitly confirmed. Only your entered idea and structural lineage are retained by the pipeline. Nothing is approved or executed.'),
-    firstWorkflowHost,evidencePickerHost,field('Original workflow evidence JSON files (ordered as in the portable packet)',sources),order,
+    firstWorkflowHost,evidencePickerHost,field('Original workflow evidence JSON files (ordered as in the portable packet)',sources),order,inventoryHost,
     el('p','Prepare a packet using the same ordered evidence below, or use an existing exact packet. The byte budget is not a token count. A too-small budget refuses rather than drops events. Download and inspect the files, then share only through an authorized local or cloud AI environment.'),
     field('Context byte budget',budget),prepare,packetStatus,downloadPacket,downloadGuide,checkpointHost,
     el('p','Optional compact external handoff: download both matching files, inspect locally and share only with an authorized AI. Compact format is reversible, not redaction.'),downloadCompact,downloadCompactGuide,localSection,batchHost,compatHost,
@@ -309,10 +312,21 @@ export function mountAiOpportunityHandoff(host, post, onCreated, onStage){
       download:downloadLocal
     });
   }).catch(()=>{firstWorkflowHost.textContent='First-workflow guide unavailable; all individual controls remain available.';});
+  const inventoryModule=import('/ai-implementation-source-inventory.js').catch(()=>null);
+  inventoryModule.then(module=>{
+    if(module)sourceInventory=module.mountSourceInventory(inventoryHost,{getFiles:()=>orderedSources.slice()});
+    else inventoryHost.textContent='Source coverage inventory unavailable; existing packet preparation remains available.';
+  });
   import('/ai-implementation-evidence-picker.js').then(module=>{
     evidencePicker=module.mountImplementationEvidencePicker(evidencePickerHost,{
       getBusy:()=>busy,lock,download:downloadLocal,onSelected:file=>{
         sources.value='';orderedSources=[file];invalidate();invalidatePacket();renderOrder();
+      },onAppend:async file=>{
+        const before=orderedSources.slice(),module=await inventoryModule;
+        if(!module)throw Error('Append unavailable; retain the existing selection or import original files.');
+        const next=await module.appendEvidenceSource(before,file);
+        if(orderedSources.length!==before.length||!before.every((f,i)=>f===orderedSources[i]))throw Error('Source selection changed; append cancelled.');
+        sources.value='';orderedSources=next;invalidate();invalidatePacket();renderOrder();
       }
     });
   }).catch(()=>{evidencePickerHost.textContent='Direct local evidence selection unavailable; original file import remains available.';});

@@ -60,13 +60,14 @@ async function boundedJSON(path,query){
   return {text,value:JSON.parse(text),size};
 }
 
-export function mountImplementationEvidencePicker(host,{getBusy,lock,onSelected,download}){
+export function mountImplementationEvidencePicker(host,{getBusy,lock,onSelected,onAppend,download}){
   const el=(tag,text)=>{const n=document.createElement(tag);if(text!==undefined)n.textContent=text;return n;};
   const field=(label,node)=>{const n=el('label',label+' ');n.append(node);return n;};
   const button=text=>{const n=el('button',text);n.type='button';return n;};
   const since=el('input'),until=el('input'),ids=el('textarea');ids.rows=4;ids.maxLength=1024;
   since.placeholder='2026-11-28T08:00:00+01:00';until.placeholder='2026-11-28T12:00:00+01:00';
-  const discover=button('Find local execution candidates'),load=button('Use selected executions (replace sources)'),save=button('Download last selected original evidence');
+  const discover=button('Find local execution candidates'),load=button('Use selected executions (replace sources)'),append=button('Append selected executions to sources'),save=button('Download last selected original evidence');
+  append.hidden=typeof onAppend!=='function';
   const status=el('p','Set the explicit time window. No capture, query or sharing occurs automatically.');
   status.setAttribute('role','status');status.setAttribute('aria-live','polite');
   const candidates=el('div'),selection=el('p'),presets=el('div');let rows=[],last=null,epoch=0;
@@ -75,7 +76,7 @@ export function mountImplementationEvidencePicker(host,{getBusy,lock,onSelected,
   function refresh(){
     const busy=getBusy();for(const n of [since,until,ids,...presetButtons])n.disabled=busy;
     let validWindow=false;try{evidenceWindow(since.value.trim(),until.value.trim());validWindow=true;}catch(_){}
-    discover.disabled=busy||!validWindow;load.disabled=busy||!parsed();save.disabled=busy||!last;
+    discover.disabled=busy||!validWindow;load.disabled=busy||!parsed();append.disabled=load.disabled||typeof onAppend!=='function';save.disabled=busy||!last;
     let selected=[];try{selected=selectedExecutionIds(ids.value);}catch(_){}
     selection.textContent=selected.length?selected.length+' explicitly selected execution IDs.':'Enter or select one to twelve unique execution IDs.';
     for(const {node,id} of rows){node.disabled=busy||selected.includes(id)||selected.length>=12;}
@@ -121,8 +122,8 @@ export function mountImplementationEvidencePicker(host,{getBusy,lock,onSelected,
     }catch(e){if(ticket===epoch){rows=[];candidates.replaceChildren();status.textContent=e.message;}}
     finally{lock(false);refresh();}
   };
-  load.onclick=async()=>{
-    const selected=parsed();if(load.disabled||!selected)return;
+  async function retrieve(appendMode){
+    const selected=parsed();if((appendMode?append:load).disabled||!selected)return;
     const ticket=++epoch;lock(true);status.textContent='Retrieving the exact selected local execution evidence.';
     try{
       const r=await boundedJSON('/v1/workflow-evidence',{...selected.window,execution_ids:selected.ids.join(','),source_event_limit:'25000',max_runs:String(selected.ids.length),max_events_per_run:'100',include_canonical_evidence:'true'});
@@ -130,16 +131,19 @@ export function mountImplementationEvidencePicker(host,{getBusy,lock,onSelected,
       const counts=checkSelectedBundle(r.value,selected.ids,selected.window);
       const f=new File([r.text],'owg-selected-executions.json',{type:'application/json'});
       if(f.size!==r.size)throw Error('Evidence byte preservation failed.');
-      onSelected(f);last=r.text;
-      status.textContent='Selected '+selected.ids.length+' executions and '+counts.events+' canonical events; '+counts.gaps+' coverage flags. Original source loaded into the handoff below. No AI request or upload occurred.';
+      if(appendMode)await onAppend(f);else onSelected(f);
+      if(ticket!==epoch)return;
+      last=r.text;
+      status.textContent='Selected '+selected.ids.length+' executions and '+counts.events+' canonical events; '+counts.gaps+' coverage flags. '+(appendMode?'Original source appended to the ordered handoff.':'Original source loaded into the handoff below.')+' No AI request or upload occurred.';
     }catch(e){if(ticket===epoch)status.textContent=e.message;}
     finally{lock(false);refresh();}
-  };
+  }
+  load.onclick=()=>retrieve(false);append.onclick=()=>retrieve(true);
   save.onclick=()=>{if(!getBusy()&&last)download('owg-selected-executions.json','application/json',last);};
   const details=el('details');details.id='owgImplementationEvidencePicker';
   details.append(el('summary','Select observed work directly from OWG'),
-    el('p','Optional alternative to importing files. Search within seven days; derived families and limited examples are navigation only. Select the actual executions you want the external AI to interpret. Editing the picker does not replace existing handoff sources until you explicitly click Use selected executions. No automatic upload.'),
+    el('p','Optional alternative to importing files. Search within seven days; derived families and limited examples are navigation only. Select the actual executions you want the external AI to interpret. Editing the picker does not replace existing handoff sources until you explicitly replace or append selected executions. Append retains the existing original files in order; repeated references are shown separately in the source inventory. No automatic upload.'),
     el('p','Choose a recent window or enter exact timestamps. Presets do not query or replace evidence.'),presets,field('Evidence window start (ISO 8601 with offset)',since),field('Evidence window end (ISO 8601 with offset)',until),discover,candidates,
-    field('Exact execution IDs (one per line or comma separated)',ids),selection,load,status,save);
+    field('Exact execution IDs (one per line or comma separated)',ids),selection,load,append,status,save);
   host.append(details);refresh();return {refresh};
 }
