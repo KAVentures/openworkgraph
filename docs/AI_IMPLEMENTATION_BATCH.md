@@ -72,8 +72,7 @@ and confirm creation of an unassessed idea or a shadow skill draft.
 No automatic ranking, portfolio writes, model requests, deployment,
 spending or execution occurs. The existing single proposal path is unchanged.
 
-This is a local CLI foundation; a batch dashboard with per-item selection
-and review is subsequent integration work. The original source documents,
+The same review is available in the local implementation dashboard: prepare the shared evidence packet, expand **Review multiple AI implementation proposals**, and select the returned JSON array. Review the complete report and download it before modifying inputs. Select an individual structurally reviewed item to transfer its exact canonical proposal to the existing individual review; the human-entered title/details and confirmation are reset. The server independently recomputes the original batch and verifies its pin before selection. Source, budget or batch edits invalidate the batch report and selected batch proposal. There is no automatic creation, ranking or approval. The existing CLI remains available. The original source documents,
 returned batch and reports may be sensitive; retain and share according
 to existing organizational permissions. Outputs are bounded exclusive local
 files.
