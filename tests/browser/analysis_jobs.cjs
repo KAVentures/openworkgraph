@@ -9,6 +9,9 @@ const path=require('node:path');
  const base='http://127.0.0.1:8787',python=process.env.OWG_BROWSER_PYTHON||'python';
  const server=spawn(python,['-m','uvicorn','analysis_jobs_app:app','--app-dir','tests/browser','--host','127.0.0.1','--port','8787'],{env:{...process.env,OWG_BROWSER_TEST_DIR:scratch},stdio:['ignore','pipe','pipe']});
  let logs='',browser;for(const pipe of [server.stdout,server.stderr])pipe.on('data',c=>logs=(logs+c).slice(-6000));
+ const submitUrl=url=>url.pathname.endsWith('/analysis-jobs')&&url.searchParams.get('source_bound')==='true';
+ const resultUrl=url=>/\/analysis-jobs\/[^/]+\/result$/.test(url.pathname);
+ const waitForHeld=async(promise,label)=>{let timer;try{return await Promise.race([promise,new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error('Timed out waiting for '+label)),15000);})]);}finally{clearTimeout(timer);}};
  const control=async(action)=>{const r=await fetch(base+'/test-analysis/'+action,{method:'POST'});assert.ok(r.ok,await r.text());};
  const waitUntil=async(predicate)=>{for(let i=0;i<100;i++){if(await predicate())return;await new Promise(r=>setTimeout(r,50));}throw new Error('Fixture wait timed out: '+logs);};
  try{
@@ -49,21 +52,21 @@ const path=require('node:path');
   assert.ok(await page.locator('#owgAnalysisJson').isDisabled());await control('release');await control('normal-deadline');
   // Cancel while the submission response is held: its eventual job ID must be erased, not rendered.
   let releaseSubmit,seenSubmit;const heldSubmit=new Promise(r=>seenSubmit=r);
-  await page.route('**/analysis-jobs',async route=>{const response=await route.fetch();seenSubmit();await new Promise(r=>releaseSubmit=r);await route.fulfill({response});},{times:1});
-  await run();await heldSubmit;await page.locator('#owgAnalysisCancel').click();releaseSubmit();
+  await page.route(submitUrl,async route=>{const response=await route.fetch();seenSubmit();await new Promise(r=>releaseSubmit=r);await route.fulfill({response});},{times:1});
+  await run();await waitForHeld(heldSubmit,'source-bound submission');await page.locator('#owgAnalysisCancel').click();releaseSubmit();
   await status.filter({hasText:'no result was displayed'}).waitFor();assert.equal(await out.locator('table').count(),0);
   await waitUntil(async()=>(await(await fetch(base+'/test-analysis/state')).json()).jobs===0);
   // Cancel while a successful result is held: a late complete response cannot restore export/save.
   let releaseResult,seenResult;const heldResult=new Promise(r=>seenResult=r);
-  await page.route('**/analysis-source-bound',async route=>{const response=await route.fetch();seenResult();await new Promise(r=>releaseResult=r);await route.fulfill({response});},{times:1});
-  await run();await heldResult;await page.locator('#owgAnalysisCancel').click();releaseResult();
+  await page.route(resultUrl,async route=>{const response=await route.fetch();seenResult();await new Promise(r=>releaseResult=r);await route.fulfill({response});},{times:1});
+  await run();await waitForHeld(heldResult,'retained result');await page.locator('#owgAnalysisCancel').click();releaseResult();
   await status.filter({hasText:'no result was displayed'}).waitFor();assert.equal(await out.locator('table').count(),0);
   assert.ok(await page.locator('#owgAnalysisJson').isDisabled());
   // A log/view refresh also suppresses a held completed result.
   let releaseStale,seenStale;const heldStale=new Promise(r=>seenStale=r);
-  await page.route('**/analysis-source-bound',async route=>{const response=await route.fetch();seenStale();await new Promise(r=>releaseStale=r);await route.fulfill({response});},{times:1});
-  await run();await heldStale;await page.locator('#owgEventLogAnalyze').click();
-  const staleResponse=page.waitForResponse(r=>r.url().endsWith('/analysis-source-bound'));
+  await page.route(resultUrl,async route=>{const response=await route.fetch();seenStale();await new Promise(r=>releaseStale=r);await route.fulfill({response});},{times:1});
+  await run();await waitForHeld(heldStale,'stale retained result');await page.locator('#owgEventLogAnalyze').click();
+  const staleResponse=page.waitForResponse(r=>resultUrl(new URL(r.url())));
   releaseStale();await staleResponse;
   assert.equal(await page.locator('#owgAnalysisResults table').count(),0);
   await page.locator('#owgAnalysisRun').click();await page.locator('#owgAnalysisStatus').filter({hasText:'Analysis complete.'}).waitFor();

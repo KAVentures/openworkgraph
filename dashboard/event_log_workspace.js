@@ -11904,7 +11904,7 @@
       try{
         if(background.checked){
           message.textContent='Submitting local analysis…';
-          const submitted=await (await api(jobBase,{method:'POST',signal:AbortSignal.timeout(10000),headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)})).json();
+          const submitted=await (await api(jobBase+'?source_bound=true',{method:'POST',signal:AbortSignal.timeout(10000),headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)})).json();
           job=jobBase+'/'+encodeURIComponent(submitted.job_id);
           let status=submitted;
           while(current()&&!cancelRequested&&['queued','running'].includes(status.state)){
@@ -11915,11 +11915,11 @@
           }
           if(!current()||cancelRequested)return;
           if(status.state!=='succeeded')throw new Error(status.state==='timed_out'?'Analysis reached its deadline; no partial result was returned.':status.state==='cancelled'?'Analysis cancelled; no result was returned.':status.error||'Analysis failed; no partial result was returned.');
-          // The job result has no atomic source fingerprint. Recompute under the
-          // same lock as the digest before showing a result that can be exported.
-          // A changed source between job completion and this read is reflected
-          // in the newly reviewed result, never silently attributed to the job.
-          r=await(await api(base()+'/analysis-source-bound',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)})).json();
+          // The retained bytes are from the same cancellable query and source
+          // fingerprint, not a second execution against a possibly newer log.
+          if(!status.source_bound_result_available)throw Error('This background job has no source-bound result. Rerun the analysis.');
+          r=await(await api(job+'/result',{signal:AbortSignal.timeout(10000)})).json();
+          if(!/^[a-f0-9]{64}$/.test(r.source_content_sha256||''))throw Error('Source-bound job result is incomplete; rerun the analysis.');
           if(cancelRequested||!current())return;
         }else{
           message.textContent='Analysis running…';
