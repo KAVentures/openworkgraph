@@ -23,5 +23,6 @@ def discover(response, terms, limit, after, scan_limit):
         cursor = result['candidates'][-1]['workflow_id']
     return {**result, 'scan_after': after, 'scan_limit': scan_limit,
             'next_after': cursor, 'has_more': cursor is not None,
+            'next_scan_limit_hint': (min(scan_limit, limit) if result['matches_truncated'] else scan_limit) if cursor is not None else None,
             'atomic_catalog_snapshot_verified': False,
             'interpretation': result['interpretation'] + ' Continue using next_after with the same query. Each page is a separate read; inserts, deletions and revisions may change the inventory.'}

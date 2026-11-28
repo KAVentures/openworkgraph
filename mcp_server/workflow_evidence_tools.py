@@ -163,6 +163,8 @@ def register_workflow_evidence_tools(mcp: Any, runtime_module: Any) -> None:
         summary_only=true to receive metadata for matching saved workflows
         within one bounded catalog page (scan_limit 1–100). Continue with the
         returned next_after and the same query, even when a page has zero matches.
+        Optionally use next_scan_limit_hint for the next scan_limit to avoid
+        repeated reads when a shortlist was truncated.
         No semantic ranking or atomic catalog snapshot; incomplete scans are explicit. Retrieve the relevant exact workflow ID without
         discovery arguments and check its revision and digest before reuse.
         Knowledge is explicitly supplied, not captured evidence or execution
