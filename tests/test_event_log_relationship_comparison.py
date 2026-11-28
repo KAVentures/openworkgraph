@@ -203,6 +203,17 @@ with TestClient(app) as client:
     page=client.get("/object-relationship-comparison")
     assert page.status_code==200 and "Content-Security-Policy" in page.headers
     assert client.get("/object-relationship-comparison.js").status_code==200
+    topo=base(ids[0])+"/topology"
+    body={"snapshot":pins[0],"confirm":True,"view":"bridges"}
+    assert client.post(topo,json=body,headers=bearer).status_code in (401,403)
+    result=client.post(topo,json=body,headers=h)
+    assert result.status_code==200,result.text
+    assert result.headers["cache-control"]=="no-store"
+    assert result.json()["counts"]["bridge_pairs"]==4
+    assert result.json()["counts"]["single_assertion_bridges"]==3
+    assert client.post(topo,json={**body,"confirm":False},headers=h).status_code==422
+    assert client.get("/object-topology-review").status_code==200
+    assert client.get("/object-topology-review.js").status_code==200
 """
     env={**os.environ,"WORKFLOW_OBSERVER_DATA":str(tmp_path/"data"),
          "WORKFLOW_OBSERVER_AUTH_DIR":str(tmp_path/"auth"),
