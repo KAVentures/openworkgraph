@@ -176,3 +176,7 @@ Routes require the local dashboard session; the API token is refused.
 
 `POST /v1/communications/analyze` accepts `classifier=learned` and
 `review_sample=1–200`; sampling also needs the confirmation header.
+
+
+For cutoff-aware response episodes, repeat contacts and deadline sensitivity,
+see [Communications response episodes](COMMUNICATIONS_RESPONSE_EPISODES.md).
