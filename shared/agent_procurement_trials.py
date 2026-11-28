@@ -198,6 +198,8 @@ def _count_max(bounds,maximum):
 
 def _latency(values):
     n=len(values)
+    if not n:
+        return {"known_attempts":0,"unknown_attempts":0,"p95_lower_ms":0,"p95_upper_ms":None,"p95_ms":None}
     known=sorted(v for v in values if v is not None)
     missing=n-len(known)
     rank=(95*n+99)//100

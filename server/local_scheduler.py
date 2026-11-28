@@ -10,6 +10,7 @@ schedule with an explicit confirmation. Supported jobs:
   the signal inbox reflects the current data;
 - ``event_log_report``: save a copy of an event log's self-contained HTML report
   in the local data folder, keeping the newest ten;
+- ``procurement_monitor_deadlines``: review crossed frozen window deadlines for explicitly opted-in retained local journals, without external source reads;
 - ``local_backup``: at most daily, create a verified unencrypted snapshot
   outside the data folder, excluding credentials; rotate owned scheduled files
   only after success, with separate user acknowledgment.
@@ -41,7 +42,7 @@ from .db import DATA_DIR
 
 FORMAT = "openworkgraph.local-schedules.v1"
 KINDS = ("retained_jira_profile", "event_log_signals", "event_log_report", "local_backup", "event_log_folder_feed",
-         "event_log_agent_runs")
+         "event_log_agent_runs", "procurement_monitor_deadlines")
 MIN_BACKUP_INTERVAL_MINUTES = 24 * 60
 MIN_INTERVAL_MINUTES = 15
 MAX_INTERVAL_MINUTES = 7 * 24 * 60
@@ -388,6 +389,10 @@ def _check_backup_location() -> None:
 
 
 def _check_target(kind: str, target_id: str) -> None:
+    if kind == "procurement_monitor_deadlines":
+        if target_id != "local":
+            raise ScheduleError("monitor deadline target must be local")
+        return
     if kind == "local_backup":
         if target_id != "local":
             raise ScheduleError("local backup target must be local")
@@ -454,6 +459,9 @@ def _run_scoped_report(item: dict[str, Any]) -> tuple[str, float]:
 
 def _run_job(kind: str, target_id: str) -> tuple[str, float]:
     """Run one job; returns (outcome code, provider retry-after seconds)."""
+    if kind == "procurement_monitor_deadlines":
+        from . import agent_procurement_monitor_schedule as monitor_schedule
+        return monitor_schedule.run_scheduled(target_id)
     if kind == "local_backup":
         if target_id != "local":
             return "failed:invalid_local_backup_target", 0.0

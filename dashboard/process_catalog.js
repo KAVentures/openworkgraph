@@ -1655,7 +1655,7 @@
     const section=el('section');section.appendChild(el('h4','AI workforce procurement'));
     section.appendChild(el('p','Compare portable shadow evaluations, freeze a repeated trial, or review its full scheduled population. Files are inspected only on this computer and are not retained. Model identities, measurements and business outcomes remain unverified.'));
     const mode=el('select');mode.id='owgCatalogProcurementMode';mode.setAttribute('aria-label','Procurement operation');
-    for(const [value,label] of [['compare','Compare completed shadow reports'],['freeze','Freeze a repeated trial plan'],['review','Review a frozen trial and captures'],['nominate','Nominate a candidate before holdout'],['assess','Assess the held-out trial'],['decide','Record a pinned rehearsal decision'],['outcome-review','Review controlled sandbox outcomes'],['rollout-review','Request separate rollout review'],['deployment-review','Review monitored deployment readiness'],['deployment-decide','Record deployment review referral']]){
+    for(const [value,label] of [['compare','Compare completed shadow reports'],['freeze','Freeze a repeated trial plan'],['review','Review a frozen trial and captures'],['operating-cost','Review human and AI operating costs'],['router-freeze','Freeze a held-out router rehearsal'],['router-review','Review held-out routing predictions'],['router-change-freeze','Freeze router version comparison'],['router-change-assess','Assess paired router version change'],['router-change-decide','Record controlled router change referral'],['router-pilot-freeze','Freeze controlled router pilot'],['router-pilot-review','Review controlled pilot observations'],['router-pilot-decide','Record pilot expansion or rollback referral'],['router-monitor-freeze','Freeze multi-window router monitoring'],['router-monitor-review','Review cumulative monitoring snapshot'],['router-monitor-decide','Record monitoring or rollback referral'],['router-journal-list','List locally retained monitoring journals'],['router-journal-append','Retain a monitoring checkpoint locally'],['router-journal-refresh','Refresh monitoring using the local clock'],['router-journal-schedule','Set journal-specific scheduled review consent'],['router-journal-detail','Inspect retained monitoring history'],['router-journal-decide','Record retained monitoring decision'],['router-journal-forget','Remove retained monitoring journal'],['router-producer-grant','Issue scoped monitoring producer credential'],['router-producer-revoke','Revoke monitoring producer credential'],['router-finance-reconcile','Reconcile declared booked financial amounts'],['nominate','Nominate a candidate before holdout'],['assess','Assess the held-out trial'],['decide','Record a pinned rehearsal decision'],['outcome-review','Review controlled sandbox outcomes'],['rollout-review','Request separate rollout review'],['deployment-review','Review monitored deployment readiness'],['deployment-decide','Record deployment review referral']]){
       const option=el('option',label);option.value=value;mode.appendChild(option);
     }
     const modeLabel=el('label','Procurement operation ');modeLabel.htmlFor=mode.id;modeLabel.appendChild(mode);
@@ -1672,6 +1672,14 @@
       hint.textContent=mode.value==='compare'?'Choose an existing comparison request (see AGENT_PROCUREMENT.md).':
         mode.value==='freeze'?'Choose a confirmed design JSON with exact reference report, candidates, gates and repeats (see AGENT_PROCUREMENT_TRIALS.md).':
         mode.value==='review'?'Choose the frozen plan and a capture ledger. Failed and missing scheduled slots remain in the denominator.':
+        mode.value==='operating-cost'?'Choose the exact trial and human operating-cost bundle (see AGENT_PROCUREMENT_OPERATING_COST.md). Review and fallback time, missing evidence and fixed-cost assumptions remain visible.':
+        mode.value.startsWith('router-producer-')?'Issue or revoke an explicitly confirmed scoped producer credential using the retained journal head. Credentials are shown once and never included in report downloads.':
+        mode.value==='router-finance-reconcile'?'Submit an explicitly confirmed finance statement for a closed monitoring window, with current journal and report pins. See AGENT_PROCUREMENT_FINANCE.md.':
+        mode.value.startsWith('router-journal-')?'Local retained monitoring journal. Append, decision and removal require explicit confirmation and a current head pin (see AGENT_PROCUREMENT_MONITOR_JOURNAL.md).':
+        mode.value.startsWith('router-monitor-')?'Choose the exact monitoring bundle and retained prior snapshot pin (see AGENT_PROCUREMENT_ROUTER_MONITOR.md). No live telemetry or rollback is executed.':
+        mode.value.startsWith('router-pilot-')?'Choose a pinned pilot evidence bundle (see AGENT_PROCUREMENT_ROUTER_PILOT.md). This reviews declared observations; it cannot execute or roll back a pilot.':
+        mode.value.startsWith('router-change-')?'Choose the exact router version change bundle (see AGENT_PROCUREMENT_ROUTER_CHANGE.md). Referral is not production authorization.':
+        ['router-freeze','router-review'].includes(mode.value)?'Choose the exact routing rehearsal bundle (see AGENT_PROCUREMENT_ROUTER_REHEARSAL.md). Predictions and paired outcomes are declarations, not observed live routing.':
         ['deployment-review','deployment-decide'].includes(mode.value)?'Choose the deployment readiness bundle (see AGENT_PROCUREMENT_DEPLOYMENT.md). Existing monitoring records are read locally; no release changes are made.':
         ['outcome-review','rollout-review'].includes(mode.value)?'Choose the outcome review bundle (see AGENT_PROCUREMENT_OUTCOMES.md). No rollout or execution permission will be granted.':
         'Choose the exact selection bundle (see AGENT_PROCUREMENT_SELECTION.md). Nomination and decision require a current saved revision and explicit confirmation in the document.';
@@ -1693,8 +1701,15 @@
       const selectionMode=['nominate','assess','decide'].includes(operation);
       const outcomeMode=['outcome-review','rollout-review'].includes(operation);
       const deploymentMode=['deployment-review','deployment-decide'].includes(operation);
-      const heading={nominate:'Frozen candidate nomination',assess:'Held-out selection assessment',decide:'Rehearsal decision receipt','outcome-review':'Controlled sandbox outcome review','rollout-review':'Separate rollout review receipt','deployment-review':'Monitored deployment readiness','deployment-decide':'Release-owner referral receipt'};
-      output.appendChild(el('h5',(selectionMode||outcomeMode||deploymentMode)?heading[operation]:operation==='freeze'?'Frozen trial plan · '+result.scheduled_attempts+' attempts':'Candidate procurement comparison'));
+      const economicsMode=operation==='operating-cost';
+      const routerMode=['router-freeze','router-review'].includes(operation);
+      const routerChangeMode=operation.startsWith('router-change-');
+      const routerPilotMode=operation.startsWith('router-pilot-');
+      const routerMonitorMode=operation.startsWith('router-monitor-');
+      const routerJournalMode=operation.startsWith('router-journal-')||operation==='router-finance-reconcile';
+      const routerProducerMode=operation.startsWith('router-producer-');
+      const heading={'router-finance-reconcile':'Retained finance reconciliation','router-producer-grant':'Scoped monitoring producer credential','router-producer-revoke':'Monitoring producer revoked','router-journal-list':'Retained monitoring journals','router-journal-append':'Retained monitoring checkpoint','router-journal-refresh':'Clock-refreshed monitoring checkpoint','router-journal-schedule':'Scheduled review consent','router-journal-detail':'Retained monitoring history','router-journal-decide':'Retained monitoring decision','router-journal-forget':'Monitoring journal removal','router-monitor-freeze':'Frozen multi-window router monitoring','router-monitor-review':'Cumulative router monitoring review','router-monitor-decide':'Monitoring review referral receipt','router-pilot-freeze':'Frozen controlled router pilot','router-pilot-review':'Controlled router pilot review','router-pilot-decide':'Pilot review referral receipt','router-change-freeze':'Frozen router version comparison','router-change-assess':'Paired router version assessment','router-change-decide':'Controlled router change receipt','router-freeze':'Frozen router rehearsal plan','router-review':'Held-out router rehearsal review','operating-cost':'Human and AI operating cost comparison',nominate:'Frozen candidate nomination',assess:'Held-out selection assessment',decide:'Rehearsal decision receipt','outcome-review':'Controlled sandbox outcome review','rollout-review':'Separate rollout review receipt','deployment-review':'Monitored deployment readiness','deployment-decide':'Release-owner referral receipt'};
+      output.appendChild(el('h5',(selectionMode||outcomeMode||deploymentMode||economicsMode||routerMode||routerChangeMode||routerPilotMode||routerMonitorMode||routerJournalMode||routerProducerMode)?heading[operation]:operation==='freeze'?'Frozen trial plan · '+result.scheduled_attempts+' attempts':'Candidate procurement comparison'));
       output.appendChild(el('p','Exact saved revision '+envelope.revision+'. '+(envelope.references_latest_revision_at_inspection?
         'Latest saved revision at inspection.':'Historical revision; current revision '+envelope.latest_revision_at_inspection+'. Evaluate the current design before substitution.')));
       if(operation==='freeze'){
@@ -1702,6 +1717,423 @@
         const list=el('ul');
         for(const c of result.basis.candidates)list.appendChild(el('li',c.candidate_id+' · '+c.provider+' / '+c.model+' / '+c.runtime));
         output.appendChild(list);
+      }else if(routerProducerMode){
+        if(operation==='router-producer-grant'){
+          output.append(el('p','Grant '+result.grant.grant_id+' · '+result.grant.producer_alias+' · '+result.grant.window_id+' / '+result.grant.arm),
+            el('p','Expires '+new Date(result.grant.expires_ms).toISOString()),
+            el('p','Copy this write-only bearer token to the authorized local producer now. It cannot be retrieved again. Do not include it in reports, URLs or logs.'));
+          const secret=el('input');secret.type='password';secret.readOnly=true;secret.value=result.producer_token;secret.autocomplete='off';secret.setAttribute('aria-label','One-time monitoring producer token');
+          const reveal=button('Show or hide producer token',()=>{secret.type=secret.type==='password'?'text':'password';});
+          output.append(secret,reveal,button('Copy producer token',async()=>{await navigator.clipboard.writeText(secret.value);}),el('p','Current journal head: '+result.head_sha256));
+        }else output.append(el('p','Grant '+result.grant_id+' revoked. Existing evidence is retained.'),el('p','Current journal head: '+result.head_sha256));
+      }else if(routerJournalMode){
+        if(operation==='router-journal-list'){
+          const ul=el('ul');
+          for(const r of result.journals){
+            const item=el('li',r.monitor_id+' · '+r.entry_count+' audit entries · '+r.checkpoint_count+' checkpoints');
+            item.append(el('p','Current head: '+r.head_sha256),el('p',r.eligible_for_continued_monitoring_review?'Eligible for continuation review':'Continuation blocked or incomplete'));
+            ul.appendChild(item);
+          }
+          output.append(el('p',result.journals.length+' journals for this saved revision'),ul);
+        }else if(operation==='router-journal-forget'){
+          output.append(el('p','Removed local journal '+result.monitor_id+'. Existing exports and backups are not erased by this operation.'));
+        }else{
+          output.append(el('p',result.monitor_id+' · '+result.checkpoint_count+' checkpoints / '+result.entry_count+' audit entries'),
+            el('p','Current head: '+result.head_sha256),
+            el('p','Ordinary audit entries remaining: '+result.ordinary_entries_remaining+' · reserved disable entries: '+result.reserved_disable_entries),
+            el('p',result.eligible_for_continued_monitoring_review?'Eligible for separate continuation review.':'Retained evidence blocks continuation or remains incomplete.'),
+            el('p','Rollback referral previously recorded: '+(result.rollback_referral_recorded?'yes':'no')),
+            el('p','Sticky rollback triggers: '+(result.sticky_rollback_triggers.map(x=>(x.window_id||'cumulative')+': '+x.reason).join(' · ')||'none recorded')),
+            el('p','Historical overdue windows: '+(result.overdue_window_history.join(', ')||'none recorded')),
+            el('p','Latest snapshot: '+result.latest_report.snapshot_sha256+' · '+new Date(result.latest_report.as_of_ms).toISOString()),
+            el('p',(result.credential_authenticated_observations||0)+' observations submitted with scoped producer credentials; this does not verify their outcomes.'));
+          output.appendChild(el('p','Scheduled deadline review consent: '+(result.scheduled_deadline_review_enabled?'enabled':'disabled')+'. The local scheduler must also be enabled.'));
+          const grants=el('ul');for(const g of result.producer_grants||[])grants.appendChild(el('li',g.grant_id+' · '+g.producer_alias+' · '+g.window_id+' / '+g.arm+' · '+(g.revoked?'revoked':g.expires_ms<=Date.now()?'expired':'active')));output.append(el('h6','Producer grants'),grants);
+          const money=(v,currency)=>{
+            if(v==null)return 'unbounded';
+            const n=BigInt(v.numerator),d=BigInt(v.denominator),a=n<0n?-n:n,r=(2n*a+d)/(2n*d);
+            return (a%d!==0n?'≈ ':'')+(n<0n?'-':'')+String(r/1000000n)+'.'+String(r%1000000n).padStart(6,'0')+' '+currency;
+          };
+          const integerMoney=(v,currency)=>money({numerator:v,denominator:'1'},currency);
+          output.appendChild(el('h6','Declared financial reconciliations'));
+          if(!(result.finance_reconciliations||[]).length)output.appendChild(el('p','No retained finance statements.'));
+          for(const f of result.finance_reconciliations||[]){
+            const section=el('section');section.append(el('h6',f.window_id+' · '+f.accounting_basis+' basis'),
+              el('p','Pinned monitoring report: '+f.monitor_report_sha256),
+              el('p','Finance reviewer: '+f.reviewer_alias+' · statement '+f.reconciliation_sha256),
+              el('p','Challenger minus incumbent declared net per enrolled case: '+money(f.challenger_minus_incumbent_booked_net_per_case,f.currency)+' (descriptive, not causal savings)'));
+            for(const [name,a] of Object.entries(f.arms)){
+              section.append(el('p',name+' · '+a.recorded_cases+'/'+a.scheduled_cases+' telemetry records · booked revenue '+integerMoney(a.declared_booked_revenue_microunits,f.currency)+' · booked cost '+integerMoney(a.declared_booked_cost_microunits,f.currency)+' · booked net '+integerMoney(a.declared_booked_net_microunits,f.currency)),
+                el('p','Telemetry direct cost: '+money(a.telemetry_direct_cost.lower_microunits,f.currency)+' to '+money(a.telemetry_direct_cost.upper_microunits,f.currency)+'; not added to booked cost'),
+                el('p','Diagnostic provider/external booking minus telemetry direct cost: '+money(a.booked_provider_external_minus_telemetry_direct.lower_microunits,f.currency)+' to '+money(a.booked_provider_external_minus_telemetry_direct.upper_microunits,f.currency)));
+            }
+            section.appendChild(el('p','Financial documents and reviewer identity are not independently verified. Historical reconciliation is not rewritten by later observations.'));
+            output.appendChild(section);
+          }
+          const windows=el('ul');for(const w of result.latest_report.windows)windows.appendChild(el('li',w.window_id+' · '+w.state.replaceAll('_',' ')+' · '+w.recorded_cases+'/'+w.scheduled_cases+' recorded'));
+          output.append(el('h6','Latest window results'),windows,el('h6','Chained local audit history'));
+          const history=el('ul');for(const e of result.history){
+            const item=el('li',e.sequence+' · '+e.kind+' · '+new Date(e.recorded_at_ms).toISOString());
+            item.append(el('p','Entry: '+e.entry_sha256),el('p',e.kind==='decision'?e.details.disposition.replaceAll('_',' ')+' · '+e.details.reviewer_alias:e.kind==='producer_grant'||e.kind==='producer_revoke'?'Grant '+e.details.grant_id:e.kind==='producer_checkpoint'?'Producer '+e.details.producer_alias+' · '+e.details.accepted_observations+' accepted observations':e.kind==='finance_reconciliation'?'Finance statement '+e.details.window_id+' · '+e.details.reconciliation_sha256:e.kind==='schedule_consent'?'Scheduled deadline review '+(e.details.enabled?'enabled':'disabled'):e.kind==='outcome_corroboration'?'Separate review '+e.details.window_id+' · '+e.details.reviewed_cases+' cases':e.kind==='corroboration_required'?'Full corroboration required':e.kind==='source_outcome_bind'?'Source bindings '+e.details.bound_cases:e.kind==='source_outcome_check'?'Source checks '+e.details.confirmed_cases+'/'+e.details.checked_cases:'Snapshot '+e.details.snapshot_sha256+' · '+e.details.recorded_cases+' recorded cases'));
+            history.appendChild(item);
+          }
+          output.append(history,el('p','Locally retained declarations, not authenticated production telemetry or a tamper-proof external audit log. No deployment or rollback performed.'));
+          installJournalWorkbench(output,{workflow_id:selected.workflow_id,revision:selected.revision});
+        }
+      }else if(routerMonitorMode){
+        if(operation==='router-monitor-freeze'){
+          output.append(el('p',result.scheduled_cases+' distinct scheduled cases · '+result.windows.length+' frozen windows'),
+            el('p','Retain the exact plan and approval reference before external monitoring. This is not a traffic assignment service.'),
+            el('p','Rollback target: '+result.rollback_target_configuration_sha256));
+          const list=el('ul');
+          for(const w of result.windows)list.appendChild(el('li',w.window_id+' · '+w.plan.slots.length+' cases · '+new Date(w.plan.request.window_start_ms).toISOString()+' → '+new Date(w.plan.request.window_end_exclusive_ms).toISOString()+' (exclusive)'));
+          output.appendChild(list);
+        }else if(operation==='router-monitor-decide'){
+          output.append(el('p','Disposition: '+result.request.disposition.replaceAll('_',' ')),
+            el('p','Reviewer alias: '+result.request.reviewer_alias+' (identity not independently verified)'),
+            el('p','Rollback target: '+result.rollback_target_configuration_sha256),
+            el('p','No deployment changed or rollback executed.'));
+        }else{
+          const money=v=>{
+            if(v==null)return 'unbounded';
+            const n=BigInt(v.numerator),d=BigInt(v.denominator),a=n<0n?-n:n,r=(2n*a+d)/(2n*d);
+            return (a%d!==0n?'≈ ':'')+(n<0n?'-':'')+String(r/1000000n)+'.'+String(r%1000000n).padStart(6,'0')+' '+result.currency;
+          };
+          const range=v=>money(v.lower_microunits)+' to '+money(v.upper_microunits);
+          const counts=v=>v.lower+'–'+v.upper;
+          output.append(el('p','Recommended review: '+result.recommended_review.replaceAll('_',' ')),
+            el('p',result.recorded_cases+' recorded / '+result.started_window_cases+' started-window cases / '+result.scheduled_cases+' total scheduled cases'),
+            el('p',result.completed_passing_windows+' of '+result.windows.length+' windows completed with passing checks'),
+            el('p','Snapshot as of '+new Date(result.as_of_ms).toISOString()),
+            el('p',result.prior_checkpoint_extension_verified?'Retained prior snapshot extension verified.':'No retained prior snapshot supplied.'),
+            el('p','Current snapshot pin: '+result.snapshot_sha256),
+            el('p','Previously overdue windows: '+(result.overdue_windows_at_previous_checkpoint.join(', ')||'none reported at supplied checkpoint')),
+            el('p','Rollback review triggers: '+(result.rollback_review_triggers.map(x=>(x.window_id||'cumulative')+': '+x.reason).join(' · ')||'none established')),
+            el('p','Prior checkpoint triggers: '+(result.rollback_triggers_at_previous_checkpoint.map(x=>(x.window_id||'cumulative')+': '+x.reason).join(' · ')||'none supplied')));
+          const showArm=(name,a)=>el('p',name+': '+a.terminal+'/'+a.cases+' terminal · success '+counts(a.counts.success)+' · mean cost '+range(a.mean_variable_cost));
+          output.appendChild(el('h6','Cumulative started-window results'));
+          for(const [name,a] of Object.entries(result.arms))output.appendChild(showArm(name,a));
+          for(const c of result.cumulative_category_reviews){
+            const section=el('section');section.append(el('h6',c.category.replaceAll('_',' ')+' · '+c.status),showArm('Incumbent',c.incumbent),showArm('Challenger',c.challenger),el('p','Mean variable savings: '+range(c.mean_variable_cost_savings)));output.appendChild(section);
+          }
+          output.appendChild(el('h6','Closed-window cumulative prefixes'));
+          const prefixes=el('ul');for(const p of result.closed_prefix_checks)prefixes.appendChild(el('li',p.through_window_id+' · '+p.status+' · '+Object.entries(p.category_status).map(([k,v])=>k.replaceAll('_',' ')+': '+v).join(' · ')));output.appendChild(prefixes);
+          output.appendChild(el('h6','Individual monitoring windows'));
+          for(const w of result.windows){
+            const section=el('section');section.append(el('h6',w.window_id+' · '+w.state.replaceAll('_',' ')),
+              el('p',w.recorded_cases+' / '+w.scheduled_cases+' recorded · '+new Date(w.start_ms).toISOString()+' → '+new Date(w.end_exclusive_ms).toISOString()));
+            if(w.checks){
+              const ul=el('ul');for(const [k,v] of Object.entries(w.checks))ul.appendChild(el('li',k.replaceAll('_',' ')+': '+v));section.appendChild(ul);
+              for(const c of w.category_reviews)section.appendChild(el('p',c.category.replaceAll('_',' ')+': '+c.status+' · mean variable savings '+range(c.mean_variable_cost_savings)));
+            }
+            output.appendChild(section);
+          }
+          output.appendChild(el('p','Keep the snapshot input and its exported pin for the next checkpoint. No independently persisted history, authenticated telemetry or causal effect is established.'));
+        }
+      }else if(routerPilotMode){
+        if(operation==='router-pilot-freeze'){
+          output.append(el('p',result.slots.length+' allocated distinct cases · pilot '+result.request.pilot_id),
+            el('p','Declared window (UTC): '+new Date(result.request.window_start_ms).toISOString()+' to '+new Date(result.request.window_end_exclusive_ms).toISOString()+' (exclusive)'),
+            el('p','Pinned rollback target: '+result.request.rollback_target_configuration_sha256),
+            el('p','External pilot approval reference is declared, not verified. Allocation is an offline artifact, not an instruction to execute.'));
+          const list=el('ul');
+          for(const category of ['normal','exception','missing_facts']){
+            const group=result.slots.filter(s=>s.category===category);
+            list.appendChild(el('li',category.replaceAll('_',' ')+': '+group.filter(s=>s.arm==='incumbent').length+' incumbent / '+group.filter(s=>s.arm==='challenger').length+' challenger'));
+          }
+          output.appendChild(list);
+        }else if(operation==='router-pilot-decide'){
+          output.append(el('p','Disposition: '+result.request.disposition.replaceAll('_',' ')),
+            el('p','Reviewer alias: '+result.request.reviewer_alias+' (identity not independently verified)'),
+            el('p','Pinned rollback target: '+result.rollback_target_configuration_sha256),
+            el('p','No deployment changed or rollback executed.'));
+        }else{
+          const money=v=>{
+            if(v==null)return 'unbounded';
+            const n=BigInt(v.numerator),d=BigInt(v.denominator),a=n<0n?-n:n,r=(2n*a+d)/(2n*d);
+            return (a%d!==0n?'≈ ':'')+(n<0n?'-':'')+String(r/1000000n)+'.'+String(r%1000000n).padStart(6,'0')+' '+result.currency;
+          };
+          const range=v=>money(v.lower_microunits)+' to '+money(v.upper_microunits);
+          const counts=v=>v.lower+'–'+v.upper;
+          output.append(el('p','Recommended review: '+result.recommended_review.replaceAll('_',' ')),
+            el('p',result.recorded_cases+' of '+result.scheduled_cases+' distinct cases recorded'),
+            el('p','Rollback review triggers: '+(result.rollback_review_triggers.join(', ')||'none established')),
+            el('p','Pinned rollback target: '+result.rollback_target_configuration_sha256));
+          const showArm=(name,a)=>el('p',name+': '+a.terminal+'/'+a.cases+' terminal · success '+counts(a.counts.success)+' · critical '+counts(a.counts.critical)+' · forbidden '+counts(a.counts.forbidden)+' · mean variable cost '+range(a.mean_variable_cost)+' · attribution '+a.attribution_counts.pass+' pass / '+a.attribution_counts.fail+' fail / '+a.attribution_counts.unknown+' unknown');
+          for(const [name,a] of Object.entries(result.arms))output.appendChild(showArm(name,a));
+          const gates=el('ul');for(const [k,v] of Object.entries(result.checks))gates.appendChild(el('li',k.replaceAll('_',' ')+': '+v));
+          output.append(el('h6','Frozen pilot checks'),gates);
+          for(const c of result.category_reviews){
+            const section=el('section');section.append(el('h6',c.category.replaceAll('_',' ')+' · '+c.status),
+              showArm('Incumbent',c.incumbent),showArm('Challenger',c.challenger),
+              el('p','Mean variable savings: '+range(c.mean_variable_cost_savings)));
+            const cg=el('ul');for(const [k,v] of Object.entries(c.checks))cg.appendChild(el('li',k.replaceAll('_',' ')+': '+v));
+            section.appendChild(cg);output.appendChild(section);
+          }
+          const filter=el('input');filter.type='checkbox';filter.setAttribute('aria-label','Show pilot problems or unresolved observations');
+          const label=el('label',' Show pilot problems or unresolved observations');label.prepend(filter);
+          const view=el('div');let offset=0;
+          const draw=()=>{
+            const rows=filter.checked?result.rows.filter(r=>r.attribution!=='pass'||r.status!=='completed'||r.success.lower!==1||r.critical.upper||r.forbidden.upper||r.manual_leakage.upper||r.route_deviation.upper):result.rows;
+            const list=el('ul');
+            for(const r of rows.slice(offset,offset+25)){
+              const item=el('li',r.case_token_sha256+' · '+r.arm+' · '+r.category+' · '+r.status);
+              item.append(el('p','Attribution: '+r.attribution+' · actual destination: '+(r.actual_candidate_id||r.actual_destination||'unknown')),
+                el('p','Success '+counts(r.success)+' · critical '+counts(r.critical)+' · forbidden '+counts(r.forbidden)+' · variable cost '+range(r.variable_cost)),
+                el('p','Source evidence reference: '+(r.source_evidence_sha256||'none')));
+              list.appendChild(item);
+            }
+            const nav=el('div');if(offset)nav.appendChild(button('Previous pilot page',()=>{offset=Math.max(0,offset-25);draw();}));
+            if(offset+25<rows.length)nav.appendChild(button('Next pilot page',()=>{offset+=25;draw();}));
+            view.replaceChildren(el('p',rows.length?'Showing '+(offset+1)+'–'+Math.min(rows.length,offset+25)+' of '+rows.length+' pilot rows':'No matching pilot rows.'),list,nav);
+          };
+          filter.addEventListener('change',()=>{offset=0;draw();});output.append(el('h6','Declared pilot evidence'),label,view);draw();
+          output.appendChild(el('p','Disjoint-arm comparisons are descriptive, not causal estimates. No independent execution, approval or source evidence verification is established.'));
+        }
+      }else if(routerChangeMode){
+        if(operation==='router-change-freeze'){
+          output.append(el('p',result.paired_attempts+' paired scheduled predictions · portfolio '+result.request.portfolio_id),
+            el('p','Incumbent configuration: '+result.request.incumbent_configuration_sha256),
+            el('p','Challenger configuration: '+result.request.challenger_configuration_sha256),
+            el('p','Retain the frozen comparison before collecting either ledger. No independent chronology or production execution is established.'));
+        }else if(operation==='router-change-decide'){
+          output.append(el('p','Disposition: '+result.request.disposition.replaceAll('_',' ')),
+            el('p','Reviewer alias: '+result.request.reviewer_alias+' (identity not independently verified)'),
+            el('p','Referred configuration: '+(result.referred_configuration_sha256||'none')),
+            el('p','No deployment changed. A referral is not rollout authorization.'));
+        }else{
+          const money=v=>{
+            if(v==null)return 'unbounded';
+            const n=BigInt(v.numerator),d=BigInt(v.denominator),a=n<0n?-n:n,r=(2n*a+d)/(2n*d);
+            return (a%d!==0n?'≈ ':'')+(n<0n?'-':'')+String(r/1000000n)+'.'+String(r%1000000n).padStart(6,'0')+' '+result.currency;
+          };
+          const range=v=>money(v.lower_microunits)+' to '+money(v.upper_microunits);
+          const counts=v=>v.lower+'–'+v.upper;
+          output.append(el('p',result.eligible_for_controlled_change_review?'Eligible for separate controlled change review.':'Frozen checks block positive referral.'),
+            el('p',result.paired_attempts+' paired predictions · incumbent gates '+result.incumbent_absolute_gate_status+' · challenger gates '+result.challenger_absolute_gate_status),
+            el('p','Recurring switching savings: '+range(result.annual_recurring_switch_savings)),
+            el('p','First-year switching savings: '+range(result.first_year_switch_savings)),
+            el('p','Changed destinations: '+counts(result.observed_counts.changed_destination)+' · new outcome regressions: '+counts(result.observed_counts.new_outcome_regression)+' · new manual leakage: '+counts(result.observed_counts.new_manual_leakage)));
+          const checks=el('ul');for(const [k,v] of Object.entries(result.checks))checks.appendChild(el('li',k.replaceAll('_',' ')+': '+v));
+          output.append(el('h6','Frozen change checks'),checks);
+          for(const c of result.category_reviews){
+            const section=el('section');section.append(el('h6',c.category.replaceAll('_',' ')+' · '+c.status),
+              el('p',c.distinct_cases+' distinct cases · '+c.attempts+' paired attempts'),
+              el('p','Success change: '+counts(c.counts.success_change)+' · new regressions: '+counts(c.counts.new_outcome_regression)+' · new critical: '+counts(c.counts.new_critical)));
+            const cg=el('ul');for(const [k,v] of Object.entries(c.checks))cg.appendChild(el('li',k.replaceAll('_',' ')+': '+v));
+            section.appendChild(cg);output.appendChild(section);
+          }
+          const filter=el('input');filter.type='checkbox';filter.setAttribute('aria-label','Show changed or potentially regressed routes');
+          const label=el('label',' Show changed or potentially regressed routes');label.prepend(filter);
+          const view=el('div');let offset=0;
+          const draw=()=>{
+            const rows=filter.checked?result.rows.filter(r=>r.changed_destination.upper||r.new_outcome_regression.upper||r.new_critical.upper||r.new_non_delivery.upper||r.new_manual_leakage.upper||r.new_fallback.upper):result.rows;
+            const list=el('ul');
+            for(const r of rows.slice(offset,offset+25)){
+              const destination=(ids,manual)=>[...ids,...(manual?['manual']:[])].join(', ');
+              const item=el('li',r.case_id+' · repeat '+r.repeat+' · '+r.incumbent_status+' → '+r.challenger_status);
+              item.append(el('p','Possible incumbent paths: '+destination(r.incumbent_possible_candidate_ids,r.incumbent_manual_path_possible)),
+                el('p','Possible challenger paths: '+destination(r.challenger_possible_candidate_ids,r.challenger_manual_path_possible)),
+                el('p','Paired variable savings: '+range(r.paired_variable_cost_savings)+' · new regression: '+counts(r.new_outcome_regression)+' · new leakage: '+counts(r.new_manual_leakage)));
+              list.appendChild(item);
+            }
+            const nav=el('div');
+            if(offset)nav.appendChild(button('Previous router change page',()=>{offset=Math.max(0,offset-25);draw();}));
+            if(offset+25<rows.length)nav.appendChild(button('Next router change page',()=>{offset+=25;draw();}));
+            view.replaceChildren(el('p',rows.length?'Showing '+(offset+1)+'–'+Math.min(rows.length,offset+25)+' of '+rows.length+' paired change rows':'No matching change rows.'),list,nav);
+          };
+          filter.addEventListener('change',()=>{offset=0;draw();});
+          output.append(el('h6','Paired change evidence'),label,view);draw();
+          output.appendChild(el('p','Identical paths reuse shared counterfactual evidence. Outcomes are declarations, switching costs are assumptions, and no actual routed executions or reviewer identity are verified.'));
+        }
+      }else if(routerMode){
+        if(operation==='router-freeze'){
+          output.append(el('p',result.scheduled_attempts+' scheduled router predictions · portfolio '+result.request.portfolio_id),
+            el('p','Retain the exact plan before obtaining predictions. The separate input-only challenge is available through the local CLI. The plan does not establish chronology.'));
+          const routes=el('ul');
+          for(const [category,candidate] of Object.entries(result.assignments))routes.appendChild(el('li',category.replaceAll('_',' ')+' → '+(candidate||'manual')));
+          output.appendChild(routes);
+        }else{
+          const money=v=>{
+            if(v==null)return 'unbounded';
+            const n=BigInt(v.numerator),d=BigInt(v.denominator),a=n<0n?-n:n;
+            const r=(2n*a+d)/(2n*d);
+            return (a%d!==0n?'≈ ':'')+(n<0n?'-':'')+String(r/1000000n)+'.'+String(r%1000000n).padStart(6,'0')+' '+result.currency;
+          };
+          const range=v=>money(v.lower_microunits)+' to '+money(v.upper_microunits);
+          const counts=v=>v.lower+'–'+v.upper;
+          output.append(el('p','Portfolio '+result.portfolio_id+' · gate status: '+result.gate_status),
+            el('p',result.recorded_attempts+' of '+result.scheduled_attempts+' predictions recorded · '+Object.entries(result.status_counts).map(([k,v])=>k.replaceAll('_',' ')+': '+v).join(' · ')),
+            el('p','Category accuracy count: '+counts(result.observed_counts.accuracy)+' · destination agreement: '+counts(result.observed_counts.agreement)+' · manual leakage: '+counts(result.observed_counts.manual_leakage)),
+            el('p','Declared outcome regressions: '+counts(result.observed_counts.regression)+' · shadow critical: '+counts(result.observed_counts.critical)+' · non-delivery: '+counts(result.observed_counts.non_delivery)),
+            el('p','Conditional annual cost: '+range(result.annual_cost)+' · first-year savings: '+range(result.first_year_savings)),
+            el('p','Annual signed variable cost difference from intended paths: '+range(result.annual_cost_difference_from_ideal_path)),
+            el('p','Including router effort and direct charges: '+range(result.annual_cost_difference_from_ideal_including_router)+' (excludes fixed charges)'),
+            el('p','Router p95 latency: '+result.router_latency.p95_lower_ms+' to '+(result.router_latency.p95_upper_ms==null?'unbounded':result.router_latency.p95_upper_ms)+' ms · all scheduled predictions'),
+            el('p','Manual fixed costs retained. All configured agents charged. Financial evidence: '+(result.financial_evidence_complete?'complete for these assumptions':'incomplete')));
+          const gates=el('ul');for(const [key,value] of Object.entries(result.checks))gates.appendChild(el('li',key.replaceAll('_',' ')+': '+value));
+          output.append(el('h6','Frozen policy checks'),gates);
+          const matrix=el('ul');for(const [cat,values] of Object.entries(result.confusion_counts)){
+            const item=el('li',cat.replaceAll('_',' ')+': '+Object.entries(values).filter(([,v])=>v).map(([k,v])=>k.replaceAll('_',' ')+' '+v).join(' · '));
+            matrix.appendChild(item);
+          }
+          output.append(el('h6','Classification confusion counts (including failed and missing predictions)'),matrix);
+          for(const c of result.category_reviews){
+            const section=el('section');section.append(el('h6',c.category.replaceAll('_',' ')+' · '+c.status),
+              el('p',c.distinct_cases+' distinct cases · '+c.attempts+' attempts · declared annual volume '+c.annual_cases),
+              el('p','Category accuracy: '+counts(c.counts.accuracy)+' · manual leakage: '+counts(c.counts.manual_leakage)+' · outcome regressions: '+counts(c.counts.regression)));
+            const cg=el('ul');for(const [key,value] of Object.entries(c.checks))cg.appendChild(el('li',key.replaceAll('_',' ')+': '+value));
+            section.appendChild(cg);output.appendChild(section);
+          }
+          const filter=el('input');filter.type='checkbox';filter.setAttribute('aria-label','Show router problems or unresolved predictions');
+          const label=el('label',' Show router problems or unresolved predictions');label.prepend(filter);
+          const view=el('div');let offset=0;
+          const draw=()=>{
+            const rows=filter.checked?result.rows.filter(r=>r.route_unresolved||r.accuracy.lower!==1||r.manual_leakage.upper||r.regression.upper||r.critical.upper||r.non_delivery.upper):result.rows;
+            const list=el('ul');
+            for(const r of rows.slice(offset,offset+25)){
+              const item=el('li',r.case_id+' · repeat '+r.repeat+' · '+r.status+' · expected '+r.true_category+' / predicted '+(r.predicted_category||'none'));
+              item.append(el('p','Intended: '+(r.intended_candidate_id||'manual')+' · possible destinations: '+[...r.possible_candidate_ids,...(r.manual_path_possible?['manual']:[])].join(', ')),
+                el('p','Router cost: '+range(r.router_cost)+' · paired savings: '+range(r.paired_savings)),
+                el('p','Variable cost difference from intended path: '+range(r.cost_difference_from_ideal_path)),
+                el('p','Manual leakage: '+counts(r.manual_leakage)+' · declared regression: '+counts(r.regression)+' · shadow critical: '+counts(r.critical)));
+              list.appendChild(item);
+            }
+            const nav=el('div');
+            if(offset)nav.appendChild(button('Previous router case page',()=>{offset=Math.max(0,offset-25);draw();}));
+            if(offset+25<rows.length)nav.appendChild(button('Next router case page',()=>{offset+=25;draw();}));
+            view.replaceChildren(el('p',rows.length?'Showing '+(offset+1)+'–'+Math.min(rows.length,offset+25)+' of '+rows.length+' routing rows':'No matching routing rows.'),list,nav);
+          };
+          filter.addEventListener('change',()=>{offset=0;draw();});
+          output.append(el('h6','Paired routing evidence'),label,view);draw();
+        }
+        output.appendChild(el('p','No actual routed execution or pre-execution prediction provenance was verified. Known router failures use a declared manual fallback counterfactual; missing predictions are unresolved.'));
+      }else if(economicsMode){
+        // Exact amounts use decimal strings. Round only the displayed value,
+        // never the downloaded report or the evidence hash.
+        const money=v=>{
+          if(v==null)return 'unbounded';
+          const n=BigInt(v.numerator),d=BigInt(v.denominator),a=n<0n?-n:n;
+          const rounded=(a*2n+d)/(2n*d),whole=rounded/1000000n,part=String(rounded%1000000n).padStart(6,'0');
+          return (a%d!==0n?'≈ ':'')+(n<0n?'-':'')+String(whole)+'.'+part+' '+result.currency;
+        };
+        const range=v=>money(v.lower_microunits)+' to '+money(v.upper_microunits);
+        const human=(data)=>{
+          const o=data.declared_business_outcomes,t=data.human_touched_attempts;
+          return data.complete_cost_attempts+' of '+data.attempts+' attempts with complete costs · human-touched attempts '+t.lower+'–'+t.upper+
+            ' · declared business outcomes: '+o.declared_success+' success, '+o.declared_failure+' failure, '+o.unresolved_or_missing+' unresolved/missing';
+        };
+        const manual=result.manual_baseline;
+        output.append(el('h6','Current human-led baseline'),el('p','Total enrolled cost: '+range(manual.total_cost)),el('p',human(manual)),el('p','Cost per declared successful task: '+(manual.cost_per_declared_success.status==='no_possible_success'?'undefined (no possible success)':range(manual.cost_per_declared_success))));
+        output.appendChild(el('p','Annual scenario: '+result.scenario.annual_cases+' cases. Conditional estimate, not verified realized savings or deployment approval.'));
+        for(const c of result.candidates){
+          const box=el('section');box.append(el('h6',c.candidate_id+' · trial gates: '+c.trial_gate_status),
+            el('p','All-attempt operating cost: '+range(c.candidate.total_cost)),
+            el('p','Paired savings versus manual: '+range(c.paired_trial_savings)),
+            el('p','Full-replacement recurring savings (all manual fixed cost removed): '+range(c.annual_recurring_savings_scenario)),
+            el('p','Full-replacement first-year savings: '+range(c.first_year_savings_scenario)),
+            el('p',human(c.candidate)),el('p','Cost per declared successful task: '+(c.candidate.cost_per_declared_success.status==='no_possible_success'?'undefined (no possible success)':range(c.candidate.cost_per_declared_success))));
+          const categories=el('ul');
+          for(const [key,value] of Object.entries(c.candidate.human_time_by_category)){
+            categories.appendChild(el('li',key+': '+value.lower_person_ms+' to '+(value.upper_person_ms==null?'unbounded':value.upper_person_ms)+' person-ms · '+value.known_attempts+' measured attempts'));
+          }
+          box.appendChild(categories);
+          const quality=c.declared_outcome_review,adopt=c.conditional_adoption;
+          box.append(el('h6','Declared outcome risk: '+quality.status),
+            el('p','Paired outcome regressions: '+quality.regression_count.lower+'–'+quality.regression_count.upper+' of '+quality.paired_attempts+
+              ' · success-count change: '+quality.success_count_change.lower+' to '+quality.success_count_change.upper),
+            el('p','Declared outcome thresholds: minimum success '+(quality.minimum_declared_success_basis_points/100)+'%, maximum paired regression '+(quality.maximum_declared_regression_basis_points/100)+'%. Not independent outcome verification.'));
+          const checks=el('ul');for(const [key,value] of Object.entries(quality.checks))checks.appendChild(el('li',key.replaceAll('_',' ')+': '+value));
+          box.appendChild(checks);
+          const groups=el('ul');
+          for(const g of c.category_reviews){
+            const item=el('li',g.category.replaceAll('_',' ')+' · '+g.distinct_cases+' distinct cases · '+g.candidate.attempts+' enrolled attempts');
+            item.append(el('p','Paired savings: '+range(g.paired_savings)),
+              el('p','Declared outcome risk: '+g.declared_outcome_review.status+' · regressions '+g.declared_outcome_review.regression_count.lower+'–'+g.declared_outcome_review.regression_count.upper));
+            groups.appendChild(item);
+          }
+          box.append(el('h6','Normal, exception and missing-facts economics'),groups);
+          const volumeText=v=>v==null?'unknown':v.empty?'none':v.minimum_cases+'–'+v.maximum_cases+' cases';
+          const yesNo=v=>v==null?'unknown':v?'yes':'no';
+          const frontier=adopt.first_year_positive_volume;
+          box.append(el('h6','Mixed-adoption economics'),
+            el('p','Manual fixed costs remain during partial adoption. Only the declared avoidable amount is removed at full adoption.'),
+            el('p','First-year positive lower-bound partial volume: '+volumeText(frontier.partial_guaranteed_positive)+
+              ' · positive upper-bound partial volume: '+volumeText(frontier.partial_possible_positive)),
+            el('p','Full adoption positive lower bound: '+yesNo(frontier.full_guaranteed_positive)+' · positive upper bound: '+yesNo(frontier.full_possible_positive)));
+          const volumeList=el('ul');
+          for(const row of adopt.rows){
+            const item=el('li',row.adopted_cases+' adopted / '+row.manual_cases_remaining+' manual cases');
+            item.append(el('p','Recurring savings: '+range(row.annual_recurring_savings)),
+              el('p','First-year savings: '+range(row.first_year_savings)));
+            const hours=v=>{
+              if(v==null)return 'unbounded';
+              // Exact report retains person-ms; display rounds to nearest whole person-hour.
+              const n=BigInt(v.numerator),d=BigInt(v.denominator)*3600000n,a=n<0n?-n:n;
+              return (a%d!==0n?'≈ ':'')+(n<0n?'-':'')+String((a*2n+d)/(2n*d))+' h';
+            };
+            item.appendChild(el('p','Conditional released capacity: '+hours(row.annual_released_person_ms.lower)+' to '+hours(row.annual_released_person_ms.upper)+' (not cash savings)'));
+            volumeList.appendChild(item);
+          }
+          box.appendChild(volumeList);output.appendChild(box);
+        }
+        if(result.conditional_portfolios){
+          const p=result.conditional_portfolios;
+          output.append(el('h5','Conditional multi-agent portfolios'),
+            el('p','Declared annual category volumes: '+Object.entries(p.category_volumes).map(([k,v])=>k.replaceAll('_',' ')+': '+v).join(' · ')),
+            el('p','All-manual annual cost: '+range(p.all_manual_annual_cost)),
+            el('p','Retrospective case labels are not proven available before execution. No portfolio is automatically selected or authorized.'));
+          const count=v=>{
+            if(v==null)return 'unbounded';
+            const n=BigInt(v.numerator),d=BigInt(v.denominator);
+            return d===1n?String(n):String(n)+'/'+String(d);
+          };
+          const countRange=v=>count(v.lower)+' to '+count(v.upper);
+          for(const plan of p.portfolios){
+            const section=el('section');
+            section.append(el('h6',plan.portfolio_id+' · declared quality gates: '+plan.declared_evidence_status),
+              el('p',plan.ai_cases+' AI-assigned / '+plan.manual_cases+' manual cases · active agents: '+(plan.active_candidate_ids.join(', ')||'none')),
+              el('p','Financial evidence: '+(plan.financial_evidence_complete?'complete for these assumptions':'incomplete')+' · capacity evidence: '+(plan.capacity_evidence_complete?'complete for these assumptions':'incomplete')),
+              el('p','Annual cost: '+range(plan.annual_cost)),
+              el('p','First-year cost: '+range(plan.first_year_cost)),
+              el('p','Recurring savings: '+range(plan.recurring_savings)),
+              el('p','First-year savings: '+range(plan.first_year_savings)),
+              el('p','Conditional declared success count: '+countRange(plan.annual_declared_success_count)+' · regression count: '+countRange(plan.annual_declared_regression_count)),
+              el('p','Annual released person-ms: '+countRange(plan.annual_released_person_ms)+' (not cash savings)'));
+            const gates=el('ul');for(const [key,value] of Object.entries(plan.checks))gates.appendChild(el('li',key.replaceAll('_',' ')+': '+value));
+            const routes=el('ul');
+            for(const r of plan.routes){
+              const item=el('li',r.category.replaceAll('_',' ')+' · '+r.annual_cases+' cases → '+(r.candidate_id||'manual')+' · '+r.status);
+              if(r.annual_cases)item.append(el('p',r.observed_distinct_cases+' observed cases / '+r.observed_attempts+' attempts · variable cost: '+range(r.annual_variable_cost)),
+                el('p','Declared regression count: '+countRange(r.annual_declared_regression_count)));
+              routes.appendChild(item);
+            }
+            section.append(gates,el('h6','Conditional assignments'),routes);output.appendChild(section);
+          }
+        }
+        const picker=el('select');picker.setAttribute('aria-label','Operating cost candidate');
+        for(const c of result.candidates){const option=el('option',c.candidate_id);option.value=c.candidate_id;picker.appendChild(option);}
+        const filter=el('input');filter.type='checkbox';filter.setAttribute('aria-label','Show incomplete operating cost evidence');
+        const label=el('label',' Show incomplete operating cost evidence');label.prepend(filter);
+        const view=el('div');let offset=0;
+        const draw=()=>{
+          const candidate=result.candidates.find(c=>c.candidate_id===picker.value);
+          const rows=filter.checked?candidate.rows.filter(r=>r.manual_missing.length||r.candidate_missing.length):candidate.rows;
+          const list=el('ul');
+          for(const r of rows.slice(offset,offset+25)){
+            const line=el('li',r.case_id+' · '+r.case_category.replaceAll('_',' ')+' · repeat '+r.repeat+' · '+r.trial_status+' · savings: '+range(r.paired_savings));
+            line.appendChild(el('p','Manual missing: '+(r.manual_missing.join(', ')||'none')+' · AI missing: '+(r.candidate_missing.join(', ')||'none')));
+            line.appendChild(el('p','Declared outcomes: '+(r.manual_declared_outcome||'unknown')+' → '+(r.candidate_declared_outcome||'unknown')+' · regression '+r.declared_outcome_comparison.regression.lower+'–'+r.declared_outcome_comparison.regression.upper));
+            list.appendChild(line);
+          }
+          const nav=el('div');
+          if(offset)nav.appendChild(button('Previous operating cost page',()=>{offset=Math.max(0,offset-25);draw();}));
+          if(offset+25<rows.length)nav.appendChild(button('Next operating cost page',()=>{offset+=25;draw();}));
+          view.replaceChildren(el('p',rows.length?'Showing '+(offset+1)+'–'+Math.min(rows.length,offset+25)+' of '+rows.length+' cost rows':'No matching cost rows.'),list,nav);
+        };
+        picker.addEventListener('change',()=>{offset=0;draw();});filter.addEventListener('change',()=>{offset=0;draw();});
+        output.append(el('h6','Paired operating cost evidence'),picker,label,view);draw();
+        output.appendChild(el('p','Cost, person-time, human baseline, and business outcome observations are operator declarations. Unknown costs are not zero; shadow matches do not establish realized business success.'));
       }else if(deploymentMode){
         if(operation==='deployment-decide'){
           output.appendChild(el('p','Disposition: '+result.request.decision.replaceAll('_',' ')+'. No production rollout authorized.'));
@@ -1806,9 +2238,9 @@
           output.append(el('h5','Paired case evidence'),picker,filterLabel,view);draw();
         }
       }
-      output.appendChild(button('Download minimized procurement JSON',()=>{
+      if(operation!=='router-producer-grant')output.appendChild(button('Download minimized procurement JSON',()=>{
         const url=URL.createObjectURL(new Blob([JSON.stringify(result,null,2)+'\n'],{type:'application/json'}));
-        const link=el('a');link.href=url;link.download=(selectionMode||outcomeMode||deploymentMode)?'owg-procurement-'+operation+'.json':operation==='freeze'?'owg-procurement-plan.json':'owg-procurement-review.json';
+        const link=el('a');link.href=url;link.download=(selectionMode||outcomeMode||deploymentMode||economicsMode||routerMode||routerChangeMode||routerPilotMode||routerMonitorMode||routerJournalMode||routerProducerMode)?'owg-procurement-'+operation+'.json':operation==='freeze'?'owg-procurement-plan.json':'owg-procurement-review.json';
         link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
       }));
       output.appendChild(el('p','No model or business tool was called; reported identity, measurements and outcomes remain unverified. This review grants no execution or substitution permission.'));
@@ -1816,6 +2248,514 @@
     section.append(modeLabel,hint,documentLabel,planLabel,run,
       button('Clear procurement review',()=>{documentFile.value='';planFile.value='';clearProcurementReview();}),output);
     host.appendChild(section);
+  }
+  function installJournalWorkbench(host,scope,initialId=''){
+    const section=el('details');
+    section.append(el('summary','Manage retained monitoring journals'),
+      el('p','Exact saved revision '+scope.revision+'. Actions use the latest explicitly displayed audit head. No provider, deployment or business operation is performed.'));
+    const output=el('div');output.setAttribute('aria-live','polite');
+    let serial=0,working=false;
+    const valid=attempt=>attempt===serial&&section.isConnected;
+    const call=(op,document)=>request('/v1/process-catalog/procurement/'+op+'?'+new URLSearchParams({workflow_id:scope.workflow_id,revision:String(scope.revision)}),{document:JSON.stringify(document)}).then(e=>e.result);
+    const perform=async(fn)=>{
+      if(working||!section.isConnected)return;
+      working=true;
+      try{await fn();}catch(error){output.appendChild(el('p','Action failed: '+error.message+' · reload the journal before retrying.'));}
+      finally{working=false;}
+    };
+    const download=(value,name)=>button('Download '+name,()=>{
+      const url=URL.createObjectURL(new Blob([JSON.stringify(value,null,2)+'\n'],{type:'application/json'}));
+      const link=el('a');link.href=url;link.download=name+'.json';link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
+    });
+    const loadList=async()=>{
+      const attempt=++serial;
+      const value=await call('router-journal-list',{});
+      if(!valid(attempt))return;
+      output.replaceChildren(el('p',value.journals.length+' retained journals for this revision.'));
+      for(const row of value.journals){
+        output.appendChild(button('Open journal '+row.monitor_id,()=>perform(()=>loadDetail(row.monitor_id))));
+      }
+    };
+    const loadDetail=async(id)=>{
+      const attempt=++serial;
+      const value=await call('router-journal-detail',{monitor_id:id});
+      if(!valid(attempt))return;
+      draw(value);
+    };
+    const draw=value=>{
+      output.replaceChildren(el('h5',value.monitor_id),el('p','Current audit head: '+value.head_sha256),
+        el('p',value.entry_count+' audit entries · '+value.ordinary_entries_remaining+' ordinary entries remaining · '+value.reserved_disable_entries+' reserved for disable actions'),
+        el('p',value.eligible_for_continued_monitoring_review?'Eligible for separate continuation review':'Continuation blocked or incomplete'),
+        el('p','Latest monitoring cutoff: '+new Date(value.latest_report.as_of_ms).toISOString()),
+        el('p','Recorded rollback referral: '+(value.rollback_referral_recorded?'yes':'no')+' · sticky incidents: '+value.sticky_rollback_triggers.length));
+      const base={monitor_id:value.monitor_id,expected_head_sha256:value.head_sha256,confirmed:true};
+      const change=(op,extra,message)=>perform(async()=>{
+        if(!window.confirm(message))return;
+        const attempt=++serial;
+        await call(op,{...base,...extra});
+        if(valid(attempt))await loadDetail(value.monitor_id);
+      });
+      output.append(button('Reload current journal',()=>perform(()=>loadDetail(value.monitor_id))),
+        button('Refresh monitoring cutoff',()=>change('router-journal-refresh',{},'Reevaluate retained evidence using the current local clock?')),
+        button(value.scheduled_deadline_review_enabled?'Withdraw scheduled review consent':'Enable journal scheduled review consent',()=>change('router-journal-schedule',{enabled:!value.scheduled_deadline_review_enabled},'Change scheduled review consent for this exact retained journal?')),
+        download(value,'owg-monitor-journal'));
+      const reviewer=el('input');reviewer.maxLength=80;reviewer.setAttribute('aria-label','Monitoring reviewer alias');
+      const label=el('label','Distinct reviewer alias ');label.appendChild(reviewer);
+      const disposition=el('select');disposition.setAttribute('aria-label','Monitoring review disposition');
+      for(const [key,name] of [['hold','Hold'],['refer_for_rollback_review','Refer for rollback review'],['refer_for_continued_monitoring_review','Refer for continuation review']]){
+        const opt=el('option',name);opt.value=key;if(key==='refer_for_continued_monitoring_review'&&!value.eligible_for_continued_monitoring_review)opt.disabled=true;disposition.appendChild(opt);
+      }
+      const dispositionLabel=el('label','Disposition ');dispositionLabel.appendChild(disposition);
+      output.append(label,dispositionLabel,button('Record monitoring review decision',()=>change('router-journal-decide',{reviewer_alias:reviewer.value,disposition:disposition.value},'Record this review referral or hold? This does not execute a rollback or deployment.')));
+      const corroboration=value.outcome_corroboration;
+      const reviewSection=el('details');reviewSection.append(el('summary','Separate outcome corroboration'),
+        el('p',corroboration.matched+'/'+corroboration.enrolled+' matched · '+corroboration.reviewed+' reviewed · '+corroboration.conflicts+' conflicts · '+corroboration.source_overlap+' source/alias overlaps'),
+        el('p',corroboration.required?'Full corroboration required for continuation.':'Separate corroboration optional; any discovered conflict still blocks continuation.'),
+        el('p','Separate declared evidence is not proof of reviewer identity or source-system accuracy.'));
+      if(!corroboration.required)reviewSection.appendChild(button('Require complete outcome corroboration',()=>change('router-corroboration-require',{},'Require full outcome corroboration for continuation? This cannot be switched off within this journal.')));
+      const reviewWindow=el('select');reviewWindow.setAttribute('aria-label','Closed corroboration window');
+      for(const w of value.latest_report.windows){
+        if(w.end_exclusive_ms<=value.latest_report.as_of_ms&&w.end_exclusive_ms<=Date.now()){
+          const opt=el('option',w.window_id);opt.value=w.window_id;reviewWindow.appendChild(opt);
+        }
+      }
+      const reviewLabel=el('label','Closed window ');reviewLabel.appendChild(reviewWindow);
+      const reviewAlias=el('input');reviewAlias.maxLength=80;reviewAlias.setAttribute('aria-label','Separate outcome reviewer alias');
+      const aliasLabel=el('label','Reviewer alias ');aliasLabel.appendChild(reviewAlias);
+      const reviewFile=el('input');reviewFile.type='file';reviewFile.accept='.json,application/json';reviewFile.setAttribute('aria-label','Separate reviewer outcome rows JSON');
+      const reviewPin={expected_report_sha256:value.latest_report.report_sha256};
+      reviewSection.append(reviewLabel,button('Prepare blind corroboration manifest',()=>perform(async()=>{
+        if(!reviewWindow.value)throw new Error('Choose a closed monitoring window.');
+        if(!window.confirm('Export unreviewed opaque case and slot references without arm assignments or producer outcomes?'))return;
+        const attempt=++serial;
+        const manifest=await call('router-corroboration-manifest',{...base,...reviewPin,window_id:reviewWindow.value});
+        if(valid(attempt))reviewSection.appendChild(download(manifest,'owg-corroboration-manifest'));
+      })),aliasLabel,el('p','Upload a JSON array of resolved reviewer rows. See AGENT_PROCUREMENT_CORROBORATION.md. Unresolved cases may be omitted and reviewed later.'),reviewFile,
+      button('Retain separate reviewer evidence',()=>perform(async()=>{
+        if(!reviewWindow.value)throw new Error('Choose a closed monitoring window.');
+        const file=reviewFile.files?.[0];if(!file||file.size>512*1024)throw new Error('Choose reviewer rows JSON of at most 512 KiB.');
+        // Keep the original JSON array text: do not round or discard duplicate
+        // fields in a browser parse before the server validates it.
+        const raw=await file.text();
+        if(!window.confirm('Retain separate reviewer declarations? Submitted slots cannot be rewritten. Conflicts block continuation.'))return;
+        const attempt=++serial;
+        const prefix=JSON.stringify({...base,...reviewPin,window_id:reviewWindow.value,reviewer_alias:reviewAlias.value,confirm_separate_source_review:true});
+        const document=prefix.slice(0,-1)+',"rows":'+raw+'}';
+        await request('/v1/process-catalog/procurement/router-corroboration-record?'+new URLSearchParams({workflow_id:scope.workflow_id,revision:String(scope.revision)}),{document});
+        if(valid(attempt))await loadDetail(value.monitor_id);
+      })));
+      const reviewTriggers=el('ul');for(const x of corroboration.triggers)reviewTriggers.appendChild(el('li',x.window_id+' · '+x.reason+(x.fields?' · '+x.fields.join(', '):'')));
+      reviewSection.appendChild(reviewTriggers);output.appendChild(reviewSection);
+      const source=value.source_outcomes;
+      const sourceSection=el('details');sourceSection.append(el('summary','Read-only source outcome checks'),
+        el('p',source.confirmed+'/'+source.bound+' linked source predicates confirmed · '+source.unknown+' unknown · '+source.conflicts.length+' discrepancies'),
+        el('p','Supports Stripe invoice payment, Jira issue resolution and GitHub pull request merge in the closed window. Each requires a separately enabled read-only source connection, retained record evidence and explicit case mapping. No source changes are made.'));
+      const sourceWindow=el('select');sourceWindow.setAttribute('aria-label','Closed source outcome window');
+      for(const w of value.latest_report.windows){
+        if(w.end_exclusive_ms<=value.latest_report.as_of_ms&&w.end_exclusive_ms<=Date.now()){
+          const opt=el('option',w.window_id);opt.value=w.window_id;sourceWindow.appendChild(opt);
+        }
+      }
+      const sourceWindowLabel=el('label','Closed window ');sourceWindowLabel.appendChild(sourceWindow);
+      const mappingFile=el('input');mappingFile.type='file';mappingFile.accept='.json,application/json';mappingFile.setAttribute('aria-label','Source outcome bindings JSON');
+      sourceSection.append(sourceWindowLabel,el('p','Use the blind case manifest above to prepare an array of slot_id, case_token_sha256, observed opaque resource_ref and predicate (invoice_paid_in_window, jira_issue_resolved_in_window or github_pr_merged_in_window).'),mappingFile,
+        button('Retain source outcome bindings',()=>perform(async()=>{
+          const file=mappingFile.files?.[0];if(!sourceWindow.value||!file||file.size>128*1024)throw new Error('Choose a closed window and bindings JSON up to 128 KiB.');
+          const raw=await file.text();
+          if(!window.confirm('Retain immutable case-to-record mappings? Confirm each exact outcome definition is its selected source predicate within this window. This mapping is your declaration.'))return;
+          const attempt=++serial;
+          const prefix=JSON.stringify({...base,expected_report_sha256:value.latest_report.report_sha256,window_id:sourceWindow.value,confirm_operator_case_mapping:true,confirm_case_outcome_defined_by_predicate:true});
+          await request('/v1/process-catalog/procurement/router-source-outcome-bind?'+new URLSearchParams({workflow_id:scope.workflow_id,revision:String(scope.revision)}),{document:prefix.slice(0,-1)+',"bindings":'+raw+'}'});
+          if(valid(attempt))await loadDetail(value.monitor_id);
+        })));
+      for(const b of value.source_outcome_bindings){
+        const result=[...value.source_outcome_checks].reverse().find(x=>x.slot_id===b.slot_id);
+        const row=el('div');row.appendChild(el('p',b.window_id+' · '+b.slot_id.slice(0,12)+' · '+b.predicate+' · '+(result?result.status+' / '+result.reason:'not checked')));
+        if(result?.status!=='confirmed')row.appendChild(button(b.predicate==='jira_issue_resolved_in_window'?'Check linked Jira issue':b.predicate==='github_pr_merged_in_window'?'Check linked GitHub pull request':'Check linked Stripe invoice',()=>change('router-source-outcome-check',{
+          expected_report_sha256:value.latest_report.report_sha256,window_id:b.window_id,slot_ids:[b.slot_id],confirm_source_read:true
+        },'Perform an explicitly authorized read-only check of the linked source record?')));
+        sourceSection.appendChild(row);
+      }
+      output.appendChild(sourceSection);
+      const sf=value.source_finance;
+      const financeSection=el('details');financeSection.append(el('summary','Source invoice amount reconciliation'),
+        el('p',sf.matched+' exact matches · '+sf.mismatched+' mismatches · '+sf.unknown+' unknown of '+sf.selected+' selected invoice lines'),
+        el('p','Amounts below are original currency minor units. They are invoice amount_paid values, not verified booked revenue, cash settlement or ROI. Only selected, previously confirmed live invoice predicates can be checked.'));
+      for(const g of sf.groups){
+        financeSection.appendChild(el('p',g.window_id+' · '+g.arm+' · '+g.currency+' · '+g.matched+'/'+g.selected+' matched · '+g.unknown+' unknown · known declared '+g.known_declared_minor_units+' · known source '+g.known_source_minor_units+' · difference '+g.known_difference_minor_units+' minor units'));
+      }
+      for(const b of value.source_outcome_bindings){
+        if(b.predicate!=='invoice_paid_in_window')continue;
+        const predicate=value.source_outcome_checks.find(x=>x.slot_id===b.slot_id&&x.status==='confirmed');
+        const statement=value.finance_reconciliations.find(x=>x.window_id===b.window_id);
+        if(!predicate||!statement)continue;
+        const latest=[...value.source_finance_checks].reverse().find(x=>x.slot_id===b.slot_id);
+        const row=el('div');row.appendChild(el('p',b.window_id+' · '+b.slot_id.slice(0,12)+' · '+statement.currency+' · '+(latest?latest.status+' / '+latest.reason:'not compared')));
+        if(latest&&latest.status!=='unknown'){
+          row.appendChild(el('p','Declared '+latest.declared_amount_paid_minor_units+' · source '+latest.source_amount_paid_minor_units+' · difference '+latest.difference_minor_units+' minor units'));
+        }else{
+          const input=el('input');input.type='text';input.inputMode='numeric';input.maxLength=19;
+          input.setAttribute('aria-label','Declared gross invoice paid amount in minor units');
+          if(latest){input.value=latest.declared_amount_paid_minor_units;input.readOnly=true;}
+          const label=el('label','Declared amount_paid ('+statement.currency+' minor units) ');label.appendChild(input);
+          row.append(label,button(latest?'Retry unknown source amount':'Compare source invoice amount',()=>perform(async()=>{
+            const raw=input.value.trim();
+            if(!/^(0|[1-9][0-9]{0,18})$/.test(raw)||BigInt(raw)>1000000000000000000n)throw new Error('Provide an exact nonnegative integer of at most 10^18 minor units.');
+            if(!window.confirm('Read the authorized live Stripe invoice amount and retain this immutable declaration? It is not booked revenue or cash settlement.'))return;
+            const attempt=++serial;
+            const prefix=JSON.stringify({...base,window_id:b.window_id,expected_report_sha256:value.latest_report.report_sha256,
+              expected_reconciliation_sha256:statement.reconciliation_sha256,confirm_source_amount_read:true,confirm_gross_invoice_amount_not_booked_revenue:true});
+            const document=prefix.slice(0,-1)+',"rows":[{"slot_id":'+JSON.stringify(b.slot_id)+',"declared_amount_paid_minor_units":'+raw+'}]}';
+            await request('/v1/process-catalog/procurement/router-source-finance-check?'+new URLSearchParams({workflow_id:scope.workflow_id,revision:String(scope.revision)}),{document});
+            if(valid(attempt))await loadDetail(value.monitor_id);
+          })));
+        }
+        financeSection.appendChild(row);
+      }
+      output.appendChild(financeSection);
+      output.appendChild(el('h6','Producer credential management'));
+      for(const g of value.producer_grants){
+        const row=el('div');row.appendChild(el('p',g.producer_alias+' · '+g.window_id+' / '+g.arm+' · '+(g.revoked?'revoked':g.expires_ms<=Date.now()?'expired':'active')));
+        if(!g.revoked)row.appendChild(button('Revoke '+g.grant_id,()=>change('router-producer-revoke',{grant_id:g.grant_id},'Revoke this producer credential? Previously accepted evidence remains retained.')));
+        if(!g.revoked&&g.expires_ms>Date.now())row.appendChild(button('Prepare assignment manifest for '+g.grant_id,()=>perform(async()=>{
+          if(!window.confirm('Export the assigned opaque case and slot references for this producer?'))return;
+          const attempt=++serial;
+          const manifest=await call('router-producer-manifest',{...base,grant_id:g.grant_id});
+          if(valid(attempt))row.appendChild(download(manifest,'owg-producer-assignment-'+g.grant_id));
+        })));
+        output.appendChild(row);
+      }
+      const name=el('input');name.maxLength=80;name.setAttribute('aria-label','Producer alias');
+      const windowSelect=el('select');windowSelect.setAttribute('aria-label','Producer monitoring window');
+      for(const w of value.latest_report.windows){const opt=el('option',w.window_id);opt.value=w.window_id;windowSelect.appendChild(opt);}
+      const arm=el('select');arm.setAttribute('aria-label','Producer arm');
+      for(const a of ['incumbent','challenger']){const opt=el('option',a);opt.value=a;arm.appendChild(opt);}
+      const ttl=el('input');ttl.type='number';ttl.min='60';ttl.max='604800';ttl.step='1';ttl.value='3600';ttl.setAttribute('aria-label','Producer credential lifetime seconds');
+      for(const [text,input] of [['Producer alias',name],['Window',windowSelect],['Arm',arm],['Credential lifetime seconds',ttl]]){const l=el('label',text+' ');l.appendChild(input);output.appendChild(l);}
+      output.appendChild(button('Issue scoped producer credential',()=>perform(async()=>{
+        const seconds=Number(ttl.value);
+        if(!Number.isInteger(seconds)||seconds<60||seconds>604800)throw new Error('Choose a lifetime from 60 to 604800 seconds.');
+        if(!window.confirm('Issue a write-only credential for this exact window and arm? It will be shown only once.'))return;
+        const attempt=++serial;
+        const grant=await call('router-producer-grant',{...base,producer_alias:name.value,window_id:windowSelect.value,arm:arm.value,ttl_seconds:seconds});
+        if(!valid(attempt))return;
+        // Never put this value in download state, storage, or a URL.
+        output.replaceChildren(el('p','Credential issued. Copy it now; leaving this view discards the displayed secret.'));
+        const input=el('input');input.type='password';input.readOnly=true;input.autocomplete='off';input.value=grant.producer_token;input.setAttribute('aria-label','One-time producer credential');
+        output.append(input,button('Show or hide credential',()=>{input.type=input.type==='password'?'text':'password';}),button('Copy producer credential',()=>navigator.clipboard.writeText(input.value)),
+          button('Dismiss credential and reload journal',()=>perform(()=>{input.value='';return loadDetail(value.monitor_id);})));
+      })));
+      output.appendChild(el('h6','Window review'));
+      const windows=el('ul');for(const w of value.latest_report.windows)windows.appendChild(el('li',w.window_id+' · '+w.state+' · '+w.recorded_cases+'/'+w.scheduled_cases+' recorded'));output.appendChild(windows);
+      output.appendChild(button('Remove retained journal',()=>perform(async()=>{
+        if(!window.confirm('Permanently remove this local journal and its producer credentials? Existing backups and exports are not erased.'))return;
+        const attempt=++serial;await call('router-journal-forget',base);
+        if(valid(attempt))await loadList();
+      })));
+    };
+    section.append(button(initialId?'Open journal '+initialId:'List retained journals',()=>perform(initialId?()=>loadDetail(initialId):loadList)),output);
+    host.appendChild(section);
+
+  }
+  function installWorkforceExchange(host){
+    const section=el('details');section.append(el('summary','Exchange minimized monitoring summaries across installations'),
+      el('p','Explicit offline export or review. Use the same high-entropy correlation key at each source, and obtain packet pins separately from trusted operators. No automatic network transfer. Signed packets can be verified against separately obtained public keys.'));
+    const alias=el('input');alias.setAttribute('aria-label','Installation alias');alias.maxLength=80;
+    const secret=el('input');secret.type='password';secret.autocomplete='off';secret.maxLength=64;secret.setAttribute('aria-label','Shared 32-byte correlation key in hexadecimal');
+    const aliasLabel=el('label','Installation alias ');aliasLabel.append(alias);
+    const secretLabel=el('label','Shared correlation key (64 hex characters) ');secretLabel.append(secret);
+    const file=el('input');file.type='file';file.accept='.json,application/json';file.setAttribute('aria-label','Pinned workforce exchange review bundle');
+    const output=el('div');let generation=0;
+    const download=(value,name)=>button('Download '+name,()=>{
+      const url=URL.createObjectURL(new Blob([JSON.stringify(value,null,2)+'\n'],{type:'application/json'}));
+      const link=el('a');link.href=url;link.download=name+'.json';link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
+    });
+    const signingMode=el('input');signingMode.type='checkbox';signingMode.checked=true;
+    const signingLabel=el('label','Require signed export and review ');signingLabel.append(signingMode);
+    const identity=button('Show installation public signing key',async()=>{
+      if(!window.confirm('Create or read the local installation signing identity?'))return;
+      const attempt=++generation;output.replaceChildren();
+      try{
+        const value=await request('/v1/process-catalog/procurement-workforce/exchange/identity',{document:JSON.stringify({confirmed:true})});
+        if(attempt!==generation||!output.isConnected)return;
+        output.append(el('p','Public key: '+value.public_key_hex),el('p','Fingerprint: '+value.public_key_sha256),download(value,'owg-workforce-public-identity'),el('p','Verify this fingerprint through a separate trusted channel. No private key is exported.'));
+      }catch(error){if(attempt===generation)output.replaceChildren(el('p',error.message));}
+    });
+    const registered=el('input');registered.type='checkbox';registered.checked=true;
+    const registeredLabel=el('label','Review against retained local trust registry ');registeredLabel.append(registered);
+    const trustPanel=el('div');let trustRevision=null;
+    const refreshTrust=async()=>{
+      const value=await request('/v1/process-catalog/procurement-workforce/exchange/trust-status',{document:'{}'});
+      if(!trustPanel.isConnected)return;
+      trustRevision=value.revision;trustPanel.replaceChildren(el('p','Registry revision '+value.revision+' · '+value.entries.length+' enrolled or revoked identities'));
+      const list=el('ul');for(const entry of value.entries){
+        const item=el('li',entry.installation_alias+' · '+(entry.active?'active':'revoked')+' · namespace '+entry.correlation_namespace_sha256);
+        item.append(el('p','Public key: '+entry.public_key_hex),el('p','Latest accepted packet: '+(entry.accepted_packet_sha256||'none')));list.appendChild(item);
+      }trustPanel.appendChild(list);
+      const ns=el('input');ns.setAttribute('aria-label','Trust correlation namespace');ns.maxLength=64;
+      const name=el('input');name.setAttribute('aria-label','Trusted installation alias');name.maxLength=80;
+      const key=el('input');key.setAttribute('aria-label','Separately verified public key');key.maxLength=64;
+      const action=el('select');action.setAttribute('aria-label','Trust registry action');for(const v of ['enroll','rotate','revoke']){const opt=el('option',v);opt.value=v;action.appendChild(opt);}
+      for(const [label,input] of [['Namespace',ns],['Installation alias',name],['Public key (ignored for revoke)',key],['Action',action]]){const l=el('label',label+' ');l.appendChild(input);trustPanel.appendChild(l);}
+      trustPanel.appendChild(button('Apply trust registry change',async()=>{
+        if(!window.confirm('Apply '+action.value+' for this exact alias and namespace? Verify key ownership separately.'))return;
+        await request('/v1/process-catalog/procurement-workforce/exchange/trust-configure',{document:JSON.stringify({expected_revision:trustRevision,installation_alias:name.value,correlation_namespace_sha256:ns.value,action:action.value,public_key_hex:action.value==='revoke'?null:key.value,confirmed:true})});
+        await refreshTrust();
+      }));
+    };
+    const runExport=button('Create minimized exchange packet',async()=>{
+      const attempt=++generation;output.replaceChildren();
+      try{
+        if(!window.confirm('Export minimized aggregate monitoring evidence with linkable correlation tags?'))return;
+        if(!/^[a-f0-9]{64}$/.test(secret.value))throw new Error('Provide a randomly generated 32-byte key as lowercase hex.');
+        const document=JSON.stringify({installation_alias:alias.value,correlation_key_hex:secret.value,confirmed:true});
+        secret.value='';
+        const signed=signingMode.checked;
+        const result=await request('/v1/process-catalog/procurement-workforce/exchange/'+(signed?'signed-export':'export'),{document});
+        if(attempt!==generation||!output.isConnected)return;
+        const envelope=signed?result.signed_packet:{expected_packet_sha256:result.packet_sha256,packet:result.packet};
+        output.append(el('p',envelope.packet.rows.length+' minimized journal rows · '+envelope.packet.unreadable_journals+' unreadable'),
+          el('p','Packet SHA-256: '+envelope.expected_packet_sha256),
+          el('p','Correlation namespace: '+envelope.packet.correlation_namespace_sha256),
+          download(envelope,signed?'owg-workforce-signed-exchange-packet':'owg-workforce-exchange-packet'));
+        if(signed)output.append(el('p','Signing public key fingerprint: '+result.public_key_sha256),el('p','Distribute the public key fingerprint separately; do not treat a packet as its own trust anchor.'));
+      }catch(error){if(attempt===generation)output.replaceChildren(el('p',error.message));}
+    });
+    const renderReview=(target,result)=>{
+        target.append(el('h4','Multi-installation review'),el('p',result.installations.length+' declared installations · '+result.included_journals+' included journals · '+result.excluded_journals+' excluded · '+result.unreadable_journals+' unreadable'),
+          el('p',result.totals_may_be_incomplete?'Totals may be incomplete.':'No exclusions identified in the supplied packets; completeness is not independently verified.'));
+        target.appendChild(el('p',result.all_packet_signatures_verified_against_operator_pins?'All signatures verified against explicit operator-pinned keys.':'Unsigned content-digest review only.'));
+        for(const pin of result.trusted_key_fingerprints||[])target.appendChild(el('p',pin.installation_alias+' · key fingerprint '+pin.public_key_sha256));
+        if(result.local_monotonic_packet_pins_checked)target.appendChild(el('p','Registry revision '+result.registry_revision+' · '+result.accepted_new_packets+' new packets · '+result.exact_repeated_packets+' exact repeats'));
+        const money=(v,c)=>{
+          if(v==null)return 'unbounded';
+          const n=BigInt(v.numerator),d=BigInt(v.denominator),r=(2n*n+d)/(2n*d);
+          return String(r/1000000n)+'.'+String(r%1000000n).padStart(6,'0')+' '+c+' (rounded)';
+        };
+        for(const g of result.currency_totals){
+          const sub=el('section');sub.append(el('h5',g.currency),el('p',g.recorded_cases+' recorded / '+g.started_cases+' started / '+g.scheduled_cases+' scheduled'));
+          for(const [name,a] of Object.entries(g.arms))sub.appendChild(el('p',name+': '+a.recorded+'/'+a.cases+' recorded · declared variable cost '+money(a.variable_cost.lower_microunits,g.currency)+' to '+money(a.variable_cost.upper_microunits,g.currency)));
+          target.appendChild(sub);
+        }
+        const list=el('ul');for(const r of result.journals)list.appendChild(el('li',r.installation_alias+' · '+r.journal_tag.slice(0,12)+' · '+(r.rollback_review?'rollback review · ':r.attention?'attention · ':'')+(r.included_in_totals?'included':r.exclusion_reasons.join(', '))));
+        target.append(el('h5','Incident and overlap queue'),list,download(result,'owg-workforce-exchange-review'),
+          el('p','Source identity, actual business outcomes and financial benefits remain unverified. No deployment or spending authorization.'));
+    };
+    const inboxSection=el('details');inboxSection.append(el('summary','Retained signed installation inbox'),
+      el('p','Admit signed packets individually from an approved transfer channel. Review requires fresh verified snapshots from every active site in this namespace. No automatic remote transport.'));
+    const inboxNs=el('input');inboxNs.maxLength=64;inboxNs.setAttribute('aria-label','Inbox correlation namespace');
+    const age=el('input');age.type='number';age.min='1';age.max='8784';age.step='1';age.value='24';age.setAttribute('aria-label','Maximum packet age in hours');
+    const inboxFile=el('input');inboxFile.type='file';inboxFile.accept='.json,application/json';inboxFile.setAttribute('aria-label','Signed installation packet');
+    const inboxOutput=el('div');inboxOutput.setAttribute('aria-live','polite');let inboxState=null,inboxBusy=false;
+    const inboxScope=()=>{
+      const hours=Number(age.value);
+      if(!/^[a-f0-9]{64}$/.test(inboxNs.value)||!Number.isInteger(hours)||hours<1||hours>8784)throw new Error('Enter a namespace digest and maximum age of 1–8784 hours.');
+      return {correlation_namespace_sha256:inboxNs.value,maximum_packet_age_ms:hours*3600000};
+    };
+    const inboxCall=(action,document)=>request('/v1/process-catalog/procurement-workforce/exchange/'+action,{document});
+    const inboxPerform=async(fn)=>{
+      if(inboxBusy)return;inboxBusy=true;
+      try{await fn();}catch(error){inboxState=null;inboxOutput.replaceChildren(el('p','Inbox action failed: '+error.message+' · reload status before retrying.'));}
+      finally{inboxBusy=false;}
+    };
+    const drawInbox=value=>{
+      inboxState=value;inboxOutput.replaceChildren(el('p','Registry revision '+value.registry_revision+' · inbox revision '+value.inbox_revision),
+        el('p',value.ready_for_complete_review?'Every active site has a fresh verified packet.':'Complete review blocked: missing, stale, changed-key or superseded packets.'),
+        el('p','Active installations: '+value.active_installations));
+      const list=el('ul');for(const entry of value.entries)list.appendChild(el('li',entry.installation_alias+' · '+entry.status+(entry.exported_at_ms!==null?' · '+new Date(entry.exported_at_ms).toISOString():'')+(entry.packet_sha256?' · '+entry.packet_sha256:'')));inboxOutput.appendChild(list);
+      const incidents=value.retained_rollback_signals||[];
+      inboxOutput.appendChild(el('h5','Retained rollback review signals: '+incidents.length));
+      const retained=el('ul');for(const item of incidents)retained.appendChild(el('li',item.installation_alias+' · '+item.journal_tag.slice(0,12)+' · last reported '+new Date(item.last_exported_ms).toISOString()));
+      inboxOutput.append(retained,download(value,'owg-workforce-inbox-status'));
+      if(value.incident_history_retirement_available)inboxOutput.appendChild(button('Retire inactive namespace incident history',()=>inboxPerform(async()=>{
+        const scope=pinnedScope();delete scope.maximum_packet_age_ms;
+        if(!window.confirm('Confirm you exported and reviewed this exact incident history, and want to remove its local retained signals. This does not erase backups or change accepted trust watermarks.'))return;
+        await inboxCall('inbox-retire',JSON.stringify({...scope,expected_incident_history_sha256:value.incident_history_sha256,confirm_exported_history:true}));
+        await loadInbox();
+      })));
+    };
+    const loadInbox=async()=>{
+      const scope=inboxScope();const value=await inboxCall('inbox-status',JSON.stringify(scope));
+      if(inboxOutput.isConnected&&JSON.stringify(scope)===JSON.stringify(inboxScope()))drawInbox(value);
+    };
+    const pinnedScope=()=>{
+      const scope=inboxScope();
+      if(!inboxState||inboxState.correlation_namespace_sha256!==scope.correlation_namespace_sha256||inboxState.maximum_packet_age_ms!==scope.maximum_packet_age_ms)throw new Error('Load current inbox status first.');
+      return {...scope,expected_revision:inboxState.registry_revision,expected_inbox_revision:inboxState.inbox_revision,confirmed:true};
+    };
+    const admit=button('Admit signed installation packet',()=>inboxPerform(async()=>{
+      const scope=pinnedScope();const f=inboxFile.files?.[0];
+      if(!f||f.size>8*1024*1024)throw new Error('Choose a signed packet JSON file of at most 8 MiB.');
+      if(!window.confirm('Retain this minimized signed packet locally? The registered public key and monotonic packet checks must pass.'))return;
+      const prefix=JSON.stringify(scope);
+      const value=await inboxCall('inbox-admit',prefix.slice(0,-1)+',"signed_packet":'+await f.text()+'}');
+      if(inboxOutput.isConnected&&inboxScope().correlation_namespace_sha256===scope.correlation_namespace_sha256){drawInbox(value);inboxFile.value='';}
+    }));
+    const reviewInbox=button('Review complete retained cohort',()=>inboxPerform(async()=>{
+      const scope=pinnedScope();
+      if(!inboxState.ready_for_complete_review)throw new Error('Every active installation must have an available packet.');
+      if(!window.confirm('Review all active retained installation packets and advance accepted registry pins?'))return;
+      const result=await inboxCall('inbox-review',JSON.stringify(scope));
+      if(!inboxOutput.isConnected||inboxScope().correlation_namespace_sha256!==scope.correlation_namespace_sha256)return;
+      await loadInbox();renderReview(inboxOutput,result);
+    }));
+    const forgetInbox=button('Remove retained packets in namespace',()=>inboxPerform(async()=>{
+      const scope=pinnedScope();delete scope.maximum_packet_age_ms;
+      if(!window.confirm('Remove this namespace’s retained packet contents? Accepted registry watermarks and minimized rollback signals remain. Backups and exports are not erased.'))return;
+      await inboxCall('inbox-forget',JSON.stringify(scope));await loadInbox();
+    }));
+    for(const [label,input] of [['Correlation namespace',inboxNs],['Maximum age in hours',age]]){const l=el('label',label+' ');l.appendChild(input);inboxSection.appendChild(l);}
+    for(const input of [inboxNs,age])input.addEventListener('change',()=>{inboxState=null;inboxOutput.replaceChildren();});
+    inboxSection.append(button('Load inbox status',()=>inboxPerform(loadInbox)),inboxFile,admit,reviewInbox,forgetInbox,inboxOutput);
+    const runReview=button('Review pinned installation packets',async()=>{
+      const attempt=++generation;output.replaceChildren();
+      try{
+        const selected=file.files?.[0];if(!selected||selected.size>8*1024*1024)throw new Error('Choose a review bundle of at most 8 MiB.');
+        if(!window.confirm('Review these explicitly selected offline installation packets?'))return;
+        const signed=signingMode.checked;
+        const result=await request('/v1/process-catalog/procurement-workforce/exchange/'+(signed?(registered.checked?'registered-review':'signed-review'):'review'),{document:await selected.text()});
+        if(attempt!==generation||!output.isConnected)return;
+        renderReview(output,result);
+      }catch(error){if(attempt===generation)output.replaceChildren(el('p',error.message));}
+    });
+    file.addEventListener('change',()=>{generation++;output.replaceChildren();});
+    signingMode.addEventListener('change',()=>{generation++;output.replaceChildren();});
+    registered.addEventListener('change',()=>{generation++;output.replaceChildren();});
+    section.append(signingLabel,registeredLabel,identity,button('Load local trust registry',refreshTrust),trustPanel,inboxSection,aliasLabel,secretLabel,runExport,el('p','Review bundle: combine downloaded packets with separately obtained pins, the expected correlation namespace and either the expected registry revision (registered review) or an explicit public-key trust list (stateless signed review) (see AGENT_PROCUREMENT_WORKFORCE_EXCHANGE.md).'),file,runReview,output);host.appendChild(section);
+  }
+  function installWorkforceSchedule(host){
+    const section=el('details');section.append(el('summary','Schedule local workforce deadline reviews'),
+      el('p','Only journals with separate explicit consent are reviewed, and only crossed frozen boundaries create a checkpoint. No external source reads, messages or deployment actions.'));
+    const output=el('div');let generation=0;
+    const show=async()=>{
+      const attempt=++generation;
+      const data=await request('/v1/schedules');
+      if(attempt!==generation||!output.isConnected)return;
+      output.replaceChildren(el('p',data.scheduler_running?'Local scheduler running':'Local scheduler not running'));
+      const current=data.schedules.find(s=>s.kind==='procurement_monitor_deadlines'&&s.target_id==='local');
+      if(!current){
+        const interval=el('input');interval.type='number';interval.min='15';interval.max='10080';interval.step='1';interval.value='15';interval.setAttribute('aria-label','Monitoring review interval in minutes');
+        const label=el('label','Interval in minutes ');label.append(interval);
+        output.append(label,button('Enable local deadline schedule',async()=>{
+          const minutes=Number(interval.value);if(!Number.isInteger(minutes)||minutes<15||minutes>10080)throw new Error('Choose an integer interval of 15 to 10080 minutes.');
+          if(!window.confirm('Run local deadline reviews for explicitly opted-in monitoring journals at this interval?'))return;
+          await request('/v1/schedules',{kind:'procurement_monitor_deadlines',target_id:'local',interval_minutes:minutes,confirm_scheduled_runs:true});await show();
+        }));
+      }else{
+        output.append(el('p',(current.enabled?'Enabled':'Paused')+' · every '+current.interval_minutes+' minutes · next '+(current.next_run_at||'not scheduled')),
+          el('p','Last result: '+(current.last_result||'not run')+' · pause reason '+(current.paused_reason||'none')),
+          button(current.enabled?'Pause deadline schedule':'Resume deadline schedule',async()=>{
+            if(!window.confirm((current.enabled?'Pause':'Resume')+' the local deadline schedule?'))return;
+            await request('/v1/schedules/update',{schedule_id:current.schedule_id,enabled:!current.enabled});await show();
+          }),
+          button('Remove deadline schedule',async()=>{
+            if(!window.confirm('Remove this schedule? Retained journals and their consent are unchanged.'))return;
+            await request('/v1/schedules/delete',{schedule_id:current.schedule_id});await show();
+          }));
+      }
+    };
+    section.append(button('Load deadline schedule status',show),output);host.appendChild(section);
+  }
+  function installWorkforceAllocation(host){
+    const section=el('details');section.append(el('summary','Optimize selected workflow AI budget scenarios'),
+      el('p','Upload an exact allocation bundle (see AGENT_PROCUREMENT_WORKFORCE_ALLOCATION.md). This is a finite conditional comparison, not spending approval or an execution decision.'));
+    const file=el('input');file.type='file';file.accept='.json,application/json';file.setAttribute('aria-label','Workforce allocation bundle');
+    const output=el('div');let generation=0;
+    const run=button('Evaluate workforce allocation',async()=>{
+      const attempt=++generation;output.replaceChildren();
+      try{
+        const selected=file.files?.[0];
+        if(!selected||selected.size>8*1024*1024)throw new Error('Choose a JSON bundle of at most 8 MiB.');
+        const body={document:await selected.text()};
+        const result=await request('/v1/process-catalog/procurement-workforce/allocation',body);
+        if(attempt!==generation||!output.isConnected)return;
+        const amount=(v,unit)=>{
+          if(v==null)return 'unbounded';
+          const n=BigInt(v.numerator),d=BigInt(v.denominator),a=n<0n?-n:n;
+          const scale=unit==='money'?1000000n:3600000n;
+          const rounded=(2n*a*100n+d*scale)/(2n*d*scale);
+          return (n<0n?'-':'')+String(rounded/100n)+'.'+String(rounded%100n).padStart(2,'0')+' '+(unit==='money'?result.currency:'person-hours')+' (rounded)';
+        };
+        output.append(el('h4','Exact finite allocation for review'),
+          el('p',result.selected_workflows+' selected workflows · '+result.feasible_combinations+' feasible / '+result.evaluated_combinations+' combinations'),
+          el('p','Lower-bound first-year scenario savings: '+amount(result.first_year_savings_lower_microunits,'money')),
+          el('p','Upper gross AI cost: '+amount(result.first_year_gross_ai_cost_upper_microunits,'money')+' · remaining envelope '+amount(result.gross_ai_cost_headroom_microunits,'money')),
+          el('p',result.annual_ai_cases+' annual AI cases · '+result.ai_case_headroom+' remaining case capacity'),
+          el('p','Worst-case additional person-time: '+amount(result.annual_additional_person_ms_upper,'time')+' · remaining envelope '+amount(result.additional_person_ms_headroom,'time')));
+        for(const row of result.rows){
+          const group=el('section');group.append(el('h5',row.title+' · r'+row.revision),
+            el('p','Selected for review: '+(row.selected_for_review.portfolio_id||'defer')),
+            button('Open allocation process revision',()=>load(row.workflow_id,row.revision)));
+          const ul=el('ul');
+          for(const o of row.options)ul.appendChild(el('li',(o.portfolio_id||'defer')+' · '+(o.eligible?'eligible scenario; lower savings '+amount(o.first_year_savings_lower_microunits,'money')+'; upper gross cost '+amount(o.first_year_gross_ai_cost_upper_microunits,'money'):o.exclusion_reasons.join(', '))));
+          group.appendChild(ul);output.appendChild(group);
+        }
+        output.append(el('p','No shared discounts, cross-workflow labor offsets, verified savings or purchase authority are assumed.'),
+          button('Download allocation review JSON',()=>{
+            const url=URL.createObjectURL(new Blob([JSON.stringify(result,null,2)+'\n'],{type:'application/json'}));
+            const link=el('a');link.href=url;link.download='owg-workforce-allocation.json';link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
+          }));
+      }catch(error){if(attempt===generation)output.replaceChildren(el('p',error.message));}
+    });
+    file.addEventListener('change',()=>{generation++;output.replaceChildren();});
+    section.append(file,run,output);host.appendChild(section);
+  }
+  async function workforceOverview(){
+    const host=document.getElementById('owgWorkforceOverview');
+    host.replaceChildren(el('p','Loading retained local monitoring journals…'));
+    try{
+      const data=await request('/v1/process-catalog/procurement-workforce/overview');
+      host.replaceChildren(el('h3','AI workforce monitoring · local installation'),
+        el('p',data.journal_count+' retained journals · '+data.included_journals+' included in totals · '+data.excluded_journals+' excluded · '+data.unreadable_journals.length+' unreadable'),
+        el('p','Snapshot viewed '+new Date(data.as_of_server_ms).toISOString()+'. No production execution or independently verified savings.'));
+      const money=(v,currency)=>{
+        if(v==null)return 'unbounded';
+        const n=BigInt(v.numerator),d=BigInt(v.denominator),a=n<0n?-n:n,r=(2n*a+d)/(2n*d);
+        return (a%d!==0n?'≈ ':'')+(n<0n?'-':'')+String(r/1000000n)+'.'+String(r%1000000n).padStart(6,'0')+' '+currency;
+      };
+      const range=(v,currency)=>money(v.lower_microunits,currency)+' to '+money(v.upper_microunits,currency);
+      const armLine=(name,a,currency)=>el('p',name+': '+a.recorded+'/'+a.cases+' recorded · success '+a.counts.success.lower+'–'+a.counts.success.upper+' · declared variable cost '+range(a.variable_cost,currency));
+      if(data.totals_may_be_incomplete)host.appendChild(el('p','Totals exclude overlapping, historical, unreadable or otherwise ineligible journals. Inspect the exclusions before using these figures.'));
+      for(const g of data.currency_totals){
+        const section=el('section');section.append(el('h4',g.currency+' · '+g.journals+' included journals'),
+          el('p',g.recorded_cases+' recorded / '+g.started_window_cases+' started / '+g.scheduled_cases+' scheduled · '+g.credential_authenticated_observations+' credential-attributed observations'));
+        for(const [name,a] of Object.entries(g.arms))section.appendChild(armLine(name,a,g.currency));
+        host.appendChild(section);
+      }
+      host.appendChild(el('h4','Incident and review queue'));
+      const filter=el('select');filter.setAttribute('aria-label','Workforce review filter');
+      for(const [value,label] of [['all','All journals'],['rollback_review','Rollback review'],['attention','Needs attention'],['excluded_review','Excluded review'],['monitoring','Monitoring'],['continuation_review','Continuation review']]){
+        const o=el('option',label);o.value=value;filter.appendChild(o);
+      }
+      const list=el('div');const draw=()=>{
+        list.replaceChildren();
+        const rows=data.journals.filter(r=>filter.value==='all'||r.priority===filter.value);
+        if(!rows.length)list.appendChild(el('p','No matching journals.'));
+        for(const r of rows){
+          const section=el('section');
+          section.append(el('h5',r.title+' · r'+r.revision+' · '+r.monitor_id),
+            el('p',r.priority.replaceAll('_',' ')+' · '+r.recorded_cases+'/'+r.started_window_cases+' recorded · '+(r.included_in_totals?'included in totals':'excluded: '+r.exclusion_reasons.join(', '))),
+            el('p','Retained cutoff: '+new Date(r.as_of_ms).toISOString()+' · head '+r.head_sha256),
+            el('p','Rollback triggers: '+(r.sticky_rollback_triggers.map(x=>(x.window_id||'cumulative')+': '+x.reason).join(' · ')||'none recorded')),
+            el('p','Rollback referral: '+(r.rollback_referral_recorded?'recorded':'not recorded')+' · due for review: '+(r.due_for_review_windows.join(', ')||'none')),
+            el('p','Source predicates: '+r.source_outcomes.confirmed+'/'+r.source_outcomes.bound+' confirmed'),
+            el('p','Source invoice amounts: '+r.source_finance.matched+' matched · '+r.source_finance.mismatched+' discrepancies · '+r.source_finance.unknown+' unknown'),
+            el('p','Outcome corroboration: '+r.outcome_corroboration.matched+'/'+r.outcome_corroboration.enrolled+' matched · '+r.outcome_corroboration.conflicts+' conflicts'),
+            el('p','Declared finance statements: '+(r.finance_reconciled_windows.join(', ')||'none')+' · scheduled review consent '+(r.scheduled_deadline_review_enabled?'enabled':'disabled')),
+            button('Open saved revision',()=>load(r.workflow_id,r.revision)));
+          installJournalWorkbench(section,{workflow_id:r.workflow_id,revision:r.revision},r.monitor_id);
+          for(const [name,a] of Object.entries(r.arms))section.appendChild(armLine(name,a,r.currency));
+          list.appendChild(section);
+        }
+      };
+      filter.addEventListener('change',draw);host.append(filter,list);draw();
+      for(const r of data.unreadable_journals)host.appendChild(el('p','Unreadable journal: '+r.workflow_id+' · r'+r.revision+' · '+r.monitor_id));
+      host.appendChild(el('p','Currencies are never combined. Disjoint arm costs are not realized savings. Source credentials do not verify business outcomes.'));
+      host.appendChild(button('Download workforce monitoring overview',()=>{
+        const url=URL.createObjectURL(new Blob([JSON.stringify(data,null,2)+'\n'],{type:'application/json'}));
+        const link=el('a');link.href=url;link.download='owg-workforce-monitoring-overview.json';link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
+      }));
+    }catch(error){host.replaceChildren(el('p','Workforce overview unavailable.'));status(error.message);}
   }
   async function backlog(currency){
     const result=await request('/v1/process-catalog/opportunities?'+new URLSearchParams({currency}));
@@ -1961,6 +2901,11 @@
     let currency='USD';field(host,'Backlog currency',currency,value=>currency=value,['USD','EUR','GBP','SEK']);
     host.appendChild(button('Review improvement backlog',()=>backlog(currency)));
     const backlogHost=el('div');backlogHost.id='owgCatalogBacklog';host.appendChild(backlogHost);
+    host.appendChild(button('Review AI workforce monitoring',()=>workforceOverview()));
+    const workforceHost=el('div');workforceHost.id='owgWorkforceOverview';host.appendChild(workforceHost);
+    installWorkforceExchange(host);
+    installWorkforceSchedule(host);
+    installWorkforceAllocation(host);
     const message=el('p','No saved process has been loaded.');message.id='owgCatalogStatus';message.setAttribute('role','status');host.appendChild(message);
     const editor=el('div');editor.id='owgCatalogEditor';host.appendChild(editor);
     const style=el('style');style.textContent='#owgProcessCatalog label{display:block;margin:8px 0}#owgProcessCatalog fieldset{margin:12px 0;min-width:0}#owgProcessCatalog input:not([type=checkbox]){max-width:100%;width:32em}#owgProcessCatalog .owg-catalog-actions{display:flex;gap:8px;flex-wrap:wrap;margin:16px 0}';host.prepend(style);

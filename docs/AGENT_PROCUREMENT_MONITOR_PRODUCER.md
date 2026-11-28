@@ -1,0 +1,114 @@
+# Scoped local monitoring producers
+
+A native local adapter may submit observations to one retained monitoring
+journal, one frozen window, and one allocated arm. This is a separate
+write-only bearer, not the general API token or a dashboard session.
+The operator provisions and revokes credentials using the dashboard.
+No provider or deployment is contacted by OWG.
+
+## Provision
+
+First retain a verified monitor snapshot with router-journal-append.
+Older retained journals need one new verified checkpoint to retain their
+validated plan. Use router-producer-grant with the existing JSON-text
+dashboard envelope and workflow_id/revision query parameters. Document:
+monitor_id, expected_head_sha256, producer_alias, window_id, arm,
+ttl_seconds (60 to 604800), confirmed=true. The response includes the
+opaque bearer exactly once. Give it only to the authorized native local
+producer through an appropriate local secret store. Never log it or place
+it in a URL. Database storage contains a SHA-256 token digest, not the
+bearer. Grant metadata and audit history contain no token.
+
+## Submit
+
+POST /v1/process-catalog/procurement-producer/ingest on the local secure API,
+Authorization: Bearer <producer token>, Content-Type: application/json.
+No browser Origin header. Submit a JSON object with format
+openworkgraph.procurement-monitor-producer-batch.v1, batch_id (opaque alias),
+and observations (1–100 exact pilot observation objects). No journal scope
+or cutoff is supplied by the producer. The 512 KiB body limit applies to
+streamed requests. The operator distributes only the assigned slot/case
+tokens outside this API; the credential has no read or discovery rights.
+
+Only assigned window/arm slots, matching case tokens and in-window timestamps
+not after the server clock are accepted. Wrong actual version or destination
+is retained as adverse evidence rather than discarded. Every batch is
+atomic; duplicate slot/source references, changed observations, expired
+or revoked grants and stale process revisions are rejected. An exact
+batch-ID replay under the same active grant is idempotent (same normalized
+observations); changed payload conflicts. The receipt exposes only the
+grant ID, batch ID and accepted count, never the journal head, other arm,
+prior observations or report. The server clock must advance past the last
+retained cutoff; retry a 409 clock conflict only after it advances.
+
+Accepted observations automatically trigger a cumulative checkpoint review
+inside the same write transaction. Sticky historical incidents continue to
+block continuation. Existing manual imports remain declarations; only
+observations first accepted by this endpoint receive producer attribution.
+A producer bearer authenticates possession of a provisioned secret, not
+independent business truth, an executed model artifact or provider identity.
+
+## Revoke and inspect
+
+router-producer-revoke: monitor_id, expected_head_sha256, grant_id,
+confirmed=true. Revocation is serialized with ingest; previously committed
+evidence remains. Journal detail lists grant metadata and observation hashes
+with producer attribution, not tokens. Explicit journal removal deletes its
+grants together with its history. Limits: 48 grants per journal (including
+revoked/expired), 100 observations per batch, existing bounded journal
+capacity. No automatic pruning or silent evidence rewrite. Local database
+administrators remain trusted. No scheduler, remote collector or deployment
+authority is created; automated evaluation occurs on accepted submissions.
+
+An operator may use router-journal-refresh (monitor_id, expected_head_sha256,
+confirmed=true) to advance the retained cutoff to the local server clock and
+recompute missing/overdue windows without accepting new observations or
+uploading the upstream bundle. This is explicit, not a background scheduler.
+Credential management rejects AI-context-marked requests in addition to
+requiring the dashboard session. Clock refresh consumes a journal audit entry.
+
+Each outstanding producer grant reserves one future audit entry for explicit
+revocation, even if the grant has expired. Issuing a credential requires both
+its grant entry and its revocation reservation. Ordinary writes cannot consume
+these reservations; failed writes roll back atomically. Journal detail exposes
+reserved_disable_entries and ordinary_entries_remaining. For legacy journals
+already beyond the new reservation invariant, explicit journal removal remains
+available and removes associated credentials.
+
+The direct journal workbench can prepare a producer assignment manifest via
+router-producer-manifest. The operator supplies monitor_id, expected_head_sha256,
+grant_id and confirmed=true. The read-only manifest lists only that active
+window/arm's opaque case tokens, slot IDs, expected router configuration hash,
+recorded flags, timing and batch contract, with a content digest. It contains
+no bearer secret, reviewed category, intended destination, other-arm slots,
+raw inputs or outcomes. Send it separately from the producer credential over
+an approved channel. It is not proof of actual execution or authorization to
+run an agent. The producer endpoint itself still has no manifest/read access.
+
+## Native producer helper
+
+The installed package includes `python -m shared.agent_procurement_monitor_client`.
+It prepares already-observed evidence, never launches an agent or fabricates outcomes.
+Supply the downloaded assignment and a JSON array of exact Observation objects.
+
+```sh
+python -m shared.agent_procurement_monitor_client prepare \\
+  --assignment assignment.json --observations observations.json --out-dir batches
+python -m shared.agent_procurement_monitor_client submit \\
+  --assignment assignment.json --batch batches/batch-001.json \\
+  --base-url http://127.0.0.1:8000 --confirm-submit
+```
+
+Replace port 8000 with the actual local OWG API port. The tool prompts for the
+scoped credential without echo, or reads OWG_MONITOR_PRODUCER_TOKEN from the
+environment. Do not put credentials in command-line arguments or output files.
+Preparation checks the assignment digest, assigned slot/case and time bounds,
+unique evidence references and recorded flags; writes an exclusive local batch
+directory with deterministic IDs and no bearer. Wrong router versions and
+adverse outcomes remain unchanged. Submission checks the exact batch ID and
+credential grant, uses numeric loopback only, disables environment proxies and
+redirects, and validates a bounded receipt against the submitted batch. No
+automatic retry: on ambiguous transport failure, retain and explicitly resubmit
+the identical batch while the credential is valid. The server remains the
+authoritative scope and duplicate-evidence checker. The assignment digest is
+not a signature; obtain the manifest through the trusted local operator.
