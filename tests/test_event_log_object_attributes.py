@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import csv
 from io import BytesIO, StringIO
 import json
 import os
@@ -284,6 +285,68 @@ def test_event_detail_retains_csv_resource_and_selected_event_attributes():
     assert detail['resource'] == 'operator' and detail['event_attributes'] == [{'name': 'priority', 'value': 'high'}]
 
 
+def test_event_evidence_exports_complete_exact_values_and_spreadsheet_review(monkeypatch):
+    doc = {'objectTypes': [], 'eventTypes': [],
+           'objects': [{'id': '=object', 'type': 'order', 'attributes':
+                        [_value('status', '2024-01-01T00:00:00Z', f'v{n:02}') for n in range(30)] +
+                        [_value('status', '2024-01-01T00:00:00Z', '')]},
+                       {'id': '+other', 'type': 'item'}],
+           'events': [{'id': '=event', 'type': '=Activity', 'time': '2024-01-01T01:00:00Z',
+                       'attributes': [{'name': '=formula', 'value': '+value'}],
+                       'relationships': [{'objectId': '=object', 'qualifier': ''},
+                                         {'objectId': '+other', 'qualifier': '@qualifier'}]}]}
+    log = _import(doc)['log_id']
+    revision = attributes.object_events(log, 'order', '=object')['log_revision']
+    evidence = attributes.event_evidence(log, 'order', '=object', '=event', revision)
+    assert evidence['format'] == 'openworkgraph.object-event-evidence.v1' and evidence['complete_for_export_scope']
+    assert evidence['scope']['object_states'] == 'selected_object_only'
+    assert len(evidence['participants']) == 2
+    state = evidence['event']['object_attribute_states'][0]
+    assert state['status'] == 'ambiguous' and state['evidence_value_count'] == 31
+    assert state['evidence_values'] == [''] + [f'v{n:02}' for n in range(30)]
+    assert state['evidence_values_truncated'] is False
+    rows = list(csv.DictReader(StringIO(attributes.event_evidence_csv(evidence))))
+    assert rows[0]['event_id_review'] == "'=event" and rows[0]['focal_object_id_review'] == "'=object"
+    event_attr = next(row for row in rows if row['record_type'] == 'event_attribute')
+    assert event_attr['name_review'] == "'=formula" and event_attr['value_review'] == "'+value"
+    assert any(row['record_type'] == 'participant_qualifier' and row['value_review'] == "'@qualifier" for row in rows)
+    assert any(row['record_type'] == 'object_state' and row['value_review'] == '' and row['value_present'] == 'true' for row in rows)
+    monkeypatch.setattr(attributes, 'MAX_EVENT_EXPORT_LINKS', 1)
+    with pytest.raises(workspace.EventLogWorkspaceError, match='link limit'):
+        attributes.event_evidence(log, 'order', '=object', '=event', revision)
+    monkeypatch.setattr(attributes, 'MAX_EVENT_EXPORT_LINKS', 20_000)
+    monkeypatch.setattr(attributes, 'MAX_EVENT_EXPORT_OBJECTS', 1)
+    with pytest.raises(workspace.EventLogWorkspaceError, match='object limit'):
+        attributes.event_evidence(log, 'order', '=object', '=event', revision)
+    monkeypatch.setattr(attributes, 'MAX_EVENT_EXPORT_OBJECTS', 5_000)
+    newer = {'objectTypes': [], 'eventTypes': [], 'objects': [{'id': 'new', 'type': 'order'}],
+             'events': [{'id': 'new-event', 'type': 'New', 'time': '2024-02-01T00:00:00Z',
+                         'relationships': [{'objectId': 'new', 'qualifier': ''}]}]}
+    workspace.append_log(log, BytesIO(json.dumps(newer).encode()), source_format='ocel')
+    with pytest.raises(workspace.EventLogWorkspaceError, match='changed'):
+        attributes.event_evidence(log, 'order', '=object', '=event', revision)
+
+
+def test_event_evidence_uses_one_read_snapshot_during_append(monkeypatch):
+    log = _import(_orders())['log_id']
+    revision = attributes.object_events(log, 'order', 'o1')['log_revision']
+    original = attributes._event_detail
+    def interleave(conn, *args):
+        detail = original(conn, *args)
+        newer = {'objectTypes': [], 'eventTypes': [],
+                 'objects': [{'id': 'o1', 'type': 'order', 'attributes': [_value('status', '2024-01-01T04:00:00Z', 'changed')]}],
+                 'events': [{'id': 'new-event', 'type': 'New', 'time': '2024-02-01T00:00:00Z',
+                             'relationships': [{'objectId': 'o1', 'qualifier': ''}]}]}
+        workspace.append_log(log, BytesIO(json.dumps(newer).encode()), source_format='ocel')
+        assert attributes._revision(conn, log) == revision
+        return detail
+    monkeypatch.setattr(attributes, '_event_detail', interleave)
+    evidence = attributes.event_evidence(log, 'order', 'o1', 'e2', revision)
+    status = next(s for s in evidence['event']['object_attribute_states'] if s['name'] == 'status')
+    assert status['value'] == 'approved' and status['next_recorded_at'] == '2024-01-01T05:00:00Z'
+    assert evidence['log_revision'] == revision
+
+
 @pytest.mark.parametrize("fmt", ["ocel", "ocelxml"])
 def test_exports_round_trip_the_history_and_the_stored_value(fmt):
     log = _import(_orders())["log_id"]
@@ -392,6 +455,14 @@ with TestClient(app) as client:
     assert detail.status_code == 200 and detail.headers['cache-control'] == 'no-store'
     assert detail.json()['object_attribute_states'][0]['value'] == 'closed'
     assert client.get(detail_path, params={**params, 'event_id': 'missing'}, headers=headers).status_code == 422
+    evidence_path = "/v1/event-logs/" + made.json()["log_id"] + "/object-event-evidence"
+    assert client.get(evidence_path, params=params, headers=bearer).status_code in (401, 403)
+    snapshot = client.get(evidence_path, params=params, headers=headers)
+    assert snapshot.status_code == 200 and snapshot.headers['cache-control'] == 'no-store'
+    assert snapshot.json()['participants'][0]['object_id'] == 'o1'
+    review = client.get(evidence_path, params={**params, 'format': 'csv-review'}, headers=headers)
+    assert review.status_code == 200 and review.headers['content-type'].startswith('text/csv')
+    assert 'participant_qualifier' in review.text
     assert client.get(path + "?object_id=nope", headers=headers).status_code == 422
     assert client.get("/v1/event-logs/log_0000000000000000/object-attributes", headers=headers).status_code in (404, 422)
 '''

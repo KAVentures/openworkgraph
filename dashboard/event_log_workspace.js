@@ -4955,7 +4955,10 @@
     const eventNav=el('div',null,'row');eventNav.append(eventPrevious,eventNext);
     const eventDetail=el('div');eventDetail.id='owgObjectEventDetail';
     const eventDetailTitle=el('h4'),eventDetailStatus=el('div',null,'muted'),eventDetailRows=el('div');eventDetailStatus.setAttribute('role','status');
-    eventDetail.append(eventDetailTitle,el('p','Object values use the latest retained timestamp at or before the event. Equal-time conflicting values are ambiguous; 1970-01-01 denotes an initial value without a known time. These observations do not verify business state.','muted'),eventDetailStatus,eventDetailRows);
+    const evidenceJson=button('Download event evidence (JSON)','secondary'),evidenceCsv=button('Download event evidence (CSV)','secondary');
+    evidenceJson.disabled=evidenceCsv.disabled=true;
+    const evidenceStatus=el('div',null,'muted');evidenceStatus.setAttribute('role','status');
+    eventDetail.append(eventDetailTitle,el('p','Object values use the latest retained timestamp at or before the event. Equal-time conflicting values are ambiguous; 1970-01-01 denotes an initial value without a known time. These observations do not verify business state.','muted'),eventDetailStatus,eventDetailRows,evidenceJson,evidenceCsv,el('p','Evidence downloads include event and object IDs, resource, retained attributes and linked objects. JSON keeps exact values; CSV escapes formula-like cells for spreadsheet review.','muted'),evidenceStatus);
     const participants=el('div');participants.id='owgObjectEventParticipants';
     const participantTitle=el('h4'),participantStatus=el('div',null,'muted'),participantRows=el('div');participantStatus.setAttribute('role','status');
     const participantPrevious=button('Previous linked objects','secondary'),participantNext=button('Next linked objects','secondary'),participantNav=el('div',null,'row');participantNav.append(participantPrevious,participantNext);
@@ -4967,7 +4970,7 @@
     let historyTurn=0,historyRevision=null,historyOffset=0,historyFollowing=null;
     let eventTurn=0,eventRevision=null,eventOffset=0,eventFollowing=null;
     let eventDetailTurn=0;
-    const clearEventDetail=()=>{++eventDetailTurn;eventDetailStatus.textContent='';eventDetailRows.replaceChildren();show(eventDetail,false);};
+    const clearEventDetail=()=>{++eventDetailTurn;eventDetailStatus.textContent='';eventDetailRows.replaceChildren();evidenceStatus.textContent='';evidenceJson.disabled=evidenceCsv.disabled=true;show(eventDetail,false);};
     let participantTurn=0,participantEvent='',participantRevision=null,participantIndex=0,participantFollowing=null,participantCursors=[null];
     const clearParticipants=()=>{++participantTurn;participantEvent='';participantRevision=null;participantIndex=0;participantFollowing=null;participantCursors=[null];participantRows.replaceChildren();participantStatus.textContent='';participantPrevious.disabled=participantNext.disabled=true;show(participants,false);};
     const clearObjectEvents=()=>{++eventTurn;eventRevision=null;eventOffset=0;eventFollowing=null;eventStatus.textContent='';eventRows.replaceChildren();eventPrevious.disabled=eventNext.disabled=true;clearParticipants();clearEventDetail();show(eventPanel,false);};
@@ -5027,6 +5030,7 @@
     async function loadEventDetail(event,basis){
       const ticket=++eventDetailTurn,selected=pick.value,object=historyId.value;
       const active=()=>current()&&ticket===eventDetailTurn&&pick.value===selected&&historyId.value===object;
+      evidenceJson.disabled=evidenceCsv.disabled=true;evidenceStatus.textContent='';
       eventDetailTitle.textContent='Event details · '+event;eventDetailRows.replaceChildren();eventDetailStatus.textContent='Loading event details…';show(eventDetail,true);
       const query=new URLSearchParams({object_type:selected,object_id:object,event_id:event,revision:String(basis)});
       try{
@@ -5043,6 +5047,20 @@
             review.onclick=()=>{historyAttribute.value=a.name;clearAttributeHistory();historyRevision=basis;loadObjectHistory(0);historyStatus.tabIndex=-1;historyStatus.focus();};
             return [a.name,labels[a.status]||a.status,a.valid_from||'—',evidence,a.next_recorded_at||'—',review];
           })):el('p','No retained object attributes.','muted'));
+        const downloadEvidence=async format=>{
+          if(!active())return;
+          evidenceJson.disabled=evidenceCsv.disabled=true;evidenceStatus.textContent='Preparing event evidence…';
+          const params=new URLSearchParams({object_type:selected,object_id:object,event_id:event,revision:String(basis),format});
+          try{
+            const response=await api(logPath('object-event-evidence').replace(/\?.*$/,'')+'?'+params);
+            const blob=await response.blob();if(!active())return;
+            downloadBlob(blob,format==='json'?'object-event-evidence.json':'object-event-evidence.review.csv');
+            evidenceStatus.textContent='Downloaded event evidence.';
+          }catch(error){if(active())evidenceStatus.textContent=error.message;}
+          finally{if(active())evidenceJson.disabled=evidenceCsv.disabled=false;}
+        };
+        evidenceJson.onclick=()=>downloadEvidence('json');evidenceCsv.onclick=()=>downloadEvidence('csv-review');
+        evidenceJson.disabled=evidenceCsv.disabled=false;
       }catch(error){if(active())eventDetailStatus.textContent=error.message;}
     }
     async function loadParticipants(index){

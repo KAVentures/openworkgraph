@@ -1291,6 +1291,24 @@ def event_log_object_event_detail(request: Request, log_id: str,
     return _respond(object_attributes.event_detail, log_id, object_type, object_id, event_id, revision)
 
 
+@router.get("/v1/event-logs/{log_id}/object-event-evidence")
+def export_event_log_object_event_evidence(request: Request, log_id: str,
+        object_type: str = Query(min_length=1, max_length=200),
+        object_id: str = Query(min_length=1, max_length=200),
+        event_id: str = Query(min_length=1, max_length=200),
+        revision: int = Query(ge=0, le=2_147_483_647),
+        format: str = Query(default='json', pattern='^(json|csv-review)$')):
+    _require_dashboard(request)
+    try:
+        evidence = object_attributes.event_evidence(log_id, object_type, object_id, event_id, revision)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    if format == 'json':
+        return JSONResponse(evidence, headers={'Cache-Control': 'no-store'})
+    return Response(object_attributes.event_evidence_csv(evidence), media_type='text/csv',
+                    headers={'Cache-Control': 'no-store'})
+
+
 @router.post("/v1/event-logs/{log_id}/stuck-cases")
 async def event_log_stuck_cases(request: Request, log_id: str):
     """Open cases idle much longer than usual after their latest activity."""

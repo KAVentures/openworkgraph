@@ -13,10 +13,13 @@ Counts describe the recorded values; they do not verify when the business change
 from __future__ import annotations
 
 import json
+import csv
+from io import StringIO
 from typing import Any
 
 from . import event_log_workspace as workspace
 from .event_log_object_relationships import _revision
+from shared.spreadsheet_review import review_cell
 
 MAX_TYPES = 20
 MAX_ATTRIBUTES = 20
@@ -24,6 +27,8 @@ MAX_TRANSITIONS = 10
 MAX_TIMELINE = 200
 MAX_ASOF_LINKS = 5_000_000      # event links examined to compare stored values with values at event time
 MAX_STATE_EVIDENCE = 20         # exact values at a conflicting timestamp; complete history remains pageable
+MAX_EVENT_EXPORT_OBJECTS = 5_000
+MAX_EVENT_EXPORT_LINKS = 20_000
 
 _INITIAL = "TIMESTAMP '1970-01-01 00:00:00'"
 
@@ -186,57 +191,144 @@ def event_objects(log_id: str, object_type: str, object_id: str, event_id: str, 
             conn.close()
 
 
-def event_detail(log_id: str, object_type: str, object_id: str, event_id: str, revision: int) -> dict[str, Any]:
-    """Read a retained event and the selected object's recorded values at its time."""
+def _validate_event_detail(object_type: str, object_id: str, event_id: str, revision: int) -> None:
     if (not all(isinstance(s, str) and 1 <= len(s) <= 200 for s in (object_type, object_id, event_id)) or
             type(revision) is not int or revision < 0):
         raise workspace.EventLogWorkspaceError('invalid object event detail request')
+
+
+def event_detail(log_id: str, object_type: str, object_id: str, event_id: str, revision: int) -> dict[str, Any]:
+    """Read a retained event and the selected object's recorded values at its time."""
+    _validate_event_detail(object_type, object_id, event_id, revision)
     with workspace._LOCK:
         conn = workspace._connect()
         try:
+            conn.execute('BEGIN TRANSACTION')
             workspace._check_log(conn, log_id)
-            current = _revision(conn, log_id)
-            if revision != current:
+            if _revision(conn, log_id) != revision:
                 raise workspace.EventLogWorkspaceError('the retained log has changed; restart the object event history')
-            row = conn.execute('''SELECT e.activity, e.ts, e.resource, e.attributes, o.attributes
-                FROM events e JOIN event_objects eo ON eo.log_id=e.log_id AND eo.event_id=e.event_id
-                JOIN objects o ON o.log_id=eo.log_id AND o.object_id=eo.object_id
-                WHERE e.log_id=? AND e.event_id=? AND o.object_id=? AND o.object_type=? LIMIT 1''',
-                               [log_id, event_id, object_id, object_type]).fetchone()
-            if not row:
-                raise workspace.EventLogWorkspaceError('the event is not linked to the selected object and type')
-            activity, timestamp, resource, event_json, object_json = row
-            event_attributes = json.loads(event_json or '{}')
-            stored_attributes = json.loads(object_json or '{}')
-            history_names = {r[0] for r in conn.execute('''SELECT DISTINCT name FROM object_attribute_values
-                WHERE log_id=? AND object_id=?''', [log_id, object_id]).fetchall()}
-            names = set(stored_attributes) | history_names
-            rows = conn.execute('''SELECT name, valid_from, list(DISTINCT value ORDER BY value) AS values_at_time
-                FROM object_attribute_values WHERE log_id=? AND object_id=? AND valid_from <= ?
-                GROUP BY name, valid_from QUALIFY row_number() OVER (PARTITION BY name ORDER BY valid_from DESC)=1''',
-                                [log_id, object_id, timestamp]).fetchall()
-            at_time = {name: (at, values) for name, at, values in rows}
-            future = dict(conn.execute('''SELECT name, min(valid_from) FROM object_attribute_values
-                WHERE log_id=? AND object_id=? AND valid_from > ? GROUP BY name''',
-                                       [log_id, object_id, timestamp]).fetchall())
-            states = []
-            for name in sorted(names):
-                if name not in at_time:
-                    states.append({'name': name, 'status': 'before_first_value' if name in history_names else 'missing_history',
-                                   'valid_from': None, 'value': None, 'next_recorded_at': _iso(future.get(name)),
-                                   'evidence_values': [], 'evidence_value_count': 0, 'evidence_values_truncated': False})
-                else:
-                    at, values = at_time[name]
-                    states.append({'name': name, 'status': 'known' if len(values) == 1 else 'ambiguous',
-                                   'valid_from': _iso(at), 'value': values[0] if len(values) == 1 else None,
-                                   'next_recorded_at': _iso(future.get(name)), 'evidence_values': values[:MAX_STATE_EVIDENCE],
-                                   'evidence_value_count': len(values), 'evidence_values_truncated': len(values) > MAX_STATE_EVIDENCE})
-            return {'object_type': object_type, 'object_id': object_id, 'event_id': event_id,
-                    'log_revision': current, 'activity': activity, 'timestamp': _iso(timestamp), 'resource': resource,
-                    'event_attributes': [{'name': name, 'value': value} for name, value in sorted(event_attributes.items())],
-                    'object_attribute_states': states}
+            return _event_detail(conn, log_id, object_type, object_id, event_id, revision)
         finally:
             conn.close()
+
+
+def _event_detail(conn, log_id: str, object_type: str, object_id: str, event_id: str, revision: int) -> dict[str, Any]:
+    current = revision
+    row = conn.execute('''SELECT e.activity, e.ts, e.resource, e.attributes, o.attributes
+        FROM events e JOIN event_objects eo ON eo.log_id=e.log_id AND eo.event_id=e.event_id
+        JOIN objects o ON o.log_id=eo.log_id AND o.object_id=eo.object_id
+        WHERE e.log_id=? AND e.event_id=? AND o.object_id=? AND o.object_type=? LIMIT 1''',
+                       [log_id, event_id, object_id, object_type]).fetchone()
+    if not row:
+        raise workspace.EventLogWorkspaceError('the event is not linked to the selected object and type')
+    activity, timestamp, resource, event_json, object_json = row
+    event_attributes = json.loads(event_json or '{}')
+    stored_attributes = json.loads(object_json or '{}')
+    history_names = {r[0] for r in conn.execute('''SELECT DISTINCT name FROM object_attribute_values
+        WHERE log_id=? AND object_id=?''', [log_id, object_id]).fetchall()}
+    names = set(stored_attributes) | history_names
+    rows = conn.execute('''SELECT name, valid_from, list(DISTINCT value ORDER BY value) AS values_at_time
+        FROM object_attribute_values WHERE log_id=? AND object_id=? AND valid_from <= ?
+        GROUP BY name, valid_from QUALIFY row_number() OVER (PARTITION BY name ORDER BY valid_from DESC)=1''',
+                        [log_id, object_id, timestamp]).fetchall()
+    at_time = {name: (at, values) for name, at, values in rows}
+    future = dict(conn.execute('''SELECT name, min(valid_from) FROM object_attribute_values
+        WHERE log_id=? AND object_id=? AND valid_from > ? GROUP BY name''',
+                               [log_id, object_id, timestamp]).fetchall())
+    states = []
+    for name in sorted(names):
+        if name not in at_time:
+            states.append({'name': name, 'status': 'before_first_value' if name in history_names else 'missing_history',
+                           'valid_from': None, 'value': None, 'next_recorded_at': _iso(future.get(name)),
+                           'evidence_values': [], 'evidence_value_count': 0, 'evidence_values_truncated': False})
+        else:
+            at, values = at_time[name]
+            states.append({'name': name, 'status': 'known' if len(values) == 1 else 'ambiguous',
+                           'valid_from': _iso(at), 'value': values[0] if len(values) == 1 else None,
+                           'next_recorded_at': _iso(future.get(name)), 'evidence_values': values[:MAX_STATE_EVIDENCE],
+                           'evidence_value_count': len(values), 'evidence_values_truncated': len(values) > MAX_STATE_EVIDENCE})
+    return {'object_type': object_type, 'object_id': object_id, 'event_id': event_id,
+            'log_revision': current, 'activity': activity, 'timestamp': _iso(timestamp), 'resource': resource,
+            'event_attributes': [{'name': name, 'value': value} for name, value in sorted(event_attributes.items())],
+            'object_attribute_states': states}
+
+
+def event_evidence(log_id: str, object_type: str, object_id: str, event_id: str, revision: int) -> dict[str, Any]:
+    """Capture a complete bounded event review at the reviewed append revision."""
+    _validate_event_detail(object_type, object_id, event_id, revision)
+    with workspace._LOCK:
+        conn = workspace._connect()
+        try:
+            conn.execute('BEGIN TRANSACTION')
+            workspace._check_log(conn, log_id)
+            if _revision(conn, log_id) != revision:
+                raise workspace.EventLogWorkspaceError('the retained log has changed; restart the object event history')
+            detail = _event_detail(conn, log_id, object_type, object_id, event_id, revision)
+            links = conn.execute('SELECT count(*) FROM event_objects WHERE log_id=? AND event_id=?',
+                                 [log_id, event_id]).fetchone()[0]
+            if links > MAX_EVENT_EXPORT_LINKS:
+                raise workspace.EventLogWorkspaceError('event evidence exceeds the export link limit; no export was produced')
+            joined, count = conn.execute('''SELECT count(*), count(DISTINCT eo.object_id) FROM event_objects eo
+                JOIN objects o ON o.log_id=eo.log_id AND o.object_id=eo.object_id
+                WHERE eo.log_id=? AND eo.event_id=?''', [log_id, event_id]).fetchone()
+            if joined != links:
+                raise workspace.EventLogWorkspaceError('event evidence has unresolved object links; no export was produced')
+            if count > MAX_EVENT_EXPORT_OBJECTS:
+                raise workspace.EventLogWorkspaceError('event evidence exceeds the export object limit; no export was produced')
+            participants = conn.execute('''SELECT eo.object_id, o.object_type, list(DISTINCT eo.qualifier ORDER BY eo.qualifier)
+                FROM event_objects eo JOIN objects o ON o.log_id=eo.log_id AND o.object_id=eo.object_id
+                WHERE eo.log_id=? AND eo.event_id=? GROUP BY eo.object_id, o.object_type ORDER BY eo.object_id''',
+                                        [log_id, event_id]).fetchall()
+            if len(participants) != count:
+                raise workspace.EventLogWorkspaceError('event evidence has ambiguous object identities; no export was produced')
+            for state in detail['object_attribute_states']:
+                if state['evidence_values_truncated']:
+                    values = [row[0] for row in conn.execute('''SELECT DISTINCT value FROM object_attribute_values
+                        WHERE log_id=? AND object_id=? AND name=? AND valid_from=CAST(? AS TIMESTAMP) ORDER BY value''',
+                        [log_id, object_id, state['name'], state['valid_from']]).fetchall()]
+                    if len(values) != state['evidence_value_count']:
+                        raise workspace.EventLogWorkspaceError('event evidence changed; no export was produced')
+                    state['evidence_values'] = values
+                    state['evidence_values_truncated'] = False
+            conn.execute('COMMIT')
+            return {'format': 'openworkgraph.object-event-evidence.v1', 'log_id': log_id,
+                    'log_revision': revision, 'event': detail,
+                    'participants': [{'object_id': obj, 'object_type': kind, 'qualifiers': qualifiers}
+                                     for obj, kind, qualifiers in participants],
+                    'complete_for_export_scope': True,
+                    'scope': {'object_states': 'selected_object_only', 'participants': 'all_retained_event_links',
+                              'state_values': 'all_distinct_values_at_latest_recorded_timestamp'},
+                    'interpretation': 'Recorded links and attribute values are not verified business relationships or state; source completeness is unknown.'}
+        finally:
+            conn.close()
+
+
+def event_evidence_csv(evidence: dict[str, Any]) -> str:
+    """Produce a spreadsheet-review projection; JSON retains literal values."""
+    out = StringIO(newline='')
+    writer = csv.writer(out)
+    writer.writerow(['record_type', 'log_id', 'log_revision', 'event_id_review', 'focal_type_review',
+                     'focal_object_id_review', 'activity_review', 'timestamp_utc', 'resource_review',
+                     'related_type_review', 'related_object_id_review', 'name_review', 'value_review',
+                     'value_present', 'status', 'valid_from_utc', 'next_recorded_at_utc'])
+    event = evidence['event']
+    prefix = [evidence['log_id'], evidence['log_revision'], event['event_id'], event['object_type'],
+              event['object_id'], event['activity'], event['timestamp'], event['resource']]
+    def write(kind, related_type='', related_id='', name='', value='', present=False, status='', valid_from='', next_at=''):
+        writer.writerow([review_cell(v) for v in [kind, *prefix, related_type, related_id, name, value,
+                                                 str(present).lower(), status, valid_from, next_at]])
+    write('event')
+    for item in event['event_attributes']:
+        write('event_attribute', name=item['name'], value=item['value'], present=True)
+    for state in event['object_attribute_states']:
+        for value in state['evidence_values'] or [None]:
+            write('object_state', name=state['name'], value=value, present=value is not None,
+                  status=state['status'], valid_from=state['valid_from'], next_at=state['next_recorded_at'])
+    for participant in evidence['participants']:
+        for qualifier in participant['qualifiers']:
+            write('participant_qualifier', participant['object_type'], participant['object_id'],
+                  value=qualifier, present=True)
+    return out.getvalue()
 
 
 def attribute_changes(log_id: str, object_type: str | None = None, object_id: str | None = None) -> dict[str, Any]:
@@ -361,4 +453,4 @@ def _iso(stamp) -> str | None:
     return None if stamp is None else stamp.isoformat() + "Z"
 
 
-__all__ = ["attribute_changes", "object_history", "browse_objects", "object_events", "event_objects", "event_detail"]
+__all__ = ["attribute_changes", "object_history", "browse_objects", "object_events", "event_objects", "event_detail", "event_evidence", "event_evidence_csv"]
