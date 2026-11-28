@@ -42,6 +42,7 @@ from .event_log_domain_packs_service_governance import SERVICE_GOVERNANCE_PACKS
 from .event_log_domain_packs_business_support import BUSINESS_SUPPORT_PACKS
 from .event_log_domain_packs_object_operations import OBJECT_OPERATIONS_PACKS
 from .event_log_domain_packs_operational_assurance import OPERATIONAL_ASSURANCE_PACKS
+from .event_log_domain_packs_quality_management import QUALITY_MANAGEMENT_PACKS
 
 FORMAT = "openworkgraph.domain-pack.v1"
 INSTALL_FORMAT = "openworkgraph.domain-pack-install.v1"
@@ -767,6 +768,7 @@ PACKS: dict[str, dict[str, dict[str, Any]]] = {**OPERATIONS_PACKS,
                                               **OBJECT_OPERATIONS_PACKS,
                                               **ALL_REGULATED_SERVICE_PACKS,
                                               **OPERATIONAL_ASSURANCE_PACKS,
+                                              **QUALITY_MANAGEMENT_PACKS,
                                               "returns_refunds": {"1.0.0": RETURNS_REFUNDS_1_0_0},
                                               "order_to_cash": {"1.0.0": ORDER_TO_CASH_1_0_0},
                                               "procure_to_pay": {"1.0.0": PROCURE_TO_PAY_1_0_0},
