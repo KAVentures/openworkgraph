@@ -29,6 +29,36 @@ const path=require('node:path');
    await page.locator('#owgPipelineCard').waitFor();
    await page.locator('#owgPipelineCounts').filter({hasText:'No ideas yet.'}).waitFor();
 
+   // Stage a reviewed shadow skill using the actual portable proposal contract.
+   const portable=spawnSync(python,['-c',"import json;from tests.test_native_skill_download_routes import inputs;print(json.dumps(inputs()))"],{encoding:'utf8'});
+   assert.equal(portable.status,0,portable.stderr);
+   const fixture=JSON.parse(portable.stdout),skills=page.locator('#owgNativeSkillDownload');
+   await skills.locator('summary').click();
+   await skills.getByLabel('Original skill evidence JSON files',{exact:true}).setInputFiles({name:'evidence.json',mimeType:'application/json',buffer:Buffer.from(fixture.sources[0])});
+   await skills.getByLabel('Original external AI skill proposal JSON',{exact:true}).setInputFiles({name:'proposal.json',mimeType:'application/json',buffer:Buffer.from(fixture.proposal)});
+   const draft=skills.getByLabel('Editable human-reviewed skill draft JSON',{exact:true});
+   await draft.fill(fixture.draft);
+   const preview=skills.getByRole('button',{name:'Preview reviewed shadow skill',exact:true});
+   const downloadSkill=skills.getByRole('button',{name:'Download exact shadow skill ZIP',exact:true});
+   await preview.click();
+   await skills.getByText('Inspect both complete rendered files.',{exact:false}).waitFor();
+   assert(await downloadSkill.isDisabled());
+   await skills.getByLabel('I inspected both rendered files and confirm download for isolated shadow testing only',{exact:true}).check();
+   assert(await downloadSkill.isEnabled());
+   await draft.fill(fixture.draft+' ');
+   assert(await downloadSkill.isDisabled());
+   await preview.click();
+   await skills.getByText('Inspect both complete rendered files.',{exact:false}).waitFor();
+   await skills.getByLabel('I inspected both rendered files and confirm download for isolated shadow testing only',{exact:true}).check();
+   const [skillDownload,skillResponse]=await Promise.all([page.waitForEvent('download'),page.waitForResponse(r=>r.url().endsWith('/native-skill-download/archive')),downloadSkill.click()]);
+   assert.equal(skillResponse.status(),200);
+   const skillBytes=await fs.readFile(await skillDownload.path());
+   assert.equal(createHash('sha256').update(skillBytes).digest('hex'),skillResponse.headers()['x-owg-archive-sha256']);
+   const skillPath=path.join(scratch,'reviewed-skill.zip');await fs.writeFile(skillPath,skillBytes);
+   const checked=spawnSync(python,['-c',"import sys,tempfile;from zipfile import ZipFile;from shared.ai_skill_stage import verify;d=tempfile.mkdtemp();ZipFile(sys.argv[1]).extractall(d);assert verify(d,sys.argv[2])['exact_staged_files_verified']",skillPath,skillResponse.headers()['x-owg-package-sha256']],{encoding:'utf8'});
+   assert.equal(checked.status,0,checked.stderr);
+   await skills.locator('summary').click();
+
    // Exact budget frontier uses real local revisions and is read-only.
    const frontierIds=await page.evaluate(async()=>{
      const base='/v1/automation-pipeline',headers={'Content-Type':'application/json'},ids=[];
