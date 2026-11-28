@@ -3,6 +3,7 @@ const assert=require('node:assert/strict');
 const fs=require('node:fs/promises');
 const {spawn,spawnSync}=require('node:child_process');
 const {createHash}=require('node:crypto');
+const {createServer}=require('node:http');
 const {tmpdir}=require('node:os');
 const path=require('node:path');
 // Real-browser acceptance: add an idea → assess → approve with a note → implemented, CSV export, stale-edit refusal.
@@ -28,6 +29,297 @@ const path=require('node:path');
    await page.goto(base+'/#session='+session);await page.locator('[role=tab][data-tab=evidence]').click();
    await page.locator('#owgPipelineCard').waitFor();
    await page.locator('#owgPipelineCounts').filter({hasText:'No ideas yet.'}).waitFor();
+
+   // External AI proposal: select original evidence, review and add only an unassessed idea.
+   const portable=spawnSync(python,['-c',"import sys,json;sys.path.insert(0,'tests');from test_ai_implementation_review import proposal;from test_ai_implementation_compact_inference import repetitive_sources;s=repetitive_sources();print(json.dumps({'source':s[0],'proposal':proposal(s)}))"],{encoding:'utf8'});
+   assert.equal(portable.status,0,portable.stderr);
+   const fixture=JSON.parse(portable.stdout),handoff=page.locator('#owgAiOpportunityHandoff');
+   await handoff.locator(':scope > summary').click();
+   // Direct selection uses original observed-run evidence GET responses. Intercept
+   // just those two reads with an exact contract fixture; preparation is real API.
+   const picker=handoff.locator('#owgImplementationEvidencePicker');
+   const window={since:'2026-11-28T07:00:00.000Z',until:'2026-11-28T11:00:00.000Z'};
+   const liveSource=structuredClone(fixture.source),eid=liveSource.executions[0].execution_id;
+   const missing='execution:'+'c'.repeat(16);
+   liveSource.selector={selection_mode:'explicit_executions',family_selection_is_ground_truth:false,selected_execution_count:1,execution_ids:[eid]};
+   Object.assign(liveSource.provenance,{source:'canonical_local_event_store',requested_window:window,selected_execution_ids:[eid],source_limit_reached:true});
+   const liveText=JSON.stringify(liveSource,null,2);let discoveryCalls=0,evidenceCalls=0;
+   const familyPattern='**/v1/workflow-evidence/families?*',evidencePattern='**/v1/workflow-evidence?*';
+   await page.route(familyPattern,async route=>{
+     discoveryCalls++;const q=new URL(route.request().url()).searchParams;
+     assert.equal(q.get('since'),window.since);assert.equal(q.get('until'),window.until);
+     assert.equal(q.get('min_runs'),'1');assert.equal(q.get('limit'),'20');
+     await route.fulfill({json:{format:liveSource.format,authoritative:false,family_grouping_is_navigation_only:true,requested_window:window,source_limit_reached:true,
+       families_returned:1,families_total:2,families:[{family_key:'fixture',family_is_ground_truth:false,execution_count:2,executions:[{execution_id:eid,actor_kind:'human',started_at:window.since},{execution_id:missing,actor_kind:'agent',started_at:window.since}]}]}});
+   });
+   await page.route(evidencePattern,async route=>{
+     evidenceCalls++;const q=new URL(route.request().url()).searchParams;
+     assert.equal(q.get('since'),window.since);assert.equal(q.get('until'),window.until);
+     assert.equal(q.get('include_canonical_evidence'),'true');assert.equal(q.get('max_runs'),'1');
+     await route.fulfill({status:200,contentType:'application/json',body:liveText});
+   });
+   try{
+     await picker.locator('summary').click();
+     const find=picker.getByRole('button',{name:'Find local execution candidates',exact:true});
+     const use=picker.getByRole('button',{name:'Use selected executions (replace sources)',exact:true});
+     assert(await find.isDisabled());assert(await use.isDisabled());assert.equal(discoveryCalls+evidenceCalls,0);
+     await picker.getByLabel('Evidence window start (ISO 8601 with offset)',{exact:true}).fill('2026-11-28T08:00:00+01:00');
+     await picker.getByLabel('Evidence window end (ISO 8601 with offset)',{exact:true}).fill('2026-11-28T12:00:00+01:00');
+     await find.click();await picker.getByText('Returned 1 of 2 candidate families;',{exact:false}).waitFor();assert(await use.isDisabled());
+     await picker.getByRole('button',{name:'Add '+eid,exact:true}).click();
+     await use.click();await picker.getByText('Original source loaded into the handoff below.',{exact:false}).waitFor();
+     assert.equal(discoveryCalls,1);assert.equal(evidenceCalls,1);
+     const [originalFile]=await Promise.all([page.waitForEvent('download'),picker.getByRole('button',{name:'Download last selected original evidence',exact:true}).click()]);
+     assert.equal(await fs.readFile(await originalFile.path(),'utf8'),liveText);
+     await handoff.getByRole('button',{name:'Prepare evidence packet',exact:true}).click();
+     await handoff.getByText('Packet ready:',{exact:false}).waitFor();
+     const [selectedPacket]=await Promise.all([page.waitForEvent('download'),handoff.getByRole('button',{name:'Download evidence packet',exact:true}).click()]);
+     const expected=spawnSync(python,['-c',"import sys,json;from shared.ai_implementation_review import prepare;print(prepare([json.load(sys.stdin)])['packet_sha256'])"],{input:liveText,encoding:'utf8'});
+     assert.equal(expected.status,0,expected.stderr);assert.equal(JSON.parse(await fs.readFile(await selectedPacket.path(),'utf8')).packet_sha256,expected.stdout.trim());
+     await picker.getByLabel('Exact execution IDs (one per line or comma separated)',{exact:true}).fill(missing);
+     await use.click();await picker.getByText('Returned evidence does not match every explicitly selected', {exact:false}).waitFor();
+     // A refused replacement leaves the previously prepared packet available.
+     assert(await handoff.getByRole('button',{name:'Download evidence packet',exact:true}).isEnabled());
+     await picker.locator('summary').click();
+   }finally{await page.unroute(familyPattern);await page.unroute(evidencePattern);}
+   await handoff.getByLabel('Original workflow evidence JSON files (ordered as in the portable packet)',{exact:true}).setInputFiles({name:'evidence.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(fixture.source))});
+   const prepButton=handoff.getByRole('button',{name:'Prepare evidence packet',exact:true});
+   const packetDownload=handoff.getByRole('button',{name:'Download evidence packet',exact:true});
+   const instructionsDownload=handoff.getByRole('button',{name:'Download AI instructions',exact:true});
+   assert(await packetDownload.isDisabled());
+   await prepButton.click();
+   await handoff.getByText('Packet ready:',{exact:false}).waitFor();
+   const [downloadedPacket]=await Promise.all([page.waitForEvent('download'),packetDownload.click()]);
+   const packetText=await fs.readFile(await downloadedPacket.path(),'utf8');
+   assert.equal(JSON.parse(packetText).packet_sha256,fixture.proposal.packet_sha256);
+   const [downloadedGuide]=await Promise.all([page.waitForEvent('download'),instructionsDownload.click()]);
+   assert((await fs.readFile(await downloadedGuide.path(),'utf8')).includes('Never invent references'));
+   const compactButton=handoff.getByRole('button',{name:'Download compact evidence packet',exact:true});
+   const compactGuideButton=handoff.getByRole('button',{name:'Download compact AI instructions',exact:true});
+   assert(await compactButton.isEnabled());assert(await compactGuideButton.isEnabled());
+   const [compactFile]=await Promise.all([page.waitForEvent('download'),compactButton.click()]);
+   const [compactGuideFile]=await Promise.all([page.waitForEvent('download'),compactGuideButton.click()]);
+   const compactText=await fs.readFile(await compactFile.path(),'utf8');
+   const compactGuideText=await fs.readFile(await compactGuideFile.path(),'utf8');
+   assert.equal(JSON.parse(compactText).original_packet_sha256,fixture.proposal.packet_sha256);
+   assert(compactGuideText.includes('copy original_packet_sha256'));
+   const expandCheck=spawnSync(python,['-c',"import sys,json;from shared.ai_context_compaction import expand,canonical;v=json.load(sys.stdin);sys.stdout.buffer.write(canonical(expand(v,v['original_packet_sha256'])))"],{input:compactText,encoding:'utf8'});
+   assert.equal(expandCheck.status,0,expandCheck.stderr);assert.equal(expandCheck.stdout,packetText);
+   await handoff.getByLabel('Context byte budget',{exact:true}).selectOption('131072');
+   assert(await packetDownload.isDisabled());assert(await compactButton.isDisabled());assert(await compactGuideButton.isDisabled());
+   await prepButton.click();
+   await handoff.getByText('Packet ready:',{exact:false}).waitFor();
+   // A shared packet supports multiple proposals; retain invalid and duplicate items.
+   {
+     const batch=handoff.locator('#owgImplementationBatch');await batch.locator(':scope > summary').click();
+     const bad=structuredClone(fixture.proposal);bad.outcome.evidence_refs=['invented'];
+     const distinct=structuredClone(fixture.proposal);distinct.title='Second implementation candidate';
+     const proposals=[fixture.proposal,bad,distinct,fixture.proposal,null,bad];
+     const batchFile=batch.getByLabel('Returned proposal array JSON (2 MiB max)',{exact:true});
+     const reviewBatch=batch.getByRole('button',{name:'Review complete proposal batch',exact:true});
+     assert(await reviewBatch.isDisabled());
+     await batchFile.setInputFiles({name:'batch.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(proposals))});
+     await reviewBatch.click();await batch.getByText('Batch review complete: 2 distinct structurally reviewed, 2 refused, 2 exact duplicates.',{exact:false}).waitFor();
+     assert.equal(await batch.getByRole('button',{name:'Use item 2 for individual review',exact:true}).count(),0);
+     assert.equal(await batch.getByRole('button',{name:'Use item 4 for individual review',exact:true}).count(),0);
+     const [reportFile]=await Promise.all([page.waitForEvent('download'),batch.getByRole('button',{name:'Download complete batch review',exact:true}).click()]);
+     const batchReport=JSON.parse(await fs.readFile(await reportFile.path(),'utf8'));
+     assert.equal(batchReport.item_count,6);assert.equal(batchReport.portfolio_written,false);
+     const planning=batch.locator('#owgImplementationPlanning');await planning.locator(':scope > summary').click();
+     const preparePlan=planning.getByRole('button',{name:'Prepare planning worklist',exact:true});
+     assert(await preparePlan.isDisabled());
+     await planning.getByLabel('Planning currency code',{exact:true}).fill('SEK');await preparePlan.click();
+     await planning.getByText('Planning worklist ready: 2 distinct reviewed candidates.',{exact:false}).waitFor();
+     await planning.getByLabel('Assess item 1',{exact:true}).check();
+     for(const [label,lo,hi] of [['Cases per month','60','120'],['Eligible share (0–1)','0.5','1'],['Net human minutes saved per eligible case','-6','12']]){
+       await planning.getByLabel(label+' — low (item 1)',{exact:true}).fill(lo);
+       await planning.getByLabel(label+' — high (item 1)',{exact:true}).fill(hi);
+     }
+     await planning.getByLabel('Reviewed basis and uncertainties (item 1)',{exact:true}).fill('Hypothetical bounds; measure the baseline independently.');
+     const comparePlan=planning.getByRole('button',{name:'Compare reviewed scenarios',exact:true});assert(await comparePlan.isDisabled());
+     await planning.getByLabel('I reviewed these assumptions and uncertainties',{exact:true}).check();
+     await comparePlan.click();
+     await planning.getByText('Planning comparison complete: 1 assessed of 2 distinct candidates; 6 returned items retained.',{exact:false}).waitFor();
+     await planning.getByText('Modeled net human hours per month: -12 to 24 hours',{exact:true}).waitFor();
+     await planning.getByText('Modeled monthly capacity value: Unknown SEK',{exact:true}).waitFor();
+     const [planningDownload]=await Promise.all([page.waitForEvent('download'),planning.getByRole('button',{name:'Download planning review',exact:true}).click()]);
+     const planningReport=JSON.parse(await fs.readFile(await planningDownload.path(),'utf8'));
+     assert.equal(planningReport.portfolio_total,null);assert.equal(planningReport.batch_review_sha256,batchReport.batch_review_sha256);
+     assert.equal(planningReport.shared_scoped_citations.length,1);
+     const reconcile=planning.getByRole('button',{name:'Reconcile with saved portfolio',exact:true});
+     assert(await reconcile.isEnabled());await reconcile.click();
+     await planning.getByText('Portfolio reconciliation:',{exact:false}).waitFor();
+     const [reconciliationDownload]=await Promise.all([page.waitForEvent('download'),planning.getByRole('button',{name:'Download portfolio reconciliation',exact:true}).click()]);
+     const reconciliation=JSON.parse(await fs.readFile(await reconciliationDownload.path(),'utf8'));
+     assert.equal(reconciliation.item_count,6);assert.equal(reconciliation.planning_review_sha256,planningReport.planning_review_sha256);
+     assert.equal(reconciliation.portfolio_written,false);assert.equal(reconciliation.execution_authorized,false);
+     assert.equal(reconciliation.items[1].mapping_status,'not_a_distinct_reviewed_candidate');
+     await planning.getByLabel('Cases per month — low (item 1)',{exact:true}).fill('70');
+     assert(await comparePlan.isDisabled());assert(await planning.getByRole('button',{name:'Download planning review',exact:true}).isDisabled());
+     assert(await reconcile.isDisabled());assert(await planning.getByRole('button',{name:'Download portfolio reconciliation',exact:true}).isDisabled());
+     await planning.locator(':scope > summary').click();
+     await batch.getByRole('button',{name:'Use item 3 for individual review',exact:true}).click();
+     await batch.getByText('Item 3 transferred to individual review.',{exact:false}).waitFor();
+     await handoff.getByLabel('Human-reviewed opportunity title',{exact:true}).fill('Reviewed second candidate');
+     await handoff.getByRole('button',{name:'Review exact proposal',exact:true}).click();
+     await handoff.getByText('Structural review passed.',{exact:false}).waitFor();
+     assert((await handoff.textContent()).includes(batchReport.items[2].proposal_sha256));
+     assert(await handoff.getByRole('button',{name:'Create unassessed idea',exact:true}).isDisabled());
+     await batchFile.setInputFiles({name:'changed.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(proposals.slice().reverse()))});
+     assert(await batch.getByRole('button',{name:'Download complete batch review',exact:true}).isDisabled());
+     assert(await preparePlan.isDisabled());assert.equal(await planning.getByLabel('Assess item 1',{exact:true}).count(),0);
+     assert(await handoff.getByRole('button',{name:'Create unassessed idea',exact:true}).isDisabled());
+     await batch.locator(':scope > summary').click();
+   }
+   // Exercise actual dashboard -> local HTTP model -> cited proposal -> review.
+   const modelAnswer={...fixture.proposal,author_model:'local-test:1'};let localCalls=0;
+   const modelServer=createServer((req,res)=>{
+     let body='';req.on('data',chunk=>{body+=chunk;});req.on('end',()=>{
+       localCalls++;const payload=JSON.parse(body);
+       assert.equal(req.url,'/v1/chat/completions');assert.equal(payload.model,'local-test:1');
+       const context=JSON.parse(payload.messages[1].content);
+       if(localCalls===1||localCalls===4)assert.equal(context.packet_sha256,fixture.proposal.packet_sha256);
+       else {assert.equal(context.original_packet_sha256,fixture.proposal.packet_sha256);assert.equal(context.packet_skeleton.event_count,10);}
+       res.writeHead(200,{'Content-Type':'application/json'});
+       res.end(JSON.stringify({model:'local-test:1',choices:[{finish_reason:'stop',message:{role:'assistant',content:JSON.stringify(modelAnswer)}}],usage:{prompt_tokens:120,completion_tokens:30,total_tokens:150}}));
+     });
+   });
+   await new Promise((resolve,reject)=>{modelServer.once('error',reject);modelServer.listen(0,'127.0.0.1',resolve);});
+   try{
+     const local=handoff.locator('#owgLocalImplementationModel');await local.locator(':scope > summary').click();
+     await local.getByLabel('Local model ID',{exact:true}).fill('local-test:1');
+     await local.getByLabel('Local model port',{exact:true}).fill(String(modelServer.address().port));
+     const gen=local.getByRole('button',{name:'Generate with local model',exact:true});
+     assert(await gen.isDisabled());
+     await local.getByLabel('I authorize sending the selected evidence to this configured loopback model service',{exact:true}).check();
+     await gen.click();
+     await local.getByText('Local model draft ready:',{exact:false}).waitFor();
+     assert.equal(localCalls,1);assert(await gen.isDisabled());
+     const [receiptFile]=await Promise.all([page.waitForEvent('download'),local.getByRole('button',{name:'Download local model receipt',exact:true}).click()]);
+     const originalReceipt=JSON.parse(await fs.readFile(await receiptFile.path(),'utf8'));
+     assert.equal(originalReceipt.usage.total_tokens,150);assert.equal(originalReceipt.context_representation,'original');
+     await local.getByLabel('Model evidence representation',{exact:true}).selectOption('compact');
+     assert(await gen.isDisabled());
+     await local.getByLabel('I authorize sending the selected evidence to this configured loopback model service',{exact:true}).check();
+     await gen.click();await local.getByText('Local model draft ready:',{exact:false}).waitFor();
+     assert.equal(localCalls,2);
+     const [compactReceiptFile]=await Promise.all([page.waitForEvent('download'),local.getByRole('button',{name:'Download local model receipt',exact:true}).click()]);
+     const compactReceipt=JSON.parse(await fs.readFile(await compactReceiptFile.path(),'utf8'));
+     assert.equal(compactReceipt.context_representation,'compact');
+     assert(compactReceipt.transmitted_context_bytes<originalReceipt.transmitted_context_bytes);
+     assert.equal(compactReceipt.packet_sha256,originalReceipt.packet_sha256);assert.equal(compactReceipt.token_savings_verified,false);
+     const trial=local.locator('#owgContextTrial');await trial.locator('summary').click();
+     const runTrial=trial.getByRole('button',{name:'Run paired context experiment',exact:true});
+     assert(await runTrial.isDisabled());
+     await trial.getByLabel('Paired experiment order',{exact:true}).selectOption('compact-first');
+     await trial.getByLabel('I explicitly authorize both local model requests for this experiment',{exact:true}).check();
+     await runTrial.click();
+     await trial.getByText('Paired context experiment complete: 2 of 2', {exact:false}).waitFor();
+     assert.equal(localCalls,4);assert(await runTrial.isDisabled());
+     const [trialFile]=await Promise.all([page.waitForEvent('download'),trial.getByRole('button',{name:'Download complete context trial',exact:true}).click()]);
+     const trialReport=JSON.parse(await fs.readFile(await trialFile.path(),'utf8'));
+     assert.equal(trialReport.packet_sha256,compactReceipt.packet_sha256);
+     assert.deepEqual(trialReport.attempts.map(x=>x.representation),['compact','original']);
+     assert.equal(trialReport.original_minus_compact.total_tokens,0);assert.equal(trialReport.token_savings_verified,false);
+     const [trialProposal]=await Promise.all([page.waitForEvent('download'),trial.getByRole('button',{name:'Download compact trial proposal',exact:true}).click()]);
+     assert.equal(JSON.parse(await fs.readFile(await trialProposal.path(),'utf8')).packet_sha256,fixture.proposal.packet_sha256);
+     await trial.getByLabel('Paired experiment order',{exact:true}).selectOption('original-first');
+     assert(await runTrial.isDisabled());assert(await trial.getByRole('button',{name:'Download complete context trial',exact:true}).isDisabled());
+     await local.getByRole('button',{name:'Use generated proposal for review',exact:true}).click();
+     await handoff.getByLabel('Human-reviewed opportunity title',{exact:true}).fill('Local model draft');
+     await handoff.getByRole('button',{name:'Review exact proposal',exact:true}).click();
+     await handoff.getByText('Structural review passed.',{exact:false}).waitFor();
+     assert(await handoff.getByRole('button',{name:'Create unassessed idea',exact:true}).isDisabled());
+     // Direct exact transfer to the native shadow renderer, no intermediate file export.
+     const stageButton=handoff.getByRole('button',{name:'Start new shadow skill draft from reviewed proposal',exact:true});
+     assert(await stageButton.isEnabled());
+     await stageButton.click();
+     const transferred=page.locator('#owgNativeSkillDownload');
+     await transferred.getByText('Evidence and proposal transferred.',{exact:false}).waitFor();
+     const transferredDraft=transferred.getByLabel('Editable human-reviewed skill draft JSON',{exact:true});
+     const transferredConfirm=transferred.getByLabel('I inspected both rendered files and confirm download for isolated shadow testing only',{exact:true});
+     const transferredDownload=transferred.getByRole('button',{name:'Download exact shadow skill ZIP',exact:true});
+     assert.equal(JSON.parse(await transferredDraft.inputValue()).instructions,'');
+     assert(await transferredDownload.isDisabled());assert(await transferredConfirm.isDisabled());
+     await transferredDraft.fill(JSON.stringify({name:'customer-follow-up',description:'Draft customer follow-up',option_index:0,
+       instructions:'Draft a reply from synthetic cases only.',tool_mappings:{},
+       source_verification:'Check independent fixture status.',test_plan:'Run frozen normal and exception cases.',
+       escalation:'Stop on missing facts.',rollback:'Remove staged skill and discard drafts.',review_note:'Human reviewed against the proposal.'}));
+     const [transferPreview]=await Promise.all([
+       page.waitForResponse(r=>r.url().endsWith('/native-skill-download/preview')),
+       transferred.getByRole('button',{name:'Preview reviewed shadow skill',exact:true}).click()]);
+     assert.equal(transferPreview.status(),200);
+     const transferValue=await transferPreview.json();
+     assert.equal(transferValue.manifest.packet_sha256,compactReceipt.packet_sha256);
+     assert.equal(transferValue.manifest.proposal_sha256,compactReceipt.proposal_sha256);
+     assert.equal(transferValue.execution_authorized,false);
+     assert(await transferredDownload.isDisabled());
+     await transferredConfirm.check();
+     assert(await transferredDownload.isEnabled());
+     await stageButton.click();
+     await transferred.getByText('Evidence and proposal transferred.',{exact:false}).waitFor();
+     assert(await transferredDownload.isDisabled());assert.equal(await transferredConfirm.isChecked(),false);
+     assert.equal(JSON.parse(await transferredDraft.inputValue()).instructions,'');
+     await transferred.locator('summary').click();
+     // The existing manual import path remains available, and clears approval.
+   }finally{await new Promise(resolve=>modelServer.close(resolve));}
+   await handoff.getByLabel('External AI proposal JSON',{exact:true}).setInputFiles({name:'proposal.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(fixture.proposal))});
+   await handoff.getByLabel('Human-reviewed opportunity title',{exact:true}).fill('Reviewed AI opportunity');
+   await handoff.getByLabel('Human-reviewed opportunity details',{exact:true}).fill('Resolve business rules before implementation.');
+   const reviewButton=handoff.getByRole('button',{name:'Review exact proposal',exact:true});
+   const createButton=handoff.getByRole('button',{name:'Create unassessed idea',exact:true});
+   await reviewButton.click();
+   await handoff.getByText('Structural review passed.',{exact:false}).waitFor();
+   assert(await createButton.isDisabled());
+   await handoff.getByLabel('I reviewed the original proposal and want to create an unassessed idea only',{exact:true}).check();
+   assert(await createButton.isEnabled());
+   await handoff.getByLabel('Human-reviewed opportunity title',{exact:true}).fill('Reviewed AI opportunity changed');
+   assert(await createButton.isDisabled());
+   await reviewButton.click();
+   await handoff.getByText('Structural review passed.',{exact:false}).waitFor();
+   await handoff.getByLabel('I reviewed the original proposal and want to create an unassessed idea only',{exact:true}).check();
+   await createButton.click();
+   await handoff.getByText('Unassessed idea created:',{exact:false}).waitFor();
+   await page.getByRole('button',{name:'Open idea Reviewed AI opportunity changed',exact:true}).waitFor();
+   const imported=await page.evaluate(async()=>(await(await fetch('/v1/automation-pipeline')).json()).ideas);
+   assert.equal(imported.length,1);assert.equal(imported[0].state,'idea');assert.equal(imported[0].assessment,null);
+   assert.equal(imported[0].execution_authorized,false);assert.equal(imported[0].ai_proposal_handoff.structural_review_only,true);
+   await page.evaluate(async id=>{const r=await fetch('/v1/automation-pipeline/'+id+'/delete',{method:'POST'});if(!r.ok)throw Error(await r.text());},imported[0].idea_id);
+   await handoff.locator(':scope > summary').click();
+   await page.locator('#owgPipelineRefresh').click();
+   await page.locator('#owgPipelineCounts').filter({hasText:'No ideas yet.'}).waitFor();
+
+   {
+   // Stage a reviewed shadow skill using the actual portable proposal contract.
+   const portable=spawnSync(python,['-c',"import json;from tests.test_native_skill_download_routes import inputs;print(json.dumps(inputs()))"],{encoding:'utf8'});
+   assert.equal(portable.status,0,portable.stderr);
+   const fixture=JSON.parse(portable.stdout),skills=page.locator('#owgNativeSkillDownload');
+   await skills.locator('summary').click();
+   await skills.getByLabel('Original skill evidence JSON files',{exact:true}).setInputFiles({name:'evidence.json',mimeType:'application/json',buffer:Buffer.from(fixture.sources[0])});
+   await skills.getByLabel('Original external AI skill proposal JSON',{exact:true}).setInputFiles({name:'proposal.json',mimeType:'application/json',buffer:Buffer.from(fixture.proposal)});
+   const draft=skills.getByLabel('Editable human-reviewed skill draft JSON',{exact:true});
+   await draft.fill(fixture.draft);
+   const preview=skills.getByRole('button',{name:'Preview reviewed shadow skill',exact:true});
+   const downloadSkill=skills.getByRole('button',{name:'Download exact shadow skill ZIP',exact:true});
+   await preview.click();
+   await skills.getByText('Inspect both complete rendered files.',{exact:false}).waitFor();
+   assert(await downloadSkill.isDisabled());
+   await skills.getByLabel('I inspected both rendered files and confirm download for isolated shadow testing only',{exact:true}).check();
+   assert(await downloadSkill.isEnabled());
+   await draft.fill(fixture.draft+' ');
+   assert(await downloadSkill.isDisabled());
+   await preview.click();
+   await skills.getByText('Inspect both complete rendered files.',{exact:false}).waitFor();
+   await skills.getByLabel('I inspected both rendered files and confirm download for isolated shadow testing only',{exact:true}).check();
+   const [skillDownload,skillResponse]=await Promise.all([page.waitForEvent('download'),page.waitForResponse(r=>r.url().endsWith('/native-skill-download/archive')),downloadSkill.click()]);
+   assert.equal(skillResponse.status(),200);
+   const skillBytes=await fs.readFile(await skillDownload.path());
+   assert.equal(createHash('sha256').update(skillBytes).digest('hex'),skillResponse.headers()['x-owg-archive-sha256']);
+   const skillPath=path.join(scratch,'reviewed-skill.zip');await fs.writeFile(skillPath,skillBytes);
+   const checked=spawnSync(python,['-c',"import sys,tempfile;from zipfile import ZipFile;from shared.ai_skill_stage import verify;d=tempfile.mkdtemp();ZipFile(sys.argv[1]).extractall(d);assert verify(d,sys.argv[2])['exact_staged_files_verified']",skillPath,skillResponse.headers()['x-owg-package-sha256']],{encoding:'utf8'});
+   assert.equal(checked.status,0,checked.stderr);
+   await skills.locator('summary').click();
+   }
 
    // Exact budget frontier uses real local revisions and is read-only.
    const frontierIds=await page.evaluate(async()=>{
@@ -969,6 +1261,27 @@ with zipfile.ZipFile(sys.argv[1]) as z:
    await page.getByRole('button',{name:'Reconcile original downloaded check',exact:true}).click();
    await page.getByText('document does not match a retained export for this project',{exact:false}).waitFor();
    assert.equal(sourceDownloads,1);
+   // Reconcile a complete declared cohort using the actual unknown receipt and a missing case.
+   const cohortPanel=page.locator('#owgProjectSourceCohort');
+   await cohortPanel.locator(':scope > summary').click();
+   await cohortPanel.getByRole('button',{name:'Load confirmed project expectations',exact:true}).click();
+   await cohortPanel.getByLabel('Declared case ID',{exact:true}).fill('case_1');
+   await cohortPanel.getByLabel('Case observed record reference',{exact:true}).fill(sourceB);
+   await cohortPanel.getByLabel('Original case source-check document (optional)',{exact:true}).setInputFiles({name:'original.json',mimeType:'application/json',buffer:checkBytes});
+   await cohortPanel.getByRole('button',{name:'Add declared source-check case',exact:true}).click();
+   await cohortPanel.getByText('case_1 ·', {exact:false}).first().waitFor();
+   await cohortPanel.getByLabel('Declared case ID',{exact:true}).fill('case_2');
+   await cohortPanel.getByRole('button',{name:'Add declared source-check case',exact:true}).click();
+   await cohortPanel.getByRole('button',{name:'Reconcile declared cohort',exact:true}).click();
+   await cohortPanel.getByText('2 declared cases · 0 historical operations reported verified · 1 not established · 1 missing documents',{exact:true}).waitFor();
+   const [cohortDownload]=await Promise.all([page.waitForEvent('download'),cohortPanel.getByRole('button',{name:'Download cohort review JSON',exact:true}).click()]);
+   const cohortReport=JSON.parse(await fs.readFile(await cohortDownload.path(),'utf8'));
+   assert.equal(cohortReport.business_outcomes_verified,false);assert.equal(cohortReport.case_association_verified,false);
+   assert.equal(cohortReport.cases[0].document_sha256,checkHistory.exports[0].document_sha256);
+   assert(!JSON.stringify(cohortReport).includes(sourceB));
+   await cohortPanel.getByRole('button',{name:'Remove case_2',exact:true}).click();
+   assert(await cohortPanel.getByRole('button',{name:'Download cohort review JSON',exact:true}).isDisabled());
+   await cohortPanel.locator(':scope > summary').click();
    const sourceAudit=await page.evaluate(async()=>window.axe.run(document.querySelector('#owgPipelineCard'),{
      runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21a','wcag21aa']},resultTypes:['violations']}));
    assert.deepEqual(sourceAudit.violations.map(v=>v.id),[]);

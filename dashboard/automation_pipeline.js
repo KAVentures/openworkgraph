@@ -1229,6 +1229,17 @@
     };
     card.append(row,resumeSection,auditSection,tools,planningFilters,status,counts,portfolioButton,portfolioHost,budgetScenarioButton,budgetScenarioHost,benefitOverlapButton,benefitOverlapHost,benefitReadinessButton,benefitReadinessHost,dependencyScheduleButton,dependencyScheduleHost,capacityButton,capacityHost,viewCount,list,comparison,detail);
     panel.appendChild(card);
+    const aiHandoffHost=el('div');card.insertBefore(aiHandoffHost,row);
+    const nativeSkillHost=el('div');card.insertBefore(nativeSkillHost,row);
+    const nativeSkillReady=import('/native-skill-download.js')
+      .then(module=>module.mountNativeSkillDownload(nativeSkillHost,api))
+      .catch(()=>{nativeSkillHost.textContent='Native shadow skill preparation unavailable.';return null;});
+    import('/ai-opportunity-handoff.js').then(module=>module.mountAiOpportunityHandoff(aiHandoffHost,post,
+      async id=>{await refresh();await show(id);},async draft=>{
+        const target=await nativeSkillReady;
+        if(!target)throw Error('Native shadow skill preparation unavailable.');
+        target.acceptReviewedProposal(draft);
+      })).catch(()=>{aiHandoffHost.textContent='AI proposal handoff unavailable.';});
 
     let latestIdeas=[],refreshGeneration=0,resumeGeneration=0,auditGeneration=0,auditPageIndex=0,auditAbort=null;
     let loadedState=null,currentView=null;
@@ -3050,6 +3061,10 @@
               field('Exported project for source check',selected),field('Confirmed source-state expectation',expectation),field('Reported run (only runs that reported this project\'s exact specification, from linked reports)',runChoice),field('Observed record reference (owg:r:…)',sourceRef),consentText,run,note,history,
               el('h5','Review a previous download'),el('p','Select the unchanged original file to compare its bytes with the retained export hash. This local review does not retain the file or contact a provider.','muted'),
               field('Original source-check JSON file',reviewFile),reviewButton,reviewResult);
+            const cohortHost=el('div');checkHost.appendChild(cohortHost);
+            import('/project-source-cohort.js').then(m=>{if(generation===detailGeneration&&view===sourceView)m.mountProjectSourceCohort(cohortHost,
+              {api,base,revision:idea.revision,expectations:()=>entries,isCurrent:()=>generation===detailGeneration&&view===sourceView,projectSelect:selected});})
+              .catch(()=>{cohortHost.textContent='Source-check cohort review unavailable.';});
             await loadOptions();
           }catch(e){if(generation===detailGeneration&&view===sourceView)status.textContent=e.message;}
         };
