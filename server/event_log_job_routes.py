@@ -24,6 +24,9 @@ def add_routes(router, require_dashboard, json_body):
         except workspace.EventLogWorkspaceError as exc:
             raise HTTPException(422, str(exc)) from None
 
+    from .event_log_job_console_routes import add_routes as add_console_routes
+    add_console_routes(router, owner, respond, json_body)
+
     @router.post(base, status_code=202)
     async def submit(request: Request, log_id: str, source_bound: bool = False):
         key = owner(request)

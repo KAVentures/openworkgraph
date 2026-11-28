@@ -11391,6 +11391,9 @@
     const endsWith=input('owgAnalysisEnds','text','any activity');
     const run=button('Run analysis');run.id='owgAnalysisRun';
     const background=input('owgAnalysisBackground','checkbox');background.checked=true;
+    const retainJob=input('owgAnalysisRetainJob','checkbox');retainJob.checked=false;
+    const jobConsoleHost=el('div');
+    background.addEventListener('change',()=>{retainJob.disabled=!background.checked;if(!background.checked)retainJob.checked=false;});
     const cancel=button('Cancel analysis','secondary');cancel.id='owgAnalysisCancel';cancel.disabled=true;
     let running=false,cancelRequested=false,job=null,attempt=0;
     const name=input('owgAnalysisName','text','Analysis name');name.maxLength=120;
@@ -11768,7 +11771,7 @@
       return current;
     }
     const exports=exportButtons('owgAnalysis',()=>last,r=>[r.columns,...r.rows],verifiedAnalysisExport,error=>{message.textContent=error.message;});
-    box.append(field('Run as a cancellable local job',background),
+    box.append(field('Run as a cancellable local job',background),field('Retain a successful background result in this session until expiry',retainJob),jobConsoleHost,
       el('p','Local jobs have a two-minute deadline including queue time. They use the log when execution starts; results are static. Results expire after ten minutes or restart. Leaving this view stops polling; work may continue until its deadline. Nothing is uploaded.','muted'),
       row,metricBox,message,out,exports.node,prepareShare,prepareCases,prepareCompany,sharing,saveRow,savedList);
     mAdd.onclick=()=>{try{useMetric(readMetric());message.textContent='Metric added; choose it under Measure.';}catch(error){message.textContent=error.message;}};
@@ -11922,8 +11925,9 @@
     async function execute(spec){
       if(running)throw new Error('Wait for this analysis or cancel it first.');
       const ownAttempt=++attempt,jobBase=base()+'/analysis-jobs';
+      const retainSuccessful=background.checked&&retainJob.checked;let retainedComplete=false;
       const current=()=>generation===state.generation&&box.isConnected&&ownAttempt===attempt;
-      running=true;cancelRequested=false;job=null;run.disabled=true;caseScope.disabled=true;background.disabled=true;cancel.disabled=!background.checked;
+      running=true;cancelRequested=false;job=null;run.disabled=true;caseScope.disabled=true;background.disabled=true;cancel.disabled=!background.checked;retainJob.disabled=true;
       resetSharing();last=null;lastSpec=null;out.replaceChildren();exports.enable(false);save.disabled=true;prepareShare.disabled=true;prepareCases.disabled=true;prepareCompany.disabled=true;
       let r;
       try{
@@ -11946,6 +11950,7 @@
           r=await(await api(job+'/result',{signal:AbortSignal.timeout(10000)})).json();
           if(!/^[a-f0-9]{64}$/.test(r.source_content_sha256||''))throw Error('Source-bound job result is incomplete; rerun the analysis.');
           if(cancelRequested||!current())return;
+          retainedComplete=retainSuccessful;
         }else{
           message.textContent='Analysis running…';
           r=await (await api(base()+'/analysis-source-bound',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)})).json();
@@ -11955,8 +11960,8 @@
       finally{
         const cleanup=job;job=null;running=false;
         // Deletion cancels unfinished work and erases retained bytes. Failure is bounded by server expiry.
-        if(cleanup)api(cleanup+'/delete',{method:'POST',signal:AbortSignal.timeout(10000)}).catch(()=>{});
-        if(current()){run.disabled=false;caseScope.disabled=false;background.disabled=false;cancel.disabled=true;
+        if(cleanup&&!(retainedComplete&&current()&&!cancelRequested))api(cleanup+'/delete',{method:'POST',signal:AbortSignal.timeout(10000)}).catch(()=>{});
+        if(current()){run.disabled=false;caseScope.disabled=false;background.disabled=false;cancel.disabled=true;retainJob.disabled=!background.checked;
           if(cancelRequested)message.textContent='Analysis cancelled in this view; no result was displayed. Server cleanup requested; its deadline still applies.';}
       }
       if(!current())return;
@@ -12026,6 +12031,7 @@
       return panel;
     }
     box.appendChild(templateImportControls());
+    import('/analysis-job-console.js').then(m=>{if(jobConsoleHost.isConnected&&generation===state.generation)m.mount(jobConsoleHost,{api,isCurrent:()=>generation===state.generation&&box.isConnected});}).catch(()=>{if(jobConsoleHost.isConnected)jobConsoleHost.textContent='Job console unavailable; analysis remains available.';});
 
     async function refresh(){
       const r=await getJSON(base()+'/analyses');if(generation!==state.generation)return;
