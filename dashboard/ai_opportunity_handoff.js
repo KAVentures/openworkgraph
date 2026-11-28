@@ -15,6 +15,7 @@ export function mountAiOpportunityHandoff(host, post, onCreated){
   const controls=[sources,proposal,title,description],order=el('ol');
   let generation=0,basis=null,busy=false,orderedSources=[];
   let packetGeneration=0,preparedPacket=null;
+  let generatedResult=null,selectedGenerated=false;
   const budget=el('select');
   for(const [value,label] of [[131072,'128 KiB'],[524288,'512 KiB'],[2097152,'2 MiB'],[8388608,'8 MiB']]){
     const option=el('option',label);option.value=String(value);budget.append(option);
@@ -27,6 +28,7 @@ export function mountAiOpportunityHandoff(host, post, onCreated){
   packetStatus.setAttribute('role','status');packetStatus.setAttribute('aria-live','polite');
   function invalidatePacket(){
     packetGeneration++;preparedPacket=null;downloadPacket.disabled=downloadGuide.disabled=true;
+    clearLocal();
     packetStatus.textContent='Evidence selection or budget changed. Prepare a new packet.';
   }
   budget.addEventListener('change',invalidatePacket);
@@ -72,6 +74,81 @@ export function mountAiOpportunityHandoff(host, post, onCreated){
     }catch(error){if(ticket===packetGeneration)packetStatus.textContent=error.message;}
     finally{lock(false);}
   };
+  const localModel=el('input'),localPort=el('input'),localTokens=el('input'),localJsonMode=el('input'),localConfirm=el('input');
+  localModel.maxLength=120;localModel.placeholder='Exact configured model ID';
+  localPort.type=localTokens.type='number';localPort.min='1';localPort.max='65535';localPort.value='11434';
+  localTokens.min='128';localTokens.max='16384';localTokens.value='4096';
+  localJsonMode.type=localConfirm.type='checkbox';
+  const generate=el('button','Generate with local model'),useGenerated=el('button','Use generated proposal for review'),
+    saveProposal=el('button','Download generated proposal'),saveReceipt=el('button','Download local model receipt');
+  for(const n of [generate,useGenerated,saveProposal,saveReceipt]){n.type='button';n.disabled=true;}
+  const localStatus=el('div','Prepare an evidence packet to enable the optional local model route.');
+  localStatus.setAttribute('role','status');localStatus.setAttribute('aria-live','polite');
+  const generatedText=el('textarea');generatedText.readOnly=true;generatedText.rows=8;
+  generatedText.hidden=true;
+  const localControls=[localModel,localPort,localTokens,localJsonMode,localConfirm];
+  function localReady(){
+    return !!preparedPacket&&preparedPacket.max_packet_bytes<=524288&&localConfirm.checked&&
+      /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,119}$/.test(localModel.value)&&
+      Number.isInteger(Number(localPort.value))&&Number(localPort.value)>=1&&Number(localPort.value)<=65535&&
+      Number.isInteger(Number(localTokens.value))&&Number(localTokens.value)>=128&&Number(localTokens.value)<=16384;
+  }
+  function refreshLocal(){
+    for(const n of localControls)n.disabled=busy||!preparedPacket||preparedPacket.max_packet_bytes>524288;
+    generate.disabled=busy||!localReady();
+    useGenerated.disabled=saveProposal.disabled=saveReceipt.disabled=busy||!generatedResult;
+  }
+  function clearLocal(){
+    const wasSelected=selectedGenerated;
+    generatedResult=null;selectedGenerated=false;localConfirm.checked=false;
+    generatedText.value='';generatedText.hidden=true;
+    localStatus.textContent='Local draft cleared. Prepare the evidence and explicitly confirm the next request.';
+    if(wasSelected)invalidate();
+    refreshLocal();
+  }
+  for(const n of [localModel,localPort,localTokens,localJsonMode])n.addEventListener('input',clearLocal);
+  localConfirm.addEventListener('change',refreshLocal);
+  useGenerated.onclick=()=>{
+    if(busy||!generatedResult)return;
+    proposal.value='';selectedGenerated=true;invalidate();
+    status.textContent='Generated proposal selected. Enter human-reviewed idea details and review exact proposal.';
+  };
+  saveProposal.onclick=()=>{if(!busy&&generatedResult)downloadLocal('owg-local-model-proposal.json','application/json',generatedResult.proposal_json);};
+  saveReceipt.onclick=()=>{if(!busy&&generatedResult)downloadLocal('owg-local-model-receipt.json','application/json',JSON.stringify(generatedResult.receipt,null,2));};
+  generate.onclick=async()=>{
+    if(busy||!localReady())return;
+    const packet=preparedPacket,ticket=packetGeneration,files=orderedSources.slice();
+    const settings={model:localModel.value,port:Number(localPort.value),max_output_tokens:Number(localTokens.value),json_mode:localJsonMode.checked};
+    clearLocal();lock(true);localStatus.textContent='Requesting one draft from the confirmed loopback model service…';
+    try{
+      const response=await post('/v1/ai-opportunity-handoff/generate-local',{
+        sources:await Promise.all(files.map(f=>f.text())),expected_packet_sha256:packet.packet_sha256,
+        max_bytes:packet.max_packet_bytes,...settings,confirm_local_inference:true});
+      if(ticket!==packetGeneration)return;
+      const receipt=response.receipt;
+      if(response.format!=='openworkgraph.ai-implementation-local-handoff.v1'||response.packet_sha256!==packet.packet_sha256||
+        response.execution_authorized!==false||response.semantic_correctness_verified!==false||response.opportunity_created!==false||
+        response.human_review_required!==true||typeof response.proposal_json!=='string'||
+        new TextEncoder().encode(response.proposal_json).length>1048576||
+        !receipt||receipt.format!=='openworkgraph.ai-implementation-local-model-receipt.v1'||
+        receipt.packet_sha256!==packet.packet_sha256||receipt.requested_model!==settings.model||receipt.endpoint_reported_model!==settings.model||
+        receipt.endpoint_is_loopback!==true||receipt.inference_location_verified!==false||
+        receipt.execution_authorized!==false||receipt.actual_cost_verified!==false||receipt.semantic_correctness_verified!==false||
+        !/^[0-9a-f]{64}$/.test(receipt.proposal_sha256)||receipt.review_status!=='structural_review_only'||
+        !Number.isSafeInteger(receipt.elapsed_ms)||receipt.elapsed_ms<0||!receipt.usage||
+        !['prompt_tokens','completion_tokens','total_tokens'].every(k=>receipt.usage[k]===null||
+          (Number.isSafeInteger(receipt.usage[k])&&receipt.usage[k]>=0)))
+        throw Error('Unexpected local proposal response.');
+      const parsed=JSON.parse(response.proposal_json);
+      if(parsed.format!=='openworkgraph.ai-implementation-proposal.v1'||parsed.packet_sha256!==packet.packet_sha256||parsed.author_model!==settings.model)
+        throw Error('Local proposal does not match the selected packet and model.');
+      generatedResult=response;generatedText.value=JSON.stringify(parsed,null,2);generatedText.hidden=false;
+      const usage=receipt.usage,display=value=>value===null?'unknown':String(value);
+      localStatus.textContent='Local model draft ready: '+display(usage.prompt_tokens)+' input, '+display(usage.completion_tokens)+
+        ' output, '+display(usage.total_tokens)+' total reported tokens; '+receipt.elapsed_ms+' ms. Costs and inference location are unverified. Inspect the proposal before using it.';
+    }catch(error){if(ticket===packetGeneration)localStatus.textContent=error.message;}
+    finally{lock(false);}
+  };
   function renderOrder(){
     order.replaceChildren();
     orderedSources.forEach((f,i)=>{
@@ -92,21 +169,23 @@ export function mountAiOpportunityHandoff(host, post, onCreated){
     summary.textContent='';status.textContent='Inputs changed. Review the exact proposal again.';
   }
   sources.addEventListener('change',()=>{orderedSources=Array.from(sources.files||[]);invalidate();invalidatePacket();renderOrder();});
-  for(const n of [proposal,title,description])n.addEventListener('input',invalidate);
+  proposal.addEventListener('input',()=>{selectedGenerated=false;invalidate();});
+  for(const n of [title,description])n.addEventListener('input',invalidate);
   confirmation.addEventListener('change',()=>{commit.disabled=busy||!basis||!confirmation.checked;});
   function lock(value){
     busy=value;for(const n of controls)n.disabled=value;preview.disabled=value;
     budget.disabled=prepare.disabled=value;downloadPacket.disabled=downloadGuide.disabled=value||!preparedPacket;
-    confirmation.disabled=value||!basis;commit.disabled=value||!basis||!confirmation.checked;renderOrder();
+    confirmation.disabled=value||!basis;commit.disabled=value||!basis||!confirmation.checked;renderOrder();refreshLocal();
   }
   preview.onclick=async()=>{
     if(busy)return;
     invalidate();const ticket=generation;lock(true);
     try{
-      const files=orderedSources.slice(),proposed=proposal.files?.[0];
-      if(files.length<1||files.length>8||!proposed||!title.value.trim())throw Error('Choose one to eight evidence JSON files, one proposal and a title.');
-      if(files.reduce((n,f)=>n+f.size,proposed.size)>8*1024*1024)throw Error('Selected files exceed 8 MiB.');
-      const draft={sources:await Promise.all(files.map(f=>f.text())),proposal:await proposed.text(),title:title.value,description:description.value};
+      const files=orderedSources.slice(),proposed=proposal.files?.[0],localText=selectedGenerated&&generatedResult?generatedResult.proposal_json:null;
+      if(files.length<1||files.length>8||(!proposed&&!localText)||!title.value.trim())throw Error('Choose one to eight evidence JSON files, one proposal and a title.');
+      const proposalSize=localText?new TextEncoder().encode(localText).length:proposed.size;
+      if(files.reduce((n,f)=>n+f.size,proposalSize)>8*1024*1024)throw Error('Selected files exceed 8 MiB.');
+      const draft={sources:await Promise.all(files.map(f=>f.text())),proposal:localText||await proposed.text(),title:title.value,description:description.value};
       const response=await post('/v1/ai-opportunity-handoff/preview',draft);
       if(ticket!==generation)return;
       if(response.format!=='openworkgraph.ai-opportunity-handoff.v1'||response.execution_authorized!==false||
@@ -132,12 +211,19 @@ export function mountAiOpportunityHandoff(host, post, onCreated){
     }catch(error){status.textContent=error.message;}
     finally{lock(false);}
   };
+  const localSection=el('details');localSection.id='owgLocalImplementationModel';
+  localSection.append(el('summary','Optional: generate a draft with your local model'),
+    el('p','Prepare a packet of at most 512 KiB. OWG makes one request to the configured port on the OWG server’s IPv4 loopback, not necessarily the browser machine. A loopback service may proxy or retain data; verify the service, egress and permissions first. No remote fallback.'),
+    field('Local model ID',localModel),field('Local model port',localPort),field('Maximum output tokens',localTokens),
+    field('Request JSON-object mode',localJsonMode),field('I authorize sending the selected evidence to this configured loopback model service',localConfirm),
+    generate,localStatus,field('Generated proposal (unverified interpretation)',generatedText),useGenerated,saveProposal,saveReceipt);
+  refreshLocal();
   const details=el('details');details.id='owgAiOpportunityHandoff';
   details.append(el('summary','Add an external AI proposal to the implementation portfolio'),
-    el('p','Files are reviewed by the local OWG server, not sent to a model. Only your entered idea and structural lineage are retained. Nothing is approved or executed.'),
+    el('p','Preparation and review stay on the local OWG server. The optional local model request sends selected evidence only when explicitly confirmed. Only your entered idea and structural lineage are retained by the pipeline. Nothing is approved or executed.'),
     field('Original workflow evidence JSON files (ordered as in the portable packet)',sources),order,
     el('p','Prepare a packet using the same ordered evidence below, or use an existing exact packet. The byte budget is not a token count. A too-small budget refuses rather than drops events. Download and inspect the files, then share only through an authorized local or cloud AI environment.'),
-    field('Context byte budget',budget),prepare,packetStatus,downloadPacket,downloadGuide,
+    field('Context byte budget',budget),prepare,packetStatus,downloadPacket,downloadGuide,localSection,
     field('External AI proposal JSON',proposal),field('Human-reviewed opportunity title',title),
     field('Human-reviewed opportunity details',description),preview,status,summary,
     field('I reviewed the original proposal and want to create an unassessed idea only',confirmation),commit);

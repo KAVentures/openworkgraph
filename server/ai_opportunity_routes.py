@@ -1,6 +1,8 @@
 """Local dashboard-only bridge from external AI proposals to unassessed ideas."""
+import http.client
 import json
 from pathlib import Path
+from threading import Lock
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
@@ -8,11 +10,13 @@ from starlette.concurrency import run_in_threadpool
 
 from shared import ai_opportunity_handoff as handoff
 from shared import ai_implementation_packet as packet_handoff
+from shared import ai_implementation_local_handoff as local_handoff
 from . import automation_pipeline as pipeline
 from .local_auth import dashboard_session_valid
 
 router = APIRouter()
 MAX_BYTES = 8 * 1024 * 1024
+_LOCAL_MODEL_SLOT = Lock()
 SCRIPT = Path(__file__).resolve().parents[1] / "dashboard" / "ai_opportunity_handoff.js"
 
 
@@ -85,6 +89,37 @@ async def prepare_packet(request: Request):
         result = await run_in_threadpool(packet_handoff.preview, [_decode(s) for s in sources], payload["max_bytes"])
     except (ValueError, TypeError, KeyError, AttributeError, RecursionError, OverflowError):
         raise HTTPException(422, "Packet preparation refused; check the original evidence or increase the byte budget. No evidence is silently dropped.") from None
+    _require_dashboard(request)
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+def _generate_local(payload, request):
+    _require_dashboard(request)
+    if not _LOCAL_MODEL_SLOT.acquire(blocking=False):
+        raise HTTPException(409, "A local model request is already in progress")
+    try:
+        # Keep the slot until the blocking network request has actually ended.
+        _require_dashboard(request)
+        return local_handoff.generate(payload)
+    finally:
+        _LOCAL_MODEL_SLOT.release()
+
+
+@router.post("/v1/ai-opportunity-handoff/generate-local")
+async def generate_local(request: Request):
+    payload = await _body(request)
+    _require_dashboard(request)
+    if not isinstance(payload, dict) or set(payload) != {"sources", "expected_packet_sha256", "max_bytes", "model", "port", "max_output_tokens", "json_mode", "confirm_local_inference"}:
+        raise HTTPException(422, "Exact local model request required")
+    sources = payload["sources"]
+    if not isinstance(sources, list) or not 1 <= len(sources) <= 8 or not all(isinstance(s, str) for s in sources):
+        raise HTTPException(422, "Select one to eight original evidence JSON files")
+    if payload["confirm_local_inference"] is not True:
+        raise HTTPException(422, "Explicit local model confirmation required")
+    try:
+        result = await run_in_threadpool(_generate_local, {**payload, "sources": [_decode(s) for s in sources]}, request)
+    except (ValueError, TypeError, KeyError, AttributeError, RecursionError, OverflowError, OSError, http.client.HTTPException):
+        raise HTTPException(422, "Local model proposal refused; check the current evidence, model service, budget or response. No retry or cloud fallback occurred.") from None
     _require_dashboard(request)
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 

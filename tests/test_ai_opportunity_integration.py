@@ -72,6 +72,7 @@ with TestClient(app) as client:
     assert client.get("/ai-opportunity-handoff.js").status_code==200
     for headers in ({},bearer):
         assert client.post(base+"/prepare-packet",json={"sources":data["sources"],"max_bytes":131072},headers=headers).status_code in (401,403)
+        assert client.post(base+"/generate-local",json={},headers=headers).status_code in (401,403)
         assert client.post(base+"/preview",json=data,headers=headers).status_code in (401,403)
         assert client.post(base+"/commit",json={},headers=headers).status_code in (401,403)
     assert client.post(base+"/preview",json={**data,"proposal":'{"x":1,"x":2}'},headers=owner).status_code==422
@@ -85,6 +86,45 @@ with TestClient(app) as client:
     assert json.loads(prepared["packet_json"])["packet_sha256"]==json.loads(data["proposal"])["packet_sha256"]
     assert client.post(base+"/prepare-packet",json={**packet_request,"max_bytes":True},headers=owner).status_code==422
     assert client.post(base+"/prepare-packet",json={**packet_request,"sources":['{"x":1,"x":2}']},headers=owner).status_code==422
+    # Actual loopback proposal adapter through the owner-only dashboard route.
+    from http.server import BaseHTTPRequestHandler,ThreadingHTTPServer
+    from threading import Thread
+    calls=[]
+    answer=json.loads(data["proposal"])
+    answer["author_model"]="local-test:1"
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            calls.append(json.loads(self.rfile.read(int(self.headers["Content-Length"]))))
+            body=json.dumps({"model":"local-test:1","choices":[{"finish_reason":"stop","message":{"role":"assistant","content":json.dumps(answer)}}],"usage":{"prompt_tokens":12,"completion_tokens":8,"total_tokens":20}}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type","application/json")
+            self.send_header("Content-Length",str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        def log_message(self,*_): pass
+    listener=ThreadingHTTPServer(("127.0.0.1",0),Handler)
+    thread=Thread(target=listener.serve_forever,daemon=True)
+    thread.start()
+    try:
+        req={"sources":data["sources"],"expected_packet_sha256":prepared["packet_sha256"],"max_bytes":131072,
+             "model":"local-test:1","port":listener.server_port,"max_output_tokens":4096,"json_mode":False,"confirm_local_inference":True}
+        for change in ({"confirm_local_inference":False},{"expected_packet_sha256":"0"*64},{"port":0}):
+            assert client.post(base+"/generate-local",json={**req,**change},headers=owner).status_code==422
+        assert not calls
+        generated=client.post(base+"/generate-local",json=req,headers=owner)
+        assert generated.status_code==200,generated.text
+        assert generated.headers["cache-control"]=="no-store"
+        value=generated.json()
+        assert len(calls)==1 and value["receipt"]["usage"]["total_tokens"]==20
+        assert value["opportunity_created"] is False
+        assert client.get("/v1/automation-pipeline",headers=owner).json()["ideas"]==[]
+        returned=client.post(base+"/preview",json={**data,"proposal":value["proposal_json"]},headers=owner)
+        assert returned.status_code==200,returned.text
+        assert returned.json()["lineage"]["proposal_sha256"]==value["receipt"]["proposal_sha256"]
+    finally:
+        listener.shutdown()
+        listener.server_close()
+        thread.join(timeout=3)
     result=client.post(base+"/preview",json=data,headers=owner)
     assert result.status_code==200,result.text
     assert result.headers["cache-control"]=="no-store"
