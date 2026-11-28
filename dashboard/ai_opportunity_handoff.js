@@ -12,23 +12,39 @@ export function mountAiOpportunityHandoff(host, post, onCreated){
   const status=el('div','Choose the original evidence files and AI proposal; enter a human-reviewed idea title and details.');
   status.setAttribute('role','status');status.setAttribute('aria-live','polite');
   const summary=el('pre');summary.style.whiteSpace='pre-wrap';summary.style.overflowWrap='anywhere';
-  const controls=[sources,proposal,title,description];
-  let generation=0,basis=null,busy=false;
+  const controls=[sources,proposal,title,description],order=el('ol');
+  let generation=0,basis=null,busy=false,orderedSources=[];
+  function renderOrder(){
+    order.replaceChildren();
+    orderedSources.forEach((f,i)=>{
+      const row=el('li',f.name+' '),up=el('button','Move earlier'),down=el('button','Move later');
+      up.type=down.type='button';up.disabled=busy||i===0;down.disabled=busy||i===orderedSources.length-1;
+      up.setAttribute('aria-label','Move evidence file '+(i+1)+' earlier');
+      down.setAttribute('aria-label','Move evidence file '+(i+1)+' later');
+      const move=delta=>{
+        if(busy)return;
+        [orderedSources[i],orderedSources[i+delta]]=[orderedSources[i+delta],orderedSources[i]];
+        invalidate();renderOrder();
+      };
+      up.onclick=()=>move(-1);down.onclick=()=>move(1);row.append(up,down);order.append(row);
+    });
+  }
   function invalidate(){
     generation++;basis=null;confirmation.checked=false;confirmation.disabled=true;commit.disabled=true;
     summary.textContent='';status.textContent='Inputs changed. Review the exact proposal again.';
   }
-  for(const n of controls)n.addEventListener('input',invalidate);
+  sources.addEventListener('change',()=>{orderedSources=Array.from(sources.files||[]);invalidate();renderOrder();});
+  for(const n of [proposal,title,description])n.addEventListener('input',invalidate);
   confirmation.addEventListener('change',()=>{commit.disabled=busy||!basis||!confirmation.checked;});
   function lock(value){
     busy=value;for(const n of controls)n.disabled=value;preview.disabled=value;
-    confirmation.disabled=value||!basis;commit.disabled=value||!basis||!confirmation.checked;
+    confirmation.disabled=value||!basis;commit.disabled=value||!basis||!confirmation.checked;renderOrder();
   }
   preview.onclick=async()=>{
     if(busy)return;
     invalidate();const ticket=generation;lock(true);
     try{
-      const files=Array.from(sources.files||[]),proposed=proposal.files?.[0];
+      const files=orderedSources.slice(),proposed=proposal.files?.[0];
       if(files.length<1||files.length>8||!proposed||!title.value.trim())throw Error('Choose one to eight evidence JSON files, one proposal and a title.');
       if(files.reduce((n,f)=>n+f.size,proposed.size)>8*1024*1024)throw Error('Selected files exceed 8 MiB.');
       const draft={sources:await Promise.all(files.map(f=>f.text())),proposal:await proposed.text(),title:title.value,description:description.value};
@@ -60,7 +76,7 @@ export function mountAiOpportunityHandoff(host, post, onCreated){
   const details=el('details');details.id='owgAiOpportunityHandoff';
   details.append(el('summary','Add an external AI proposal to the implementation portfolio'),
     el('p','Files are reviewed by the local OWG server, not sent to a model. Only your entered idea and structural lineage are retained. Nothing is approved or executed.'),
-    field('Original workflow evidence JSON files (ordered as in the portable packet)',sources),
+    field('Original workflow evidence JSON files (ordered as in the portable packet)',sources),order,
     field('External AI proposal JSON',proposal),field('Human-reviewed opportunity title',title),
     field('Human-reviewed opportunity details',description),preview,status,summary,
     field('I reviewed the original proposal and want to create an unassessed idea only',confirmation),commit);
