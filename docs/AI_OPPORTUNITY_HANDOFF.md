@@ -57,6 +57,30 @@ SQLite transaction. Deleting the idea permits a new import. No model is
 called, no evidence is uploaded to an external provider, no existing
 pipeline assessment or state transition is bypassed.
 
+## Optional loopback model route
+
+After preparing a packet of at most 512 KiB, expand **Optional: generate a
+draft with your local model**. Enter the exact model ID and configured service
+port, choose the output-token bound and optionally JSON-object mode. Confirm
+sending the selected evidence to that service. The owner-only endpoint
+rebuilds the packet and checks its exact digest before making one request to
+the OWG server's IPv4 loopback. A process-wide single-flight slot refuses
+concurrent local inference; no retries, tools, credentials or cloud fallback
+are introduced. The local service can still proxy or log data; verify its
+configuration and company authorization. A socket timeout is not a guaranteed
+wall-clock deadline. Revoking a session can suppress the result but cannot
+undo a request already sent.
+
+Inspect the returned proposal as untrusted text; choose **Use generated
+proposal for review** to use it in the existing human-reviewed opportunity
+flow, or download the exact proposal and usage receipt. The receipt reports
+endpoint-reported token counts, elapsed time and digests, not independently
+verified cost or location. A missing count remains unknown. Changing source
+files, order, budget or model settings discards the generated draft and
+requires fresh confirmation. The manual external AI file import remains
+available. No idea is created by generation, and all existing review and
+confirmation gates still apply.
+
 ## Verification
 
 Focused pure handoff tests cover exact pinning, stale previews,

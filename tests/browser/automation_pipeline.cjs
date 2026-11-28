@@ -3,6 +3,7 @@ const assert=require('node:assert/strict');
 const fs=require('node:fs/promises');
 const {spawn,spawnSync}=require('node:child_process');
 const {createHash}=require('node:crypto');
+const {createServer}=require('node:http');
 const {tmpdir}=require('node:os');
 const path=require('node:path');
 // Real-browser acceptance: add an idea → assess → approve with a note → implemented, CSV export, stale-edit refusal.
@@ -50,6 +51,37 @@ const path=require('node:path');
    assert(await packetDownload.isDisabled());
    await prepButton.click();
    await handoff.getByText('Packet ready:',{exact:false}).waitFor();
+   // Exercise actual dashboard -> local HTTP model -> cited proposal -> review.
+   const modelAnswer={...fixture.proposal,author_model:'local-test:1'};let localCalls=0;
+   const modelServer=createServer((req,res)=>{
+     let body='';req.on('data',chunk=>{body+=chunk;});req.on('end',()=>{
+       localCalls++;const payload=JSON.parse(body);
+       assert.equal(req.url,'/v1/chat/completions');assert.equal(payload.model,'local-test:1');
+       assert.equal(JSON.parse(payload.messages[1].content).packet_sha256,fixture.proposal.packet_sha256);
+       res.writeHead(200,{'Content-Type':'application/json'});
+       res.end(JSON.stringify({model:'local-test:1',choices:[{finish_reason:'stop',message:{role:'assistant',content:JSON.stringify(modelAnswer)}}],usage:{prompt_tokens:120,completion_tokens:30,total_tokens:150}}));
+     });
+   });
+   await new Promise((resolve,reject)=>{modelServer.once('error',reject);modelServer.listen(0,'127.0.0.1',resolve);});
+   try{
+     const local=handoff.locator('#owgLocalImplementationModel');await local.locator('summary').click();
+     await local.getByLabel('Local model ID',{exact:true}).fill('local-test:1');
+     await local.getByLabel('Local model port',{exact:true}).fill(String(modelServer.address().port));
+     const gen=local.getByRole('button',{name:'Generate with local model',exact:true});
+     assert(await gen.isDisabled());
+     await local.getByLabel('I authorize sending the selected evidence to this configured loopback model service',{exact:true}).check();
+     await gen.click();
+     await local.getByText('Local model draft ready:',{exact:false}).waitFor();
+     assert.equal(localCalls,1);assert(await gen.isDisabled());
+     const [receiptFile]=await Promise.all([page.waitForEvent('download'),local.getByRole('button',{name:'Download local model receipt',exact:true}).click()]);
+     assert.equal(JSON.parse(await fs.readFile(await receiptFile.path(),'utf8')).usage.total_tokens,150);
+     await local.getByRole('button',{name:'Use generated proposal for review',exact:true}).click();
+     await handoff.getByLabel('Human-reviewed opportunity title',{exact:true}).fill('Local model draft');
+     await handoff.getByRole('button',{name:'Review exact proposal',exact:true}).click();
+     await handoff.getByText('Structural review passed.',{exact:false}).waitFor();
+     assert(await handoff.getByRole('button',{name:'Create unassessed idea',exact:true}).isDisabled());
+     // The existing manual import path remains available, and clears approval.
+   }finally{await new Promise(resolve=>modelServer.close(resolve));}
    await handoff.getByLabel('External AI proposal JSON',{exact:true}).setInputFiles({name:'proposal.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(fixture.proposal))});
    await handoff.getByLabel('Human-reviewed opportunity title',{exact:true}).fill('Reviewed AI opportunity');
    await handoff.getByLabel('Human-reviewed opportunity details',{exact:true}).fill('Resolve business rules before implementation.');
