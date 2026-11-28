@@ -91,6 +91,25 @@ async def portfolio_budget_scenario(request: Request):
     return await run_in_threadpool(_respond, scenario.solve, spec)
 
 
+@router.get("/v1/automation-pipeline/resource-schedule/inventory")
+async def resource_schedule_inventory(request: Request):
+    from . import automation_resource_schedule as schedule
+    _require_dashboard(request)
+    return await run_in_threadpool(_respond, schedule.inventory)
+
+
+@router.post("/v1/automation-pipeline/resource-schedule")
+async def resource_schedule(request: Request):
+    from . import automation_resource_schedule as schedule
+    from .event_log_routes import _json_body
+    _require_dashboard(request)
+    spec = await _json_body(request, "portfolio resource schedule", strict=True, limit=32768)
+    _require_dashboard(request)
+    response = await run_in_threadpool(_respond, schedule.solve, spec)
+    _require_dashboard(request)
+    return response
+
+
 @router.get("/v1/automation-pipeline/benefit-overlap")
 def benefit_overlap_review(request: Request):
     """Read-only potential benefit duplication review, never an aggregate savings claim."""
@@ -288,6 +307,27 @@ async def quality_benefit_scenario(request: Request, idea_id: str):
     spec = await _json_body(request, "quality and adoption scenario", strict=True, limit=65536)
     _require_dashboard(request)
     return await run_in_threadpool(_benefit, quality.analyze, idea_id, spec)
+
+
+@router.get("/v1/automation-pipeline/{idea_id}/investment-case/inventory")
+async def investment_case_inventory(request: Request, idea_id: str):
+    from . import automation_investment_case as investment
+    _require_dashboard(request)
+    response = await run_in_threadpool(_benefit, investment.inventory, idea_id)
+    _require_dashboard(request)
+    return response
+
+
+@router.post("/v1/automation-pipeline/{idea_id}/investment-case")
+async def investment_case(request: Request, idea_id: str):
+    from . import automation_investment_case as investment
+    from .event_log_routes import _json_body
+    _require_dashboard(request)
+    spec = await _json_body(request, "phased investment business case", strict=True, limit=65536)
+    _require_dashboard(request)
+    response = await run_in_threadpool(_benefit, investment.evaluate, idea_id, spec)
+    _require_dashboard(request)
+    return response
 
 
 @router.get("/v1/automation-pipeline/{idea_id}/realized-value")

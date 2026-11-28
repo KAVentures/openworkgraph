@@ -86,6 +86,17 @@
     const sample=input('owgCommsSample','checkbox');const sampleCount=input('owgCommsSampleCount','number');sampleCount.min='1';sampleCount.max='200';sampleCount.value='25';
     const sampleLabel=el('label');sampleLabel.style.cssText='display:flex;gap:6px;align-items:center';
     sampleLabel.append(sample,document.createTextNode(' Keep the least certain inbound messages, redacted, as review examples (needs review examples turned on below)'));
+    const episodeEnabled=input('owgCommsEpisodes','checkbox');
+    const episodeLabel=el('label');episodeLabel.style.cssText='display:flex;gap:6px;align-items:center';
+    episodeLabel.append(episodeEnabled,document.createTextNode(' Include response episodes and deadline review (optional)'));
+    const episodeCutoff=input('owgCommsEpisodeCutoff','text','2026-01-31T23:59:59Z');
+    episodeCutoff.maxLength=64;
+    const episodeDeadlines=input('owgCommsEpisodeDeadlines','text','60,240,1440');
+    episodeDeadlines.value='60,240,1440';episodeDeadlines.maxLength=100;
+    const episodeControls=el('div');episodeControls.id='owgCommsEpisodeControls';
+    episodeControls.append(el('p','Declare an export observation cutoff with timezone and one to eight elapsed-time deadlines. An observed outbound is not verified resolution. No extra storage is enabled.','muted'),
+      field('Response observation cutoff (ISO with timezone)',episodeCutoff),field('Response deadlines in whole minutes, comma-separated',episodeDeadlines));
+    episodeEnabled.onchange=()=>show(episodeControls,episodeEnabled.checked);show(episodeControls,false);
     const run=button('Analyse communications');run.id='owgCommsRun';run.disabled=true;
     const status=el('div',null,'muted');status.id='owgCommsStatus';status.setAttribute('role','status');status.setAttribute('aria-live','polite');
     const results=el('div');results.id='owgCommsResults';
@@ -94,10 +105,19 @@
     const saveTaxonomy=button('Save taxonomy','secondary');saveTaxonomy.id='owgCommsTaxonomySave';
     const resetTaxonomy=button('Restore default','secondary');resetTaxonomy.id='owgCommsTaxonomyReset';
     const taxStatus=el('div',null,'muted');taxStatus.id='owgCommsTaxonomyStatus';taxStatus.setAttribute('role','status');
-    const taxRow=el('div',null,'row');taxRow.append(saveTaxonomy,resetTaxonomy);
-    taxonomyBox.append(el('div','One intent per line: "Name: term, term". A message gets the intent whose terms match best; ties are shown as ambiguous.','muted'),field('Intents and terms',taxonomy),taxRow,taxStatus);
+    const previewTaxonomy=button('Preview changes on reviewed training messages','secondary');
+    previewTaxonomy.id='owgCommsTaxonomyPreview';
+    const applyPreview=button('Apply reviewed taxonomy','secondary');applyPreview.id='owgCommsTaxonomyApply';applyPreview.disabled=true;
+    const taxPreview=el('div');taxPreview.id='owgCommsTaxonomyPreviewResult';taxPreview.setAttribute('aria-live','polite');
+    let previewGeneration=0, pinnedPreview=null;
+    function invalidateTaxPreview(){
+      previewGeneration++;pinnedPreview=null;applyPreview.disabled=true;previewTaxonomy.disabled=false;taxPreview.replaceChildren();
+    }
+    taxonomy.addEventListener('input',invalidateTaxPreview);
+    const taxRow=el('div',null,'row');taxRow.append(saveTaxonomy,resetTaxonomy,previewTaxonomy,applyPreview);
+    taxonomyBox.append(el('div','One intent per line: "Name: term, term". A message gets the intent whose terms match best; ties are shown as ambiguous.','muted'),field('Intents and terms',taxonomy),taxRow,taxStatus,taxPreview);
     const review=el('details');review.id='owgCommsReview';review.appendChild(el('summary','Review examples and learned model'));
-    card.append(row,mapping,field('Intents from',classifier),qualityControls,consentLabel,saveLabel,sampleLabel,field('How many review examples',sampleCount),run,status,results,review,taxonomyBox);
+    card.append(row,mapping,field('Intents from',classifier),qualityControls,episodeLabel,episodeControls,consentLabel,saveLabel,sampleLabel,field('How many review examples',sampleCount),run,status,results,review,taxonomyBox);
     const anchor=document.getElementById('owgEventLogCard')||document.getElementById('owgProcessCSV');
     if(anchor)anchor.insertAdjacentElement('afterend',card);else panel.appendChild(card);
 
@@ -133,15 +153,69 @@
         }
         q.set('quality_gate_language',code.toLowerCase());
       }
+      if(episodeEnabled.checked){
+        const cutoff=episodeCutoff.value.trim(),parts=episodeDeadlines.value.split(',').map(x=>x.trim());
+        if(!/T.*(?:Z|[+-]\d{2}:\d{2})$/i.test(cutoff)||!Number.isFinite(Date.parse(cutoff))||parts.length<1||parts.length>8||
+          parts.some(x=>!/^\d{1,5}$/.test(x)||Number(x)<1||Number(x)>43200)||new Set(parts.map(Number)).size!==parts.length){
+          status.textContent='Declare an exact timezone-qualified cutoff and one to eight distinct whole-minute deadlines.';return;
+        }
+        q.set('response_cutoff',cutoff);q.set('response_deadlines',parts.map(Number).join(','));
+      }
       if(sample.checked){q.set('review_sample',String(Math.max(1,Math.min(200,Number(sampleCount.value)||25))));headers['X-OWG-Review-Examples-Confirmed']='true';}
       if(save.checked){q.set('save_event_log','true');q.set('name',chosen.name.replace(/\.[^.]+$/,'').slice(0,100)+' intents');headers['X-OWG-Local-Storage-Confirmed']='true';}
       run.disabled=true;status.textContent='Analysing '+chosen.name+'…';results.replaceChildren();
       try{render(await api('/v1/communications/analyze?'+q,{method:'POST',body:chosen,headers}));status.textContent='';consent.checked=false;save.checked=false;if(sample.checked){sample.checked=false;loadReview();}}
       catch(error){status.textContent=error.message;}finally{refresh();}
     };
-    const loadTaxonomy=async()=>{try{const t=await api('/v1/communications/taxonomy');taxonomy.value=formatTaxonomy(t.taxonomy);taxStatus.textContent=t.is_default?'Default taxonomy.':'Your saved taxonomy.';}catch(error){taxStatus.textContent=error.message;}};
-    saveTaxonomy.onclick=async()=>{try{const t=await api('/v1/communications/taxonomy',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(parseTaxonomy(taxonomy.value))});taxonomy.value=formatTaxonomy(t.taxonomy);taxStatus.textContent='Taxonomy saved on this computer.';renderModel(await api('/v1/communications/review/model'));}catch(error){taxStatus.textContent=error.message;}};
-    resetTaxonomy.onclick=async()=>{try{const t=await api('/v1/communications/taxonomy/reset',{method:'POST'});taxonomy.value=formatTaxonomy(t.taxonomy);taxStatus.textContent='Default taxonomy restored.';renderModel(await api('/v1/communications/review/model'));}catch(error){taxStatus.textContent=error.message;}};
+    const loadTaxonomy=async()=>{invalidateTaxPreview();try{const t=await api('/v1/communications/taxonomy');taxonomy.value=formatTaxonomy(t.taxonomy);taxStatus.textContent=t.is_default?'Default taxonomy.':'Your saved taxonomy.';}catch(error){taxStatus.textContent=error.message;}};
+    saveTaxonomy.onclick=async()=>{invalidateTaxPreview();try{const t=await api('/v1/communications/taxonomy',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(parseTaxonomy(taxonomy.value))});taxonomy.value=formatTaxonomy(t.taxonomy);taxStatus.textContent='Taxonomy saved on this computer.';renderModel(await api('/v1/communications/review/model'));}catch(error){taxStatus.textContent=error.message;}};
+    resetTaxonomy.onclick=async()=>{invalidateTaxPreview();try{const t=await api('/v1/communications/taxonomy/reset',{method:'POST'});taxonomy.value=formatTaxonomy(t.taxonomy);taxStatus.textContent='Default taxonomy restored.';renderModel(await api('/v1/communications/review/model'));}catch(error){taxStatus.textContent=error.message;}};
+    previewTaxonomy.onclick=async()=>{
+      invalidateTaxPreview();
+      const generation=previewGeneration;
+      const original=taxonomy.value;
+      previewTaxonomy.disabled=true;
+      taxPreview.replaceChildren(el('p','Comparing existing labelled training examples…','muted'));
+      try{
+        const candidate=parseTaxonomy(original);
+        const data=await api('/v1/communications/taxonomy/preview',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(candidate)});
+        if(generation!==previewGeneration||taxonomy.value!==original)return;
+        const lang=select('owgCommsTaxonomyPreviewLanguage',[['','All reviewed languages'],...data.by_language.map(g=>[g.language,g.language])]);
+        const body=el('div');
+        const draw=()=>{
+          const m=lang.value?data.by_language.find(g=>g.language===lang.value):data.overall;
+          if(!m)return;
+          body.replaceChildren(el('p',m.messages+' labelled training messages · '+m.changed_decisions+' changed decisions · '+m.newly_correct+' newly correct · '+m.newly_not_correct+' no longer correct.'),
+            el('p','Strict complete-message accuracy: '+pct(m.baseline_strict_accuracy)+' → '+pct(m.candidate_strict_accuracy)+
+              '. Ambiguous '+m.baseline_ambiguous+' → '+m.candidate_ambiguous+'; unclassified '+m.baseline_unclassified+' → '+m.candidate_unclassified+'.'),
+            table(['Intent','Positive support','Negative support','Current F1','Proposed F1','Current precision','Proposed precision','Current recall','Proposed recall','Current coverage','Proposed coverage'],
+              m.per_intent.map(x=>[x.intent,x.baseline.positive_support,x.baseline.negative_support,pct(x.baseline.f1),pct(x.candidate.f1),pct(x.baseline.precision),pct(x.candidate.precision),pct(x.baseline.recall),pct(x.candidate.recall),pct(x.baseline.decision_coverage),pct(x.candidate.decision_coverage)])),
+            table(['Current primary result','Proposed primary result','Messages'],m.primary_transitions.map(x=>[x.baseline,x.candidate,x.messages])),
+            table(['Current correctness','Proposed correctness','Messages'],m.correctness_transitions.map(x=>[x.baseline,x.candidate,x.messages])));
+        };
+        lang.onchange=draw;draw();
+        taxPreview.replaceChildren(el('h3','Training-only change review'),el('p',data.interpretation,'note'),
+          el('p','Language groups shown: '+data.language_groups_displayed+' of '+data.language_groups_total+'. No message text or example IDs in this report.','muted'),
+          table(['Intent','Added normalized terms','Removed normalized terms'],data.term_changes.map(x=>[x.intent,x.added_normalized_terms,x.removed_normalized_terms])),
+          field('Review language',lang),body);
+        pinnedPreview={candidate,original,digest:data.preview_sha256};
+        applyPreview.disabled=false;
+      }catch(error){if(generation===previewGeneration)taxPreview.replaceChildren(el('p',error.message,'note'));}
+      finally{if(generation===previewGeneration)previewTaxonomy.disabled=false;}
+    };
+    applyPreview.onclick=async()=>{
+      const pin=pinnedPreview;
+      if(!pin||taxonomy.value!==pin.original)return;
+      invalidateTaxPreview();const generation=previewGeneration;
+      taxStatus.textContent='Saving the exact reviewed taxonomy…';
+      try{
+        const data=await api('/v1/communications/taxonomy/apply-preview',{method:'POST',headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({taxonomy:pin.candidate,preview_sha256:pin.digest,confirm:true})});
+        if(generation!==previewGeneration)return;
+        taxonomy.value=formatTaxonomy(data.taxonomy);taxStatus.textContent='Reviewed taxonomy saved on this computer.';
+        renderModel(await api('/v1/communications/review/model'));
+      }catch(error){if(generation===previewGeneration)taxStatus.textContent=error.message;}
+    };
     refresh();loadTaxonomy();
 
     // Review examples: separately consented, retention-bounded, redacted texts the user labels.
@@ -157,13 +231,36 @@
     previousReview.id='owgCommsReviewPrevious';nextReview.id='owgCommsReviewNext';
     previousReview.disabled=nextReview.disabled=true;
     const reviewOrder=el('div',null,'row');reviewOrder.append(prioritize,diverse,newest,previousReview,nextReview);
-    let triageMode=false,triageOrder='priority',reviewOffset=0,reviewGeneration=0;
+    let triageMode=false,triageOrder='priority',reviewOffset=0,reviewGeneration=0,queuePin=null;
+    const facetControls=el('div',null,'row');facetControls.hidden=true;
+    const facetFields={};
+    for(const [key,label] of [['language','Declared language'],['keyword_intent','Keyword intent'],['priority','Review priority']]){
+      const picker=el('select');picker.setAttribute('aria-label',label);
+      const option=el('option','All');option.value='';picker.append(option);
+      facetFields[key]=picker;facetControls.append(field(label,picker));
+      picker.onchange=()=>{resetQueue();loadReview();};
+    }
+    const resetQueue=()=>{reviewOffset=0;queuePin=null;reviewGeneration++;previousReview.disabled=nextReview.disabled=true;examples.replaceChildren();};
+    const refreshQueue=button('Refresh review queue','secondary');
+    refreshQueue.onclick=()=>{resetQueue();loadReview();};
+    facetControls.append(refreshQueue);facetControls.style.display='none';
+    function drawFacets(page){
+      for(const [key,picker] of Object.entries(facetFields)){
+        const selected=picker.value;picker.replaceChildren();
+        const all=el('option','All');all.value='';picker.append(all);
+        for(const [value,n] of Object.entries(page.eligible_facets?.[key]||{})){
+          const option=el('option',value+' ('+n+')');option.value=value;picker.append(option);}
+        if(selected&&![...picker.options].some(o=>o.value===selected)){
+          const option=el('option',selected+' (0)');option.value=selected;picker.append(option);}
+        picker.value=selected;
+      }
+    }
     const train=button('Train intent model','secondary');train.id='owgCommsTrain';
     const dropModel=button('Delete model','secondary');dropModel.id='owgCommsModelDelete';
     const model=el('div');model.id='owgCommsModel';
     let ackVersion='',intentNames=[];
     review.append(el('div','Off by default. When on, only the messages you choose are kept, with identifiers, contact details and card numbers redacted, for the retention you set (1–90 days). You label them to train and test a local model. One in five examples is held out and only used to measure quality. Message text is treated as data, never as instructions. Turning this off deletes every example and the model.','muted'),
-      ack,field('Keep examples for (days)',retention),saveReview,reviewStatus,reviewOrder,examples,el('div',null,'row'),train,dropModel,model);
+      ack,field('Keep examples for (days)',retention),saveReview,reviewStatus,reviewOrder,facetControls,examples,el('div',null,'row'),train,dropModel,model);
     const names=async()=>{const t=await api('/v1/communications/taxonomy');intentNames=t.taxonomy.intents.map(i=>i.name);};
     function renderModel(m){
       if(!m.trained){model.replaceChildren(el('div','No intent model is trained yet.','muted'));return;}
@@ -286,13 +383,13 @@
         const lang=input('owgCommsLang_'+x.example_id,'text','en');lang.value=x.language==='und'?'':x.language;lang.maxLength=12;
         box.appendChild(field('Language',lang));
         const saveLabel=button(x.labels===null?'Save labels (none ticked means no intent)':'Update labels','secondary');
-        saveLabel.onclick=async()=>{try{await api('/v1/communications/review/label',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({example_id:x.example_id,labels:picks.filter(c=>c.checked).map(c=>c.value),language:lang.value.trim()})});reviewOffset=0;await loadReview();reviewStatus.textContent='Labels saved. '+reviewStatus.textContent;}catch(error){reviewStatus.textContent=error.message;}};
+        saveLabel.onclick=async()=>{invalidateTaxPreview();try{await api('/v1/communications/review/label',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({example_id:x.example_id,labels:picks.filter(c=>c.checked).map(c=>c.value),language:lang.value.trim()})});reviewOffset=0;await loadReview();reviewStatus.textContent='Labels saved. '+reviewStatus.textContent;}catch(error){reviewStatus.textContent=error.message;}};
         const remove=button('Delete example','secondary');remove.setAttribute('aria-label','Delete example '+x.example_id);
-        remove.onclick=async()=>{try{await api('/v1/communications/review/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({example_ids:[x.example_id]})});reviewOffset=0;await loadReview();}catch(error){reviewStatus.textContent=error.message;}};
+        remove.onclick=async()=>{invalidateTaxPreview();try{await api('/v1/communications/review/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({example_ids:[x.example_id]})});reviewOffset=0;await loadReview();}catch(error){reviewStatus.textContent=error.message;}};
         box.append(saveLabel,remove);list.appendChild(box);
       });
       const intro=triageMode?
-        page.total+' unlabelled training examples eligible; '+items.length+' prioritized suggestions shown. '+
+        page.total+' matching unlabelled training examples of '+page.total_eligible+' eligible; '+items.length+' prioritized suggestions shown. '+
         page.unlabelled_holdout_excluded+' held-out examples excluded. '+
         (page.learned_predictions_used?'Current learned-model suggestions included.':
           'Keyword-only order; learned model '+page.model_status+'.'):
@@ -310,6 +407,7 @@
       const generation=++reviewGeneration;
       const current=()=>generation===reviewGeneration;
       previousReview.disabled=nextReview.disabled=true;
+      examples.replaceChildren();
       try{
         const st=await api('/v1/communications/review/settings');if(!current())return;
         ackVersion=st.acknowledgement_version;ackText.textContent=' '+st.acknowledgement;
@@ -318,29 +416,34 @@
         const t=await api('/v1/communications/taxonomy');if(!current())return;
         intentNames=t.taxonomy.intents.map(i=>i.name);
         prioritize.disabled=diverse.disabled=newest.disabled=!st.enabled;
-        if(!st.enabled){examples.replaceChildren();reviewOffset=0;}
-        const endpoint=triageMode?'/v1/communications/review/triage?limit=20&offset='+reviewOffset+'&order='+triageOrder:
+        facetControls.hidden=!st.enabled||!triageMode;facetControls.style.display=facetControls.hidden?'none':'';
+        if(!st.enabled){examples.replaceChildren();reviewOffset=0;queuePin=null;}
+        const params=new URLSearchParams({limit:'20',offset:String(reviewOffset),order:triageOrder});
+        for(const [key,picker] of Object.entries(facetFields))if(picker.value)params.set(key,picker.value);
+        if(reviewOffset&&queuePin)params.set('expected_queue_sha256',queuePin);
+        const endpoint=triageMode?'/v1/communications/review/triage?'+params:
           '/v1/communications/review/examples?status=unlabelled&limit=20';
         const data=st.enabled?await api(endpoint):{examples:[],total:0,unlabelled_holdout_excluded:0,model_status:'absent'};
         if(!current())return;
         if(triageMode&&reviewOffset&&reviewOffset>=data.total){reviewOffset=0;return loadReview();}
+        if(triageMode&&st.enabled){queuePin=data.queue_sha256;drawFacets(data);}
         renderExamples(data);
-        const fresh=await api('/v1/communications/review/model');if(current())renderModel(fresh);
-      }catch(error){if(current()){examples.replaceChildren();reviewStatus.textContent=error.message;}}
+        const fresh=await api('/v1/communications/review/model');if(current()){renderModel(fresh);return fresh;}
+      }catch(error){if(current()){examples.replaceChildren();queuePin=null;reviewOffset=0;reviewStatus.textContent=error.message;}}
     }
-    prioritize.onclick=()=>{triageMode=true;triageOrder='priority';reviewOffset=0;loadReview();};
-    diverse.onclick=()=>{triageMode=true;triageOrder='diverse';reviewOffset=0;loadReview();};
-    newest.onclick=()=>{triageMode=false;reviewOffset=0;loadReview();};
+    prioritize.onclick=()=>{triageMode=true;triageOrder='priority';reviewOffset=0;queuePin=null;loadReview();};
+    diverse.onclick=()=>{triageMode=true;triageOrder='diverse';reviewOffset=0;queuePin=null;loadReview();};
+    newest.onclick=()=>{triageMode=false;reviewOffset=0;queuePin=null;loadReview();};
     previousReview.onclick=()=>{reviewOffset=Math.max(0,reviewOffset-20);loadReview();};
     nextReview.onclick=()=>{reviewOffset+=20;loadReview();};
-    saveReview.onclick=async()=>{
+    saveReview.onclick=async()=>{invalidateTaxPreview();
       if(!reviewOn.checked&&!window.confirm('Turn off review examples and delete every kept example and the model?'))return;
       ++reviewGeneration;examples.replaceChildren();reviewOffset=0;
       try{await api('/v1/communications/review/settings',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(reviewOn.checked?{enabled:true,acknowledgement_version:ackVersion,retention_days:Number(retention.value)}:{enabled:false})});await loadReview();}
       catch(error){reviewStatus.textContent=error.message;}
     };
-    train.onclick=async()=>{train.disabled=true;reviewStatus.textContent='Training on this computer…';try{renderModel(await api('/v1/communications/review/train',{method:'POST'}));reviewStatus.textContent='Model trained. Choose "Learned model" above to use it.';}catch(error){reviewStatus.textContent=error.message;}finally{train.disabled=false;}};
-    dropModel.onclick=async()=>{try{await api('/v1/communications/review/model/delete',{method:'POST'});renderModel({trained:false});}catch(error){reviewStatus.textContent=error.message;}};
+    train.onclick=async()=>{resetQueue();train.disabled=true;reviewStatus.textContent='Training on this computer…';try{await api('/v1/communications/review/train',{method:'POST'});resetQueue();const fresh=await loadReview();if(fresh?.trained)reviewStatus.textContent='Model trained. Choose "Learned model" above to use it.';}catch(error){resetQueue();reviewStatus.textContent=error.message;}finally{train.disabled=false;}};
+    dropModel.onclick=async()=>{resetQueue();dropModel.disabled=true;try{await api('/v1/communications/review/model/delete',{method:'POST'});resetQueue();await loadReview();}catch(error){resetQueue();reviewStatus.textContent=error.message;}finally{dropModel.disabled=false;}};
     review.addEventListener('toggle',()=>{if(review.open)loadReview();});
 
     function render(r){
@@ -355,6 +458,58 @@
         el('div','Only entity types are counted; values are never kept or shown.','muted'));
       const t=r.threads;
       parts.push(el('h3','Threads'),table(['Threads','Median messages','Threads with repeat contact','Median first response'],[[Number(t.threads).toLocaleString(),t.median_messages_per_thread===null?'—':t.median_messages_per_thread,Number(t.threads_with_repeat_inbound).toLocaleString(),t.first_response_seconds?duration(t.first_response_seconds.median)+' ('+t.first_response_seconds.count+' threads)':'—']]));
+      if(r.response_episodes){
+        const a=r.response_episodes,s=a.overall,c=a.coverage,box=el('div');box.id='owgCommsEpisodeResults';
+        const pct=v=>v===null?'—':(100*v).toFixed(1)+'%';
+        const targetRows=(label,group)=>group.deadlines.map(d=>[label,d.deadline_minutes,d.counts.observed_within_deadline,d.counts.observed_after_deadline,
+          d.counts.no_reply_deadline_elapsed,d.counts.no_reply_within_deadline,pct(d.observed_within_deadline_share),pct(d.upper_share_if_pending_reply_on_time)]);
+        const headers=['Group','Deadline (min)','Observed on time','Observed late','No reply, elapsed','No reply, pending','Observed lower share','Conditional upper share'];
+        box.append(el('h3','Response episode intelligence'),el('p',a.observation_cutoff+' cutoff · '+s.episodes+' eligible response episodes across '+c.eligible_threads+' threads.'),
+          table(['Measure','Count'],[['Threaded population',c.threaded_population],['Eligible threads',c.eligible_threads],['Excluded threads',c.excluded_threads],
+            ['Messages without thread',c.unthreaded_messages],['Dated messages after cutoff (fully dated threads)',c.dated_messages_after_cutoff_in_fully_dated_threads],
+            ['First observed episodes',s.first_observed_episodes],['Follow-up episodes',s.follow_up_episodes],
+            ['Episodes with repeat inbound',s.episodes_with_repeat_inbound],['Additional inbound messages',s.additional_inbound_before_observed_reply_or_cutoff],
+            ['Observed reply episodes',s.observed_reply_episodes],['No observed reply',s.without_observed_reply]]),
+          table(['Exclusive exclusion reason','Threads'],Object.entries(c.exclusive_exclusion_reasons)),
+          table(['Duration basis','Count','Median','P90'],[['Observed replies',s.observed_reply_seconds.count,s.observed_reply_seconds.median===null?'—':duration(s.observed_reply_seconds.median),
+            s.observed_reply_seconds.p90_nearest_rank===null?'—':duration(s.observed_reply_seconds.p90_nearest_rank)],
+            ['Open episode age',s.open_age_seconds.count,s.open_age_seconds.median===null?'—':duration(s.open_age_seconds.median),
+            s.open_age_seconds.p90_nearest_rank===null?'—':duration(s.open_age_seconds.p90_nearest_rank)]]),
+          el('h4','Response deadline sensitivity'),table(headers,targetRows('All eligible episodes',s)));
+        for(const [title,group] of [['First inbound intent',a.by_first_inbound_intent],['Episode start week (UTC)',a.by_episode_start_week],['First observed versus follow-up',a.by_episode_kind]]){
+          const details=el('details');details.append(el('summary',title),
+            el('p',group.suppressed_or_limited_groups+' groups withheld or limited; minimum '+group.minimum_distinct_threads+' distinct threads per displayed group.','muted'),
+            table(['Group','Distinct threads','Episodes','Repeat inbound episodes','Observed replies','Without observed reply'],
+              group.rows.map(x=>[x.label??'Mixed first timestamp',x.distinct_threads,x.episodes,x.episodes_with_repeat_inbound,x.observed_reply_episodes,x.without_observed_reply])),
+            table(headers,group.rows.flatMap(x=>targetRows(x.label??'Mixed first timestamp',x))));
+          box.append(details);
+        }
+        const work=a.workload;
+        if(work?.available){
+          const w=work.overall;
+          box.append(el('h4','Observed response backlog and workload'),
+            table(['Measure','Value'],[['Observed new episodes',w.new_episodes],['Observed replies',w.observed_replies],
+              ['Open at cutoff',w.closing_observed_backlog],['Peak observed backlog',w.peak_observed_backlog],
+              ['Time-weighted observed backlog',w.time_weighted_observed_backlog===null?'—':w.time_weighted_observed_backlog.toFixed(2)],
+              ['Total episode-wait exposure (hours)',(w.episode_wait_seconds/3600).toFixed(2)]]),
+            el('h4','Open episode aging'),
+            table(['Age from (minutes, inclusive)','Age until (minutes, exclusive)','Open episodes'],
+              work.aging_bands.map(b=>[b.minimum_age_minutes_inclusive,b.maximum_age_minutes_exclusive??'No upper bound',b.open_episodes])),
+            table(['Deadline (min)','Past deadline','Within deadline','Due within 1 hour','Due within 1 day','Median seconds overdue'],
+              work.open_deadline_exposure.map(d=>[d.deadline_minutes,d.past_deadline,d.within_or_at_deadline,d.due_within_next_hour,d.due_within_next_day,d.median_seconds_past_deadline??'—'])));
+          const trend=el('details');trend.append(el('summary','Weekly response backlog flow (UTC)'),
+            el('p',work.weekly_windows_withheld_below_support+' low-support weeks withheld; up to '+work.maximum_weeks+' recent weeks. '+(work.older_weeks_not_displayed?'Earlier weeks not shown; their open episodes remain in opening counts.':''),'muted'),
+            table(['UTC week','Opening backlog','New episodes','Observed replies','Closing backlog','Peak','Episode-wait hours'],
+              work.weekly_windows.map(x=>[x.week+(x.partial_week?' (partial)':''),x.opening_observed_backlog,x.new_episodes,
+                x.observed_replies,x.closing_observed_backlog,x.peak_observed_backlog,(x.episode_wait_seconds/3600).toFixed(2)])));
+          box.append(trend,el('p',work.interpretation,'muted'));
+        }
+        const exportButton=button('Download response episode aggregates','secondary');
+        exportButton.id='owgCommsEpisodeDownload';
+        exportButton.onclick=()=>{const url=URL.createObjectURL(new Blob([JSON.stringify(a,null,2)],{type:'application/json'})),link=el('a');
+          link.href=url;link.download='owg-response-episodes.json';link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);};
+        box.append(el('p',a.interpretation,'muted'),exportButton);parts.push(box);
+      }
       if(r.weekly_volume.length)parts.push(el('h3','Weekly volume'),table(['Week','Messages','Most common intent'],r.weekly_volume.slice(-26).map(w=>{const top=Object.entries(w.by_intent).filter(([k])=>k!=='outbound reply').sort((a,b)=>b[1]-a[1])[0];return [w.week,Number(w.messages).toLocaleString(),top?top[0]+' ('+top[1]+')':'—'];})));
       if(r.unclassified_themes.length)parts.push(el('h3','Frequent phrases in unclassified messages'),el('div','Phrases in at least 5 messages that matched no intent; consider adding them to the taxonomy.','muted'),
         table(['Phrase','Messages'],r.unclassified_themes.map(x=>[x.terms,x.messages])));

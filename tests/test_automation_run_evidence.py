@@ -168,6 +168,36 @@ with TestClient(app) as client:
     assert compare.status_code==200,compare.text
     assert compare.json()["minimum_step_id_edits"]==0
     assert client.post(base+"/search",content=b'{"limit":1,"limit":2}',headers={**h,"Content-Type":"application/json"}).status_code==422
+    step_url=base.removesuffix("/runs")+"/step-reliability"
+    settings={"reported_spec_sha256":None,"start_date":"2026-01-01","end_date":"2026-01-02"}
+    assert client.post(step_url,json=settings,headers=bearer).status_code in (401,403)
+    initial=client.post(step_url,json=settings,headers=h)
+    assert initial.status_code==200,initial.text
+    assert initial.headers["cache-control"]=="no-store"
+    assert initial.json()["matching_runs"]==2
+    step=client.post(step_url,json={**settings,"step_id":"check","run_filter":"failed",
+        "expected_population_sha256":initial.json()["population_sha256"]},headers=h)
+    assert step.status_code==200,step.text
+    assert step.json()["page"]["matching"]==2
+    assert client.post(step_url,content=b'{"limit":1,"limit":2}',headers={**h,"Content-Type":"application/json"}).status_code==422
+    assert client.post(step_url,json={**settings,"step_id":"check","run_filter":"failed"},headers=h).status_code==422
+    recovery_url=base.removesuffix("/runs")+"/recovery-patterns"
+    assert client.post(recovery_url,json=settings,headers=bearer).status_code in (401,403)
+    result=client.post(recovery_url,json=settings,headers=h)
+    assert result.status_code==200,result.text
+    assert result.headers["cache-control"]=="no-store"
+    value=result.json()
+    assert value["summary"]["runs"]==2
+    assert value["summary"]["episode_summary"]["episodes"]==2
+    pattern=value["page"]["rows"][0]["pattern_sha256"]
+    focused=client.post(recovery_url,json={**settings,"view":"runs","pattern_sha256":pattern,
+        "expected_population_sha256":value["population_sha256"]},headers=h)
+    assert focused.status_code==200,focused.text
+    assert focused.json()["page"]["matching"]==2
+    assert client.post(recovery_url,json={**settings,"expected_population_sha256":"0"*64},headers=h).status_code==422
+    assert client.post(recovery_url,content=b'{"limit":1,"limit":2}',headers={**h,"Content-Type":"application/json"}).status_code==422
+    assert client.post(recovery_url,json={**settings,"view":"runs","pattern_sha256":pattern},headers=h).status_code==422
+
 """
     env={**os.environ,"WORKFLOW_OBSERVER_DATA":str(tmp_path/"data"),
          "WORKFLOW_OBSERVER_AUTH_DIR":str(tmp_path/"auth"),

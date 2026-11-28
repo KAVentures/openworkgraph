@@ -78,22 +78,20 @@ async def put_taxonomy(request: Request):
         mining.parse_taxonomy(taxonomy)
     except ValueError as exc:
         raise HTTPException(422, str(exc) if isinstance(exc, mining.CommunicationsError) else "taxonomy is not valid JSON") from None
-    path = _taxonomy_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(".tmp")
-    temporary.write_text(json.dumps(taxonomy, ensure_ascii=False), encoding="utf-8")
-    try:
-        os.chmod(temporary, 0o600)
-    except OSError:
-        pass
-    os.replace(temporary, path)
+    with review._LOCK:
+        _save_taxonomy(taxonomy)
     return _no_store({"taxonomy": taxonomy, "is_default": False})
+
+
+def _save_taxonomy(taxonomy):
+    review._write(_taxonomy_path(), taxonomy)
 
 
 @router.post("/v1/communications/taxonomy/reset")
 def reset_taxonomy(request: Request):
     _require_dashboard(request)
-    _taxonomy_path().unlink(missing_ok=True)
+    with review._LOCK:
+        _taxonomy_path().unlink(missing_ok=True)
     return _no_store({"taxonomy": mining.DEFAULT_TAXONOMY, "is_default": True})
 
 
@@ -115,7 +113,7 @@ def _run(path: str, fmt: str, options: dict[str, Any], save: dict[str, Any] | No
                                    channel_column=options["channel_column"], delimiter=options["delimiter"])
     try:
         report = mining.analyze(messages, load_taxonomy(), learned=learned[0] if learned else None,
-                                review_sample=review_sample)
+                                review_sample=review_sample,response_episode_settings=options.get("response_episode_settings"))
     finally:
         if fmt != "mbox":
             handle.close()
@@ -152,6 +150,8 @@ async def analyze_export(
     classifier: str = Query(default="keyword", pattern="^(keyword|learned)$"),
     quality_gate_language: str | None = Query(default=None, max_length=12),
     review_sample: int = Query(default=0, ge=0, le=review.MAX_BATCH),
+    response_cutoff: str | None = Query(default=None,max_length=64),
+    response_deadlines: str | None = Query(default=None,max_length=100),
 ):
     _require_dashboard(request)
     if request.headers.get("x-owg-local-processing-confirmed") != "true":
@@ -178,6 +178,21 @@ async def analyze_export(
                "delimiter": "\t" if delimiter == "t" else delimiter, "own_domains": _split(own_domains)}
     if format == "csv" and not options["text_columns"]:
         raise HTTPException(422, "choose at least one text column")
+    if response_cutoff is not None or response_deadlines is not None:
+        from shared import communications_response_episodes as episodes
+        try:
+            if response_cutoff is None or response_deadlines is None:
+                raise ValueError("both response cutoff and deadlines are required")
+            tokens=response_deadlines.split(",")
+            if any(not t.isascii() or not t.isdecimal() or len(t)>5 for t in tokens):
+                raise ValueError("response deadlines must be comma-separated whole minutes")
+            options["response_episode_settings"]=episodes.settings(response_cutoff,[int(t) for t in tokens])
+            if format=="csv" and not all(options[k] for k in ("time_column","thread_column","direction_column")):
+                raise ValueError("response review needs explicit time, thread and direction columns")
+            if format!="csv" and not options["own_domains"]:
+                raise ValueError("response review needs your own email domains to distinguish replies")
+        except ValueError as exc:
+            raise HTTPException(422,str(exc)) from None
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     handle = tempfile.NamedTemporaryFile("wb", dir=str(DATA_DIR), prefix="owg-comms-", delete=False)
     try:
@@ -218,6 +233,38 @@ async def _json_body(request: Request, maximum: int = 1024 * 1024) -> Any:
         raise HTTPException(422, "invalid JSON") from None
 
 
+@router.post("/v1/communications/taxonomy/preview")
+async def preview_taxonomy(request: Request):
+    _require_dashboard(request)
+    from . import communications_taxonomy_change as change
+    candidate = await _json_body(request, 65536)
+    try:
+        result = await run_in_threadpool(change.preview, load_taxonomy, candidate)
+    except mining.CommunicationsError as exc:
+        raise HTTPException(422, str(exc)) from None
+    except review.ReviewError as exc:
+        raise HTTPException(409, str(exc)) from None
+    _require_dashboard(request)
+    return _no_store(result)
+
+
+@router.post("/v1/communications/taxonomy/apply-preview")
+async def apply_taxonomy_preview(request: Request):
+    _require_dashboard(request)
+    from . import communications_taxonomy_change as change
+    body = await _json_body(request, 70000)
+    if not isinstance(body, dict) or set(body) != {"taxonomy", "preview_sha256", "confirm"} or body["confirm"] is not True:
+        raise HTTPException(422, "explicit confirmation and preview digest required")
+    _require_dashboard(request)
+    try:
+        result = await run_in_threadpool(change.apply, load_taxonomy, _save_taxonomy, body["taxonomy"], body["preview_sha256"])
+        return _no_store(result)
+    except mining.CommunicationsError as exc:
+        raise HTTPException(422, str(exc)) from None
+    except review.ReviewError as exc:
+        raise HTTPException(409, str(exc)) from None
+
+
 def _review_call(operation, *args):
     try:
         return _no_store(operation(*args))
@@ -251,12 +298,20 @@ def get_review_examples(request: Request, status: str = Query(default="all", pat
 @router.get("/v1/communications/review/triage")
 def get_active_review_queue(request: Request, limit: int = Query(default=20, ge=1, le=50),
                             offset: int = Query(default=0, ge=0, le=2000),
-                            order: str = Query(default="priority", pattern="^(priority|diverse)$")):
+                            order: str = Query(default="priority", pattern="^(priority|diverse)$"),
+                            language: str | None = Query(default=None,min_length=1,max_length=120),
+                            keyword_intent: str | None = Query(default=None,min_length=1,max_length=120),
+                            priority: str | None = Query(default=None,min_length=1,max_length=120),
+                            expected_queue_sha256: str | None = Query(default=None,pattern="^[a-f0-9]{64}$")):
     """Human-only suggested review order; no labels, permissions or model changes."""
     _require_dashboard(request)
     from . import communications_review_triage
     try:
-        return _no_store(communications_review_triage.queue(load_taxonomy(), limit=limit, offset=offset, order=order))
+        result=communications_review_triage.queue(load_taxonomy(),limit=limit,offset=offset,order=order,
+            language=language,keyword_intent=keyword_intent,priority=priority,
+            expected_queue_sha256=expected_queue_sha256,current_taxonomy=load_taxonomy)
+        _require_dashboard(request)
+        return _no_store(result)
     except review.ReviewError as exc:
         raise HTTPException(409, str(exc)) from None
 

@@ -469,6 +469,166 @@
         searchButton,prev,next,message,list,detailHost,pinsLabel,compareButton,clearPins,compareHost);
       prev.disabled=next.disabled=true;
     }
+    const recoveryButton=button('Review issue sequences and later completions','secondary');
+    recoveryButton.id='owgMonitorRecoveryPatterns';arow.appendChild(recoveryButton);
+    recoveryButton.onclick=()=>{
+      const dep=pick.value;if(!dep)return;
+      const generation=++evidenceGeneration,root=el('div');evidenceHost.replaceChildren(root);root.id='owgRecoveryPatterns';
+      const active=()=>root.isConnected&&pick.value===dep&&generation===evidenceGeneration;
+      const start=input('owgRecoveryStart','date'),end=input('owgRecoveryEnd','date');
+      const hash=input('owgRecoverySpec','text','Exact reported specification SHA-256');hash.maxLength=64;
+      const unknown=input('owgRecoveryUnknown','checkbox');
+      const view=el('select');view.id='owgRecoveryView';setOptions(view,[['patterns','Issue sequence patterns'],['steps','Step issue episodes'],['transitions','Consecutive issue transitions'],['runs','Exact retained runs']]);
+      const runFilter=el('select');runFilter.id='owgRecoveryFilter';setOptions(runFilter,[['all','All runs'],['has_issue','Reported issues'],['no_issue','No reported issue'],['later_completion','Later same-step completion'],['unresolved_episode','Episode without later completion'],['succeeded_with_issue','Reported success with issue']]);
+      const filterField=field('Run filter',runFilter);show(filterField,false);
+      const run=button('Review exact issue population','secondary');run.id='owgRecoveryRun';
+      const message=el('p');message.id='owgRecoveryStatus';message.setAttribute('role','status');
+      const out=el('div');out.id='owgRecoveryOutput';
+      let serial=0,basis=null,report=null,focus={};
+      const clear=()=>{serial++;basis=report=null;focus={};out.replaceChildren();run.disabled=false;message.textContent='Review exact source settings.';};
+      for(const node of [start,end,hash,unknown])node.addEventListener('input',clear);
+      unknown.onchange=()=>{hash.disabled=unknown.checked;clear();};
+      const save=(value,name)=>{const url=URL.createObjectURL(new Blob([JSON.stringify(value,null,2)],{type:'application/json'})),a=el('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);};
+      const issue=x=>x[0]+' ('+x[1]+')';
+      function inspect(group){
+        focus=group;view.value='runs';runFilter.value='all';show(filterField,true);load(0);
+      }
+      function drill(label,group){
+        const b=button(label,'secondary');b.onclick=()=>inspect(group);return b;
+      }
+      function grid(headers,rows){
+        const wrap=el('div',null,'table-wrap');wrap.tabIndex=0;wrap.setAttribute('role','region');wrap.setAttribute('aria-label','Table: '+headers.join(', ').slice(0,120));
+        const t=el('table'),h=el('thead'),hr=el('tr'),body=el('tbody');
+        for(const x of headers){const th=el('th',x);th.scope='col';hr.append(th);}h.append(hr);
+        for(const row of rows){const tr=el('tr');for(const x of row){const td=el('td');if(x instanceof Node)td.append(x);else td.textContent=String(x??'—');tr.append(td);}body.append(tr);}
+        t.append(h,body);wrap.append(t);return wrap;
+      }
+      async function load(offset=0){
+        if(!basis||!active())return;
+        const n=++serial,prior=basis;report=null;out.replaceChildren();run.disabled=true;message.textContent='Reading exact retained issue evidence…';
+        try{
+          const payload={...prior.settings,view:view.value,run_filter:view.value==='runs'?runFilter.value:'all',
+            ...(view.value==='runs'?focus:{}),offset,limit:25,...(prior.pin?{expected_population_sha256:prior.pin}:{})};
+          const data=await api('/v1/automation-monitoring/deployments/'+encodeURIComponent(dep)+'/recovery-patterns',
+            {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+          if(!active()||n!==serial)return;
+          if(prior.pin&&prior.pin!==data.population_sha256)throw Error('Unexpected retained population.');
+          basis={...prior,pin:data.population_sha256};report=data;
+          const s=data.summary,p=data.page;
+          message.textContent=s.runs+' retained runs · '+s.run_flag_counts.has_issue+' with issues · '+s.episode_summary.episodes+' issue episodes.';
+          out.append(el('h4','Issue and later-completion intelligence'),
+            grid(['Measure','Count'],[['Reported steps',s.reported_steps],['Runs with no reported steps',s.runs_without_reported_steps],
+              ['Runs with later completion',s.run_flag_counts.later_completion],['Runs with unresolved episode',s.run_flag_counts.unresolved_episode],
+              ['Reported success with issue',s.run_flag_counts.succeeded_with_issue],['Distinct issue sequences',s.patterns],
+              ['Distinct issue steps',s.distinct_issue_steps],['Consecutive issue transitions',s.distinct_issue_transitions],
+              ...Object.entries(s.episode_summary.episode_states)]),
+            el('p',p.matching+' matching rows; '+p.rows.length+' shown at offset '+p.offset+'.'));
+          if(p.view==='patterns')out.append(grid(['Exact ordered issue sequence','Runs','Later completion runs','Unresolved runs','Evidence'],
+            p.rows.map(r=>[r.issue_sequence.map(issue).join(' → ')||'No reported issues',r.runs,r.runs_with_later_completion,r.runs_with_unresolved_episode,
+              drill('Inspect pattern runs',{pattern_sha256:r.pattern_sha256})])));
+          else if(p.view==='steps')out.append(grid(['Step','Runs with issue','Episodes','Later completions','Terminal unresolved','Running unresolved','Median reported elapsed seconds','Evidence'],
+            p.rows.map(r=>[r.step_id,r.runs_with_issue,r.episodes,r.episode_states.later_completion,r.episode_states.terminal_without_later_completion,
+              r.episode_states.running_without_later_completion,r.median_first_issue_to_later_completion_seconds,drill('Inspect step episode runs',{step_id:r.step_id})])));
+          else if(p.view==='transitions')out.append(grid(['Previous reported issue','Next reported issue','Distinct runs','Occurrences','Evidence'],
+            p.rows.map(r=>[issue(r.from_issue),issue(r.to_issue),r.runs,r.occurrences,drill('Inspect transition runs',{transition_sha256:r.transition_sha256})])));
+          else{
+            if(Object.keys(focus).length){const reset=button('Clear exact issue group','secondary');reset.onclick=()=>{focus={};load(0);};out.append(reset);}
+            for(const r of p.rows){
+              const d=el('details');d.append(el('summary',r.reference.run_id+' · '+r.status+' · '+r.episodes.length+' episodes'),
+                el('p','Exact run digest '+r.reference.run_sha256),el('p','Issue sequence: '+(r.issue_sequence.map(issue).join(' → ')||'none')),
+                grid(['Step','First issue sequence','Last issue sequence','Failure count','Handoff count','Episode state','Completion sequence','Elapsed seconds'],
+                  r.episodes.map(x=>[x.step_id,x.first_issue_seq,x.last_issue_seq,x.failure_occurrences,x.handoff_occurrences,
+                    x.state,x.completion_seq,x.first_issue_to_completion_seconds])));
+              const inspectRun=button('Inspect exact retained run','secondary');
+              const evidence=el('div');
+              inspectRun.onclick=async()=>{try{const item=await api('/v1/automation-monitoring/deployments/'+encodeURIComponent(dep)+'/runs/detail?'+new URLSearchParams({run_id:r.reference.run_id,expected_sha256:r.reference.run_sha256}));
+                if(!active()||report!==data)return;evidence.replaceChildren(grid(['Sequence','Step ID','Reported activity','Status','Timestamp'],item.run.steps.map(x=>[x.seq,x.step_id,x.activity,x.status,x.at])));
+              }catch(error){if(active()&&report===data)evidence.replaceChildren(el('p',error.message));}};
+              d.append(inspectRun,evidence);out.append(d);
+            }
+          }
+          const prev=button('Previous issue evidence page','secondary'),next=button('Next issue evidence page','secondary');
+          prev.disabled=p.offset===0;next.disabled=p.next_offset===null;prev.onclick=()=>load(Math.max(0,p.offset-25));next.onclick=()=>load(p.next_offset);
+          const download=button('Download recovery evidence page','secondary');download.onclick=()=>{if(report===data&&active())save(data,'owg-recovery-evidence.json');};
+          out.append(prev,next,download,el('p',data.interpretation,'muted'),el('p','Population digest: '+data.population_sha256,'muted'));
+        }catch(error){if(active()&&n===serial){basis=null;message.textContent=error.message;}}
+        finally{if(active()&&n===serial)run.disabled=false;}
+      }
+      view.onchange=()=>{focus={};runFilter.value='all';show(filterField,view.value==='runs');if(basis)load(0);};
+      runFilter.onchange=()=>{if(basis)load(0);};
+      run.onclick=()=>{clear();if(!start.value||!end.value||(!unknown.checked&&!/^[a-f0-9]{64}$/.test(hash.value))){message.textContent='Choose valid UTC dates and exact specification hash or unknown attribution.';return;}
+        basis={settings:{start_date:start.value,end_date:end.value,reported_spec_sha256:unknown.checked?null:hash.value},pin:null};load(0);};
+      root.append(el('h3','Reported issue sequences and later completions'),el('p','Review exact retained reports for one declared version or explicitly unknown attribution. Later same-step completion is not verified recovery or a retry.','muted'),
+        field('UTC start date',start),field('UTC end date exclusive',end),field('Reported specification hash',hash),field('Select unknown attribution only',unknown),field('Issue evidence view',view),filterField,run,message,out);
+    };
+    const reliabilityButton=button('Review step reliability','secondary');
+    reliabilityButton.id='owgMonitorStepReliability';arow.appendChild(reliabilityButton);
+    reliabilityButton.onclick=()=>{
+      const dep=pick.value;if(!dep)return;
+      const generation=++evidenceGeneration,root=el('div');evidenceHost.replaceChildren(root);
+      const active=()=>root.isConnected&&pick.value===dep&&generation===evidenceGeneration;
+      const start=input('owgStepReliabilityStart','date'),end=input('owgStepReliabilityEnd','date');
+      const spec=input('owgStepReliabilitySpec','text','Exact reported specification SHA-256');spec.maxLength=64;
+      const unknown=input('owgStepReliabilityUnknown','checkbox');
+      const run=button('Review retained step population','secondary'),message=el('p',null,'muted'),out=el('div');
+      message.setAttribute('role','status');
+      let turn=0,basis=null;
+      function clear(){turn++;basis=null;out.replaceChildren();run.disabled=false;message.textContent='Review the selected inputs.';}
+      for(const c of [start,end,spec,unknown])c.addEventListener('input',clear);
+      unknown.onchange=()=>{spec.disabled=unknown.checked;clear();};
+      const endpoint='/v1/automation-monitoring/deployments/'+encodeURIComponent(dep)+'/step-reliability';
+      async function load(offset=0,step=null,runFilter='all'){
+        const t=++turn,current=()=>active()&&t===turn,previous=basis;
+        if(!previous)return;
+        run.disabled=true;out.replaceChildren();message.textContent='Reviewing exact retained run and step evidence…';
+        try{
+          const r=await api(endpoint,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
+            ...previous.settings,offset,limit:30,...(step!==null?{step_id:step,run_filter:runFilter}:{}),
+            ...(previous.pin?{expected_population_sha256:previous.pin}:{})})});
+          if(!current())return;
+          if(previous.pin&&r.population_sha256!==previous.pin)throw Error('Unexpected evidence population.');
+          basis={...previous,pin:r.population_sha256};
+          message.textContent=r.matching_runs+' retained runs · '+r.matching_steps+' steps · '+r.distinct_step_ids+' step IDs · '+r.runs_without_reported_steps+' runs with no reported steps.';
+          const p=r.page,parts=[el('p','Population SHA-256: '+r.population_sha256,'muted'),el('p',r.runs_with_reported_issue_step+' runs with a reported issue step.')];
+          if(p.kind==='step_groups'){
+            const grid=table(['Step ID','Label count','Runs containing step','Occurrences','Failed runs','Handoff runs','Issue share among containing runs','First issue runs','Repeated runs','Mixed-status runs','Evidence'],
+              p.rows.map(x=>[x.step_id,x.distinct_reported_activity_labels,x.runs_with_step,x.occurrences,x.runs_with_status.failed,
+                x.runs_with_status.handed_to_human,pct(x.reported_issue_share_among_runs_with_step),x.runs_where_first_reported_issue_is_step,x.runs_with_repeated_step_id,x.runs_with_mixed_statuses,'']));
+            p.rows.forEach((x,i)=>{const b=button('Review runs','secondary');b.onclick=()=>load(0,x.step_id);grid.querySelector('tbody').rows[i].cells[10].appendChild(b);});
+            parts.push(grid);
+          }else{
+            const back=button('Return to step groups','secondary');back.onclick=()=>load(0,null);
+            const filter=el('select');filter.id='owgStepReliabilityRunFilter';
+            setOptions(filter,[['all','All containing runs'],['issue','Failed or handed off'],['failed','Failed occurrence'],
+              ['handoff','Human handoff'],['first_issue','First reported issue'],['mixed_status','Mixed reported statuses']]);
+            filter.value=p.run_filter;filter.onchange=()=>load(0,step,filter.value);
+            parts.push(back,el('h4','Exact step ID: '+step),field('Filter matching runs',filter),
+              el('p',r.selected_step.runs_with_failed_and_completed_occurrences+' runs contain both failed and completed occurrences.'));
+            for(const row of p.rows){const detail=el('details');detail.append(el('summary',row.reference.run_id+' · '+row.run_status+' · '+row.started_at),
+                el('p','Exact report SHA-256 '+row.reference.run_sha256),
+                table(['Sequence','Activity','Reported status','UTC'],row.matching_step_occurrences.map(x=>[x.seq,x.activity,x.status,x.at])));parts.push(detail);}
+          }
+          const prev=button('Previous evidence page','secondary'),next=button('Next evidence page','secondary');
+          prev.disabled=p.offset===0;next.disabled=p.next_offset===null;
+          prev.onclick=()=>load(Math.max(0,p.offset-30),step,runFilter);next.onclick=()=>load(p.next_offset,step,runFilter);
+          const download=button('Download current review page JSON','secondary');download.onclick=()=>{
+            if(!current())return;
+            const url=URL.createObjectURL(new Blob([JSON.stringify(r,null,2)],{type:'application/json'}));
+            const a=el('a');a.href=url;a.download='owg-step-reliability.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
+          };
+          out.replaceChildren(...parts,el('p',p.matching+' matching entries · offset '+p.offset),prev,next,download,...r.interpretation.map(x=>el('p',x,'muted')));
+        }catch(error){if(current()){basis=null;message.textContent=error.message;}}
+        finally{if(current())run.disabled=false;}
+      }
+      run.onclick=()=>{
+        clear();
+        if(!start.value||!end.value||(!unknown.checked&&!/^[a-f0-9]{64}$/.test(spec.value))){message.textContent='Choose UTC dates and an exact reported hash, or explicitly select missing attribution.';return;}
+        basis={settings:{start_date:start.value,end_date:end.value,reported_spec_sha256:unknown.checked?null:spec.value},pin:null};load();
+      };
+      root.append(el('h3','Version-scoped retained step reliability'),el('p','Compare reported issue frequency and repeated steps within one exact declared hash. Unknown attribution may mix versions. This is not a live runtime check.','muted'),
+        field('UTC start date',start),field('UTC end date (exclusive)',end),field('Reported specification SHA-256',spec),
+        field('Explicitly review runs without a reported specification',unknown),run,message,out);
+    };
     evidenceButton.onclick=openRunEvidence;
     portfolioButton.onclick=renderPortfolio;
     objectiveButton.onclick=()=>{
