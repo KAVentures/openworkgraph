@@ -12,8 +12,9 @@ export function mountProjectSourceCohort(host,{api,base,revision,expectations,is
   const list=el('ul'),result=el('div'),status=el('p','Declare all intended cases, including missing documents.');
   status.setAttribute('role','status');status.setAttribute('aria-live','polite');
   let cases=[],report=null,busy=false,generation=0;
+  let invalidateJoint=()=>{};
   const details=el('details');details.id='owgProjectSourceCohort';
-  function invalidate(){generation++;report=null;result.replaceChildren();save.disabled=true;}
+  function invalidate(){generation++;report=null;result.replaceChildren();save.disabled=true;invalidateJoint();}
   function reset(){invalidate();cases=[];caseId.value='';resource.value='';file.value='';status.textContent='Select the project and declare the full cohort.';refresh();}
   function refresh(){
     caseId.disabled=resource.disabled=file.disabled=expectation.disabled=busy;
@@ -92,5 +93,13 @@ export function mountProjectSourceCohort(host,{api,base,revision,expectations,is
     update,field('Declared case ID',caseId),field('Case terminal expectation',expectation),
     field('Case observed record reference',resource),field('Original case source-check document (optional)',file),
     add,list,saveDeclaration,run,status,result,save);
+  const jointHost=el('div');details.append(jointHost);
   host.append(details);refresh();
+  import('/joint-shadow-source-review.js').then(m=>{
+    if(!isCurrent())return;
+    invalidateJoint=m.mountJointShadowSourceReview(jointHost,{api,
+      context:()=>isCurrent()&&!busy&&projectSelect.value?{project:base(),generation,payload:{
+        expected_idea_revision:revision,cases:cases.map(x=>x.case),documents:cases.filter(x=>x.raw!==null).map(x=>x.raw)}}:null,
+      isCurrent:c=>isCurrent()&&c.generation===generation&&c.project===base()});
+  }).catch(()=>{jointHost.textContent='Joint shadow/source review unavailable.';});
 }
