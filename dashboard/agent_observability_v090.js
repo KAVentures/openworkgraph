@@ -175,6 +175,13 @@
   window.refreshAgentObservability=force=>{latest=null;return refresh(force);};
 
   function install(){
+    const traceHost=document.querySelector('#agentRunsTable');
+    if(traceHost&&!document.getElementById('owgNativeShadowReviewHost')){
+      const host=document.createElement('div');host.id='owgNativeShadowReviewHost';
+      traceHost.parentNode.insertBefore(host,traceHost);
+      import('/native-shadow-review.js').then(m=>m.mountNativeShadowReview(host))
+        .catch(()=>{host.textContent='Native shadow review unavailable.';});
+    }
     document.querySelector('#tab-agents')?.addEventListener('click',()=>setTimeout(()=>refresh(true),0));
     document.querySelector('#agentRefreshButton')?.addEventListener('click',()=>setTimeout(()=>refresh(true),30));
     const observer=new MutationObserver(()=>{
