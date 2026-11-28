@@ -227,3 +227,45 @@ class HttpRuntime(unittest.IsolatedAsyncioTestCase):
             server.shutdown()
             server.server_close()
             thread.join(timeout=3)
+
+    async def test_exact_offline_http_case_suite_rehearsal(self):
+        from rehearse_http import review
+        spec,plan,case,bindings,_,doc,ops=self.data
+        suite={"format":"openworkgraph.reviewed-shadow-cases.v1",
+               "process_reference":bindings["process_reference"],"spec_sha256":digest(spec),
+               "reviewed_by_customer":True,"case_inputs_authorized":True,
+               "cases":[{"id":"case_1","category":"normal","input":deepcopy(case),
+                         "expected":{"status":"proposal","accepted_routes":[plan["activity_ids"]],
+                                     "review_confirmed":True}}]}
+        with patch("execute_http.DirectClient",side_effect=AssertionError("Unexpected transport")):
+            good=review(spec,suite,bindings,doc,digest(doc))
+            self.assertTrue(good["all_cases_match_offline"])
+            self.assertEqual(good["counts"]["matching_routes"],1)
+            self.assertEqual(good["cases"][0]["routes"][0]["counts"]["terminal_source_checks"],1)
+            self.assertFalse(good["execution_authorized"])
+            self.assertEqual(good["review_sha256"],digest({k:v for k,v in good.items() if k!="review_sha256"}))
+            for private in ("SYNTHETIC_PRIVATE_RECORD","synthetic-idempotency-key",case["record_ref"]):
+                self.assertNotIn(private,json.dumps(good))
+            for changed in ({"issue":"../escape"},{"request_id":"unsafe/key"},{"version":"bad"}):
+                bad=deepcopy(suite);bad["cases"][0]["input"].update(changed)
+                rejected=review(spec,bad,bindings,doc,digest(doc))
+                self.assertEqual(rejected["counts"]["blocked_routes"],1)
+                self.assertFalse(rejected["all_cases_match_offline"])
+            stale=deepcopy(bindings);stale["bindings"][0]["tool_schema_sha256"]="f"*64
+            self.assertEqual(review(spec,suite,stale,doc,digest(doc))["counts"]["blocked_routes"],1)
+            disabled=deepcopy(bindings);disabled["enabled"]=False
+            self.assertEqual(review(spec,suite,disabled,doc,digest(doc))["reason_route_counts"],
+                             {"offline_preparation_requirements":1})
+            with self.assertRaises(ImplementationError):
+                review(spec,suite,bindings,doc,"f"*64)
+            with self.assertRaises(ImplementationError):
+                review(spec,suite,{**bindings,"tool_server_url":"https://other.invalid"},doc,digest(doc))
+            mixed=deepcopy(suite)
+            mixed["cases"].append({"id":"case_2","category":"missing_facts","input":{},
+                                   "expected":{"status":"needs_clarification","accepted_routes":[],
+                                               "review_confirmed":True}})
+            result=review(spec,mixed,bindings,doc,digest(doc))
+            self.assertFalse(result["all_cases_match_offline"])
+            self.assertEqual(result["counts"]["clarification_cases"],1)
+        self.assertFalse(self.calls)
+        self.assertFalse(self.resolved)
