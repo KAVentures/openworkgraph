@@ -83,6 +83,14 @@ analysis or change the taxonomy.
 | `PUT /v1/communications/taxonomy` | Save a taxonomy (`openworkgraph.communications-taxonomy.v1`). |
 | `POST /v1/communications/taxonomy/reset` | Restore the default taxonomy. |
 
+## Preview keyword taxonomy edits
+
+Use **Preview changes on reviewed training messages** before saving edited keyword terms.
+The preview compares both taxonomies on the same labelled training examples and shows
+exact intent transitions, newly correct and regressed messages, ambiguity and per-intent
+quality by declared language. It never uses held-out messages. **Apply reviewed taxonomy**
+checks the exact preview basis again before saving. See [taxonomy change review](COMMUNICATIONS_TAXONOMY_CHANGE.md).
+
 ## Learned intents from reviewed examples
 
 Keyword taxonomies are transparent, but they miss phrasings and languages nobody
@@ -176,3 +184,7 @@ Routes require the local dashboard session; the API token is refused.
 
 `POST /v1/communications/analyze` accepts `classifier=learned` and
 `review_sample=1–200`; sampling also needs the confirmation header.
+
+
+For cutoff-aware response episodes, repeat contacts and deadline sensitivity,
+see [Communications response episodes](COMMUNICATIONS_RESPONSE_EPISODES.md).
