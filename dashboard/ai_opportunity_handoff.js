@@ -15,7 +15,7 @@ export function mountAiOpportunityHandoff(host, post, onCreated, onStage){
   const summary=el('pre');summary.style.whiteSpace='pre-wrap';summary.style.overflowWrap='anywhere';
   const controls=[sources,proposal,title,description],order=el('ol');
   let generation=0,basis=null,busy=false,orderedSources=[];
-  let packetGeneration=0,preparedPacket=null,firstWorkflow=null,createdIdea=null,sourceInventory=null,knowledgePanel=null;
+  let packetGeneration=0,preparedPacket=null,firstWorkflow=null,createdIdea=null,sourceInventory=null,knowledgePanel=null,proposalInspector=null;
   let generatedResult=null,selectedGenerated=false,trialPanel=null,evidencePicker=null,batchPanel=null,batchProposal=null,compatPanel=null,compatProposal=null,checkpointPanel=null;
   const budget=el('select');
   for(const [value,label] of [[131072,'128 KiB'],[524288,'512 KiB'],[2097152,'2 MiB'],[8388608,'8 MiB']]){
@@ -31,7 +31,7 @@ export function mountAiOpportunityHandoff(host, post, onCreated, onStage){
   function invalidatePacket(){
     packetGeneration++;preparedPacket=null;knowledgePanel?.invalidate();downloadPacket.disabled=downloadGuide.disabled=downloadCompact.disabled=downloadCompactGuide.disabled=true;
     contextMode.value='original';clearLocal();trialPanel?.invalidate();batchPanel?.invalidate();compatPanel?.invalidate();
-    packetStatus.textContent='Evidence selection or budget changed. Prepare a new packet.';firstWorkflow?.refresh();
+    packetStatus.textContent='Evidence selection or budget changed. Prepare a new packet.';firstWorkflow?.refresh();proposalInspector?.refresh();
   }
   budget.addEventListener('change',invalidatePacket);
   function downloadLocal(name,mime,contents){
@@ -96,7 +96,7 @@ export function mountAiOpportunityHandoff(host, post, onCreated, onStage){
   }
   function acceptPrepared(response){
     const compact=response.compaction,compactDownload=response.compact_download;
-      preparedPacket=response;firstWorkflow?.refresh();knowledgePanel?.refresh();
+      preparedPacket=response;firstWorkflow?.refresh();knowledgePanel?.refresh();proposalInspector?.refresh();
       packetStatus.textContent='Packet ready: '+response.event_count+' events, '+response.coverage_gap_count+' coverage gaps, '+response.packet_bytes+' bytes. SHA-256: '+response.packet_sha256+'. Review before sharing with your chosen AI. No upload or inference occurred.'+(compact?(compact.available?' Optional compact representation saves '+compact.bytes_saved+' evidence bytes; token savings unmeasured.':' Compaction does not reduce evidence bytes.'):'')+(compactDownload?' Compact external handoff saves '+compactDownload.total_bytes_saved+' combined evidence/instruction bytes. Use the matching compact instructions; token savings and model quality remain unverified.':'');
   }
   prepare.onclick=async()=>{
@@ -223,7 +223,7 @@ export function mountAiOpportunityHandoff(host, post, onCreated, onStage){
   }
   function invalidate(){
     generation++;basis=null;createdIdea=null;confirmation.checked=false;confirmation.disabled=true;commit.disabled=true;stage.disabled=true;
-    summary.textContent='';status.textContent='Inputs changed. Review the exact proposal again.';firstWorkflow?.refresh();
+    summary.textContent='';status.textContent='Inputs changed. Review the exact proposal again.';firstWorkflow?.refresh();proposalInspector?.refresh();
   }
   sources.addEventListener('change',()=>{orderedSources=Array.from(sources.files||[]);invalidate();invalidatePacket();renderOrder();});
   proposal.addEventListener('input',()=>{selectedGenerated=false;batchProposal=null;compatProposal=null;invalidate();});
@@ -233,7 +233,7 @@ export function mountAiOpportunityHandoff(host, post, onCreated, onStage){
     busy=value;for(const n of controls)n.disabled=value;preview.disabled=value;
     budget.disabled=prepare.disabled=value;downloadPacket.disabled=downloadGuide.disabled=value||!preparedPacket;
     downloadCompact.disabled=downloadCompactGuide.disabled=value||!preparedPacket?.compact_download;
-    confirmation.disabled=value||!basis;commit.disabled=value||!basis||!confirmation.checked;stage.disabled=value||!basis||typeof onStage!=='function';renderOrder();refreshLocal();evidencePicker?.refresh();batchPanel?.refresh();compatPanel?.refresh();checkpointPanel?.refresh();firstWorkflow?.refresh();knowledgePanel?.refresh();
+    confirmation.disabled=value||!basis;commit.disabled=value||!basis||!confirmation.checked;stage.disabled=value||!basis||typeof onStage!=='function';renderOrder();refreshLocal();evidencePicker?.refresh();batchPanel?.refresh();compatPanel?.refresh();checkpointPanel?.refresh();firstWorkflow?.refresh();knowledgePanel?.refresh();proposalInspector?.refresh();
   }
   preview.onclick=async()=>{
     if(busy)return;
@@ -248,8 +248,8 @@ export function mountAiOpportunityHandoff(host, post, onCreated, onStage){
       if(ticket!==generation)return;
       if(response.format!=='openworkgraph.ai-opportunity-handoff.v1'||response.execution_authorized!==false||
         response.state_on_create!=='idea'||response.assessment_on_create!==null||
-        !/^[0-9a-f]{64}$/.test(response.preview_sha256))throw Error('Unexpected review response.');
-      basis={draft,pin:response.preview_sha256};
+        !/^[0-9a-f]{64}$/.test(response.preview_sha256)||!/^[0-9a-f]{64}$/.test(response.lineage?.packet_sha256)||response.review?.packet_sha256!==response.lineage.packet_sha256)throw Error('Unexpected review response.');
+      basis={draft,pin:response.preview_sha256,packetPin:response.lineage.packet_sha256};
       summary.textContent='Candidate: '+response.idea.title+'\nCited events: '+response.review.cited_event_count+
         ' / '+response.review.selected_event_count+'\nUnresolved questions: '+response.review.unresolved_question_count+
         '\nCoverage gaps: '+response.review.coverage_gaps.length+'\nCandidate environments: '+response.review.environments.join(', ')+
@@ -286,7 +286,7 @@ export function mountAiOpportunityHandoff(host, post, onCreated, onStage){
     field('Model evidence representation',contextMode),field('Request JSON-object mode',localJsonMode),field('I authorize sending the selected evidence to this configured loopback model service',localConfirm),
     generate,localStatus,field('Generated proposal (unverified interpretation)',generatedText),useGenerated,saveProposal,saveReceipt,trialHost);
   refreshLocal();
-  const evidencePickerHost=el('div'),batchHost=el('div'),compatHost=el('div'),checkpointHost=el('div'),firstWorkflowHost=el('div'),inventoryHost=el('div'),knowledgeHost=el('div');
+  const evidencePickerHost=el('div'),batchHost=el('div'),compatHost=el('div'),checkpointHost=el('div'),firstWorkflowHost=el('div'),inventoryHost=el('div'),knowledgeHost=el('div'),inspectorHost=el('div');
   const details=el('details');details.id='owgAiOpportunityHandoff';
   details.append(el('summary','Add an external AI proposal to the implementation portfolio'),
     el('p','Preparation and review stay on the local OWG server. The optional local model request sends selected evidence only when explicitly confirmed. Only your entered idea and structural lineage are retained by the pipeline. Nothing is approved or executed.'),
@@ -295,7 +295,7 @@ export function mountAiOpportunityHandoff(host, post, onCreated, onStage){
     field('Context byte budget',budget),prepare,packetStatus,downloadPacket,downloadGuide,knowledgeHost,checkpointHost,
     el('p','Optional compact external handoff: download both matching files, inspect locally and share only with an authorized AI. Compact format is reversible, not redaction.'),downloadCompact,downloadCompactGuide,localSection,batchHost,compatHost,
     field('External AI proposal JSON',proposal),field('Human-reviewed opportunity title',title),
-    field('Human-reviewed opportunity details',description),preview,status,summary,
+    field('Human-reviewed opportunity details',description),preview,status,summary,inspectorHost,
     ...(typeof onStage==='function'?[el('p','Starting a new shadow skill draft replaces any unfinished skill draft. The skill still requires its own human review and confirmation.'),stage]:[]),
     field('I reviewed the original proposal and want to create an unassessed idea only',confirmation),commit);
   host.append(details);
@@ -304,6 +304,21 @@ export function mountAiOpportunityHandoff(host, post, onCreated, onStage){
     const panel=panelHost.querySelector('details');
     if(panel){panel.open=true;focusControl(panel.querySelector('summary'));}else focusControl(fallback);
   }
+  import('/ai-implementation-proposal-inspector.js').then(module=>{
+    proposalInspector=module.mountProposalInspector(inspectorHost,{
+      getState:()=>({busy,reviewed:basis,packet:preparedPacket}),
+      onSelect:raw=>{
+        if(busy)throw Error('Review is busy.');
+        const transfer=new DataTransfer();
+        transfer.items.add(new File([raw],'pasted-proposal.json',{type:'application/json'}));
+        proposal.files=transfer.files;
+        selectedGenerated=false;batchProposal=compatProposal=null;
+        title.value='';description.value='';invalidate();
+        status.textContent='Pasted proposal selected. Enter human-reviewed details and review exact proposal.';
+      },
+      download:downloadLocal
+    });
+  }).catch(()=>{inspectorHost.textContent='In-place proposal inspection unavailable; manual import and review remain available.';});
   import('/ai-implementation-first-workflow.js').then(module=>{
     firstWorkflow=module.mountFirstWorkflow(firstWorkflowHost,{
       getState:()=>({busy,sourceCount:orderedSources.length,packet:preparedPacket,hasProposal:!!(proposal.files?.[0]||compatProposal||batchProposal||(selectedGenerated&&generatedResult)),hasTitle:!!title.value.trim(),reviewed:basis,createdIdea}),

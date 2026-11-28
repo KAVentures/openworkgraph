@@ -366,7 +366,11 @@ const path=require('node:path');
      await transferred.locator('summary').click();
      // The existing manual import path remains available, and clears approval.
    }finally{await new Promise(resolve=>modelServer.close(resolve));}
-   await handoff.getByLabel('External AI proposal JSON',{exact:true}).setInputFiles({name:'proposal.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(fixture.proposal))});
+   // External model chat output can be pasted directly, then passes the same structural review.
+   const inspector=handoff.locator('#owgProposalInspector');
+   await inspector.locator(':scope > summary').click();
+   await inspector.getByLabel('Paste proposal JSON',{exact:true}).fill(JSON.stringify(fixture.proposal));
+   await inspector.getByRole('button',{name:'Use pasted proposal for review',exact:true}).click();
    await handoff.getByLabel('Human-reviewed opportunity title',{exact:true}).fill('Reviewed AI opportunity');
    await handoff.getByLabel('Human-reviewed opportunity details',{exact:true}).fill('Resolve business rules before implementation.');
    const reviewButton=handoff.getByRole('button',{name:'Review exact proposal',exact:true});
@@ -374,10 +378,15 @@ const path=require('node:path');
    await reviewButton.click();
    await handoff.getByText('Structural review passed.',{exact:false}).waitFor();
    assert(await createButton.isDisabled());
+   await inspector.getByRole('heading',{name:fixture.proposal.title,exact:true}).waitFor();
+   const reviewedDownload=inspector.getByRole('button',{name:'Download exact reviewed proposal',exact:true});
+   const [exactProposal]=await Promise.all([page.waitForEvent('download'),reviewedDownload.click()]);
+   assert.equal(await fs.readFile(await exactProposal.path(),'utf8'),JSON.stringify(fixture.proposal));
    await handoff.getByLabel('I reviewed the original proposal and want to create an unassessed idea only',{exact:true}).check();
    assert(await createButton.isEnabled());
    await handoff.getByLabel('Human-reviewed opportunity title',{exact:true}).fill('Reviewed AI opportunity changed');
    assert(await createButton.isDisabled());
+   assert(await reviewedDownload.isDisabled());
    await reviewButton.click();
    await handoff.getByText('Structural review passed.',{exact:false}).waitFor();
    await handoff.getByLabel('I reviewed the original proposal and want to create an unassessed idea only',{exact:true}).check();

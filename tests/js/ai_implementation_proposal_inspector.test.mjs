@@ -1,0 +1,12 @@
+import {test} from 'node:test';
+import assert from 'node:assert/strict';
+import {pastedProposal,inspectProposal} from '../../dashboard/ai_implementation_proposal_inspector.js';
+const pin='a'.repeat(64),ref='b1/run/event';
+const p={format:'openworkgraph.ai-implementation-proposal.v1',packet_sha256:pin,title:'Review invoice',author_model:'fixture',outcome:{text:'Resolve',basis:'proposed',evidence_refs:[]},steps:[{text:'Check',basis:'observed',evidence_refs:[ref]}],exceptions:[],questions:['Approval?'],approval_requirements:['Review'],execution_options:[{environment:'human',description:'Ask',required_tools:[],evaluation:'Review',evidence_refs:[ref]}]};
+const raw=JSON.stringify(p),basis={draft:{proposal:raw},pin:'b'.repeat(64),packetPin:pin};
+const q={format:'openworkgraph.ai-implementation-evidence.v1',packet_sha256:pin,event_count:1,coverage_gaps:[{kind:'truncated_execution'}],bundles:[{runs:[{events:[{ref,untrusted_observed_data:{window_title:'<script>bad</script>'}}]}]}]};
+const packet={packet_sha256:pin,packet_json:JSON.stringify(q)};
+test('paste preserves exact JSON text and strips only a single fence',()=>{assert.equal(pastedProposal(' '+raw+' '),' '+raw+' ');assert.equal(pastedProposal('```json\n'+raw+'\n```'),raw);assert.throws(()=>pastedProposal('prefix '+raw));assert.throws(()=>pastedProposal('{}'));assert.throws(()=>pastedProposal(' '.repeat(1024*1024+1)));});
+test('inspection deduplicates citations and retains exact observed data',()=>{const x=inspectProposal(basis,packet);assert.deepEqual(x.proposal,p);assert.deepEqual(x.refs,[ref]);assert.deepEqual(x.evidence.get(ref),q.bundles[0].runs[0].events[0].untrusted_observed_data);assert.deepEqual(x.gaps,q.coverage_gaps);});
+test('unavailable or stale packet never supplies drilldown',()=>{assert.equal(inspectProposal(basis,null).evidence,null);assert.equal(inspectProposal(basis,{...packet,packet_sha256:'c'.repeat(64)}).evidence,null);assert.throws(()=>inspectProposal({...basis,packetPin:'c'.repeat(64)},packet));});
+test('reject missing citation, duplicate event and inconsistent count',()=>{for(const modify of [r=>r.bundles[0].runs[0].events[0].ref='wrong',r=>r.bundles[0].runs[0].events.push(r.bundles[0].runs[0].events[0]),r=>r.event_count=2]){const r=structuredClone(q);modify(r);assert.throws(()=>inspectProposal(basis,{...packet,packet_json:JSON.stringify(r)}));}});

@@ -95,6 +95,11 @@ def script():
     return FileResponse(SCRIPT, media_type="application/javascript")
 
 
+@router.get("/ai-implementation-proposal-inspector.js")
+def proposal_inspector_script():
+    return FileResponse(SCRIPT.with_name("ai_implementation_proposal_inspector.js"), media_type="application/javascript")
+
+
 @router.get("/ai-implementation-checkpoint.js")
 def checkpoint_script():
     return FileResponse(SCRIPT.with_name("ai_implementation_checkpoint.js"), media_type="application/javascript")
