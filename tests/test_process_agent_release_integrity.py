@@ -57,12 +57,14 @@ def test_export_includes_offline_manifest_verifier_and_exact_workflow_identity(t
     assert result["manifest_sha256"] == digest
     assert result["workflow_reference"] == {
         "workflow_id": "synthetic_release", "revision": 3, "content_sha256": "b" * 64}
-    assert result["verified_generated_file_count"] == 36
+    assert result["verified_generated_file_count"] == 39
     assert result["independently_signed"] is False
     assert result["remote_deployment_verified"] is False
     assert result["remote_execution_or_outcome_verified"] is False
     manifest = json.loads((tmp_path / "release-manifest.json").read_text())
     assert "release-manifest.json" not in manifest["files"]
+    assert {"heldout.py", "test_heldout.py", "heldout-policy.example.json"} <= set(manifest["files"])
+    assert result["verified_generated_file_count"] == len(manifest["files"])
     assert manifest["files"]["workflow.spec.json"] == hashlib.sha256(
         (tmp_path / "workflow.spec.json").read_bytes()).hexdigest()
     assert manifest["files"]["verify_release.py"] == hashlib.sha256(
