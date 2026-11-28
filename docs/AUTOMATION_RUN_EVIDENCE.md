@@ -80,3 +80,33 @@ Synthetic regression tests exercise exact occurrence filters, population
 and detail invalidation, repeat IDs, comparison symmetry of input coverage,
 unknown attribution, work limits and local authorization. No live provider
 or customer runtime is certified by these tests.
+
+## Version-scoped step reliability
+
+Choose **Review step reliability**, UTC inclusive start/exclusive end dates
+(up to 366 days), and either one exact reported specification digest or
+explicitly missing attribution. Unknown attribution may mix versions.
+Every selected run is counted once, including runs with no reported steps.
+Per exact step ID the review counts occurrences by status, distinct runs
+containing each status, repeats, mixed statuses, distinct labels and first
+reported failed/handoff step. Both containing-run and all-run issue shares
+are reported. First issue is not root cause; failed and completed occurrences
+do not prove a successful retry.
+
+POST /v1/automation-monitoring/deployments/{id}/step-reliability accepts
+required reported_spec_sha256 (64 hex characters or explicit null),
+start_date and end_date; optional expected_population_sha256, step_id,
+offset and limit (1–100). Pin the full population before paging or selecting
+a step. Evidence includes exact run references and matching occurrences.
+Existing run/step limits and 5,000 distinct step IDs bound computation.
+No provider calls, live execution checks, additional retention or authority.
+Dashboard-only authorization and no-store headers apply. Dashboard includes
+pagination, per-step evidence and current-page JSON export. Native and
+browser acceptance remain outstanding.
+
+Step-run evidence supports run_filter=all, issue, failed, handoff,
+first_issue or mixed_status after selecting an exact step ID. Filters
+operate on retained run/step groups, not individual occurrence counts.
+Page totals reflect the filtered runs while the selected step summary
+and population pin still describe the entire reviewed version cohort.
+No-match filters return an empty page, not a missing-step error.

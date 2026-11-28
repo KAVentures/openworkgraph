@@ -8,6 +8,7 @@
   const sessionKey = 'owg_dashboard_session_v1';
   let activeLog = '', groups = [], generation = 0, queryGeneration = 0, attributeGeneration = 0;
   const activityGeneration = {source: 0, target: 0};
+  let repeatBasis=null,repeatPageGeneration=0,repeatPage=null;
 
   const integer = value => Number.isInteger(value) && Number.isFinite(value);
   const logIdIsValid = value => /^log_[a-f0-9]{16}$/.test(String(value || ''));
@@ -74,6 +75,8 @@
   function clearResult(message = '') {
     queryGeneration++;
     attributeGeneration++;
+    repeatPageGeneration++;repeatBasis=repeatPage=null;
+    $('repeatResults').hidden=true;$('repeatRows').replaceChildren();
     $('inspectAttribute').disabled = false;
     $('attributeResultSection').hidden = true;
     $('attributeMetrics').replaceChildren();
@@ -255,6 +258,60 @@
     $('resultSection').hidden = false;
   }
 
+  function renderRepeat(review) {
+    const counts=review.status_counts,d=review.deadline_review;
+    const stats=[
+      ['Observed subsequent target',fmt(counts.observed_forward)],
+      ['Only earlier targets',fmt(counts.target_only_before_source)],
+      ['Missing target',fmt(counts.target_missing)],['Missing source',fmt(counts.source_missing)],
+      ['Both missing',fmt(counts.both_missing)],
+      ['Reversed first target, later target observed',fmt(review.first_target_reversed_but_subsequent_target_observed_pairs)],
+      ['Latest source differs',fmt(review.latest_source_differs_from_first_pairs)],
+      ['First-source median',elapsed(review.first_source_to_subsequent_target_seconds.p50)],
+      ['Latest-source median',elapsed(review.latest_source_to_same_target_seconds.p50)],
+      ['Median elapsed difference',elapsed(review.elapsed_difference_seconds.p50)],
+      ['Latest-source simultaneous',fmt(review.latest_source_and_target_simultaneous_pairs)]
+    ];
+    if(d){const share=x=>x==null?'—':(100*x).toFixed(1)+'%';
+      stats.push(['Deadline observed within',fmt(d.within_pairs)],['Observed late',fmt(d.observed_late_pairs)],
+        ['Deadline unresolved',fmt(d.unresolved_pairs)],
+        ['Within-share bounds',share(d.within_share_bounds.lower)+' – '+share(d.within_share_bounds.upper)]);}
+    $('repeatMetrics').replaceChildren(...stats.map(([k,v])=>metric(k,v)));
+    $('repeatNotes').textContent=review.interpretation.join(' ');
+    $('repeatPin').textContent='Exact review SHA-256: '+review.review_sha256;
+    repeatPage=review.page;
+    $('repeatRows').replaceChildren(...repeatPage.rows.map(r=>dataRow([
+      r.source_object_id,r.target_object_id,r.status,r.source_first_at,r.first_target_on_or_after_source_at,
+      r.latest_source_at_or_before_target_at,elapsed(r.first_source_to_subsequent_target_seconds),
+      elapsed(r.latest_source_to_same_target_seconds),r.target_events_before_first_source,r.deadline_status])));
+    $('repeatPageStatus').textContent=fmt(repeatPage.matching_pairs)+' matching pairs · offset '+repeatPage.offset+
+      ' · '+repeatPage.rows.length+' shown';
+    $('repeatPrev').disabled=repeatPage.offset===0;
+    $('repeatNext').disabled=repeatPage.next_offset===null;
+    $('repeatStatus').disabled=!repeatBasis?.spec.sample_limit;
+    $('repeatResults').hidden=false;
+  }
+
+  async function repeatEvidence(offset) {
+    const basis=repeatBasis;if(!basis||!basis.spec.sample_limit)return;
+    const turn=++repeatPageGeneration;
+    $('repeatPrev').disabled=$('repeatNext').disabled=true;
+    $('repeatRows').replaceChildren();
+    $('repeatPageStatus').textContent='Checking exact retained milestone evidence…';
+    try{
+      const result=await api('/v1/event-logs/'+encodeURIComponent(basis.id)+'/object-relationships/lead-times',{
+        method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
+          ...basis.spec,repeat_status:$('repeatStatus').value,repeat_offset:offset,expected_repeat_sha256:basis.pin})});
+      if(turn!==repeatPageGeneration||basis!==repeatBasis)return;
+      const review=result.repeated_milestone_review;
+      if(!review||review.review_sha256!==basis.pin)throw Error('Milestone evidence changed. Rerun analysis.');
+      renderRepeat(review);
+    }catch(error){if(turn===repeatPageGeneration){repeatBasis=repeatPage=null;
+      $('repeatRows').replaceChildren();$('repeatMetrics').replaceChildren();
+      $('repeatPin').textContent='';$('repeatStatus').disabled=true;
+      $('repeatPageStatus').textContent=error.message;}}
+  }
+
   function dataRow(values) {
     const tr = document.createElement('tr');
     values.forEach(value => {
@@ -355,6 +412,14 @@
     if (['empty', 'literal'].includes($('qualifierMode').value)) {
       spec.qualifier = $('qualifierMode').value === 'empty' ? '' : $('qualifierValue').value;
     }
+    if($('repeatReview').checked){
+      spec.repeat_review=true;
+      const raw=$('repeatDeadline').value;
+      if(raw!==''){const value=Number(raw);
+        if(!integer(value)||value<0||value>31536000){status('Deadline must be a whole number of seconds from 0 to 31536000.');return;}
+        spec.deadline_seconds=value;}
+    }
+    repeatPageGeneration++;repeatBasis=repeatPage=null;$('repeatResults').hidden=true;
     const turn = ++queryGeneration;
     $('runQuery').disabled = true;
     status('Analyzing exact relationship pairs locally…');
@@ -365,6 +430,10 @@
       {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(spec)});
       if (turn !== queryGeneration || id !== activeLog) return;
       render(result);
+      if(result.repeated_milestone_review){
+        repeatBasis={id,spec,pin:result.repeated_milestone_review.review_sha256};
+        $('repeatStatus').value='all';renderRepeat(result.repeated_milestone_review);
+      }
       status('Local relationship timing analysis complete. Counts describe supplied data, not verified business handoffs.');
     } catch (error) {
       if (turn === queryGeneration) status(error.message || 'Could not analyze this relationship.');
@@ -385,6 +454,11 @@
                       'qualifierValue', 'sampleLimit','targetAttribute']) {
       $(id).addEventListener('input', () => clearResult('Selection changed. Rerun analysis.'));
     }
+    $('repeatReview').addEventListener('change',()=>{$('repeatSettings').hidden=!$('repeatReview').checked;clearResult('Selection changed. Rerun analysis.');});
+    $('repeatDeadline').addEventListener('input',()=>clearResult('Deadline changed. Rerun analysis.'));
+    $('repeatStatus').addEventListener('change',()=>repeatEvidence(0));
+    $('repeatPrev').addEventListener('click',()=>{if(repeatBasis&&repeatPage)repeatEvidence(Math.max(0,repeatPage.offset-repeatBasis.spec.sample_limit));});
+    $('repeatNext').addEventListener('click',()=>{if(repeatPage?.next_offset!=null)repeatEvidence(repeatPage.next_offset);});
     $('queryForm').addEventListener('submit', submit);
     $('inspectAttribute').addEventListener('click', inspectAttribute);
     $('resetReport').addEventListener('click', () => clearResult('Results cleared. Your saved log remains unchanged.'));

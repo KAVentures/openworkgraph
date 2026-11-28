@@ -52,6 +52,13 @@ const path=require('node:path');
    const utf16=Buffer.concat([Buffer.from([0xFF,0xFE]),Buffer.from('case\tactivity\ttime\nu1\tÖffnen\t2024-03-01T08:00:00Z\n','utf16le')]);
    await page.locator('#owgEventLogFile').setInputFiles({name:'unicode.txt',mimeType:'text/plain',buffer:utf16});
    await page.waitForFunction(()=>document.querySelector('#owgEventLogEncoding').value==='utf-16'&&document.querySelector('#owgEventLogDelimiter').value==='t'&&document.querySelector('#owgEventLogCase').options.length>=3);
+   // Title rows above the column names: the header line is found and sent with the import.
+   await page.locator('#owgEventLogName').fill('titled');
+   await page.locator('#owgEventLogFile').setInputFiles({name:'titled.csv',mimeType:'text/csv',buffer:Buffer.from('Order report\nExported 2024-03-05\ncase,activity,time\nk1,Open,2024-03-01T08:00:00Z\nk1,Close,2024-03-01T09:00:00Z\n')});
+   await page.waitForFunction(()=>document.querySelector('#owgEventLogHeaderRow').value==='3'&&[...document.querySelector('#owgEventLogCase').options].some(o=>o.value==='case'));
+   await page.locator('#owgEventLogCase').selectOption('case');await page.locator('#owgEventLogActivity').selectOption('activity');await page.locator('#owgEventLogTime').selectOption('time');
+   await page.locator('#owgEventLogConsent').check();await page.locator('#owgEventLogImport').click();
+   await page.locator('#owgEventLogStatus').filter({hasText:'Imported 2 events'}).waitFor();
    // A comma file switches back.
    await page.locator('#owgEventLogFile').setInputFiles({name:'plain.csv',mimeType:'text/csv',buffer:Buffer.from('case,activity,time\nk1,A,2024-03-01T08:00:00Z\n')});
    await page.waitForFunction(()=>document.querySelector('#owgEventLogDelimiter').value===','&&document.querySelector('#owgEventLogEncoding').value==='utf-8'&&document.querySelector('#owgEventLogCase').options.length>=3);
@@ -59,6 +66,6 @@ const path=require('node:path');
    const audit=await page.evaluate(async()=>window.axe.run(document.querySelector('#owgEventLogDelimiter').closest('section')||document.body,{runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21aa']}}));
    assert.deepEqual(audit.violations.map(v=>v.id+': '+v.nodes.map(n=>n.target).join(',')),[]);
    assert.deepEqual(errors,[]);
-   console.log('CSV delimiter browser acceptance passed: semicolon and tab files detected and imported, Windows-1252 and UTF-16 decoded, comma and UTF-8 restored, WCAG audit.');
+   console.log('CSV delimiter browser acceptance passed: semicolon and tab files detected and imported, Windows-1252 and UTF-16 decoded, title rows skipped, comma and UTF-8 restored, WCAG audit.');
  }finally{if(browser)await browser.close();server.kill();}
 })().catch(error=>{console.error(error);process.exit(1);});
