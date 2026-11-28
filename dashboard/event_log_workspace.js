@@ -9343,12 +9343,16 @@
     const box=section('Check against a Petri net');box.id='owgPetri';
     const netsBase=()=>'/v1/event-logs/'+encodeURIComponent(state.logId)+'/reference-nets';
     box.appendChild(el('div','Replay the recorded cases on a Petri net from ProM, PM4Py, Apromore or another tool (a .pnml file), or on the net discovered here. Tokens that are missing or left behind show where the cases and the net disagree. The file is read for this check and not stored.','muted'));
-    const file=input('owgPetriFile','file');file.accept='.pnml,.ptml,application/xml,text/xml';
+    const file=input('owgPetriFile','file');file.accept='.pnml,.ptml,.bpmn,application/xml,text/xml';
+    const bpmnConversion=el('div');bpmnConversion.id='owgPetriBpmnConversion';
+    let conversionEpoch=0;
+    const clearBpmnConversion=()=>{conversionEpoch++;bpmnConversion.replaceChildren();};
+    file.addEventListener('change',clearBpmnConversion);
     const run=button('Replay on this net','secondary');run.id='owgPetriRun';
     const own=button('Replay on the discovered net','secondary');own.id='owgPetriDiscovered';
     const happy=button('Check against the most common path','secondary');happy.id='owgPetriHappy';
     const align=button('Explain each case step by step','secondary');align.id='owgPetriAlign';align.disabled=true;
-    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Petri net (.pnml) or process tree (.ptml)',file),run,own,happy,align);
+    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Petri net (.pnml), process tree (.ptml) or supported BPMN (.bpmn)',file),run,own,happy,align);
     const statusLine=el('div',null,'muted');statusLine.id='owgPetriStatus';statusLine.setAttribute('role','status');statusLine.setAttribute('aria-live','polite');
     const out=el('div');out.id='owgPetriResults';
     const aligned=el('div');aligned.id='owgPetriAlignResults';
@@ -9370,7 +9374,7 @@
         await replay(converted.pnml,'the pasted process tree');
       }catch(error){statusLine.textContent=error.message;}
     };
-    box.append(row,treeRow,statusLine,out,aligned,alertRow,alertMessage);
+    box.append(row,treeRow,statusLine,bpmnConversion,out,aligned,alertRow,alertMessage);
     // Reference nets saved with this log: keep the net just checked, or check again against a saved one.
     const savedPick=select('owgPetriSaved',[]);const savedRun=button('Replay on saved net','secondary');savedRun.id='owgPetriSavedRun';
     const savedDelete=button('Delete saved net','secondary');savedDelete.id='owgPetriSavedDelete';
@@ -9878,6 +9882,7 @@
     const replay=async(body,label)=>{
       if(sectionGeneration!==state.generation||run.disabled)return;
       const generation=sectionGeneration,cohort=globalCohort();
+      clearBpmnConversion();
       run.disabled=own.disabled=happy.disabled=align.disabled=alertSave.disabled=true;aligned.replaceChildren();alertMessage.textContent='';lastNet=null;clearSound();statusLine.textContent='Replaying on '+label+'…';out.replaceChildren();
       try{
         const r=await (await api(logPath('petri-net-replay',{}),{method:'POST',headers:{'Content-Type':'application/xml'},body})).json();
@@ -9993,8 +9998,28 @@
             finally{why.disabled=false;}};}
       }catch(error){status.textContent=error.message;}
       finally{run.disabled=own.disabled=false;align.disabled=!lastNet;}};
-    run.onclick=async()=>{const chosen=file.files&&file.files[0];if(!chosen){statusLine.textContent='Choose a .pnml file first.';return;}
+    run.onclick=async()=>{const chosen=file.files&&file.files[0];if(!chosen){statusLine.textContent='Choose a .pnml, .ptml or .bpmn file first.';return;}
       if(chosen.size>2*1024*1024){statusLine.textContent='The Petri net file is larger than 2 MB.';return;}
+      if(/\.bpmn$/i.test(chosen.name)){
+        const epoch=++conversionEpoch;bpmnConversion.replaceChildren();
+        try{
+          statusLine.textContent='Converting supported BPMN control flow…';
+          const converted=await (await api('/v1/event-logs/bpmn-to-pnml',{method:'POST',headers:{'Content-Type':'application/xml'},body:await chosen.arrayBuffer()})).json();
+          if(epoch!==conversionEpoch||sectionGeneration!==state.generation||file.files?.[0]!==chosen)return;
+          const label=chosen.name+' (BPMN control flow)';
+          await replay(converted.pnml,label);
+          if(conversionEpoch!==epoch+1||sectionGeneration!==state.generation||lastNet?.body!==converted.pnml||lastNet?.label!==label)return;
+          bpmnConversion.append(el('h4','BPMN conversion evidence'),el('div',converted.nodes+' BPMN nodes · '+converted.sequence_flows+' sequence flows · '+Object.keys(converted.parallel_pairs).length+' paired parallel regions. '+converted.caveat,'muted'));
+          const download=(name,data,mime)=>{
+            const url=URL.createObjectURL(new Blob([data],{type:mime}));
+            const link=document.createElement('a');link.href=url;link.download=name;document.body.appendChild(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
+          };
+          const pnmlDownload=button('Download converted PNML','secondary');pnmlDownload.onclick=()=>{if(conversionEpoch===epoch+1)download('converted-'+converted.pnml_sha256.slice(0,12)+'.pnml',converted.pnml,'application/xml');};
+          const mappingDownload=button('Download BPMN conversion evidence (JSON)','secondary');mappingDownload.onclick=()=>{if(conversionEpoch===epoch+1)download('bpmn-conversion-'+converted.bpmn_sha256.slice(0,12)+'.json',JSON.stringify(converted,null,2),'application/json');};
+          bpmnConversion.append(pnmlDownload,mappingDownload);
+        }catch(error){if(epoch===conversionEpoch&&sectionGeneration===state.generation)statusLine.textContent=error.message;}
+        return;
+      }
       // A process tree from PM4Py or ProM is converted to its workflow net first, then replayed as usual.
       if(/\.ptml$/i.test(chosen.name)){
         try{
@@ -11930,7 +11955,7 @@
       try{
         if(background.checked){
           message.textContent='Submitting local analysis…';
-          const submitted=await (await api(jobBase,{method:'POST',signal:AbortSignal.timeout(10000),headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)})).json();
+          const submitted=await (await api(jobBase+'?source_bound=true',{method:'POST',signal:AbortSignal.timeout(10000),headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)})).json();
           job=jobBase+'/'+encodeURIComponent(submitted.job_id);
           let status=submitted;
           while(current()&&!cancelRequested&&['queued','running'].includes(status.state)){
@@ -11941,11 +11966,11 @@
           }
           if(!current()||cancelRequested)return;
           if(status.state!=='succeeded')throw new Error(status.state==='timed_out'?'Analysis reached its deadline; no partial result was returned.':status.state==='cancelled'?'Analysis cancelled; no result was returned.':status.error||'Analysis failed; no partial result was returned.');
-          // The job result has no atomic source fingerprint. Recompute under the
-          // same lock as the digest before showing a result that can be exported.
-          // A changed source between job completion and this read is reflected
-          // in the newly reviewed result, never silently attributed to the job.
-          r=await(await api(base()+'/analysis-source-bound',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)})).json();
+          // The retained bytes are from the same cancellable query and source
+          // fingerprint, not a second execution against a possibly newer log.
+          if(!status.source_bound_result_available)throw Error('This background job has no source-bound result. Rerun the analysis.');
+          r=await(await api(job+'/result',{signal:AbortSignal.timeout(10000)})).json();
+          if(!/^[a-f0-9]{64}$/.test(r.source_content_sha256||''))throw Error('Source-bound job result is incomplete; rerun the analysis.');
           if(cancelRequested||!current())return;
         }else{
           message.textContent='Analysis running…';
@@ -12699,7 +12724,7 @@
     if(minimum>1)when.minimum_cases=minimum;
     if(['duration_over','open_longer_than'].includes(values.condition)){if(!(hours>0))throw new Error('Enter the number of hours.');when.seconds=Math.round(hours*3600);}
     if(['contains_activity','lacks_activity'].includes(values.condition))when.activity=values.activity;
-    if(values.condition==='open_longer_than'){when.end_activities=String(values.ends||'').split(',').map(x=>x.trim()).filter(Boolean);if(!when.end_activities.length)throw new Error('List the activities that end a case.');}
+    if(values.condition==='open_longer_than'){if(values.pendingEnd)throw new Error('Add the entered end activity before continuing.');when.end_activities=values.ends;if(!when.end_activities.length)throw new Error('Add the activities that end a case.');}
     return {name,when};
   }
 
@@ -12780,7 +12805,13 @@
     const threshold=input('owgSignalThreshold','number');threshold.min='0';threshold.step='any';
     const hours=input('owgSignalHours','number');hours.min='0';hours.step='any';
     const activity=select('owgSignalActivity',activityNames.slice(0,500).map(a=>[a,a]));
-    const ends=input('owgSignalEnds','text','Close, Cancel');
+    const ends=input('owgSignalEnds','text','Choose or enter one exact activity');ends.maxLength=200;
+    const endLabels=[],endList=el('ul');endList.id='owgSignalEndLabels';
+    const addEnd=button('Add end activity','secondary');addEnd.id='owgSignalAddEnd';
+    const endStatus=el('div',null,'muted');endStatus.setAttribute('role','status');
+    const endOptions=document.createElement('datalist');endOptions.id='owgSignalEndsList';
+    activityNames.slice(0,500).forEach(a=>{const option=document.createElement('option');option.value=a;endOptions.appendChild(option);});
+    ends.setAttribute('list',endOptions.id);
     const minimum=input('owgSignalMinimumCases','number');minimum.min='1';minimum.max='1000000000';minimum.step='1';minimum.value='1';
     const activeSignalCohort=filterOn()?globalCohort():null;
     const signalScope=select('owgSignalScope',[['all','All cases'],['active','Current case filter']]);
@@ -12790,7 +12821,8 @@
     const previewStatus=el('div',null,'muted');previewStatus.id='owgSignalPreviewStatus';previewStatus.setAttribute('role','status');
     const previewEvidence=el('div');previewEvidence.id='owgSignalPreviewEvidence';
     const evaluate=button('Check signals');evaluate.id='owgSignalEvaluate';
-    const fields={condition:field('Condition',condition),metric:field('KPI',metric),operator:field('Comparison',operator),threshold:field('Threshold',threshold),hours:field('Hours',hours),activity:field('Activity',activity),ends:field('Activities that end a case',ends),minimum:field('Minimum matching cases',minimum)};
+    const fields={condition:field('Condition',condition),metric:field('KPI',metric),operator:field('Comparison',operator),threshold:field('Threshold',threshold),hours:field('Hours',hours),activity:field('Activity',activity),ends:field('Activity that ends a case',ends),minimum:field('Minimum matching cases',minimum)};
+    fields.ends.append(addEnd,endOptions,endList,endStatus);
     const sync=()=>{const k=kind.value==='kpi';show(fields.minimum,!k);show(fields.condition,!k);show(fields.metric,k);show(fields.operator,k);show(fields.threshold,k);
       show(fields.hours,k?metric.value==='sla_breach_rate':['duration_over','open_longer_than'].includes(condition.value));
       show(fields.activity,!k&&['contains_activity','lacks_activity'].includes(condition.value));show(fields.ends,!k&&condition.value==='open_longer_than');};
@@ -13307,7 +13339,7 @@
           :w.kind==='conformance'?w.metric.replace(/_/g,' ')+' on '+w.net_name+' '+w.operator+' '+w.threshold+(w.recent_days?' (cases started in the last '+w.recent_days+' days)':'')
           :w.kind==='due_date'?(w.metric==='open_overdue_cases'?'open cases overdue for '+w.activity:'late share of '+w.activity)+' '+w.operator+' '+w.threshold+(w.due_attribute?' (due: '+w.due_attribute+')':' (due '+w.due_days+' days after start)')
           :w.kind==='compliance'?'compliance rule'+(w.rule&&w.rule.kind?': '+String(w.rule.kind).replace(/_/g,' '):'')
-          :w.condition.replace(/_/g,' ')+(w.activity?' '+w.activity:'')+(w.seconds?' '+duration(w.seconds):'');
+          :w.condition.replace(/_/g,' ')+(w.activity?' '+w.activity:'')+(w.seconds?' '+duration(w.seconds):'')+(w.end_activities?.length?' · ends: '+w.end_activities.map(value=>JSON.stringify(value)).join(', '):'');
         const scoped=Object.keys(rule.cohort||{}).some(key=>key!=='label');
         const scope=(scoped?'Saved case filter':'All cases')+(rule.case_type?' · '+rule.case_type:'');
         const minimumText=w.minimum_cases>1?' · minimum '+Number(w.minimum_cases).toLocaleString()+' cases':'';
@@ -13320,13 +13352,25 @@
       await refreshDelivery().catch(error=>{deliveryStatus.textContent=error.message;});
     }
     const draftRule=()=>{
-      const values={name:name.value,kind:kind.value,condition:condition.value,metric:metric.value,operator:operator.value,threshold:threshold.value,hours:hours.value,activity:activity.value,ends:ends.value,minimumCases:minimum.value};
+      const values={name:name.value,kind:kind.value,condition:condition.value,metric:metric.value,operator:operator.value,threshold:threshold.value,hours:hours.value,activity:activity.value,ends:[...endLabels],pendingEnd:ends.value.length>0,minimumCases:minimum.value};
       const body=signalRule(values);if(state.caseType)body.case_type=state.caseType;
       if(activeSignalCohort&&signalScope.value==='active')body.cohort=activeSignalCohort;
       return body;
     };
     let previewTurn=0;
     const clearPreview=()=>{++previewTurn;previewStatus.textContent='';previewEvidence.replaceChildren();preview.disabled=false;};
+    const drawEnds=()=>endList.replaceChildren(...endLabels.map((label,index)=>{
+      const item=el('li',JSON.stringify(label)+' '),remove=button('Remove','secondary');
+      remove.setAttribute('aria-label','Remove signal end activity '+label);
+      remove.onclick=()=>{endLabels.splice(index,1);drawEnds();clearPreview();};item.appendChild(remove);return item;
+    }));
+    addEnd.onclick=()=>{
+      const value=ends.value;
+      if(!value.length){endStatus.textContent='Enter an activity label.';return;}
+      if(endLabels.includes(value)){endStatus.textContent='This activity is already selected.';return;}
+      if(endLabels.length>=20){endStatus.textContent='Select at most 20 end activities.';return;}
+      endLabels.push(value);ends.value='';endStatus.textContent='';drawEnds();clearPreview();
+    };
     row.addEventListener('input',clearPreview);row.addEventListener('change',clearPreview);
     preview.onclick=async()=>{
       const ticket=++previewTurn;

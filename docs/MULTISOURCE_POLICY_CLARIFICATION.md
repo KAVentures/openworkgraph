@@ -22,3 +22,7 @@ This does not yet provide OCR, document repositories, enterprise tenancy, effect
 ## Tests
 
 Unit and real-HTTP regression cover three-way threshold/requirement conflicts, strict source selection, refusal of ambiguous endorsements, missing explanation, source-bundle changes and the unchanged saved process revision. Actual Chromium acceptance checks three authored SOPs, accessible source citation controls, no default selection, an explicit chosen citation and explanation, unchanged-document decision suppression, source-change invalidation, five-document limit and keyboard/mobile/WCAG. These tests do **not** establish correctness against independent real corporate policy documents.
+
+
+For declared effective dates, required policy families, overlap resolution and
+as-of review, see [Effective policy timelines](EFFECTIVE_POLICY_TIMELINES.md).
