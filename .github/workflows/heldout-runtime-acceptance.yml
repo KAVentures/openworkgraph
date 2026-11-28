@@ -1,0 +1,29 @@
+name: heldout-runtime-acceptance
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: heldout-runtime-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  generated-heldout:
+    if: startsWith(github.head_ref, 'feat/r17-blind-holdout-acceptance-')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install existing project and development dependencies
+        run: python -m pip install -e ".[dev]"
+      - name: Verify generated runtime, manifest integrity and acceptance
+        run: python -m pytest -q --tb=short tests/test_process_agent_project.py tests/test_process_agent_release_integrity.py tests/test_customer_runtime_acceptance.py

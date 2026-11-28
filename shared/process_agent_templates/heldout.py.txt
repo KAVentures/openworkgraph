@@ -1,0 +1,362 @@
+"""Frozen customer holdout acceptance for generated OWG agent projects.
+
+No business tools. Capture explicitly calls the existing no-tools planner.
+Freeze and score are offline. The challenge excludes reviewed answers.
+The private freeze document is not a signature or proof of blind evaluation.
+"""
+import argparse
+import asyncio
+from collections import Counter
+import json
+import os
+from pathlib import Path
+import re
+import secrets
+import sys
+
+from evaluate import validate_suite, compare, compare_candidates
+from execute import ImplementationError, digest, reference
+
+FREEZE="openworkgraph.heldout-freeze.v1"
+CHALLENGE="openworkgraph.heldout-challenge.v1"
+CAPTURE="openworkgraph.heldout-capture.v1"
+REPORT="openworkgraph.heldout-acceptance.v1"
+CATEGORIES=("normal","exception","missing_facts")
+CRITICAL=("expected_clarification","unresolved_review_bypassed")
+LIMIT=1024*1024
+HEX=re.compile(r"^[a-f0-9]{64}$")
+OPAQUE=re.compile(r"^challenge_[a-f0-9]{32}$")
+
+
+def refuse(message):
+    raise ImplementationError(message)
+
+
+def strict_load(path,limit=LIMIT):
+    def pairs(items):
+        result={}
+        for k,v in items:
+            if k in result:raise ValueError("duplicate key")
+            result[k]=v
+        return result
+    def constant(_):raise ValueError("nonfinite number")
+    try:
+        with Path(path).open("rb") as f:raw=f.read(limit+1)
+        if not raw or len(raw)>limit:raise ValueError("size")
+        value=json.loads(raw.decode("utf-8"),object_pairs_hook=pairs,parse_constant=constant)
+        if not isinstance(value,dict):raise ValueError("shape")
+        return value
+    except (OSError,ValueError,RecursionError):
+        refuse("Invalid or oversized acceptance JSON")
+
+
+def shape(value,keys,message):
+    if not isinstance(value,dict) or set(value)!=set(keys):refuse(message)
+
+
+def pin(value,expected):
+    if not isinstance(expected,str) or not HEX.fullmatch(expected) or digest(value)!=expected:
+        refuse("Independent digest pin mismatch")
+
+
+def integer(v,lo,hi):
+    return type(v) is int and lo<=v<=hi
+
+
+def validate_policy(policy):
+    shape(policy,("min_cases_by_category","min_match_bps_by_category","min_overall_match_bps",
+                   "max_critical_failures","max_regressions","require_baseline"),"Invalid holdout policy")
+    for key,lo,hi in (("min_cases_by_category",1,50),("min_match_bps_by_category",0,10000)):
+        group=policy[key]
+        shape(group,CATEGORIES,"Explicit thresholds required for every category")
+        if any(not integer(v,lo,hi) for v in group.values()):refuse("Invalid category threshold")
+    if (not integer(policy["min_overall_match_bps"],0,10000)
+            or not integer(policy["max_critical_failures"],0,50)
+            or not integer(policy["max_regressions"],0,50)
+            or type(policy["require_baseline"]) is not bool):
+        refuse("Invalid acceptance threshold")
+    if not policy["require_baseline"] and policy["max_regressions"]!=0:
+        refuse("Regression thresholds require a baseline")
+    return policy
+
+
+def _validate_cohorts(spec,development,holdout,policy):
+    dev=validate_suite(spec,development)
+    test=validate_suite(spec,holdout)
+    dev_inputs=[digest(c["input"]) for c in dev]
+    holdout_inputs=[digest(c["input"]) for c in test]
+    if len(set(dev_inputs))!=len(dev_inputs) or len(set(holdout_inputs))!=len(holdout_inputs):
+        refuse("Duplicate exact case inputs within a cohort")
+    if set(dev_inputs)&set(holdout_inputs):
+        refuse("Development and holdout inputs overlap")
+    counts=Counter(c["category"] for c in test)
+    if any(counts[k]<policy["min_cases_by_category"][k] for k in CATEGORIES):
+        refuse("Insufficient frozen holdout category coverage")
+    return test
+
+
+def make_challenge(spec,holdout,freeze):
+    # The randomized alias is public. Expected status, paths, categories and
+    # original case ID stay private. Input values themselves may be sensitive.
+    by_id={c["id"]:c for c in holdout["cases"]}
+    aliases=freeze["aliases"]
+    return {"format":CHALLENGE,"process_reference":reference(spec),
+            "spec_sha256":digest(spec),"challenge_id":freeze["challenge_id"],
+            "cases":[{"challenge_case_id":alias,"input":by_id[case_id]["input"]}
+                     for alias,case_id in sorted(aliases.items())]}
+
+
+def freeze_suite(spec,development,holdout,policy):
+    policy=validate_policy(policy)
+    cases=_validate_cohorts(spec,development,holdout,policy)
+    aliases={}
+    for c in cases:
+        alias="challenge_"+secrets.token_hex(16)
+        if alias in aliases:refuse("Challenge alias collision; try a new freeze")
+        aliases[alias]=c["id"]
+    freeze={"format":FREEZE,"process_reference":reference(spec),"spec_sha256":digest(spec),
+            "development_sha256":digest(development),"holdout_sha256":digest(holdout),
+            "challenge_id":secrets.token_hex(32),"aliases":aliases,"policy":policy}
+    challenge=make_challenge(spec,holdout,freeze)
+    freeze["challenge_sha256"]=digest(challenge)
+    return freeze,challenge
+
+
+def validate_frozen(spec,development,holdout,freeze,challenge,*,freeze_sha256):
+    pin(freeze,freeze_sha256)
+    shape(freeze,("format","process_reference","spec_sha256","development_sha256",
+                  "holdout_sha256","challenge_id","aliases","policy","challenge_sha256"),
+          "Invalid frozen review")
+    if (freeze["format"]!=FREEZE or freeze["process_reference"]!=reference(spec)
+            or freeze["spec_sha256"]!=digest(spec)
+            or freeze["development_sha256"]!=digest(development)
+            or freeze["holdout_sha256"]!=digest(holdout)
+            or not isinstance(freeze["challenge_id"],str) or not HEX.fullmatch(freeze["challenge_id"])):
+        refuse("Frozen specification or cohort changed")
+    policy=validate_policy(freeze["policy"])
+    cases=_validate_cohorts(spec,development,holdout,policy)
+    aliases=freeze["aliases"]
+    if (not isinstance(aliases,dict) or len(aliases)!=len(cases)
+            or any(not OPAQUE.fullmatch(k) for k in aliases)
+            or not all(isinstance(v,str) for v in aliases.values())
+            or set(aliases.values())!={c["id"] for c in cases}):
+        refuse("Invalid frozen challenge aliases")
+    # Verify both the declared pin and reconstructed entire public challenge.
+    pin(challenge,freeze["challenge_sha256"])
+    if digest(make_challenge(spec,holdout,freeze))!=freeze["challenge_sha256"]:
+        refuse("Challenge differs from frozen cases")
+    return policy
+
+
+def validate_challenge(spec,challenge,challenge_sha256):
+    from runtime import validate_spec
+    validate_spec(spec)
+    pin(challenge,challenge_sha256)
+    shape(challenge,("format","process_reference","spec_sha256","challenge_id","cases"),
+          "Invalid public challenge")
+    if (challenge["format"]!=CHALLENGE or challenge["process_reference"]!=reference(spec)
+            or challenge["spec_sha256"]!=digest(spec)
+            or not isinstance(challenge["challenge_id"],str) or not HEX.fullmatch(challenge["challenge_id"])):
+        refuse("Challenge specification differs")
+    rows=challenge["cases"]
+    if not isinstance(rows,list) or not 1<=len(rows)<=50:refuse("Invalid challenge population")
+    seen=set();inputs=set()
+    for row in rows:
+        shape(row,("challenge_case_id","input"),"Invalid public challenge row")
+        key=row["challenge_case_id"]
+        if (not isinstance(key,str) or not OPAQUE.fullmatch(key) or key in seen
+                or not isinstance(row["input"],dict)
+                or len(json.dumps(row["input"],allow_nan=False).encode())>65536):
+            refuse("Invalid challenge case")
+        identity=digest(row["input"])
+        if identity in inputs:refuse("Duplicate exact challenge input")
+        inputs.add(identity);seen.add(key)
+    return rows
+
+
+async def capture_planner(spec,challenge,*,challenge_sha256,model):
+    """Planner-side command; never receives private review, policy or suite."""
+    rows=validate_challenge(spec,challenge,challenge_sha256)
+    if not isinstance(model,str) or not 1<=len(model)<=160:refuse("Invalid model selection")
+    from agent import propose
+    results=[]
+    for row in rows:
+        # The existing tracing-disabled, no-business-tools planner is reused.
+        # Provider failure is an incomplete trial: no partial result is written.
+        try:
+            result=await propose(row["input"],model=model,spec=spec)
+        except Exception:
+            refuse("Planner failed; no complete capture retained")
+        if not isinstance(result,dict) or "plan" not in result:refuse("Incomplete planner result")
+        results.append({"challenge_case_id":row["challenge_case_id"],"plan":result["plan"]})
+        if len(json.dumps(results,allow_nan=False).encode())>LIMIT:refuse("Captured plans exceed byte budget")
+    return {"format":CAPTURE,"challenge_sha256":challenge_sha256,"results":results}
+
+
+def captured_results(spec,holdout,freeze,capture,expected):
+    pin(capture,expected)
+    shape(capture,("format","challenge_sha256","results"),"Invalid heldout capture")
+    if capture["format"]!=CAPTURE or capture["challenge_sha256"]!=freeze["challenge_sha256"]:
+        refuse("Capture does not match the frozen challenge")
+    rows=capture["results"];aliases=freeze["aliases"]
+    if not isinstance(rows,list) or len(rows)!=len(aliases):
+        refuse("Capture must cover every challenge case exactly once")
+    results=[];seen=set()
+    for row in rows:
+        shape(row,("challenge_case_id","plan"),"Invalid captured plan row")
+        key=row["challenge_case_id"]
+        if not isinstance(key,str) or key not in aliases or key in seen:
+            refuse("Duplicate or unknown challenge case")
+        seen.add(key)
+        # Reuse the canonical evaluator, including its malformed-plan failures.
+        results.append({"case_id":aliases[key],"plan":row["plan"]})
+    return {"format":"openworkgraph.shadow-plan-results.v1","process_reference":reference(spec),
+            "spec_sha256":digest(spec),"suite_sha256":digest(holdout),"results":results}
+
+
+def evaluate_frozen(spec,development,holdout,freeze,challenge,candidate,*,freeze_sha256,
+                    candidate_sha256,baseline=None,baseline_sha256=None):
+    policy=validate_frozen(spec,development,holdout,freeze,challenge,freeze_sha256=freeze_sha256)
+    candidate_results=captured_results(spec,holdout,freeze,candidate,candidate_sha256)
+    if (baseline is None)!=(baseline_sha256 is None):
+        refuse("Baseline and independent capture digest must be supplied together")
+    if policy["require_baseline"] and baseline is None:refuse("Frozen policy requires baseline")
+    score=compare(spec,holdout,candidate_results)
+    rows=score["cases"]
+    # Reuse paired comparison on identical case expectations, including
+    # critical reason transitions rather than aggregate-only improvement.
+    paired=None
+    if baseline is not None:
+        base=captured_results(spec,holdout,freeze,baseline,baseline_sha256)
+        paired=compare_candidates(spec,holdout,base,candidate_results)
+    def rate_gate(group,threshold):
+        n=len(group);m=sum(r["matches_reviewed_expectation"] for r in group)
+        # Exact integer comparison; rounded display never changes a gate.
+        return {"cases":n,"matches":m,"match_bps_floor":10000*m//n if n else None,
+                "threshold_bps":threshold,"pass":n>0 and 10000*m>=threshold*n}
+    categories={k:rate_gate([r for r in rows if r["category"]==k],policy["min_match_bps_by_category"][k])
+                for k in CATEGORIES}
+    overall=rate_gate(rows,policy["min_overall_match_bps"])
+    # A proposal on an expected-clarification case is critical even when
+    # another diagnostic (e.g. invalid route) takes precedence in compare().
+    expected={c["id"]:c["expected"]["status"] for c in holdout["cases"]}
+    plans={r["case_id"]:r["plan"] for r in candidate_results["results"]}
+    def is_critical(r):
+        plan=plans[r["case_id"]]
+        return (r["reason"] in CRITICAL or
+                (expected[r["case_id"]]=="needs_clarification" and isinstance(plan,dict)
+                 and plan.get("status")=="proposal"))
+    critical=sum(is_critical(r) for r in rows)
+    regressions=paired["paired_transitions"]["regressed"] if paired else None
+    critical_gate={"failures":critical,"maximum":policy["max_critical_failures"],
+                   "pass":critical<=policy["max_critical_failures"]}
+    regression_gate={"regressions":regressions,"maximum":policy["max_regressions"],
+                     "pass":regressions<=policy["max_regressions"] if paired else None}
+    passed=overall["pass"] and all(r["pass"] for r in categories.values()) and critical_gate["pass"] and (
+        regression_gate["pass"] is not False)
+    reverse={v:k for k,v in freeze["aliases"].items()}
+    report={"format":REPORT,"process_reference":reference(spec),"spec_sha256":digest(spec),
+            "freeze_sha256":freeze_sha256,"challenge_sha256":freeze["challenge_sha256"],
+            "candidate_sha256":candidate_sha256,"baseline_sha256":baseline_sha256,
+            "policy":policy,"overall":overall,"categories":categories,
+            "critical_gate":critical_gate,"regression_gate":regression_gate,
+            "paired_transitions":paired["paired_transitions"] if paired else None,
+            "identical_capture_documents":candidate_sha256==baseline_sha256 if paired else None,
+            "cases":[{"challenge_case_id":reverse[r["case_id"]],"category":r["category"],
+                      "matches":r["matches_reviewed_expectation"],"reason":r["reason"],"critical_failure":is_critical(r)}
+                     for r in rows],
+            "selected_acceptance_gates_pass":passed,
+            "expectations_are_customer_declarations":True,"exact_input_overlap_checked":True,
+            "semantic_overlap_or_prior_exposure_verified":False,"capture_blinding_verified":False,
+            "capture_model_identity_verified":False,"independent_ground_truth_verified":False,
+            "representative_population_verified":False,"business_outcomes_verified":False,
+            "execution_authorized":False,"business_tools_called":False}
+    return {**report,"acceptance_sha256":digest(report)}
+
+
+def private_write(path,value):
+    raw=json.dumps(value,sort_keys=True,ensure_ascii=True,allow_nan=False).encode("utf-8")
+    if len(raw)>LIMIT:refuse("Acceptance artifact exceeds byte limit")
+    fd=os.open(path,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
+    try:
+        with os.fdopen(fd,"wb") as f:f.write(raw)
+    except BaseException:
+        Path(path).unlink(missing_ok=True)
+        raise
+
+
+def write_freeze(directory,freeze,challenge):
+    root=Path(directory)
+    root.mkdir(mode=0o700,parents=False,exist_ok=False)
+    try:
+        private_write(root/"private-freeze.json",freeze)
+        private_write(root/"challenge.json",challenge)
+    except BaseException:
+        # Only the two files created by this invocation, in the new directory.
+        for name in ("private-freeze.json","challenge.json"):
+            (root/name).unlink(missing_ok=True)
+        root.rmdir()
+        raise
+
+
+def main(argv=None):
+    parser=argparse.ArgumentParser(description=__doc__)
+    mode=parser.add_subparsers(dest="mode",required=True)
+    for name in ("freeze","score"):
+        sub=mode.add_parser(name)
+        sub.add_argument("--development",required=True)
+        sub.add_argument("--holdout",required=True)
+        sub.add_argument("--output",required=True)
+    capture=mode.add_parser("capture")
+    capture.add_argument("--challenge",required=True)
+    capture.add_argument("--challenge-sha256",required=True)
+    capture.add_argument("--model",required=True)
+    capture.add_argument("--output",required=True)
+    capture.add_argument("--confirm-send-case-inputs-to-model",action="store_true")
+    capture.add_argument("--confirm-retain-model-output",action="store_true")
+    freeze=mode.choices["freeze"]
+    freeze.add_argument("--policy",required=True)
+    freeze.add_argument("--confirm-retain-sensitive-challenge",action="store_true")
+    score=mode.choices["score"]
+    for key in ("freeze","challenge","freeze-sha256","candidate","candidate-sha256"):
+        score.add_argument("--"+key,required=True)
+    score.add_argument("--baseline")
+    score.add_argument("--baseline-sha256")
+    score.add_argument("--confirm-reviewed-evaluation",action="store_true")
+    args=parser.parse_args(argv)
+    try:
+        if Path(args.output).exists():refuse("Choose a new output path")
+        spec=strict_load(Path(__file__).parent/"workflow.spec.json",262144)
+        if args.mode=="capture":
+            if not args.confirm_send_case_inputs_to_model or not args.confirm_retain_model_output:
+                refuse("Separately approve model disclosure and local output retention")
+            result=asyncio.run(capture_planner(spec,strict_load(args.challenge),
+                    challenge_sha256=args.challenge_sha256,model=args.model))
+            private_write(args.output,result)
+            print(json.dumps({"capture_sha256":digest(result),"cases":len(result["results"]),
+                              "execution_authorized":False}))
+            return 0
+        dev=strict_load(args.development,262144);test=strict_load(args.holdout,262144)
+        if args.mode=="freeze":
+            if not args.confirm_retain_sensitive_challenge:refuse("Confirm local retention of selected sensitive case inputs")
+            record,challenge=freeze_suite(spec,dev,test,strict_load(args.policy,32768))
+            write_freeze(args.output,record,challenge)
+            print(json.dumps({"freeze_sha256":digest(record),"challenge_sha256":digest(challenge),
+                              "cases":len(challenge["cases"]),"execution_authorized":False}))
+            return 0
+        if not args.confirm_reviewed_evaluation:refuse("Confirm offline evaluation of frozen reviewed cases")
+        result=evaluate_frozen(spec,dev,test,strict_load(args.freeze),strict_load(args.challenge),
+             strict_load(args.candidate),freeze_sha256=args.freeze_sha256,candidate_sha256=args.candidate_sha256,
+             baseline=strict_load(args.baseline) if args.baseline else None,baseline_sha256=args.baseline_sha256)
+        private_write(args.output,result)
+        print(json.dumps({"acceptance_sha256":result["acceptance_sha256"],
+                          "selected_acceptance_gates_pass":result["selected_acceptance_gates_pass"],
+                          "execution_authorized":False}))
+        return 0 if result["selected_acceptance_gates_pass"] else 3
+    except (ImplementationError,OSError,ValueError,RecursionError):
+        print("Heldout acceptance refused: invalid, changed, unauthorized or over-budget inputs.",file=sys.stderr)
+        return 2
+
+
+if __name__=="__main__":
+    raise SystemExit(main())
