@@ -81,6 +81,22 @@ requires fresh confirmation. The manual external AI file import remains
 available. No idea is created by generation, and all existing review and
 confirmation gates still apply.
 
+## Compact evidence for manually connected external AI
+
+After preparing a packet of at most 512 KiB, the dashboard also offers
+**Download compact evidence packet** and **Download compact AI instructions**
+when the exact combined evidence and guide byte count is smaller than the
+original pair. Inspect both matching files locally before deliberately
+providing them to an authorized Claude, ChatGPT or other model. The original
+download remains available. The compact attachment preserves the original
+occurrence references and packet digest; its matching guide requires the
+model to cite the original occurrences and return the original packet pin.
+The server verifies exact canonical expansion before offering the download.
+File order or budget edits invalidate both compact downloads. No uploads,
+provider calls, permission changes or deployment occur. Compact evidence
+is not redaction and smaller byte counts do not guarantee lower provider
+token consumption or equivalent reasoning quality.
+
 ## Optional compact evidence transport
 
 For prepared packets with a selected budget of at most 512 KiB, OWG reports
