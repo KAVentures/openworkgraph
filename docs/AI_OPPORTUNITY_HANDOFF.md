@@ -7,8 +7,17 @@ automation opportunity pipeline.
 
 ## Workflow
 
-1. Export the original workflow evidence from OWG and prepare the portable
-   packet with the existing `shared.ai_implementation_review` command.
+1. Export the original workflow evidence from OWG. In the local dashboard's
+   Automation pipeline, open **Add an external AI proposal to the implementation
+   portfolio**, select and order the original JSON files, choose a context byte
+   budget, and select **Prepare evidence packet**. Review the event/gap counts,
+   byte size and exact SHA-256. Download the exact canonical packet and fixed AI
+   instructions separately. The existing `shared.ai_implementation_review` CLI
+   remains an alternative. The budget is bytes, not provider tokens; oversized
+   evidence is refused, not silently truncated. The local dashboard API uses
+   the same 8 MiB request envelope cap. Changing source order/files or budget
+   invalidates the prepared download. No automatic upload or model invocation
+   occurs; inspect the contents and use only a company-authorized external AI.
 2. Have the external AI return a proposal using that packet's exact
    reference and proposal format. Review the proposal and material business
    assumptions yourself.
