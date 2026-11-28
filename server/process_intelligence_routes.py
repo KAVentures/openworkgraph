@@ -598,9 +598,19 @@ async def agent_case_compare(request: Request, log_id: str, case_a: str = Query(
 @router.get("/v1/process-intelligence/{log_id}/activity-profile")
 async def agent_activity_profile(request: Request, log_id: str,
                                  profile_activity: str = Query(min_length=1, max_length=500),
-                                 case_type: str | None = Query(default=None, max_length=200)):
+                                 case_type: str | None = Query(default=None, max_length=200),
+                                 case_filter: str | None = Query(default=None, max_length=8192)):
     _require_agent_access(request)
-    return await _answer(sharing.activity_profile, log_id, profile_activity, case_type)
+    chosen = None
+    if case_filter is not None:
+        import json
+        try:
+            chosen = json.loads(case_filter)
+        except ValueError:
+            raise HTTPException(422, "case_filter must be a JSON object") from None
+        if not isinstance(chosen, dict):
+            raise HTTPException(422, "case_filter must be a JSON object")
+    return await _answer(sharing.activity_profile, log_id, profile_activity, case_type, chosen)
 
 
 @router.get("/v1/process-intelligence/{log_id}/signal-scorecard")
@@ -677,9 +687,19 @@ async def agent_time_patterns(request: Request, log_id: str, time_zone: str = Qu
 async def agent_breakdown(request: Request, log_id: str, rows: str = Query(min_length=1, max_length=220),
                           columns: str | None = Query(default=None, max_length=220),
                           with_activity: str | None = Query(default=None, min_length=1, max_length=500),
-                          case_type: str | None = Query(default=None, max_length=200)):
+                          case_type: str | None = Query(default=None, max_length=200),
+                          case_filter: str | None = Query(default=None, max_length=8192)):
     _require_agent_access(request)
-    return await _answer(sharing.breakdown, log_id, rows, columns, case_type, with_activity)
+    chosen = None
+    if case_filter is not None:
+        import json
+        try:
+            chosen = json.loads(case_filter)
+        except ValueError:
+            raise HTTPException(422, "case_filter must be a JSON object") from None
+        if not isinstance(chosen, dict):
+            raise HTTPException(422, "case_filter must be a JSON object")
+    return await _answer(sharing.breakdown, log_id, rows, columns, case_type, with_activity, chosen)
 
 
 @router.get("/v1/process-intelligence/{log_id}/similar-cases")

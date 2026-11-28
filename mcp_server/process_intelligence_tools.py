@@ -963,15 +963,23 @@ def register_process_intelligence_tools(mcp: Any, runtime_module: Any) -> None:
                     {"case_a": case_a, "case_b": case_b, "case_type": case_type})
 
     @mcp.tool(annotations=_READ_ONLY)
-    def get_process_activity_profile(log_id: str, activity: str, case_type: str | None = None) -> dict[str, Any]:
+    def get_process_activity_profile(log_id: str, activity: str, case_type: str | None = None,
+                                     case_filter: dict[str, Any] | None = None) -> dict[str, Any]:
         """One activity of a shared log from every side: how many cases have it and how often it repeats, what
         usually comes before and after it (with median gaps), how long into a case it first happens, when in the
         week and day it occurs, and case durations with and without it. Associations, not causes. Aggregates only.
+        Optional case_filter (see openworkgraph://process-case-filter) profiles one group of at least 5 cases.
         """
         if not isinstance(activity, str) or not activity:
             raise ToolError("activity must name an activity")
+        params: dict[str, Any] = {"profile_activity": activity, "case_type": case_type}
+        if case_filter is not None:
+            if not isinstance(case_filter, dict) or not case_filter:
+                raise ToolError("case_filter must be a non-empty object")
+            import json as _json
+            params["case_filter"] = _json.dumps(case_filter, separators=(",", ":"))
         return _get("get_process_activity_profile", f"/v1/process-intelligence/{_log(log_id)}/activity-profile",
-                    {"profile_activity": activity, "case_type": case_type})
+                    params)
 
     @mcp.tool(annotations=_READ_ONLY)
     def get_process_signal_scorecard(log_id: str, months: int = 6) -> dict[str, Any]:
@@ -1058,17 +1066,25 @@ def register_process_intelligence_tools(mcp: Any, runtime_module: Any) -> None:
 
     @mcp.tool(annotations=_READ_ONLY)
     def get_process_breakdown(log_id: str, rows: str, columns: str | None = None, with_activity: str | None = None,
-                              case_type: str | None = None) -> dict[str, Any]:
+                              case_type: str | None = None,
+                              case_filter: dict[str, Any] | None = None) -> dict[str, Any]:
         """Case figures of a shared log by one or two dimensions, like a pivot table: cases, share, median and
         90th-percentile duration, events per case, rework rate and, with with_activity, the share of cases doing
         that activity. rows/columns are start_month, start_weekday, start_activity, end_activity,
         attribute:<name> (case attribute) or event_attribute:<name>. Cells with fewer than 5 cases are withheld.
-        Differences between cells describe recorded cases, not causes. Aggregates only.
+        Differences between cells describe recorded cases, not causes. Aggregates only. Optional case_filter
+        breaks down one group of at least 5 cases.
         """
         if not isinstance(rows, str) or not rows:
             raise ToolError("rows must name a dimension")
-        return _get("get_process_breakdown", f"/v1/process-intelligence/{_log(log_id)}/breakdown",
-                    {"rows": rows, "columns": columns, "with_activity": with_activity, "case_type": case_type})
+        params: dict[str, Any] = {"rows": rows, "columns": columns, "with_activity": with_activity,
+                                  "case_type": case_type}
+        if case_filter is not None:
+            if not isinstance(case_filter, dict) or not case_filter:
+                raise ToolError("case_filter must be a non-empty object")
+            import json as _json
+            params["case_filter"] = _json.dumps(case_filter, separators=(",", ":"))
+        return _get("get_process_breakdown", f"/v1/process-intelligence/{_log(log_id)}/breakdown", params)
 
     @mcp.tool(annotations=_READ_ONLY)
     def find_similar_process_cases(log_id: str, case_id: str, limit: int = 10,
