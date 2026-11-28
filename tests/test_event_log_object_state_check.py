@@ -179,6 +179,10 @@ def test_complete_review_csv_exports_all_events_and_objects(monkeypatch):
             assert rows[1]['recorded_value_review']=='' and rows[1]['recorded_value_present']=='true'
             assert rows[2]['object_result']=='missing_history' and rows[2]['recorded_value_present']=='false'
             assert rows[-1]['record_type']=='event_without_object' and rows[-1]['event_result']=='no_linked_object'
+    exact=StringIO(newline='')
+    assert s.export_worklist(log,{**settings,'result_event_id':'=e000','expected_revision':revision,'kind':'events'},exact)['rows']==1
+    exact_rows=list(csv.DictReader(StringIO(exact.getvalue())))
+    assert all(row['event_id_filter_review']=="'=e000" for row in exact_rows)
     filtered=StringIO(newline='')
     assert s.export_worklist(log,{**settings,'status':'unknown','expected_revision':revision,'kind':'objects'},filtered)['rows']==1
     assert list(csv.DictReader(StringIO(filtered.getvalue())))[1]['object_result']=='missing_history'
@@ -254,6 +258,12 @@ with TestClient(app) as c:
     assert witness.status_code==200 and witness.headers['cache-control']=='no-store',witness.text
     assert witness.json()['witnesses'][0]['status']=='ambiguous_value'
     assert c.post(witness_url,json=spec(event_id='e4'),headers=h).status_code==422
+    timeline_url=url+'/timeline'; timeline_spec=spec(expected_revision=r.json()['revision'],bucket='day')
+    assert c.post(timeline_url,json=timeline_spec,headers=bearer).status_code in (401,403)
+    timeline=c.post(timeline_url,json=timeline_spec,headers=h)
+    assert timeline.status_code==200 and timeline.headers['cache-control']=='no-store',timeline.text
+    assert timeline.json()['matching_events']==8 and timeline.json()['rows'][0]['events']==8
+    assert c.post(timeline_url,json=spec(bucket='day'),headers=h).status_code==422
     export_url=url+'/export';export_spec=spec(expected_revision=r.json()['revision'],kind='events')
     assert c.post(export_url,json=export_spec,headers=bearer).status_code in (401,403)
     exported=c.post(export_url,json=export_spec,headers=h)
@@ -301,3 +311,54 @@ def test_utc_date_window_bounds_evidence_exports_and_full_history(monkeypatch):
     with pytest.raises(w.EventLogWorkspaceError, match='event bound'):
         s.analyze(log, spec())
     assert s.analyze(log, request)['selected_events'] == 6
+
+
+def test_exact_event_result_filter_keeps_summary_and_scopes_evidence():
+    log = load()
+    request = spec(result_event_id='e4')
+    result = s.analyze(log, request)
+    assert result['selected_events'] == 8 and result['matching_events'] == 1
+    assert result['event_counts'] == {'matched':2,'not_matched':2,'unknown':3,'no_linked_object':1}
+    assert [row['event_id'] for row in result['rows']] == ['e4']
+    assert s.analyze(log, {**request, 'status':'matched'})['matching_events'] == 0
+    assert s.analyze(log, spec(result_event_id='e'))['matching_events'] == 0
+    assert s.witnesses(log, {**request,'event_id':'e4','expected_revision':result['revision']})['total_objects'] == 1
+    with pytest.raises(w.EventLogWorkspaceError, match='not in'):
+        s.witnesses(log, {**request,'event_id':'e1','expected_revision':result['revision']})
+    for kind in ('events', 'objects'):
+        out=StringIO(newline='')
+        assert s.export_worklist(log,{**request,'kind':kind,'expected_revision':result['revision']},out)['rows']==1
+        rows=list(csv.DictReader(StringIO(out.getvalue())))
+        assert rows[0]['event_id_filter_review']=='e4' and rows[1]['event_id_review']=='e4'
+    for invalid in ('', '  ', 'bad\nvalue', 'x'*201):
+        with pytest.raises(w.EventLogWorkspaceError,match='invalid'):
+            s.analyze(log,spec(result_event_id=invalid))
+
+
+def test_revision_pinned_state_timeline_groups_filtered_events(monkeypatch):
+    doc = fixture()
+    times = ['2024-01-01T00:00:00Z', '2024-01-01T12:00:00Z',
+             '2024-01-07T23:59:59Z', '2024-01-08T00:00:00Z',
+             '2024-02-01T00:00:00Z', '2024-02-02T00:00:00Z',
+             '2024-02-03T00:00:00Z', '2024-02-04T00:00:00Z']
+    for event, stamp in zip(doc['events'], times):
+        event['time'] = stamp
+    log = w.import_log(BytesIO(json.dumps(doc).encode()),name='timeline',source_format='ocel')['log_id']
+    report = s.analyze(log,spec()); revision = report['revision']
+    req = spec(expected_revision=revision,bucket='week',limit=1)
+    first=s.timeline(log,req)
+    second=s.timeline(log,{**req,'offset':first['next_offset']})
+    assert first['total_buckets']==3 and first['matching_events']==8
+    assert first['rows'][0]['start_utc']=='2024-01-01' and first['rows'][0]['events']==3
+    assert second['rows'][0]['start_utc']=='2024-01-08' and second['rows'][0]['events']==1
+    filtered=s.timeline(log,{**req,'bucket':'month','limit':30,'status':'no_linked_object'})
+    assert filtered['matching_events']==1 and filtered['rows'][0]['no_linked_object']==1
+    assert s.timeline(log,{**req,'result_event_id':'absent'})['rows']==[]
+    assert s.timeline(log,{**req,'from_date':'2024-02-01'})['matching_events']==4
+    for bad in ({'bucket':'year','expected_revision':revision},{'bucket':'day'},
+                {'bucket':'day','expected_revision':revision+1}):
+        with pytest.raises(w.EventLogWorkspaceError):
+            s.timeline(log,spec(**bad))
+    monkeypatch.setattr(s,'MAX_TIMELINE_BUCKETS',2)
+    with pytest.raises(w.EventLogWorkspaceError,match='non-empty periods'):
+        s.timeline(log,req)
