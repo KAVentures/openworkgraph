@@ -1,0 +1,231 @@
+"""Generated direct HTTP implementation tests, including the actual executor."""
+from copy import deepcopy
+from datetime import datetime, timedelta, timezone
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import json
+from pathlib import Path
+from tempfile import TemporaryDirectory
+import threading
+import unittest
+from unittest.mock import patch
+
+try:
+    import httpx
+    HTTP_AVAILABLE=True
+except ImportError:
+    HTTP_AVAILABLE=False
+
+from execute import ImplementationError, digest, prepare, review_template
+from test_execution import fixture, receipt
+if HTTP_AVAILABLE:
+    from execute_http import Operations, DirectClient, run, FORMAT
+
+
+def documents(origin="https://customer.example"):
+    spec,plan,case,bindings,_=fixture()
+    doc={"format":FORMAT,"process_reference":bindings["process_reference"],"spec_sha256":digest(spec),
+         "origin":origin,"reviewed":True,"allow_writes":True,"operations":[
+        {"name":"read_case","method":"GET","path":"/records/{issue}","fields":{"issue":"string"},
+         "query":{},"body":{},"expected_version_argument":None,"idempotency_argument":None,
+         "reviewed_provider_contract":True},
+        {"name":"resolve_case","method":"PATCH","path":"/records/{issue}","fields":{
+            "issue":"string","expected_version":"integer","request_id":"string"},
+         "query":{},"body":{},"expected_version_argument":"expected_version",
+         "idempotency_argument":"request_id","reviewed_provider_contract":True}]}
+    ops=Operations(spec,doc,digest(doc))
+    bindings["tool_server_url"]=origin
+    for binding in bindings["bindings"]:
+        binding["tool_schema_sha256"]=digest(ops.schemas[binding["tool_name"]])
+        if binding.get("precondition"):
+            condition=binding["precondition"]
+            condition["tool_schema_sha256"]=digest(ops.schemas[condition["tool_name"]])
+    intent=review_template(spec,prepare(spec,plan,case,bindings),case,bindings)
+    intent.update(customer_authorization_confirmed=True,source_reads_confirmed=True,
+                  expires_at=(datetime.now(timezone.utc)+timedelta(minutes=10)).isoformat())
+    return spec,plan,case,bindings,intent,doc,ops
+
+
+@unittest.skipUnless(HTTP_AVAILABLE,"Install requirements.txt for direct HTTP runtime tests")
+class HttpRuntime(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        self.temp=TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.environment=patch.dict("os.environ",{"OWG_EXECUTION_HTTP_TOKEN":"PRIVATE_HTTP_TOKEN",
+            "OWG_EXECUTION_SOURCE_READ_TOKEN":"PRIVATE_SOURCE_TOKEN","OWG_EXECUTION_MCP_TOKEN":"UNUSED_MCP_TOKEN"})
+        self.environment.start()
+        self.addCleanup(self.environment.stop)
+        self.calls=[]
+        self.resolved=False
+        self.version=3
+        self.failure=None
+        self.data=documents()
+
+    async def source(self,base,token,request):
+        self.assertEqual(token,"PRIVATE_SOURCE_TOKEN")
+        value=receipt(request)
+        if not self.resolved:
+            value.update(operation_verified=False,availability="unknown",reason="provider_state_not_expected_operation")
+        return value
+
+    def transport(self,request):
+        self.calls.append(request)
+        self.assertEqual(request.headers["Authorization"],"Bearer PRIVATE_HTTP_TOKEN")
+        self.assertEqual(request.url.host,"customer.example")
+        self.assertEqual(request.url.path,"/records/SYNTHETIC_PRIVATE_RECORD")
+        if request.method=="PATCH":
+            self.assertEqual(request.headers["If-Match"],'"3"')
+            self.assertEqual(request.headers["Idempotency-Key"],"synthetic-idempotency-key")
+            self.assertEqual(json.loads(request.content),{})
+            if self.failure=="redirect":
+                return httpx.Response(307,headers={"Location":"https://other.invalid"})
+            if self.failure=="timeout":
+                raise httpx.ReadTimeout("PRIVATE_TRANSPORT_ERROR")
+            if self.failure=="bad_json":
+                return httpx.Response(200,headers={"Content-Type":"application/json"},content=b'{"success":true,"success":false}')
+            if self.failure=="oversized":
+                return httpx.Response(200,json={"success":True,"data":"x"*70000})
+            self.resolved=True
+        return httpx.Response(200,json={"version":self.version,"success":True,"private":"PRIVATE_PROVIDER_RESPONSE"})
+
+    def factory(self,**kwargs):
+        self.assertIs(kwargs["follow_redirects"],False)
+        self.assertIs(kwargs["trust_env"],False)
+        return httpx.AsyncClient(transport=httpx.MockTransport(self.transport),**kwargs)
+
+    async def execute(self,data=None,folder="journal"):
+        spec,plan,case,bindings,intent,doc,ops=data or self.data
+        return await run(spec,plan,case,bindings,intent,ops,journal_directory=Path(self.temp.name)/folder,
+                         client_factory=self.factory,receipt_reader=self.source)
+
+    async def test_complete_real_executor_and_durable_no_replay(self):
+        report=await self.execute()
+        self.assertEqual([x.method for x in self.calls],["GET","PATCH","GET"])
+        self.assertTrue(report["all_tool_results_matched"])
+        self.assertTrue(report["all_declared_operations_verified"])
+        self.assertFalse(report["business_objective_verified"])
+        journal="".join(p.read_text() for p in (Path(self.temp.name)/"journal").glob("*.jsonl"))
+        for private in ("PRIVATE_HTTP_TOKEN","PRIVATE_SOURCE_TOKEN","SYNTHETIC_PRIVATE_RECORD","PRIVATE_PROVIDER_RESPONSE"):
+            self.assertNotIn(private,journal)
+        with self.assertRaises(ImplementationError):
+            await self.execute()
+        self.assertEqual(len(self.calls),3)
+
+    async def test_failed_precondition_stops_write(self):
+        self.version=4
+        report=await self.execute()
+        self.assertEqual([x.method for x in self.calls],["GET"])
+        self.assertFalse(report["all_tool_results_matched"])
+        self.assertFalse(self.resolved)
+
+    async def test_uncertain_write_outcomes_are_not_retried_or_followed(self):
+        for failure in ("redirect","timeout","bad_json","oversized"):
+            self.failure=failure
+            self.calls.clear()
+            report=await self.execute(folder=failure)
+            self.assertEqual([x.method for x in self.calls],["GET","PATCH"])
+            self.assertFalse(report["all_tool_results_matched"])
+            self.assertFalse(report["all_declared_operations_verified"])
+
+    def repin(self,data):
+        spec,plan,case,bindings,intent,doc,ops=data
+        intent=review_template(spec,prepare(spec,plan,case,bindings),case,bindings)
+        intent.update(customer_authorization_confirmed=True,source_reads_confirmed=True,
+                      expires_at=(datetime.now(timezone.utc)+timedelta(minutes=10)).isoformat())
+        return spec,plan,case,bindings,intent,doc,ops
+
+    async def test_unpinned_catalog_or_wrong_method_cannot_call_provider(self):
+        for mutation in ("pin","kind","header","origin","path"):
+            data=list(deepcopy(self.data))
+            spec,plan,case,bindings,intent,doc,ops=data
+            if mutation=="pin":
+                bindings["bindings"][0]["tool_schema_sha256"]=None
+            elif mutation=="kind":
+                bindings["bindings"][1]["tool_name"]="resolve_case"
+                bindings["bindings"][1]["tool_schema_sha256"]=digest(ops.schemas["resolve_case"])
+            elif mutation=="header":
+                bindings["bindings"][0]["idempotency"]["argument"]="issue"
+            elif mutation=="origin":
+                bindings["tool_server_url"]="https://other.invalid"
+            elif mutation=="path":
+                case["issue"]="../private"
+            with self.assertRaises(ImplementationError):
+                await self.execute(self.repin(data),folder=mutation)
+        self.assertEqual(self.calls,[])
+
+    def test_catalog_is_offline_and_existing_binding_compatible(self):
+        from configure import validate_catalog
+        spec,_,_,_,_,doc,ops=self.data
+        metadata=ops.catalog(spec)
+        validate_catalog(spec,metadata)
+        self.assertFalse(metadata["business_tool_calls"])
+        self.assertNotIn("/records/",json.dumps(metadata))
+        changed=deepcopy(doc)
+        changed["operations"][1]["path"]="/other/{issue}"
+        with self.assertRaises(ImplementationError):
+            Operations(spec,changed,digest(doc))
+        changed_ops=Operations(spec,changed,digest(changed))
+        self.assertNotEqual(digest(changed_ops.schemas["resolve_case"]),digest(ops.schemas["resolve_case"]))
+        self.assertNotEqual(digest(changed_ops.schemas["read_case"]),digest(ops.schemas["read_case"]))
+
+    def test_catalog_rejects_unreviewed_or_unsafe_operations(self):
+        spec,_,_,_,_,doc,_=self.data
+        for changes in ({"allow_writes":False},{"reviewed":False},{"origin":"https://customer.example/path"},
+                        {"origin":"http://customer.example"},{"origin":"https://user:pw@customer.example"}):
+            changed={**doc,**changes}
+            with self.assertRaises(ImplementationError):
+                Operations(spec,changed,digest(changed))
+        for changes in ({"path":"/{issue}/../x"},{"path":"/{issue}?x=1"},{"method":"DELETE"},
+                        {"expected_version_argument":None},{"reviewed_provider_contract":False},
+                        {"body":{"issue":"id"}},{"query":{"unknown":"name"}}):
+            changed=deepcopy(doc)
+            changed["operations"][1].update(changes)
+            with self.assertRaises(ImplementationError):
+                Operations(spec,changed,digest(changed))
+
+    async def test_actual_loopback_http_write_and_readback(self):
+        state={"version":3,"resolved":False,"calls":[]}
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self,*args):
+                pass
+            def respond(self,status,payload):
+                raw=json.dumps(payload).encode()
+                self.send_response(status)
+                self.send_header("Content-Type","application/json")
+                self.send_header("Content-Length",str(len(raw)))
+                self.end_headers()
+                self.wfile.write(raw)
+            def do_GET(self):
+                state["calls"].append(self.command)
+                if self.headers.get("Authorization")!="Bearer PRIVATE_HTTP_TOKEN":
+                    return self.respond(403,{"success":False})
+                self.respond(200,{"success":True,"version":state["version"]})
+            def do_PATCH(self):
+                state["calls"].append(self.command)
+                self.rfile.read(int(self.headers.get("Content-Length","0")))
+                if (self.headers.get("Authorization")!="Bearer PRIVATE_HTTP_TOKEN"
+                    or self.headers.get("If-Match")!='"3"'
+                    or self.headers.get("Idempotency-Key")!="synthetic-idempotency-key"):
+                    return self.respond(412,{"success":False})
+                state["resolved"]=True
+                state["version"]=4
+                self.respond(200,{"success":True,"version":4})
+        server=ThreadingHTTPServer(("127.0.0.1",0),Handler)
+        thread=threading.Thread(target=server.serve_forever,daemon=True)
+        thread.start()
+        try:
+            spec,plan,case,bindings,intent,doc,ops=documents("http://127.0.0.1:"+str(server.server_port))
+            async def source(base,token,request):
+                value=receipt(request)
+                if not state["resolved"]:
+                    value.update(operation_verified=False,availability="unknown",reason="provider_state_not_expected_operation")
+                return value
+            report=await run(spec,plan,case,bindings,intent,ops,
+                journal_directory=Path(self.temp.name)/"real-http",receipt_reader=source)
+            self.assertEqual(state["calls"],["GET","PATCH","GET"])
+            self.assertTrue(report["all_tool_results_matched"])
+            self.assertTrue(report["all_declared_operations_verified"])
+            self.assertEqual(state["version"],4)
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=3)

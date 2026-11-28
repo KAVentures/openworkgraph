@@ -1,0 +1,310 @@
+"""Direct customer REST execution target for a reviewed OWG runtime project.
+
+No MCP server or model required. The existing executor owns the exact case
+intent, plan, fresh preconditions, independent source checks and durable journal.
+This adapter translates only fixed, locally reviewed operations.
+"""
+import argparse
+import asyncio
+from copy import deepcopy
+from datetime import datetime, timezone
+import json
+import math
+import os
+from pathlib import Path
+import re
+from urllib.parse import urlsplit
+
+import httpx
+
+from execute import (ImplementationError, digest, reference, load_object, prepare,
+                     validate_intent, execute_approved, endpoint, _pairs, _constant)
+
+FORMAT = "openworkgraph.customer-http-operations.v1"
+MAX_OPERATIONS = 40
+MAX_FIELDS = 30
+MAX_RESPONSE = 65536
+MAX_REQUEST = 65536
+NAME = re.compile(r"[A-Za-z][A-Za-z0-9_]{0,63}\Z")
+SEGMENT = re.compile(r"[A-Za-z0-9_-][A-Za-z0-9_.~-]{0,199}\Z")
+PLACEHOLDER = re.compile(r"\{([A-Za-z][A-Za-z0-9_]{0,63})\}\Z")
+IDEMPOTENCY = re.compile(r"[A-Za-z0-9_.:-]{1,240}\Z")
+ETAG = re.compile(r'"[A-Za-z0-9_.:~/-]{1,238}"\Z')
+TOKEN = re.compile(r"[!-~]{1,8192}\Z")
+KINDS = {"string", "integer", "number", "boolean"}
+METHODS = {"GET", "POST", "PUT", "PATCH"}
+
+
+def require(condition, message):
+    if not condition:
+        raise ImplementationError(message)
+
+
+def exact(value, fields):
+    return isinstance(value,dict) and set(value)==set(fields)
+
+
+def origin(value):
+    normalized=endpoint(value)
+    try:
+        parts=urlsplit(normalized)
+        require(parts.path in ("","/") and parts.hostname and not parts.query and not parts.fragment,
+                "Direct HTTP requires a fixed origin without a path")
+        require(parts.scheme=="https" or parts.hostname in ("127.0.0.1","::1"),
+                "Direct HTTP requires HTTPS or explicit numeric loopback")
+        require(normalized==value and parts.netloc==parts.netloc.lower(),
+                "Use the exact normalized origin")
+        return normalized
+    except ValueError:
+        raise ImplementationError("Invalid reviewed HTTP origin") from None
+
+
+def path_fields(path):
+    require(isinstance(path,str) and 2<=len(path)<=400 and path.startswith("/"),
+            "A bounded fixed HTTP path is required")
+    result=[]
+    for part in path[1:].split("/"):
+        match=PLACEHOLDER.fullmatch(part)
+        if match:
+            result.append(match.group(1))
+        else:
+            require(SEGMENT.fullmatch(part) is not None and part not in (".",".."),
+                    "HTTP paths may contain only fixed safe segments or whole-segment arguments")
+    require(len(result)==len(set(result)),"Duplicate path argument")
+    return result
+
+
+def scalar(value,kind):
+    if kind=="string":
+        return isinstance(value,str) and 1<=len(value)<=2048 and all(
+            32<=ord(c)<127 or 160<=ord(c)<0xD800 or 0xE000<=ord(c)<0xFFFE or 0x10000<=ord(c)<=0x10FFFF for c in value)
+    if kind=="boolean":
+        return type(value) is bool
+    if kind=="integer":
+        return type(value) is int and -(2**53-1)<=value<=2**53-1
+    return type(value) in (int,float) and abs(value)<=2**53-1 and math.isfinite(value)
+
+
+def version_header(value):
+    if type(value) is int and 0<=value<=2**53-1:
+        return '"'+str(value)+'"'
+    require(isinstance(value,str) and ETAG.fullmatch(value) is not None,
+            "Conditional HTTP writes require a strong reviewed entity tag")
+    return value
+
+
+class Operations:
+    def __init__(self,spec,document,expected_sha256):
+        require(isinstance(expected_sha256,str) and re.fullmatch(r"[a-f0-9]{64}",expected_sha256)
+                and digest(document)==expected_sha256,"Direct HTTP operation catalog digest mismatch")
+        require(exact(document,("format","process_reference","spec_sha256","origin","reviewed",
+            "allow_writes","operations")) and document["format"]==FORMAT
+            and document["process_reference"]==reference(spec) and document["spec_sha256"]==digest(spec),
+            "HTTP operation catalog must identify the exact runtime specification")
+        require(document["reviewed"] is True and type(document["allow_writes"]) is bool,
+                "Explicit local operation review required")
+        self.origin=origin(document["origin"])
+        self.sha256=expected_sha256
+        self.operations={}
+        self.schemas={}
+        rows=document["operations"]
+        require(isinstance(rows,list) and 1<=len(rows)<=MAX_OPERATIONS,
+                "Select a bounded nonempty operation catalog")
+        for raw in rows:
+            require(exact(raw,("name","method","path","fields","query","body","expected_version_argument",
+                "idempotency_argument","reviewed_provider_contract")),"Invalid HTTP operation definition")
+            name,method=raw["name"],raw["method"]
+            require(isinstance(name,str) and NAME.fullmatch(name) and name not in self.operations
+                    and isinstance(method,str) and method in METHODS and raw["reviewed_provider_contract"] is True,
+                    "Unique reviewed HTTP operations required")
+            fields=raw["fields"]
+            require(isinstance(fields,dict) and len(fields)<=MAX_FIELDS and all(
+                isinstance(k,str) and NAME.fullmatch(k) and isinstance(v,str) and v in KINDS
+                for k,v in fields.items()),"HTTP arguments must use bounded flat scalar types")
+            path=path_fields(raw["path"])
+            query,body=raw["query"],raw["body"]
+            for mapping in (query,body):
+                require(isinstance(mapping,dict) and all(isinstance(k,str) and NAME.fullmatch(k)
+                    and isinstance(v,str) and NAME.fullmatch(v) for k,v in mapping.items())
+                    and len(set(mapping.values()))==len(mapping),"Invalid explicit HTTP argument mapping")
+            version,key=raw["expected_version_argument"],raw["idempotency_argument"]
+            used=path+list(query)+list(body)
+            if method=="GET":
+                require(not body and version is None and key is None,"GET operations cannot send a body or write headers")
+            else:
+                require(document["allow_writes"] is True and isinstance(version,str) and isinstance(key,str)
+                        and version!=key and fields.get(version) in ("string","integer")
+                        and fields.get(key)=="string",
+                        "Writes require separate catalog approval, expected version and idempotency key")
+                used.extend((version,key))
+            require(len(used)==len(set(used)) and set(used)==set(fields),
+                    "Every HTTP argument must map exactly once")
+            require(all(fields[x] in ("string","integer") for x in path),"Path arguments must be string or integer")
+            self.operations[name]=deepcopy(raw)
+            # Existing reviewed tool-schema pin now binds the ENTIRE operation
+            # catalog, including origin, method, path, mapping and approval.
+            self.schemas[name]={"type":"object","additionalProperties":False,
+                "properties":{k:{"type":v} for k,v in fields.items()},
+                "required":sorted(fields),"description":"OWG direct HTTP operation catalog sha256 "+self.sha256}
+
+    def catalog(self,spec):
+        return {"format":"openworkgraph.customer-tool-catalog.v1","process_reference":reference(spec),
+                "spec_sha256":digest(spec),"tool_server_url":self.origin,
+                "inspected_at":datetime.now(timezone.utc).isoformat(),
+                "tools":[{"name":name,"description":"Locally reviewed "+row["method"]+" HTTP operation "+name,
+                          "input_schema_sha256":digest(self.schemas[name]),
+                          "input_fields":[{"name":k,"type":v,"required":True} for k,v in sorted(row["fields"].items())],
+                          "schema_constraints_omitted":True,"annotations_are_authorization":False}
+                         for name,row in sorted(self.operations.items())],
+                "omitted_tool_count":0,"maximum_tools":MAX_OPERATIONS,"maximum_serialized_bytes":262144,
+                "business_tool_calls":False,"execution_authorized":False,
+                "raw_schemas_defaults_examples_and_request_credentials_included":False}
+
+    def request(self,name,arguments):
+        require(isinstance(name,str) and name in self.operations,"HTTP operation is not in the reviewed catalog")
+        row=self.operations[name]
+        fields=row["fields"]
+        require(isinstance(arguments,dict) and set(arguments)==set(fields)
+                and all(scalar(arguments[k],v) for k,v in fields.items()),
+                "HTTP arguments do not match exact scalar contract")
+        path=[]
+        for part in row["path"][1:].split("/"):
+            match=PLACEHOLDER.fullmatch(part)
+            if match:
+                value=str(arguments[match.group(1)])
+                require(SEGMENT.fullmatch(value) and value not in (".",".."),
+                        "Unsafe HTTP path argument")
+                path.append(value)
+            else:
+                path.append(part)
+        params={wire:arguments[arg] for arg,wire in row["query"].items()}
+        body={wire:arguments[arg] for arg,wire in row["body"].items()}
+        headers={"Accept":"application/json"}
+        if row["method"]!="GET":
+            headers["If-Match"]=version_header(arguments[row["expected_version_argument"]])
+            key=arguments[row["idempotency_argument"]]
+            require(IDEMPOTENCY.fullmatch(key),"Invalid HTTP idempotency key")
+            headers["Idempotency-Key"]=key
+        require(len(json.dumps([params,body],allow_nan=False).encode())<=MAX_REQUEST,
+                "HTTP request arguments exceed the byte bound")
+        return row["method"],self.origin+"/"+"/".join(path),params,body,headers
+
+    def preflight(self,spec,plan,case,bindings,intent):
+        prepared=prepare(spec,plan,case,bindings)
+        validate_intent(spec,prepared,case,bindings,intent)
+        require(bindings.get("tool_server_url")==self.origin,"Bindings must pin the reviewed HTTP origin")
+        mapped={r["activity_id"]:r for r in bindings["bindings"]}
+        for action in prepared["actions"]:
+            name=action["tool_name"]
+            require(name in self.operations,"Mapped HTTP operation unavailable")
+            row=self.operations[name]
+            require(action["tool_schema_sha256"]==digest(self.schemas[name]),
+                    "Every direct HTTP action requires its exact catalog-bound schema pin")
+            kind="read" if row["method"]=="GET" else "write"
+            require(action["operation_kind"]==kind,"HTTP method differs from reviewed operation kind")
+            self.request(name,action["arguments"])
+            if kind=="write":
+                binding=mapped[action["activity_id"]]
+                control=binding.get("concurrency_control") or {}
+                idempotency=binding.get("idempotency") or {}
+                require(control.get("mode")=="expected_version" and control.get("argument")==row["expected_version_argument"]
+                    and idempotency.get("mode")=="argument_key" and idempotency.get("argument")==row["idempotency_argument"],
+                    "HTTP write headers must use the exact reviewed concurrency and idempotency arguments")
+                condition=action["precondition"]
+                require(condition is not None and condition["tool_name"] in self.operations
+                        and self.operations[condition["tool_name"]]["method"]=="GET",
+                        "Direct HTTP writes require a reviewed GET precondition")
+                require(condition["tool_schema_sha256"]==digest(self.schemas[condition["tool_name"]]),
+                        "Every HTTP precondition requires its exact catalog-bound schema pin")
+                self.request(condition["tool_name"],condition["arguments"])
+        return prepared
+
+
+class DirectClient:
+    """Implements the executor's tool transport interface, without MCP."""
+    def __init__(self,operations,url,token,*,client_factory=httpx.AsyncClient):
+        require(url==operations.origin and isinstance(token,str) and TOKEN.fullmatch(token),
+                "Invalid direct HTTP origin or bearer credential")
+        self.operations=operations
+        self.token=token
+        self.client_factory=client_factory
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self,*args):
+        return False
+
+    async def list_tools(self):
+        return [{"name":name,"inputSchema":deepcopy(schema)}
+                for name,schema in sorted(self.operations.schemas.items())]
+
+    async def call_tool(self,name,arguments):
+        method,url,params,body,headers=self.operations.request(name,arguments)
+        headers["Authorization"]="Bearer "+self.token
+        # A fresh cookie-free client per operation. No redirects, ambient
+        # proxies, automatic retries, arbitrary headers or caller URLs.
+        try:
+            async with asyncio.timeout(25):
+                async with self.client_factory(timeout=20,follow_redirects=False,trust_env=False) as client:
+                    kwargs={"params":params,"headers":headers}
+                    if method!="GET":
+                        kwargs["json"]=body
+                    async with client.stream(method,url,**kwargs) as response:
+                        require(response.status_code in (200,201),
+                                "Reviewed HTTP operation did not return an accepted result; inspect before retry")
+                        require(response.headers.get("content-type","").split(";")[0].strip().lower()=="application/json",
+                                "HTTP operation requires an explicit JSON result")
+                        data=bytearray()
+                        async for part in response.aiter_bytes(chunk_size=8192):
+                            require(len(data)+len(part)<=MAX_RESPONSE,"HTTP result exceeded its byte bound")
+                            data.extend(part)
+            obj=json.loads(data,object_pairs_hook=_pairs,parse_constant=_constant)
+            require(isinstance(obj,dict),"HTTP operation requires a structured result object")
+            return {"isError":False,"structuredContent":obj}
+        except (httpx.HTTPError,TimeoutError,ValueError,UnicodeError,RecursionError):
+            raise ImplementationError("Direct HTTP operation failed or outcome is uncertain; inspect the journal") from None
+
+
+async def run(spec,plan,case,bindings,intent,operations,*,journal_directory,
+              client_factory=httpx.AsyncClient,**executor_kwargs):
+    operations.preflight(spec,plan,case,bindings,intent)
+    return await execute_approved(spec,plan,case,bindings,intent,journal_directory=journal_directory,
+        client_factory=lambda url,token:DirectClient(operations,url,token,client_factory=client_factory),
+        tool_token_env="OWG_EXECUTION_HTTP_TOKEN",**executor_kwargs)
+
+
+def write_new(path,value):
+    raw=json.dumps(value,indent=2,allow_nan=False).encode()
+    require(len(raw)<=262144,"Catalog exceeds export bound")
+    fd=os.open(path,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
+    with os.fdopen(fd,"wb") as stream:
+        stream.write(raw);stream.flush();os.fsync(stream.fileno())
+
+
+def main():
+    parser=argparse.ArgumentParser(description="Review or execute a separately authorized direct REST implementation")
+    parser.add_argument("--operations",required=True)
+    parser.add_argument("--operations-sha256",required=True)
+    mode=parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--catalog",help="Write new local metadata catalog without network access")
+    mode.add_argument("--execute-approved",action="store_true")
+    for field in ("plan","case","bindings","intent"):
+        parser.add_argument("--"+field)
+    parser.add_argument("--journal-directory",default=str(Path(__file__).parent/"execution-journal"))
+    args=parser.parse_args()
+    spec=load_object(Path(__file__).parent/"workflow.spec.json",limit=262144)
+    operations=Operations(spec,load_object(args.operations,limit=262144),args.operations_sha256)
+    if args.catalog:
+        write_new(args.catalog,operations.catalog(spec))
+        return {"catalog_written":True,"operations":len(operations.operations),"provider_calls":False}
+    require(all((args.plan,args.case,args.bindings,args.intent)),"Exact plan, case, bindings and reviewed intent required")
+    return asyncio.run(run(spec,*(load_object(getattr(args,x)) for x in ("plan","case","bindings","intent")),
+                           operations,journal_directory=args.journal_directory))
+
+
+if __name__=="__main__":
+    try:
+        print(json.dumps(main(),indent=2))
+    except Exception:
+        raise SystemExit("Direct HTTP implementation stopped. Review exact catalog, bindings, intent and journal; do not automatically retry.") from None

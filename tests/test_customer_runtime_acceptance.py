@@ -53,6 +53,7 @@ def fake(module, root, home):
     assert not (root / "customer-bindings.json").exists()
     assert home.is_dir()
     assert "OWG_EXECUTION_MCP_TOKEN" not in check._environment(home)
+    assert "OWG_EXECUTION_HTTP_TOKEN" not in check._environment(home)
     assert "OPENAI_API_KEY" not in check._environment(home)
     assert check._environment(home)["HOME"] == str(home)
     verify_directory(root, sys.argv[1])
@@ -61,12 +62,12 @@ check._run_suite = fake
 raise SystemExit(check.main(["--manifest-sha256", sys.argv[1],
                              "--confirm-trusted-synthetic-tests"]))
 """
-    env = {**os.environ, "OWG_EXECUTION_MCP_TOKEN": "SECRET_TOKEN", "OPENAI_API_KEY": "SECRET_KEY"}
+    env = {**os.environ, "OWG_EXECUTION_MCP_TOKEN": "SECRET_TOKEN", "OWG_EXECUTION_HTTP_TOKEN": "SECRET_HTTP_TOKEN", "OPENAI_API_KEY": "SECRET_KEY"}
     run = _run(tmp_path, code, _pin(tmp_path), suite_status, env=env)
     assert run.returncode == exit_code, run.stderr
     data = json.loads(run.stdout)
-    assert len(data["suites"]) == 10
-    assert {"test_run_queue", "test_binding_rehearsal"} <= {suite["suite"] for suite in data["suites"]}
+    assert len(data["suites"]) == 11
+    assert {"test_run_queue", "test_binding_rehearsal", "test_execute_http"} <= {suite["suite"] for suite in data["suites"]}
     assert data["manifest_sha256"] == _pin(tmp_path)
     assert data["status"] == ("failed" if exit_code == 1 else suite_status)
     assert not data["business_outcomes_verified"]
