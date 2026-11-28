@@ -16,7 +16,6 @@ from typing import Any
 from . import event_log_workspace as workspace
 from .event_log_workspace import EventLogWorkspaceError
 
-_SEP = workspace._SEP
 MAX_MODEL_PATHS = 10
 MAX_MODEL_PATH_LENGTH = 100
 MAX_ALIGNED_VARIANTS = 2000
@@ -88,7 +87,7 @@ def conformance(log_id: str, model: Any, case_type: str | None = None,
     def run(conn):
         total_cases = conn.execute("SELECT count(DISTINCT case_id) FROM ce").fetchone()[0]
         rows = conn.execute(f"""SELECT path, count(*) AS cases, count(*) OVER () AS observed_variants FROM (
-              SELECT string_agg(activity, '{_SEP}' ORDER BY ts, event_id) AS path FROM ce GROUP BY case_id)
+              SELECT list(activity ORDER BY ts, event_id) AS path FROM ce GROUP BY case_id)
             GROUP BY path ORDER BY cases DESC, path LIMIT {max_variants}""").fetchall()
         observed_variants = rows[0][2] if rows else 0
         aligned_cases = fitting_cases = 0
@@ -98,8 +97,7 @@ def conformance(log_id: str, model: Any, case_type: str | None = None,
         too_long = 0
         variants_aligned = variants_skipped_too_long = 0
         worst: list[dict[str, Any]] = []
-        for joined, cases, _ in rows:
-            trace = joined.split(_SEP)
+        for trace, cases, _ in rows:
             if len(trace) > MAX_ALIGNED_TRACE_LENGTH:
                 too_long += cases
                 variants_skipped_too_long += 1
@@ -301,13 +299,13 @@ def root_cause(log_id: str, outcome: str, case_type: str | None = None, *, thres
         "contains_activity": "bool_or(activity = $activity)",
         "ends_with": "arg_max(activity, (ts, event_id)) = $activity",
         "rework": "count(*) > count(DISTINCT activity)",
-        "variant_in": f"string_agg(activity, '{workspace._SEP}' ORDER BY ts, event_id) IN (SELECT unnest($paths))",
+        "variant_in": "list(activity ORDER BY ts, event_id) IN (SELECT unnest($paths::VARCHAR[][]))",
         "tagged": "case_id IN (SELECT case_id FROM case_tags WHERE log_id = $tag_log AND tag = $tag)",
     }[outcome]
     params = {key: value for key, value in (
         ("threshold", threshold_seconds if threshold_seconds is not None else 0),
         ("activity", activity or ""),
-        ("paths", [workspace._SEP.join(v) for v in variants or []]),
+        ("paths", variants or []),
         ("tag_log", log_id),
         ("tag", (tag or "").strip()),
     ) if "$" + key in outcome_sql}

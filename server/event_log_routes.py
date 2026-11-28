@@ -2257,12 +2257,12 @@ def event_log_variants(request: Request, log_id: str, case_type: str | None = Qu
 
 @router.get("/v1/event-logs/{log_id}/variants.csv")
 def event_log_variants_csv(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
-                           cohort: dict[str, Any] = Depends(_case_filter)):
+                           exact_paths: bool = Query(default=False), cohort: dict[str, Any] = Depends(_case_filter)):
     """Every variant as spreadsheet-safe CSV: path, cases, share, running share, durations. Not stored."""
     from . import event_log_variant_export as export
     _require_dashboard(request)
     try:
-        text, meta = export.variants_csv(log_id, case_type, cohort=cohort)
+        text, meta = export.variants_csv(log_id, case_type, cohort=cohort, exact_paths=exact_paths)
     except workspace.EventLogWorkspaceError as exc:
         raise HTTPException(422, str(exc)) from None
     return Response(text, media_type="text/csv; charset=utf-8", headers={
@@ -2876,6 +2876,24 @@ def event_log_domain_pack_configurations(request: Request, log_id: str, pack_id:
     return _respond(domain_packs.configuration_history, log_id, pack_id)
 
 
+@router.get("/v1/event-logs/{log_id}/domain-packs/{pack_id}/template")
+def event_log_domain_pack_template_export(request: Request, log_id: str, pack_id: str = PathParam(pattern=_PACK_ID)):
+    from . import event_log_domain_pack_template as template
+    _require_dashboard(request)
+    return _respond(template.export_template, log_id, pack_id)
+
+
+@router.post("/v1/event-logs/{log_id}/domain-packs/{pack_id}/template/review")
+async def event_log_domain_pack_template_review(request: Request, log_id: str, pack_id: str = PathParam(pattern=_PACK_ID)):
+    from . import event_log_domain_pack_template as template
+    _require_dashboard(request)
+    spec = await _json_body(request, "portable domain pack setup", strict=True, limit=131072)
+    _require_dashboard(request)
+    response = await run_in_threadpool(_respond, template.review_template, log_id, pack_id, spec)
+    _require_dashboard(request)
+    return response
+
+
 @router.post("/v1/event-logs/{log_id}/domain-packs/{pack_id}/preflight")
 async def event_log_domain_pack_preflight(request: Request, log_id: str, pack_id: str = PathParam(pattern=_PACK_ID)):
     from . import event_log_domain_pack_preflight as preflight
@@ -2921,6 +2939,97 @@ async def event_log_domain_pack_benchmark(request: Request, log_id: str, pack_id
     _require_dashboard(request)
     spec = await _json_body(request, "domain benchmark", strict=True, limit=4096)
     response = await run_in_threadpool(_respond, benchmark.compare, log_id, pack_id, spec)
+    _require_dashboard(request)
+    return response
+
+
+@router.post("/v1/event-logs/{log_id}/domain-packs/{pack_id}/deadline-sensitivity")
+async def event_log_domain_pack_deadline_sensitivity(request: Request, log_id: str, pack_id: str = PathParam(pattern=_PACK_ID)):
+    from . import event_log_domain_pack_deadlines as deadlines
+    _require_dashboard(request)
+    spec = await _json_body(request, "domain pack deadline sensitivity", strict=True, limit=8192)
+    _require_dashboard(request)
+    response = await run_in_threadpool(_respond, deadlines.review, log_id, pack_id, spec)
+    _require_dashboard(request)
+    return response
+
+
+@router.post("/v1/event-logs/{log_id}/domain-packs/{pack_id}/portfolio/preview")
+async def event_log_domain_pack_portfolio_preview(request: Request, log_id: str, pack_id: str = PathParam(pattern=_PACK_ID)):
+    from . import event_log_domain_pack_portfolio as portfolio
+    _require_dashboard(request)
+    spec = await _json_body(request, "domain pack portfolio preview", strict=True, limit=8192)
+    _require_dashboard(request)
+    response = await run_in_threadpool(_respond, portfolio.preflight, log_id, pack_id, spec)
+    _require_dashboard(request)
+    return response
+
+
+@router.post("/v1/event-logs/{log_id}/domain-packs/{pack_id}/portfolio")
+async def event_log_domain_pack_portfolio(request: Request, log_id: str, pack_id: str = PathParam(pattern=_PACK_ID)):
+    from . import event_log_domain_pack_portfolio as portfolio
+    _require_dashboard(request)
+    spec = await _json_body(request, "domain pack portfolio comparison", strict=True, limit=8192)
+    _require_dashboard(request)
+    response = await run_in_threadpool(_respond, portfolio.compare, log_id, pack_id, spec)
+    _require_dashboard(request)
+    return response
+
+
+@router.get("/v1/event-logs/{log_id}/domain-packs/{pack_id}/overlap")
+def event_log_domain_pack_overlap_available(request: Request, log_id: str, pack_id: str = PathParam(pattern=_PACK_ID)):
+    from . import event_log_domain_pack_overlap as overlap
+    _require_dashboard(request)
+    return _respond(overlap.available, log_id, pack_id)
+
+
+@router.post("/v1/event-logs/{log_id}/domain-packs/{pack_id}/overlap")
+async def event_log_domain_pack_overlap(request: Request, log_id: str, pack_id: str = PathParam(pattern=_PACK_ID)):
+    from . import event_log_domain_pack_overlap as overlap
+    _require_dashboard(request)
+    spec = await _json_body(request, "domain pack compliance overlap", strict=True, limit=8192)
+    _require_dashboard(request)
+    response = await run_in_threadpool(_respond, overlap.review, log_id, pack_id, spec)
+    _require_dashboard(request)
+    return response
+
+
+@router.get("/v1/event-logs/{log_id}/domain-packs/{pack_id}/priority")
+def event_log_domain_pack_priority_available(request: Request, log_id: str, pack_id: str = PathParam(pattern=_PACK_ID)):
+    from . import event_log_domain_pack_priority as priority
+    _require_dashboard(request)
+    return _respond(priority.available, log_id, pack_id)
+
+
+@router.post("/v1/event-logs/{log_id}/domain-packs/{pack_id}/priority")
+async def event_log_domain_pack_priority(request: Request, log_id: str, pack_id: str = PathParam(pattern=_PACK_ID)):
+    from . import event_log_domain_pack_priority as priority
+    _require_dashboard(request)
+    spec = await _json_body(request, "domain pack priority worklist", strict=True, limit=8192)
+    _require_dashboard(request)
+    response = await run_in_threadpool(_respond, priority.review, log_id, pack_id, spec)
+    _require_dashboard(request)
+    return response
+
+
+@router.post("/v1/event-logs/{log_id}/domain-packs/{pack_id}/priority/case")
+async def event_log_domain_pack_priority_case(request: Request, log_id: str, pack_id: str = PathParam(pattern=_PACK_ID)):
+    from . import event_log_domain_pack_priority as priority
+    _require_dashboard(request)
+    spec = await _json_body(request, "priority worklist case inspection", strict=True, limit=8192)
+    _require_dashboard(request)
+    response = await run_in_threadpool(_respond, priority.inspect_case, log_id, pack_id, spec)
+    _require_dashboard(request)
+    return response
+
+
+@router.post("/v1/event-logs/{log_id}/domain-packs/{pack_id}/priority/export")
+async def event_log_domain_pack_priority_export(request: Request, log_id: str, pack_id: str = PathParam(pattern=_PACK_ID)):
+    from . import event_log_domain_pack_priority as priority
+    _require_dashboard(request)
+    spec = await _json_body(request, "complete priority worklist export", strict=True, limit=8192)
+    _require_dashboard(request)
+    response = await run_in_threadpool(_respond, priority.export, log_id, pack_id, spec)
     _require_dashboard(request)
     return response
 
@@ -3053,6 +3162,31 @@ async def event_log_evaluate_prediction_snapshot(request: Request, log_id: str, 
     except workspace.EventLogWorkspaceError as exc:
         raise HTTPException(404 if "unknown" in str(exc) else 422, str(exc)) from None
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+@router.get("/prediction-calibration.js")
+def prediction_calibration_script():
+    return FileResponse(Path(__file__).resolve().parents[1]/"dashboard"/"prediction_calibration.js",media_type="application/javascript")
+
+
+@router.post("/v1/event-logs/{log_id}/prediction-snapshots/{snapshot_id}/calibration")
+async def event_log_prediction_calibration(request: Request,log_id: str,snapshot_id: str):
+    from . import event_log_prediction_calibration as calibration
+    _require_dashboard(request)
+    spec=await _json_body(request,"prospective calibration",strict=True,limit=16384)
+    result=await run_in_threadpool(_respond,calibration.review,log_id,snapshot_id,spec)
+    _require_dashboard(request)
+    return result
+
+
+@router.post("/v1/event-logs/{log_id}/prediction-snapshots/{snapshot_id}/calibration/evidence")
+async def event_log_prediction_calibration_evidence(request: Request,log_id: str,snapshot_id: str):
+    from . import event_log_prediction_calibration as calibration
+    _require_dashboard(request)
+    spec=await _json_body(request,"prospective calibration evidence",strict=True,limit=16384)
+    result=await run_in_threadpool(_respond,calibration.evidence,log_id,snapshot_id,spec)
+    _require_dashboard(request)
+    return result
 
 
 @router.post("/v1/event-logs/{log_id}/prediction-snapshots/{snapshot_id}/delete")

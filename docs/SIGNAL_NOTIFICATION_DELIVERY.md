@@ -79,3 +79,10 @@ Dashboard-session-only POST routes under /v1/schedules/signal-delivery/{log_id}:
 
 Queue inspection and control never send a network request or change source
 rules. The existing sender still rechecks schedule and current signal states.
+
+
+## Cross-channel operations portfolio
+
+Open Privacy → Scheduled jobs → External signal delivery operations to inspect all
+configured channels, pause the exact enabled set, and dismiss selected exact groups
+across paused channels. See [portfolio operations](SIGNAL_DELIVERY_PORTFOLIO.md).

@@ -82,3 +82,9 @@ class _Connection:
         value = self._conn.fetchall()
         self._control.check()
         return value
+
+    def fetchmany(self, size):
+        self._control.check()
+        value = self._conn.fetchmany(size)
+        self._control.check()
+        return value

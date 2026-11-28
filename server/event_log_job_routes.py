@@ -14,9 +14,9 @@ def add_routes(router, require_dashboard, json_body):
         require_dashboard(request)
         return session_key(request.headers['authorization'][len('OWG-Session '):].strip())
 
-    def respond(operation, *args):
+    def respond(operation, *args, **kwargs):
         try:
-            value = operation(*args)
+            value = operation(*args, **kwargs)
             return (Response(value, media_type='application/json', headers={'Cache-Control': 'no-store'})
                     if isinstance(value, bytes) else JSONResponse(value, headers={'Cache-Control': 'no-store'}))
         except JobError as exc:
@@ -25,10 +25,10 @@ def add_routes(router, require_dashboard, json_body):
             raise HTTPException(422, str(exc)) from None
 
     @router.post(base, status_code=202)
-    async def submit(request: Request, log_id: str):
+    async def submit(request: Request, log_id: str, source_bound: bool = False):
         key = owner(request)
         spec = await json_body(request, 'analysis job')
-        result = respond(jobs.submit, key, log_id, spec)
+        result = respond(jobs.submit, key, log_id, spec, source_bound=source_bound)
         result.status_code = 202
         return result
 

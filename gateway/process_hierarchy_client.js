@@ -39,7 +39,7 @@
       if(!result.artifact&&result.integrity_ok)names.set(key(ref(selected.process)),selected.process.title);render();
       message(!result.integrity_ok?'Map integrity failed. An owner can erase its history; no content is displayed.':result.artifact?'Opened map revision '+result.artifact.revision+'. '+(result.all_references_current?'All pinned references are current.':'Some references have changed, are archived or are unavailable.'): 'No map saved yet. Build and explicitly share this grouping.');
     }
-    function changed(){dirty=true;if(confirm)confirm.checked=false;form?.querySelector('#hierarchyCompareRun')?.parentElement?.remove();update();}
+    function changed(){dirty=true;if(confirm)confirm.checked=false;form?.querySelector('#hierarchyReferenceRefresh')?.remove();form?.querySelector('#hierarchyCompareRun')?.parentElement?.remove();update();}
     function writable(){return view?.can_write&&selected.permissions.edit&&(!view.artifact||view.artifact.revision===view.latest_revision);}
     function update(){if(save)save.disabled=!writable()||!confirm.checked;if(download)download.disabled=dirty||!view?.artifact||!view.integrity_ok;}
     function valid(nodes){
@@ -71,6 +71,123 @@
         const child=branch(node.id);if(child.childElementCount)li.append(child);list.append(li);
       }return list;}
       tree.append(branch(null));update();
+    }
+    function refreshReview(){
+      const panel=el('details');panel.id='hierarchyReferenceRefresh';
+      const out=el('div'),note=el('p');note.setAttribute('role','status');
+      const picker=el('fieldset');picker.append(el('legend','Exact occurrences to refresh'));
+      const artifact=view.artifact,rootId=selected.process.workflow_id;
+      const endpoint='/v1/human/processes/'+encodeURIComponent(rootId)+'/hierarchy/reference-refresh';
+      const checks=new Map();let serial=0,reviewed=null;
+      function invalidate(){
+        serial++;reviewed=null;out.replaceChildren();note.textContent='';
+        run.disabled=dirty||!Array.from(checks.values()).some(c=>c.checked);
+      }
+      function selectedIds(){return Array.from(checks).filter(([,c])=>c.checked).map(([id])=>id);}
+      function request(){
+        return {map_revision:artifact.revision,expected_map_sha256:artifact.content_sha256,node_ids:selectedIds()};
+      }
+      function live(ok,token){return ok()&&token===serial&&!dirty&&panel.isConnected&&view?.artifact===artifact;}
+      function table(headers,rows){
+        const wrap=el('div');wrap.style.overflowX='auto';
+        const t=el('table'),head=el('thead'),hr=el('tr'),tb=el('tbody');
+        for(const h of headers){const th=el('th',h);th.scope='col';hr.append(th);}
+        head.append(hr);t.append(head);
+        for(const values of rows){const row=el('tr');for(const v of values)row.append(el('td',v==null?'—':v));tb.append(row);}
+        t.append(tb);wrap.append(t);return wrap;
+      }
+      function downloadJSON(report){
+        const url=URL.createObjectURL(new Blob([JSON.stringify(report,null,2)],{type:'application/json'}));
+        try{const a=el('a');a.href=url;a.download='owg-map-reference-refresh.json';a.click();}
+        finally{URL.revokeObjectURL(url);}
+      }
+      function validateReport(report,body){
+        if(report.root_workflow_id!==rootId||report.map_revision!==artifact.revision||
+           report.map_sha256!==artifact.content_sha256||!/^[a-f0-9]{64}$/.test(report.report_sha256)||
+           JSON.stringify(report.selected_node_ids)!==JSON.stringify([...body.node_ids].sort()))
+          throw Error('Unexpected refresh review basis.');
+        if(report.persisted!==false||report.execution_authorized!==false)
+          throw Error('Unexpected refresh review authority.');
+      }
+      function renderReview(report,body,token){
+        reviewed={report,body};
+        const counts=report.counts;
+        out.replaceChildren(
+          el('p','Map revision '+report.map_revision+' · '+counts.changed_occurrences+' changed occurrences · '+counts.affected_occurrences+' navigation-context occurrences. Digest '+report.report_sha256),
+          table(['Measure','Count'],Object.entries(counts).filter(([,v])=>typeof v==='number').map(([k,v])=>[k.replaceAll('_',' '),v])),
+          table(['Occurrence path','Selected','Before','Before state','Latest','Proposed','Independent review'],report.rows.map(r=>[
+            r.node_path.join(' / '),r.selected?'Yes':'No',r.before.revision,r.before_state,r.latest?.reference.revision??r.latest_state,r.proposed.revision,r.proposed_review])),
+          table(['Changed node','Ancestors (navigation)','Descendants (navigation)'],report.branch_impacts.map(r=>[
+            r.node_id,r.ancestor_node_ids.join(' / '),r.descendant_node_ids.join(', ')])),
+          table(['Reused process','Occurrences','Selected','Distinct pins before','Distinct pins after'],report.reused_processes.map(r=>[
+            r.workflow_id,r.occurrence_node_ids.join(', '),r.selected_node_ids.join(', '),r.distinct_pins_before,r.distinct_pins_after])),
+          table(['Proposed independent review status','Occurrences'],Object.entries(counts.proposed_review_counts)));
+        const reasons=el('ul');
+        for(const b of report.blockers)reasons.append(el('li',b.node_id+': '+b.reason.replaceAll('_',' ')));
+        for(const w of report.warnings)reasons.append(el('li',w.replaceAll('_',' ')));
+        if(reasons.children.length)out.append(el('h4','Blockers and warnings'),reasons);
+        for(const n of report.interpretation)out.append(el('p',n));
+        const recheck=async ok=>{
+          if(!live(ok,token)||reviewed?.body!==body)return null;
+          const fresh=await call(endpoint,{...body,expected_report_sha256:report.report_sha256});
+          if(!live(ok,token)||reviewed?.body!==body)return null;
+          validateReport(fresh,body);
+          if(fresh.report_sha256!==report.report_sha256)throw Error('Refresh review changed; reopen the review.');
+          return fresh;
+        };
+        const exportButton=button('Recheck and download refresh report',()=>work(async ok=>{
+          const fresh=await recheck(ok);if(fresh)downloadJSON(fresh);
+        }),'hierarchyRefreshDownload');
+        const stage=button('Recheck and stage selected pins in draft',()=>work(async ok=>{
+          if(!writable())throw Error('Current root editor permission required.');
+          const fresh=await recheck(ok);if(!fresh)return;
+          if(!fresh.can_stage)throw Error('Resolve the refresh blockers before staging.');
+          // The proposal must match the saved structure, and may change only
+          // pins at explicitly selected occurrences. Never replace draft metadata.
+          const proposed=fresh.candidate_hierarchy;
+          if(proposed.nodes.length!==draft.nodes.length)throw Error('Unexpected proposed structure.');
+          const changedIds=new Set(fresh.changed_node_ids),allowed=new Set(body.node_ids);
+          const newNodes=structuredClone(draft.nodes);
+          for(let i=0;i<newNodes.length;i++){
+            const old=newNodes[i],next=proposed.nodes[i];
+            if(old.id!==next.id||old.parent_id!==next.parent_id||old.process.workflow_id!==next.process.workflow_id)
+              throw Error('Unexpected proposed structure.');
+            const differs=key(old.process)!==key(next.process);
+            if(differs!==changedIds.has(old.id)||differs&&!allowed.has(old.id))
+              throw Error('Unexpected unselected reference change.');
+            if(differs)old.process=structuredClone(next.process);
+          }
+          valid(newNodes);
+          for(const row of fresh.rows)if(row.reference_changed&&row.latest?.title)names.set(key(row.proposed),row.latest.title);
+          draft.nodes=newNodes;changed();draw();panel.remove();
+          message('Staged '+fresh.counts.changed_occurrences+' exact reference changes in the draft. Review and explicitly save the map; no revision was saved.');
+        }),'hierarchyRefreshStage');
+        stage.disabled=!report.can_stage||!writable();
+        out.append(exportButton,stage);
+      }
+      const run=button('Preview selected reference refresh',()=>work(async ok=>{
+        if(dirty)throw Error('Reopen a saved map without unsaved edits.');
+        const body=request();if(!body.node_ids.length)throw Error('Select one or more occurrences.');
+        const token=++serial;reviewed=null;out.replaceChildren();
+        note.textContent='Reviewing current process revisions and exact saved pins…';
+        const report=await call(endpoint,body);
+        if(!live(ok,token))return;
+        validateReport(report,body);renderReview(report,body,token);
+        note.textContent='Reference refresh reviewed. No saved map changed.';
+      }),'hierarchyRefreshRun');
+      for(const node of draft.nodes){
+        const info=view.resolutions.find(r=>r.node_id===node.id),c=el('input');c.type='checkbox';
+        c.checked=info?.state==='revision_changed';c.onchange=invalidate;
+        checks.set(node.id,c);picker.append(label(node.id+' · '+(names.get(key(node.process))||node.process.workflow_id)+' · '+(info?.state||'unavailable')+' ',c));
+      }
+      const choose=predicate=>{for(const [id,c] of checks)c.checked=predicate(id);invalidate();};
+      const controls=el('div');
+      controls.append(button('Select outdated occurrences',()=>choose(id=>view.resolutions.some(r=>r.node_id===id&&r.state==='revision_changed'))),
+        button('Select all occurrences',()=>choose(()=>true)),button('Clear selection',()=>choose(()=>false)));
+      panel.append(el('summary','Batch reference maintenance and impact preview'),
+        el('p','Refresh only selected occurrences. Preview the current revisions and affected map branches without changing saved definitions or inherited permissions.'),
+        controls,picker,run,note,out);
+      invalidate();return panel;
     }
     function render(){
       if(form)form.remove();form=el('fieldset');form.id='hierarchyEditor';form.append(el('legend','Repository map'));if(view.artifact)form.append(el('p','Saved by '+view.artifact.author_actor_id+' at '+view.artifact.saved_at+'. This confirms the grouping only.'));
@@ -139,6 +256,7 @@
         comparison.append(el('h4','Compare saved map revisions'),label('Baseline revision',baseline),run,out);
         form.append(comparison);
       }
+      if(view.integrity_ok&&view.artifact&&!dirty)form.append(refreshReview());
       remove=button('Erase all map history',()=>work(async ok=>{if(!window.confirm('Erase every repository map revision for this root? Process designs will remain.'))return;
         await call('/v1/human/processes/'+encodeURIComponent(selected.process.workflow_id)+'/hierarchy/delete',{expected_revision:view.latest_revision,expected_access_revision:view.access_revision,user_confirmed:true});if(ok()){await load(ok);if(ok())message('Map history erased. Process designs remain.');}}),'hierarchyDelete');remove.disabled=!view.can_delete||!view.latest_revision;form.append(remove);
       host.append(form);draw();if(busy)form.disabled=true;
