@@ -1,5 +1,5 @@
 /* Human-reviewed external AI handoff: only create an unassessed local idea. */
-export function mountAiOpportunityHandoff(host, post, onCreated){
+export function mountAiOpportunityHandoff(host, post, onCreated, onStage){
   const el=(tag,text)=>{const n=document.createElement(tag);if(text!==undefined)n.textContent=text;return n;};
   const field=(label,control)=>{const n=el('label',label+' ');n.append(control);return n;};
   const file=()=>{const n=el('input');n.type='file';n.accept='.json,application/json';return n;};
@@ -7,7 +7,8 @@ export function mountAiOpportunityHandoff(host, post, onCreated){
   const proposal=file(),title=el('input'),description=el('textarea');
   title.maxLength=200;description.maxLength=2000;description.rows=3;
   const preview=el('button','Review exact proposal'),commit=el('button','Create unassessed idea');
-  preview.type=commit.type='button';
+  const stage=el('button','Start new shadow skill draft from reviewed proposal');
+  preview.type=commit.type=stage.type='button';stage.disabled=true;stage.hidden=typeof onStage!=='function';
   const confirmation=el('input');confirmation.type='checkbox';confirmation.disabled=true;commit.disabled=true;
   const status=el('div','Choose the original evidence files and AI proposal; enter a human-reviewed idea title and details.');
   status.setAttribute('role','status');status.setAttribute('aria-live','polite');
@@ -187,7 +188,7 @@ export function mountAiOpportunityHandoff(host, post, onCreated){
     });
   }
   function invalidate(){
-    generation++;basis=null;confirmation.checked=false;confirmation.disabled=true;commit.disabled=true;
+    generation++;basis=null;confirmation.checked=false;confirmation.disabled=true;commit.disabled=true;stage.disabled=true;
     summary.textContent='';status.textContent='Inputs changed. Review the exact proposal again.';
   }
   sources.addEventListener('change',()=>{orderedSources=Array.from(sources.files||[]);invalidate();invalidatePacket();renderOrder();});
@@ -197,7 +198,7 @@ export function mountAiOpportunityHandoff(host, post, onCreated){
   function lock(value){
     busy=value;for(const n of controls)n.disabled=value;preview.disabled=value;
     budget.disabled=prepare.disabled=value;downloadPacket.disabled=downloadGuide.disabled=value||!preparedPacket;
-    confirmation.disabled=value||!basis;commit.disabled=value||!basis||!confirmation.checked;renderOrder();refreshLocal();
+    confirmation.disabled=value||!basis;commit.disabled=value||!basis||!confirmation.checked;stage.disabled=value||!basis||typeof onStage!=='function';renderOrder();refreshLocal();
   }
   preview.onclick=async()=>{
     if(busy)return;
@@ -220,6 +221,15 @@ export function mountAiOpportunityHandoff(host, post, onCreated){
         '\nProposal SHA-256: '+response.lineage.proposal_sha256+'\nPreview SHA-256: '+response.preview_sha256;
       status.textContent='Structural review passed. Review the original proposal and evidence yourself before creating an idea; no semantic verification or permission.';
     }catch(error){if(ticket===generation)status.textContent=error.message;}
+    finally{lock(false);}
+  };
+  stage.onclick=async()=>{
+    if(busy||!basis||typeof onStage!=='function')return;
+    const selected=basis;lock(true);
+    try{
+      await onStage({sources:selected.draft.sources.slice(),proposal:selected.draft.proposal});
+      status.textContent='Transferred the exact reviewed inputs into a new shadow skill draft. No approval or execution transferred.';
+    }catch(error){status.textContent=error.message;}
     finally{lock(false);}
   };
   commit.onclick=async()=>{
@@ -248,6 +258,7 @@ export function mountAiOpportunityHandoff(host, post, onCreated){
     field('Context byte budget',budget),prepare,packetStatus,downloadPacket,downloadGuide,localSection,
     field('External AI proposal JSON',proposal),field('Human-reviewed opportunity title',title),
     field('Human-reviewed opportunity details',description),preview,status,summary,
+    ...(typeof onStage==='function'?[el('p','Starting a new shadow skill draft replaces any unfinished skill draft. The skill still requires its own human review and confirmation.'),stage]:[]),
     field('I reviewed the original proposal and want to create an unassessed idea only',confirmation),commit);
   host.append(details);
 }
