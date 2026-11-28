@@ -1,0 +1,106 @@
+"""Convert explicit suite-wide HTTP field choices into disabled runtime bindings."""
+import argparse
+import json
+from pathlib import Path
+
+MAX_BYTES = 262144
+
+
+def assemble(rows, choices, activities, operations, schemas, cases, *, request, digest):
+    """Check every selected complete mapping against every relevant case."""
+    lookup = {row['activity_id']: row for row in rows}
+    if not isinstance(choices, dict) or not choices or not set(choices) <= set(lookup):
+        raise ValueError('Choose a nonempty subset of reviewed activities')
+    result, checks = [], []
+    for activity, arguments in sorted(choices.items()):
+        row = lookup[activity]
+        op = operations[row['operation_name']]
+        if not isinstance(arguments, dict) or set(arguments) != set(op['fields']):
+            raise ValueError('Explicit choice required for every operation argument')
+        supported = {arg['argument']: arg['full_support_paths'] for arg in row['arguments']}
+        if any(not isinstance(path, str) or path not in supported[arg] for arg, path in arguments.items()):
+            raise ValueError('Choose only reviewed full-support candidate paths')
+        relevant = [c for c in cases if any(activity in route for route in c['expected']['accepted_routes'])]
+        if not relevant or len(relevant) != row['relevant_cases']:
+            raise ValueError('No matching reviewed case population')
+        for case in relevant:
+            try:
+                request(row['operation_name'], arguments, case['input'])
+            except (ValueError, TypeError, KeyError, IndexError, OverflowError, RecursionError):
+                raise ValueError('Combined HTTP request rejected for a reviewed case') from None
+        result.append({'activity_id': activity, 'tool_name': row['operation_name'],
+                       'operation_kind': 'unmapped', 'proposed_operation_kind': 'read' if op['method'] == 'GET' else 'write',
+                       'suggested_implementation': activities[activity]['implementation'],
+                       'argument_map': dict(sorted(arguments.items())), 'constant_arguments': {},
+                       'tool_schema_sha256': digest(schemas[row['operation_name']]), 'authorized': False,
+                       'result_pointer': None, 'result_equals': None, 'precondition': None,
+                       'concurrency_control': None, 'idempotency': None})
+        checks.append({'activity_id': activity, 'combined_request_checks_passed': len(relevant)})
+    return result, checks
+
+
+def propose(spec, suite, catalog, catalog_pin, selection, field_review, review_pin, choices):
+    from execute import ImplementationError, digest, reference, pointer
+    from evaluate import validate_suite
+    from execute_http import Operations
+    from suggest_http_fields import review
+    current = review(spec, suite, catalog, catalog_pin, selection)
+    if current['review_sha256'] != review_pin or digest(current) != digest(field_review):
+        raise ImplementationError('Field review changed; repeat review before selecting mappings')
+    ops = Operations(spec, catalog, catalog_pin)
+    cases = validate_suite(spec, suite, allow_current_source_rules=True)
+    activities = {a['id']: a for a in spec['process_model']['activities']
+                  if a['kind'] == 'activity' and a['implementation'] != 'human'}
+    if not isinstance(choices, dict) or set(choices) != {'argument_choices'}:
+        raise ImplementationError('Explicit argument choices required')
+    def request(name, mapping, data):
+        ops.request(name, {arg: pointer(data, path) for arg, path in mapping.items()})
+    bindings, checks = assemble(current['selected_activities'], choices['argument_choices'], activities,
+                                ops.operations, ops.schemas, cases, request=request, digest=digest)
+    unmapped = sorted(set(activities) - {b['activity_id'] for b in bindings})
+    requirements = []
+    for binding in bindings:
+        aid = binding['activity_id']
+        requirements.extend({'activity_id': aid, 'code': code} for code in
+                            ('review_business_semantics', 'review_operation_kind_and_permissions', 'configure_result_predicate'))
+        if binding['proposed_operation_kind'] == 'write':
+            requirements.extend({'activity_id': aid, 'code': code} for code in
+                                ('configure_fresh_precondition', 'review_conditional_write', 'review_idempotency', 'map_terminal_source_outcome'))
+    requirements.extend({'activity_id': aid, 'code': 'unmapped_activity'} for aid in unmapped)
+    return {'format': 'openworkgraph.customer-mcp-bindings.v1', 'process_reference': reference(spec),
+            'enabled': False, 'tool_server_url': ops.origin, 'source_api_url': 'http://127.0.0.1:8787',
+            'process_catalog_url': None, 'bindings': bindings,
+            'outcome_records': [{'terminal_activity_id': r['terminal_activity_id'], 'operation': r['operation'],
+                                 'resource_ref_pointer': None} for r in spec['process_model'].get('outcome_expectations', [])],
+            'proposal_metadata': {'status': 'disabled_http_mapping_proposal', 'spec_sha256': digest(spec),
+                'suite_sha256': digest(suite), 'operations_sha256': catalog_pin, 'field_review_sha256': review_pin,
+                'choices_sha256': digest(choices), 'combined_request_checks': checks, 'unmapped_activity_ids': unmapped,
+                'requirements': requirements, 'clarification_cases': current['clarification_cases'],
+                'full_schema_and_semantics_review_required': True, 'case_values_sent_to_model': False,
+                'business_tools_called': False, 'source_reads_performed': False, 'execution_authorized': False}}
+
+
+def main(argv=None):
+    from execute import load_object, digest
+    from configure import write_new
+    from suggest_http_fields import MAX_REPORT
+    p = argparse.ArgumentParser(description=__doc__)
+    p.add_argument('--spec', default=str(Path(__file__).parent / 'workflow.spec.json'))
+    for name in ('cases', 'operations', 'operations-sha256', 'selection', 'field-review', 'field-review-sha256', 'choices', 'output'):
+        p.add_argument('--' + name, required=True)
+    p.add_argument('--confirm-disabled-proposal', action='store_true', required=True)
+    args = p.parse_args(argv)
+    try:
+        spec, suite, catalog, selection, choices = (load_object(Path(path), MAX_BYTES) for path in
+            (args.spec, args.cases, args.operations, args.selection, args.choices))
+        result = propose(spec, suite, catalog, args.operations_sha256, selection,
+                         load_object(Path(args.field_review), MAX_REPORT), args.field_review_sha256, choices)
+        write_new(Path(args.output), result, limit=MAX_BYTES)
+    except (ValueError, OSError, TypeError, KeyError, IndexError, RecursionError, OverflowError, ImportError):
+        p.exit(2, 'Disabled HTTP proposal refused; review exact inputs and select a new output file.\n')
+    print(json.dumps({'bindings': len(result['bindings']), 'proposal_sha256': digest(result), 'enabled': False}))
+    return 0
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())
