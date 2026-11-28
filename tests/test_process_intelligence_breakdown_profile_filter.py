@@ -33,8 +33,8 @@ def test_breakdown_within_one_group():
     assert sum(t["cases"] for t in eu["row_totals"]) == 20
     with pytest.raises(workspace.EventLogWorkspaceError, match="Remind"):
         sharing.breakdown(log_id, "start_activity", with_activity="Remind", case_filter={"resource": "eu"})
-    with pytest.raises(workspace.EventLogWorkspaceError):
-        sharing.breakdown(log_id, "end_activity", case_filter={"case_ids": ["c0"]})
+    with pytest.raises(workspace.EventLogWorkspaceError, match="fewer than"):
+        sharing.breakdown(log_id, "end_activity", case_filter={"started_from": "2024-03-20T00:00:00Z"})
 
 
 def test_activity_profile_within_one_group():
@@ -49,10 +49,11 @@ def test_activity_profile_within_one_group():
 
 def test_filtered_profile_preserves_small_cell_suppression():
     log_id = _log()
-    cohort = {"case_ids": ["c0", "c1", "c2", "c4", "c5", "c7"]}
+    cohort = {"started_from": "2024-03-11T00:00:00Z", "started_before": "2024-03-17T00:00:00Z"}
+    assert workspace.summary(log_id, None, cohort)["cases"] == 6
     with pytest.raises(workspace.EventLogWorkspaceError, match="fewer than"):
         sharing.activity_profile(log_id, "Remind", case_filter=cohort)
     profile = sharing.activity_profile(log_id, "Pay", case_filter=cohort)
     assert profile["cases"] == 6
     rare = next(row for row in profile["comes_after"] if row["activity"] == "Remind")
-    assert rare["times"] == 1 and rare["median_hours"] is None
+    assert rare["times"] == 2 and rare["median_hours"] is None
