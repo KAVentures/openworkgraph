@@ -1,6 +1,7 @@
 """As-of attribute checks against real retained OCEL fixtures."""
 from copy import deepcopy
-from io import BytesIO
+import csv
+from io import BytesIO, StringIO
 import json
 import os
 from pathlib import Path
@@ -147,6 +148,76 @@ def test_state_check_reads_one_snapshot_during_append(monkeypatch):
     assert s.analyze(log,spec())['selected_events']==9
 
 
+def test_complete_review_csv_exports_all_events_and_objects(monkeypatch):
+    objects=[]
+    for n in range(120):
+        values=[] if n==2 else [{'name':'=status','time':'1970-01-01T00:00:00Z','value': '=value' if n%2==0 else ''}]
+        objects.append({'id':f'+o{n:03}','type':'order','attributes':values})
+    objects.append({'id':'item','type':'item'})
+    events=[{'id':f'=e{n:03}','type':'=Pay','time':'2024-01-01T00:00:00Z',
+             'relationships':[{'objectId':f'+o{n:03}','qualifier':''},{'objectId':f'+o{n:03}','qualifier':'@other'}]}
+            for n in range(120)]
+    events.append({'id':'=no-object','type':'=Pay','time':'2024-01-01T00:00:00Z',
+                   'relationships':[{'objectId':'item','qualifier':''}]})
+    log=w.import_log(BytesIO(json.dumps({'objectTypes':[],'eventTypes':[],'objects':objects,'events':events}).encode()),
+                     name='many',source_format='ocel')['log_id']
+    settings={'activity':'=Pay','object_type':'order','attribute':'=status','expected_value':'=value','event_qualifier':''}
+    report=s.analyze(log,settings);revision=report['revision']
+    for kind in ('events','objects'):
+        output=StringIO(newline='')
+        meta=s.export_worklist(log,{**settings,'expected_revision':revision,'kind':kind},output)
+        rows=list(csv.DictReader(StringIO(output.getvalue())))
+        check=rows.pop(0)
+        assert check['record_type']=='check' and check['log_revision']==str(revision)
+        assert None not in check and check['recorded_value_present']=='false'
+        assert meta['rows']==len(rows)==121
+        assert rows[0]['event_id_review']=="'=e000" and rows[0]['activity_review']=="'=Pay"
+        assert rows[0]['attribute_review']=="'=status" and rows[0]['expected_value_review']=="'=value"
+        assert rows[0]['qualifier_present']=='true' and rows[0]['qualifier_review']==''
+        if kind=='objects':
+            assert rows[0]['object_id_review']=="'+o000" and rows[0]['recorded_value_review']=="'=value"
+            assert rows[1]['recorded_value_review']=='' and rows[1]['recorded_value_present']=='true'
+            assert rows[2]['object_result']=='missing_history' and rows[2]['recorded_value_present']=='false'
+            assert rows[-1]['record_type']=='event_without_object' and rows[-1]['event_result']=='no_linked_object'
+    exact=StringIO(newline='')
+    assert s.export_worklist(log,{**settings,'result_event_id':'=e000','expected_revision':revision,'kind':'events'},exact)['rows']==1
+    exact_rows=list(csv.DictReader(StringIO(exact.getvalue())))
+    assert all(row['event_id_filter_review']=="'=e000" for row in exact_rows)
+    filtered=StringIO(newline='')
+    assert s.export_worklist(log,{**settings,'status':'unknown','expected_revision':revision,'kind':'objects'},filtered)['rows']==1
+    assert list(csv.DictReader(StringIO(filtered.getvalue())))[1]['object_result']=='missing_history'
+    empty=StringIO(newline='')
+    empty_settings={**settings,'expected_value':'absent','status':'matched','expected_revision':revision,'kind':'events'}
+    assert s.export_worklist(log,empty_settings,empty)['rows']==0
+    empty_rows=list(csv.DictReader(StringIO(empty.getvalue())))
+    assert len(empty_rows)==1 and empty_rows[0]['record_type']=='check' and empty_rows[0]['result_filter']=='matched'
+    monkeypatch.setattr(s,'MAX_WORKLIST_BYTES',1)
+    too_large=StringIO()
+    with pytest.raises(w.EventLogWorkspaceError,match='file limit'):
+        s.export_worklist(log,{**settings,'expected_revision':revision,'kind':'events'},too_large)
+    assert too_large.getvalue()==''
+    monkeypatch.setattr(s,'MAX_WORKLIST_BYTES',512*1024*1024)
+    for bad in ({'kind':'events'},{'kind':'other','expected_revision':revision},
+                {'kind':'events','expected_revision':revision,'offset':1}):
+        out=StringIO()
+        with pytest.raises(w.EventLogWorkspaceError):s.export_worklist(log,{**settings,**bad},out)
+        assert out.getvalue()==''
+    monkeypatch.setattr(s,'MAX_EVENTS',1)
+    out=StringIO()
+    with pytest.raises(w.EventLogWorkspaceError,match='event bound'):
+        s.export_worklist(log,{**settings,'expected_revision':revision,'kind':'events'},out)
+    assert out.getvalue()==''
+    monkeypatch.setattr(s,'MAX_EVENTS',200_000)
+    newer={'objectTypes':[],'eventTypes':[],'objects':[{'id':'+o000','type':'order'}],
+           'events':[{'id':'new-event','type':'=Pay','time':'2024-01-02T00:00:00Z',
+                      'relationships':[{'objectId':'+o000','qualifier':''}]}]}
+    w.append_log(log,BytesIO(json.dumps(newer).encode()),source_format='ocel')
+    out=StringIO()
+    with pytest.raises(w.EventLogWorkspaceError,match='changed'):
+        s.export_worklist(log,{**settings,'expected_revision':revision,'kind':'events'},out)
+    assert out.getvalue()==''
+
+
 @pytest.mark.parametrize("bad",[{"limit":True},{"quantifier":"none"},{"operator":"gt"},{"extra":1},
                               {"activity":""},{"offset":1}])
 def test_invalid_requests(bad):
@@ -187,6 +258,53 @@ with TestClient(app) as c:
     assert witness.status_code==200 and witness.headers['cache-control']=='no-store',witness.text
     assert witness.json()['witnesses'][0]['status']=='ambiguous_value'
     assert c.post(witness_url,json=spec(event_id='e4'),headers=h).status_code==422
+    distribution_url=url+'/distribution'; distribution_spec=spec(expected_revision=r.json()['revision'])
+    assert c.post(distribution_url,json=distribution_spec,headers=bearer).status_code in (401,403)
+    distribution=c.post(distribution_url,json=distribution_spec,headers=h)
+    assert distribution.status_code==200 and distribution.headers['cache-control']=='no-store',distribution.text
+    assert distribution.json()['event_object_links']==10
+    assert c.post(distribution_url,json=spec(),headers=h).status_code==422
+    distribution_export_url=distribution_url+'/export'
+    assert c.post(distribution_export_url,json=distribution_spec,headers=bearer).status_code in (401,403)
+    distribution_export=c.post(distribution_export_url,json=distribution_spec,headers=h)
+    assert distribution_export.status_code==200 and distribution_export.headers['cache-control']=='no-store',distribution_export.text
+    assert 'recorded_value_present' in distribution_export.text
+    from server import event_log_workspace as w
+    from server import event_log_object_state_check as state
+    state.MAX_WORKLIST_BYTES=1
+    assert c.post(distribution_export_url,json=distribution_spec,headers=h).status_code==422
+    assert not list(w.DATA_DIR.glob('*.review.csv'))
+    state.MAX_WORKLIST_BYTES=512*1024*1024
+    timeline_url=url+'/timeline'; timeline_spec=spec(expected_revision=r.json()['revision'],bucket='day')
+    assert c.post(timeline_url,json=timeline_spec,headers=bearer).status_code in (401,403)
+    timeline=c.post(timeline_url,json=timeline_spec,headers=h)
+    assert timeline.status_code==200 and timeline.headers['cache-control']=='no-store',timeline.text
+    assert timeline.json()['matching_events']==8 and timeline.json()['rows'][0]['events']==8
+    assert c.post(timeline_url,json=spec(bucket='day'),headers=h).status_code==422
+    timeline_export_url=timeline_url+'/export'
+    assert c.post(timeline_export_url,json=timeline_spec,headers=bearer).status_code in (401,403)
+    timeline_export=c.post(timeline_export_url,json=timeline_spec,headers=h)
+    assert timeline_export.status_code==200 and timeline_export.headers['cache-control']=='no-store',timeline_export.text
+    assert timeline_export.headers['x-owg-rows']=='1' and 'period_start_utc' in timeline_export.text
+    assert c.post(timeline_export_url,json=spec(bucket='day'),headers=h).status_code==422
+    from server import event_log_workspace as w
+    from server import event_log_object_state_check as state
+    state.MAX_WORKLIST_BYTES=1
+    assert c.post(timeline_export_url,json=timeline_spec,headers=h).status_code==422
+    assert not list(w.DATA_DIR.glob('*.review.csv'))
+    state.MAX_WORKLIST_BYTES=512*1024*1024
+    export_url=url+'/export';export_spec=spec(expected_revision=r.json()['revision'],kind='events')
+    assert c.post(export_url,json=export_spec,headers=bearer).status_code in (401,403)
+    exported=c.post(export_url,json=export_spec,headers=h)
+    assert exported.status_code==200 and exported.headers['cache-control']=='no-store',exported.text
+    assert exported.headers['x-owg-rows']=='8' and exported.headers['content-type'].startswith('text/csv')
+    assert 'event_id_review' in exported.text
+    assert c.post(export_url,json=spec(kind='events'),headers=h).status_code==422
+    from server import event_log_workspace as w
+    from server import event_log_object_state_check as state
+    state.MAX_WORKLIST_BYTES=1
+    assert c.post(export_url,json=export_spec,headers=h).status_code==422
+    assert not list(w.DATA_DIR.glob('*.review.csv'))
     assert c.post(url,content=b'{"limit":1,"limit":2}',headers={**h,"Content-Type":"application/json"}).status_code==422
 """
     env={**os.environ,"WORKFLOW_OBSERVER_DATA":str(tmp_path/"data"),
@@ -195,3 +313,242 @@ with TestClient(app) as c:
     result=subprocess.run([sys.executable,"-c","import sys;sys.path.insert(0,'tests');"+code],
         cwd=Path(__file__).resolve().parents[1],env=env,capture_output=True,text=True,timeout=120)
     assert result.returncode==0,result.stdout+result.stderr
+
+
+def test_utc_date_window_bounds_evidence_exports_and_full_history(monkeypatch):
+    doc = fixture()
+    doc['events'][0]['time'] = '2023-12-31T23:59:59Z'
+    doc['events'][1]['time'] = '2024-01-02T00:00:00Z'
+    log = w.import_log(BytesIO(json.dumps(doc).encode()), name='window', source_format='ocel')['log_id']
+    request = spec(from_date='2024-01-01', until_date='2024-01-02')
+    report = s.analyze(log, request)
+    assert report['selected_events'] == 6
+    assert {r['event_id'] for r in report['rows']} == {'e3', 'e4', 'e5', 'e6', 'e7', 'e8'}
+    assert next(r for r in report['rows'] if r['event_id'] == 'e3')['status'] == 'matched'
+    with pytest.raises(w.EventLogWorkspaceError, match='not in'):
+        s.witnesses(log, {**request, 'event_id':'e2', 'expected_revision':report['revision']})
+    out = StringIO()
+    s.export_worklist(log, {**request, 'expected_revision':report['revision'], 'kind':'events'}, out)
+    rows = list(csv.DictReader(StringIO(out.getvalue())))
+    assert len(rows) == 7 and all(r['from_date_utc'] == '2024-01-01' and r['until_date_exclusive_utc'] == '2024-01-02' for r in rows)
+    for dates in ({'from_date':'2024-02-30'}, {'until_date':'2024-1-02'},
+                  {'from_date':'2024-01-02','until_date':'2024-01-02'},
+                  {'from_date':'2024-01-03','until_date':'2024-01-02'}):
+        with pytest.raises(w.EventLogWorkspaceError, match='invalid'):
+            s.analyze(log, spec(**dates))
+    monkeypatch.setattr(s, 'MAX_EVENTS', 6)
+    with pytest.raises(w.EventLogWorkspaceError, match='event bound'):
+        s.analyze(log, spec())
+    assert s.analyze(log, request)['selected_events'] == 6
+
+
+def test_exact_event_result_filter_keeps_summary_and_scopes_evidence():
+    log = load()
+    request = spec(result_event_id='e4')
+    result = s.analyze(log, request)
+    assert result['selected_events'] == 8 and result['matching_events'] == 1
+    assert result['event_counts'] == {'matched':2,'not_matched':2,'unknown':3,'no_linked_object':1}
+    assert [row['event_id'] for row in result['rows']] == ['e4']
+    assert s.analyze(log, {**request, 'status':'matched'})['matching_events'] == 0
+    assert s.analyze(log, spec(result_event_id='e'))['matching_events'] == 0
+    assert s.witnesses(log, {**request,'event_id':'e4','expected_revision':result['revision']})['total_objects'] == 1
+    with pytest.raises(w.EventLogWorkspaceError, match='not in'):
+        s.witnesses(log, {**request,'event_id':'e1','expected_revision':result['revision']})
+    for kind in ('events', 'objects'):
+        out=StringIO(newline='')
+        assert s.export_worklist(log,{**request,'kind':kind,'expected_revision':result['revision']},out)['rows']==1
+        rows=list(csv.DictReader(StringIO(out.getvalue())))
+        assert rows[0]['event_id_filter_review']=='e4' and rows[1]['event_id_review']=='e4'
+    for invalid in ('', '  ', 'bad\nvalue', 'x'*201):
+        with pytest.raises(w.EventLogWorkspaceError,match='invalid'):
+            s.analyze(log,spec(result_event_id=invalid))
+
+
+def test_revision_pinned_state_timeline_groups_filtered_events(monkeypatch):
+    doc = fixture()
+    times = ['2024-01-01T00:00:00Z', '2024-01-01T12:00:00Z',
+             '2024-01-07T23:59:59Z', '2024-01-08T00:00:00Z',
+             '2024-02-01T00:00:00Z', '2024-02-02T00:00:00Z',
+             '2024-02-03T00:00:00Z', '2024-02-04T00:00:00Z']
+    for event, stamp in zip(doc['events'], times):
+        event['time'] = stamp
+    log = w.import_log(BytesIO(json.dumps(doc).encode()),name='timeline',source_format='ocel')['log_id']
+    report = s.analyze(log,spec()); revision = report['revision']
+    req = spec(expected_revision=revision,bucket='week',limit=1)
+    first=s.timeline(log,req)
+    second=s.timeline(log,{**req,'offset':first['next_offset']})
+    assert first['total_buckets']==3 and first['matching_events']==8
+    assert first['rows'][0]['start_utc']=='2024-01-01' and first['rows'][0]['events']==3
+    assert second['rows'][0]['start_utc']=='2024-01-08' and second['rows'][0]['events']==1
+    filtered=s.timeline(log,{**req,'bucket':'month','limit':30,'status':'no_linked_object'})
+    assert filtered['matching_events']==1 and filtered['rows'][0]['no_linked_object']==1
+    assert s.timeline(log,{**req,'result_event_id':'absent'})['rows']==[]
+    assert s.timeline(log,{**req,'from_date':'2024-02-01'})['matching_events']==4
+    for bad in ({'bucket':'year','expected_revision':revision},{'bucket':'day'},
+                {'bucket':'day','expected_revision':revision+1}):
+        with pytest.raises(w.EventLogWorkspaceError):
+            s.timeline(log,spec(**bad))
+    out=StringIO(newline='')
+    exported=s.export_timeline(log,{**req,'limit':30},out)
+    rows=list(csv.DictReader(StringIO(out.getvalue())))
+    assert exported['rows']==3 and len(rows)==4
+    assert rows[0]['record_type']=='check' and rows[0]['period']=='week'
+    assert [r['events'] for r in rows[1:]]==['3','1','4']
+    assert all(r['log_revision']==str(revision) for r in rows)
+    empty=StringIO(newline='')
+    assert s.export_timeline(log,{**req,'limit':30,'result_event_id':'=missing'},empty)['rows']==0
+    assert list(csv.DictReader(StringIO(empty.getvalue())))[0]['event_id_filter_review']=="'=missing"
+    for bad in ({'offset':1}, {'limit':1}, {'expected_revision':revision+1}):
+        with pytest.raises(w.EventLogWorkspaceError):
+            s.export_timeline(log,{**req,'limit':30,**bad},StringIO())
+    monkeypatch.setattr(s,'MAX_TIMELINE_BUCKETS',2)
+    with pytest.raises(w.EventLogWorkspaceError,match='non-empty periods'):
+        s.timeline(log,req)
+    output=StringIO()
+    with pytest.raises(w.EventLogWorkspaceError,match='non-empty periods'):
+        s.export_timeline(log,{**req,'limit':30},output)
+    assert output.getvalue()==''
+
+
+def test_state_value_distribution_counts_links_preserves_unknowns_and_exact_values(monkeypatch):
+    doc=fixture()
+    doc['objects'][0]['attributes'][0]['value']=''
+    log=w.import_log(BytesIO(json.dumps(doc).encode()),name='distribution',source_format='ocel')['log_id']
+    base=s.analyze(log,spec());request=spec(expected_revision=base['revision'])
+    result=s.distribution(log,{**request,'limit':2})
+    assert result['matching_events']==8 and result['event_object_links']==10 and result['total_groups']==5
+    rows=result['rows'];offset=result['next_offset']
+    while offset is not None:
+        page=s.distribution(log,{**request,'limit':2,'offset':offset});rows+=page['rows'];offset=page['next_offset']
+    groups={(r['status'],r['recorded_value']):r['event_object_links'] for r in rows}
+    assert groups=={('matched','approved'):4,('not_matched',''):2,('missing_history',None):2,
+                    ('before_first_value',None):1,('ambiguous_value',None):1}
+    selected=s.distribution(log,{**request,'status':'unknown'})
+    assert selected['matching_events']==3 and selected['event_object_links']==4
+    assert s.distribution(log,{**request,'result_event_id':'e7'})['event_object_links']==0
+    out=StringIO(newline='');assert s.export_distribution(log,request,out)['rows']==5
+    records=list(csv.DictReader(StringIO(out.getvalue())))
+    empty=next(r for r in records if r['object_result']=='not_matched')
+    assert empty['recorded_value_present']=='true' and empty['recorded_value_review']==''
+    assert next(r for r in records if r['object_result']=='ambiguous_value')['recorded_value_present']=='false'
+    for bad in ({'expected_revision':base['revision']+1},{'offset':1},{'limit':1}):
+        with pytest.raises(w.EventLogWorkspaceError):s.export_distribution(log,{**request,**bad},StringIO())
+    monkeypatch.setattr(s,'MAX_DISTRIBUTION_VALUE_LENGTH',1)
+    with pytest.raises(w.EventLogWorkspaceError,match='4,096 characters'):s.distribution(log,request)
+    monkeypatch.setattr(s,'MAX_DISTRIBUTION_VALUE_LENGTH',4096)
+    monkeypatch.setattr(s,'MAX_DISTRIBUTION_GROUPS',4)
+    output=StringIO()
+    with pytest.raises(w.EventLogWorkspaceError,match='1,000 groups'):s.export_distribution(log,request,output)
+    assert output.getvalue()==''
+
+
+def test_distribution_csv_escapes_recorded_values():
+    doc=fixture()
+    doc['objects'][0]['attributes'][0]['value']='=formula'
+    log=w.import_log(BytesIO(json.dumps(doc).encode()),name='formulas',source_format='ocel')['log_id']
+    report=s.analyze(log,spec())
+    out=StringIO(newline='');s.export_distribution(log,spec(expected_revision=report['revision']),out)
+    records=list(csv.DictReader(StringIO(out.getvalue())))
+    assert any(row['recorded_value_review']=="'=formula" for row in records)
+    scoped=spec(expected_revision=report['revision'],scope_event_id='=missing')
+    for fn,extra in ((s.export_worklist,{'kind':'events'}),(s.export_timeline,{'bucket':'day'}),(s.export_distribution,{})):
+        output=StringIO(newline='');fn(log,{**scoped,**extra},output)
+        assert all(row['scope_event_id_review']=="'=missing" for row in csv.DictReader(StringIO(output.getvalue())))
+    object_scoped=spec(expected_revision=report['revision'],scope_object_id='=missing')
+    for fn,extra in ((s.export_worklist,{'kind':'events'}),(s.export_timeline,{'bucket':'day'}),(s.export_distribution,{})):
+        output=StringIO(newline='');fn(log,{**object_scoped,**extra},output)
+        assert all(row['scope_object_id_review']=="'=missing" for row in csv.DictReader(StringIO(output.getvalue())))
+    selected=spec(expected_revision=report['revision'],object_status_filter='not_matched',object_value_filter='=formula')
+    for fn, extra in ((s.export_worklist,{'kind':'events'}),(s.export_timeline,{'bucket':'day'}),(s.export_distribution,{})):
+        output=StringIO(newline='');fn(log,{**selected,**extra},output)
+        assert all(row['object_value_filter_review']=="'=formula" for row in csv.DictReader(StringIO(output.getvalue())))
+
+
+def test_value_group_filter_preserves_event_context_and_all_object_evidence():
+    doc=fixture();doc['objects'][0]['attributes'][0]['value']=''
+    log=w.import_log(BytesIO(json.dumps(doc).encode()),name='group',source_format='ocel')['log_id']
+    baseline=s.analyze(log,spec());revision=baseline['revision']
+    missing=spec(object_status_filter='missing_history',expected_revision=revision)
+    result=s.analyze(log,missing)
+    assert result['selected_events']==8 and result['matching_events']==2
+    assert {row['event_id'] for row in result['rows']}=={'e6','e8'}
+    witnesses=s.witnesses(log,{**missing,'event_id':'e8'})
+    assert {row['object_id'] for row in witnesses['witnesses']}=={'a','d'}
+    with pytest.raises(w.EventLogWorkspaceError,match='not in'):
+        s.witnesses(log,{**missing,'event_id':'e1'})
+    assert s.analyze(log,{**missing,'status':'unknown'})['matching_events']==1
+    assert s.analyze(log,{**missing,'result_event_id':'e8'})['matching_events']==1
+    exact=spec(object_status_filter='not_matched',object_value_filter='',expected_revision=revision)
+    assert {r['event_id'] for r in s.analyze(log,exact)['rows']}=={'e1','e8'}
+    assert s.timeline(log,{**exact,'bucket':'day'})['matching_events']==2
+    dist=s.distribution(log,exact)
+    assert dist['event_object_links']==3 and dist['matching_events']==2
+    for kind in ('events','objects'):
+        out=StringIO(newline='');meta=s.export_worklist(log,{**exact,'kind':kind},out)
+        assert meta['rows']==(2 if kind=='events' else 3)
+        rows=list(csv.DictReader(StringIO(out.getvalue())))
+        assert all(r['object_status_filter']=='not_matched' and r['object_value_filter_present']=='true' and r['object_value_filter_review']=='' for r in rows)
+    for fn, extra in ((s.export_timeline,{'bucket':'day'}),(s.export_distribution,{})):
+        out=StringIO(newline='');fn(log,{**exact,**extra},out)
+        assert all(r['object_value_filter_present']=='true' and r['object_value_filter_review']=='' for r in csv.DictReader(StringIO(out.getvalue())))
+    for invalid in ({'object_status_filter':'matched'}, {'object_status_filter':'missing_history','object_value_filter':''},
+                    {'object_value_filter':'x'}, {'object_status_filter':'fake'},
+                    {'object_status_filter':'matched','object_value_filter':'\ud800'}):
+        with pytest.raises(w.EventLogWorkspaceError,match='invalid'):
+            s.analyze(log,spec(**invalid))
+    with pytest.raises(w.EventLogWorkspaceError,match='changed'):
+        s.analyze(log,{**exact,'expected_revision':revision+1})
+
+
+def test_single_event_scope_applies_before_bounds_and_is_pinned(monkeypatch):
+    log=load();monkeypatch.setattr(s,'MAX_EVENTS',1)
+    with pytest.raises(w.EventLogWorkspaceError,match='event bound'):s.analyze(log,spec())
+    request=spec(scope_event_id='e8')
+    result=s.analyze(log,request);assert result['selected_events']==1 and result['matching_events']==1
+    assert result['rows'][0]['event_id']=='e8' and result['rows'][0]['linked_objects']==2
+    pinned={**request,'expected_revision':result['revision']}
+    assert s.witnesses(log,{**pinned,'event_id':'e8'})['total_objects']==2
+    with pytest.raises(w.EventLogWorkspaceError,match='not in'):s.witnesses(log,{**pinned,'event_id':'e1'})
+    assert s.analyze(log,{**pinned,'result_event_id':'e1'})['matching_events']==0
+    assert s.analyze(log,{**pinned,'from_date':'2024-01-02'})['selected_events']==0
+    assert s.analyze(log,{**pinned,'activity':'absent'})['selected_events']==0
+    assert s.timeline(log,{**pinned,'bucket':'day'})['matching_events']==1
+    assert s.distribution(log,pinned)['event_object_links']==2
+    for fn,extra in ((s.export_worklist,{'kind':'events'}),(s.export_worklist,{'kind':'objects'}),
+                     (s.export_timeline,{'bucket':'day'}),(s.export_distribution,{})):
+        out=StringIO(newline='');fn(log,{**pinned,**extra},out)
+        assert all(row['scope_event_id_review']=='e8' for row in csv.DictReader(StringIO(out.getvalue())))
+    for bad in ('','  ','bad\nid','x'*201):
+        with pytest.raises(w.EventLogWorkspaceError,match='invalid'):s.analyze(log,spec(scope_event_id=bad))
+    with pytest.raises(w.EventLogWorkspaceError,match='changed'):
+        s.analyze(log,{**pinned,'expected_revision':result['revision']+1})
+
+
+def test_single_object_scope_precedes_event_bound_and_preserves_qualifiers(monkeypatch):
+    log=load();monkeypatch.setattr(s,'MAX_EVENTS',4)
+    with pytest.raises(w.EventLogWorkspaceError,match='event bound'):s.analyze(log,spec())
+    request=spec(scope_object_id='a')
+    report=s.analyze(log,request)
+    assert report['selected_events']==4 and report['selected_distinct_event_object_links']==4
+    assert {r['event_id'] for r in report['rows']}=={'e1','e2','e3','e8'}
+    assert all(r['linked_objects']==1 for r in report['rows'])
+    assert report['event_counts']=={'matched':2,'not_matched':2,'unknown':0,'no_linked_object':0}
+    assert s.analyze(log,{**request,'quantifier':'any'})['event_counts']==report['event_counts']
+    assert s.analyze(log,{**request,'event_qualifier':'payer'})['selected_events']==1
+    assert s.analyze(log,{**request,'event_qualifier':''})['selected_events']==4
+    assert s.analyze(log,{**request,'event_qualifier':'absent'})['selected_events']==0
+    assert s.analyze(log,{**request,'object_type':'invoice'})['selected_events']==0
+    assert s.analyze(log,{**request,'scope_event_id':'e7'})['selected_events']==0
+    pinned={**request,'expected_revision':report['revision']}
+    witness=s.witnesses(log,{**pinned,'event_id':'e8'})
+    assert [r['object_id'] for r in witness['witnesses']]==['a']
+    assert s.distribution(log,pinned)['event_object_links']==4
+    assert s.timeline(log,{**pinned,'bucket':'day'})['matching_events']==4
+    for fn,extra in ((s.export_worklist,{'kind':'events'}),(s.export_worklist,{'kind':'objects'}),
+                     (s.export_timeline,{'bucket':'day'}),(s.export_distribution,{})):
+        out=StringIO(newline='');fn(log,{**pinned,**extra},out)
+        assert all(row['scope_object_id_review']=='a' for row in csv.DictReader(StringIO(out.getvalue())))
+    for invalid in ('','   ','bad\nid','x'*201):
+        with pytest.raises(w.EventLogWorkspaceError,match='invalid'):s.analyze(log,spec(scope_object_id=invalid))
+    with pytest.raises(w.EventLogWorkspaceError,match='changed'):
+        s.analyze(log,{**pinned,'expected_revision':report['revision']+1})

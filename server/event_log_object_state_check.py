@@ -1,16 +1,24 @@
 """Descriptive event-time checks against retained OCEL object attribute history."""
 from __future__ import annotations
 
-from typing import Literal
+import csv
+from datetime import date
+import re
+from typing import IO, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 from shared.event_log_formats import _exact_key, EventLogFormatError
+from shared.spreadsheet_review import review_cell
 from . import event_log_workspace as workspace
 from . import event_log_object_relationships as relationships
 
 MAX_EVENTS = 200_000
 MAX_LINKS = 1_000_000
 MAX_HISTORY_ROWS = 2_000_000
+MAX_TIMELINE_BUCKETS = 1000
+MAX_DISTRIBUTION_GROUPS = 1000
+MAX_DISTRIBUTION_VALUE_LENGTH = 4096
+MAX_WORKLIST_BYTES = 512 * 1024 * 1024
 STATUSES = ("matched", "not_matched", "unknown", "no_linked_object")
 OBJECT_STATUSES = ("matched", "not_matched", "missing_history", "before_first_value", "ambiguous_value")
 FORMAT = "openworkgraph.ocel-event-time-state-check.v1"
@@ -25,10 +33,52 @@ class Spec(BaseModel):
     operator: Literal["eq", "ne"] = "eq"
     quantifier: Literal["all", "any"] = "all"
     event_qualifier: str | None = Field(default=None, max_length=80)
+    from_date: str | None = None
+    until_date: str | None = None
+    scope_event_id: str | None = Field(default=None, min_length=1, max_length=200)
+    scope_object_id: str | None = Field(default=None, min_length=1, max_length=200)
+    result_event_id: str | None = Field(default=None, min_length=1, max_length=200)
+    object_status_filter: Literal['matched','not_matched','missing_history','before_first_value','ambiguous_value'] | None = None
+    object_value_filter: str | None = Field(default=None, max_length=4096)
     status: Literal["matched", "not_matched", "unknown", "no_linked_object"] | None = None
     offset: int = Field(default=0, ge=0, le=MAX_EVENTS)
     limit: int = Field(default=30, ge=1, le=100)
     expected_revision: int | None = Field(default=None, ge=0)
+
+    @field_validator("from_date", "until_date")
+    @classmethod
+    def calendar_date(cls, value):
+        if value is not None:
+            if not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", value):
+                raise ValueError("Use a UTC calendar date")
+            date.fromisoformat(value)
+        return value
+
+    @model_validator(mode="after")
+    def date_window(self):
+        if self.from_date and self.until_date and self.from_date >= self.until_date:
+            raise ValueError("The exclusive end date must be after the start date")
+        if self.object_status_filter in ('matched', 'not_matched'):
+            if self.object_value_filter is None:
+                raise ValueError("Known object result filters require an exact value")
+            try:
+                self.object_value_filter.encode('utf-8')
+            except UnicodeEncodeError:
+                raise ValueError("Object value must be valid UTF-8") from None
+        elif self.object_value_filter is not None:
+            raise ValueError("Unknown object result filters do not have a value")
+        return self
+
+    @field_validator("result_event_id", "scope_event_id", "scope_object_id")
+    @classmethod
+    def result_key(cls, value):
+        if value is not None:
+            try:
+                if not _exact_key(value):
+                    raise ValueError("Event ID cannot be blank")
+            except EventLogFormatError:
+                raise ValueError("Use an exact imported event identifier") from None
+        return value
 
     @field_validator("activity", "object_type", "attribute", "event_qualifier")
     @classmethod
@@ -61,6 +111,36 @@ class WitnessSpec(Spec):
         return value
 
 
+class TimelineSpec(Spec):
+    expected_revision: int = Field(ge=0)
+    bucket: Literal['day', 'week', 'month']
+
+
+class DistributionSpec(Spec):
+    expected_revision: int = Field(ge=0)
+
+
+class ExportSpec(Spec):
+    expected_revision: int = Field(ge=0)
+    kind: Literal['events', 'objects']
+
+
+class _LimitedWorklist:
+    def __init__(self, out: IO[str]):
+        self.out = out
+        self.size = 0
+
+    def write(self, text: str):
+        try:
+            size = len(text.encode('utf-8'))
+        except UnicodeEncodeError:
+            raise workspace.EventLogWorkspaceError('state export contains unsupported text; no export was produced') from None
+        if self.size + size > MAX_WORKLIST_BYTES:
+            raise workspace.EventLogWorkspaceError('state export exceeds the 512 MiB file limit; no export was produced')
+        self.size += size
+        return self.out.write(text)
+
+
 def _parse(value):
     try:
         result = Spec.model_validate(value)
@@ -87,7 +167,111 @@ def witnesses(log_id, value):
     return _analyze(log_id, spec, witness=True)
 
 
-def _analyze(log_id, spec, witness=False):
+def timeline(log_id, value):
+    try:
+        spec = TimelineSpec.model_validate(value)
+    except ValidationError:
+        raise workspace.EventLogWorkspaceError('invalid event-time state timeline request') from None
+    return _analyze(log_id, spec, timeline=True)
+
+
+def export_timeline(log_id: str, value, out: IO[str]):
+    try:
+        spec = TimelineSpec.model_validate(value)
+    except ValidationError:
+        raise workspace.EventLogWorkspaceError('invalid event-time state timeline export request') from None
+    if spec.offset != 0 or spec.limit != 30:
+        raise workspace.EventLogWorkspaceError('timeline export always covers all matching periods')
+    return _analyze(log_id, spec, timeline=True, timeline_export=out)
+
+
+def distribution(log_id, value):
+    try:
+        spec = DistributionSpec.model_validate(value)
+    except ValidationError:
+        raise workspace.EventLogWorkspaceError('invalid event-time state distribution request') from None
+    return _analyze(log_id, spec, distribution=True)
+
+
+def export_distribution(log_id, value, out: IO[str]):
+    try:
+        spec = DistributionSpec.model_validate(value)
+    except ValidationError:
+        raise workspace.EventLogWorkspaceError('invalid event-time state distribution export request') from None
+    if spec.offset != 0 or spec.limit != 30:
+        raise workspace.EventLogWorkspaceError('distribution export always covers all matching groups')
+    return _analyze(log_id, spec, distribution=True, distribution_export=out)
+
+
+def export_worklist(log_id: str, value, out: IO[str]):
+    try:
+        spec = ExportSpec.model_validate(value)
+    except ValidationError:
+        raise workspace.EventLogWorkspaceError('invalid event-time state export request') from None
+    if spec.offset != 0 or spec.limit != 30:
+        raise workspace.EventLogWorkspaceError('state export always covers the complete filtered selection')
+    return _analyze(log_id, spec, export=out)
+
+
+def _result_predicate(spec, alias=""):
+    prefix = alias + "." if alias else ""
+    terms, params = [], []
+    if spec.status is not None:
+        terms.append(prefix + "status=?")
+        params.append(spec.status)
+    if spec.result_event_id is not None:
+        terms.append(prefix + "event_id=?")
+        params.append(spec.result_event_id)
+    if spec.object_status_filter is not None:
+        event_ref = prefix + "event_id" if alias else "st_result.event_id"
+        condition = "g.event_id=" + event_ref + " AND g.status=?"
+        params.append(spec.object_status_filter)
+        if spec.object_value_filter is not None:
+            condition += " AND g.value_then=?"
+            params.append(spec.object_value_filter)
+        terms.append("EXISTS (SELECT 1 FROM st_object g WHERE " + condition + ")")
+    return (" WHERE " + " AND ".join(terms) if terms else ""), params
+
+
+def _write_worklist(conn, log_id: str, spec: ExportSpec, revision: int, out: IO[str]) -> dict[str, int]:
+    predicate, params = _result_predicate(spec, 'r')
+    if spec.kind == 'events':
+        expected = conn.execute('SELECT count(*) FROM st_result r' + predicate, params).fetchone()[0]
+        query = '''SELECT r.event_id,r.ts,r.status,r.n_objects,r.n_true,r.n_false,r.n_unknown,
+                          NULL::VARCHAR,NULL::VARCHAR,NULL::TIMESTAMP,NULL::VARCHAR FROM st_result r'''
+    else:
+        expected = conn.execute('''SELECT coalesce(sum(CASE WHEN r.n_objects=0 THEN 1 ELSE r.n_objects END),0)
+                                   FROM st_result r''' + predicate, params).fetchone()[0]
+        query = '''SELECT r.event_id,r.ts,r.status,r.n_objects,r.n_true,r.n_false,r.n_unknown,
+                          o.object_id,o.status,o.valid_from,o.value_then
+                   FROM st_result r LEFT JOIN st_object o ON o.event_id=r.event_id'''
+    query += predicate + (' ORDER BY r.ts,r.event_id' if spec.kind == 'events' else ' ORDER BY r.ts,r.event_id,o.object_id')
+    cursor = conn.execute(query, params)
+    writer = csv.writer(_LimitedWorklist(out))
+    writer.writerow(['record_type','log_id','log_revision','activity_review','object_type_review','attribute_review',
+                     'expected_value_review','operator','quantifier','qualifier_present','qualifier_review','result_filter',
+                     'event_id_review','event_time_utc','event_result','linked_objects','matched_objects',
+                     'not_matched_objects','unknown_objects','object_id_review','object_result','recorded_from_utc',
+                     'recorded_value_review','recorded_value_present','from_date_utc','until_date_exclusive_utc','event_id_filter_review','object_status_filter','object_value_filter_present','object_value_filter_review','scope_event_id_review','scope_object_id_review'])
+    prefix = [log_id,revision,spec.activity,spec.object_type,spec.attribute,spec.expected_value,spec.operator,
+              spec.quantifier,str(spec.event_qualifier is not None).lower(),spec.event_qualifier,spec.status]
+    writer.writerow([review_cell(value) for value in ['check',*prefix,None,None,None,None,None,None,None,
+                                                       None,None,None,None,'false',spec.from_date,spec.until_date,spec.result_event_id,spec.object_status_filter,str(spec.object_value_filter is not None).lower(),spec.object_value_filter,spec.scope_event_id,spec.scope_object_id]])
+    written = 0
+    while batch := cursor.fetchmany(5000):
+        for eid,at,status,n,yes,no,unknown,oid,object_status,valid_from,recorded in batch:
+            kind = 'event' if spec.kind == 'events' else ('event_without_object' if oid is None else 'event_object')
+            values = [kind,*prefix,eid,_stamp(at),status,n,yes,no,unknown,oid,
+                      object_status if oid is not None else None,_stamp(valid_from),recorded,str(recorded is not None).lower(),spec.from_date,spec.until_date,spec.result_event_id,spec.object_status_filter,str(spec.object_value_filter is not None).lower(),spec.object_value_filter,spec.scope_event_id,spec.scope_object_id]
+            writer.writerow([review_cell(value) for value in values])
+            written += 1
+    if written != expected:
+        raise workspace.EventLogWorkspaceError('state evidence changed; no export was produced')
+    return {'rows':written}
+
+
+def _analyze(log_id, spec, witness=False, export=None, timeline=False, timeline_export=None,
+             distribution=False, distribution_export=None):
     with workspace._LOCK:
         conn = workspace._connect()
         try:
@@ -98,16 +282,38 @@ def _analyze(log_id, spec, witness=False):
             revision = relationships._revision(conn, log_id)
             if spec.expected_revision is not None and revision != spec.expected_revision:
                 raise workspace.EventLogWorkspaceError("log changed; restart the event-time state check")
-            events = conn.execute("SELECT count(*) FROM events WHERE log_id=? AND activity=?",
-                                  [log_id,spec.activity]).fetchone()[0]
+            event_scope = "log_id=? AND activity=?"
+            event_args = [log_id, spec.activity]
+            if spec.scope_event_id is not None:
+                event_scope += " AND event_id=?"
+                event_args.append(spec.scope_event_id)
+            if spec.scope_object_id is not None:
+                event_scope += """ AND EXISTS (SELECT 1 FROM event_objects scoped
+                    JOIN objects scoped_object ON scoped_object.log_id=scoped.log_id AND scoped_object.object_id=scoped.object_id
+                    WHERE scoped.log_id=events.log_id AND scoped.event_id=events.event_id
+                    AND scoped.object_id=? AND scoped_object.object_type=?"""
+                event_args.extend([spec.scope_object_id, spec.object_type])
+                if spec.event_qualifier is not None:
+                    event_scope += " AND scoped.qualifier=?"
+                    event_args.append(spec.event_qualifier)
+                event_scope += ")"
+            if spec.from_date is not None:
+                event_scope += " AND ts>=?"
+                event_args.append(date.fromisoformat(spec.from_date))
+            if spec.until_date is not None:
+                event_scope += " AND ts<?"
+                event_args.append(date.fromisoformat(spec.until_date))
+            events = conn.execute("SELECT count(*) FROM events WHERE " + event_scope, event_args).fetchone()[0]
             if events > MAX_EVENTS:
                 raise workspace.EventLogWorkspaceError("selected activity exceeds event-time state check event bound")
-            conn.execute("""CREATE TEMP TABLE st_events AS SELECT event_id,ts FROM events
-                            WHERE log_id=? AND activity=?""",[log_id,spec.activity])
+            conn.execute("CREATE TEMP TABLE st_events AS SELECT event_id,ts FROM events WHERE " + event_scope, event_args)
             # A repeated event-object relationship under several qualifiers must
             # not duplicate an object decision or change the quantifier result.
             predicate = "eo.log_id=? AND o.object_type=?"
             args = [log_id,spec.object_type]
+            if spec.scope_object_id is not None:
+                predicate += " AND eo.object_id=?"
+                args.append(spec.scope_object_id)
             if spec.event_qualifier is not None:
                 predicate += " AND eo.qualifier=?"
                 args.append(spec.event_qualifier)
@@ -162,13 +368,84 @@ def _analyze(log_id, spec, witness=False):
             event_counts.update(dict(conn.execute("SELECT status,count(*) FROM st_result GROUP BY status").fetchall()))
             object_counts=dict.fromkeys(OBJECT_STATUSES,0)
             object_counts.update(dict(conn.execute("SELECT status,count(*) FROM st_object GROUP BY status").fetchall()))
-            where="WHERE status=?" if spec.status else ""
-            args=[spec.status] if spec.status else []
+            where, args = _result_predicate(spec)
             total=conn.execute("SELECT count(*) FROM st_result "+where,args).fetchone()[0]
+            if export is not None:
+                return _write_worklist(conn, log_id, spec, revision, export)
+            if distribution:
+                selected_where, selected_args = _result_predicate(spec, 'r')
+                conn.execute("""CREATE TEMP TABLE st_distribution AS SELECT o.status,
+                    CASE WHEN o.status IN ('matched','not_matched') THEN o.value_then ELSE NULL END AS recorded_value,
+                    count(*) AS event_object_links
+                    FROM st_object o JOIN st_result r ON r.event_id=o.event_id """ + selected_where +
+                    " GROUP BY 1,2", selected_args)
+                count, links, max_length = conn.execute("""SELECT count(*),coalesce(sum(event_object_links),0),
+                    coalesce(max(length(recorded_value)),0) FROM st_distribution""").fetchone()
+                if count > MAX_DISTRIBUTION_GROUPS:
+                    raise workspace.EventLogWorkspaceError('distribution exceeds 1,000 groups; narrow the selection')
+                if max_length > MAX_DISTRIBUTION_VALUE_LENGTH:
+                    raise workspace.EventLogWorkspaceError('distribution contains a recorded value over 4,096 characters; no distribution was produced')
+                query = 'SELECT status,recorded_value,event_object_links FROM st_distribution ORDER BY status,recorded_value NULLS FIRST'
+                if distribution_export is not None:
+                    writer = csv.writer(_LimitedWorklist(distribution_export))
+                    writer.writerow(['record_type','log_id','log_revision','activity_review','object_type_review',
+                        'attribute_review','expected_value_review','operator','quantifier','qualifier_present',
+                        'qualifier_review','from_date_utc','until_date_exclusive_utc','result_filter',
+                        'event_id_filter_review','object_result','recorded_value_present','recorded_value_review','event_object_links','object_status_filter','object_value_filter_present','object_value_filter_review','scope_event_id_review','scope_object_id_review'])
+                    prefix = [log_id,revision,spec.activity,spec.object_type,spec.attribute,spec.expected_value,
+                        spec.operator,spec.quantifier,str(spec.event_qualifier is not None).lower(),spec.event_qualifier,
+                        spec.from_date,spec.until_date,spec.status,spec.result_event_id]
+                    writer.writerow([review_cell(v) for v in ['check',*prefix,None,'false',None,None,spec.object_status_filter,str(spec.object_value_filter is not None).lower(),spec.object_value_filter,spec.scope_event_id,spec.scope_object_id]])
+                    for status,value,number in conn.execute(query).fetchall():
+                        writer.writerow([review_cell(v) for v in ['group',*prefix,status,str(value is not None).lower(),value,number,spec.object_status_filter,str(spec.object_value_filter is not None).lower(),spec.object_value_filter,spec.scope_event_id,spec.scope_object_id]])
+                    return {'rows':count}
+                rows = conn.execute(query + ' LIMIT ? OFFSET ?', [spec.limit, spec.offset]).fetchall()
+                return {'format':'openworkgraph.ocel-state-check-distribution.v1','log_id':log_id,'revision':revision,
+                        'matching_events':total,'event_object_links':links,'total_groups':count,'offset':spec.offset,
+                        'next_offset':spec.offset+len(rows) if spec.offset+len(rows)<count else None,
+                        'rows':[{'status':status,'recorded_value':value,'event_object_links':number}
+                                for status,value,number in rows],
+                        'historical_source_completeness_verified':False,'policy_compliance_verified':False}
+            if timeline:
+                # Date truncation is UTC because imported timestamps are stored in UTC.
+                conn.execute("""CREATE TEMP TABLE st_buckets AS
+                    SELECT date_trunc(?, ts) AS bucket_start, count(*) AS total,
+                      count(*) FILTER (WHERE status='matched') AS matched,
+                      count(*) FILTER (WHERE status='not_matched') AS not_matched,
+                      count(*) FILTER (WHERE status='unknown') AS unknown,
+                      count(*) FILTER (WHERE status='no_linked_object') AS no_linked_object
+                    FROM st_result """ + where + " GROUP BY 1", [spec.bucket, *args])
+                count = conn.execute('SELECT count(*) FROM st_buckets').fetchone()[0]
+                if count > MAX_TIMELINE_BUCKETS:
+                    raise workspace.EventLogWorkspaceError('timeline exceeds 1,000 non-empty periods; choose a larger period or date window')
+                if timeline_export is not None:
+                    writer = csv.writer(_LimitedWorklist(timeline_export))
+                    writer.writerow(['record_type','log_id','log_revision','activity_review','object_type_review',
+                        'attribute_review','expected_value_review','operator','quantifier','qualifier_present',
+                        'qualifier_review','from_date_utc','until_date_exclusive_utc','result_filter',
+                        'event_id_filter_review','period','period_start_utc','events','matched','not_matched',
+                        'unknown','no_linked_object','object_status_filter','object_value_filter_present','object_value_filter_review','scope_event_id_review','scope_object_id_review'])
+                    prefix = [log_id,revision,spec.activity,spec.object_type,spec.attribute,spec.expected_value,
+                        spec.operator,spec.quantifier,str(spec.event_qualifier is not None).lower(),spec.event_qualifier,
+                        spec.from_date,spec.until_date,spec.status,spec.result_event_id,spec.bucket]
+                    writer.writerow([review_cell(v) for v in ['check',*prefix,None,None,None,None,None,None,spec.object_status_filter,str(spec.object_value_filter is not None).lower(),spec.object_value_filter,spec.scope_event_id,spec.scope_object_id]])
+                    for at,n,yes,no,unknown,none in conn.execute('SELECT * FROM st_buckets ORDER BY bucket_start').fetchall():
+                        writer.writerow([review_cell(v) for v in ['period',*prefix,at.isoformat()[:10],n,yes,no,unknown,none,spec.object_status_filter,str(spec.object_value_filter is not None).lower(),spec.object_value_filter,spec.scope_event_id,spec.scope_object_id]])
+                    return {'rows':count}
+                rows = conn.execute('SELECT * FROM st_buckets ORDER BY bucket_start LIMIT ? OFFSET ?',
+                                    [spec.limit, spec.offset]).fetchall()
+                return {'format':'openworkgraph.ocel-state-check-timeline.v1', 'log_id':log_id,
+                        'revision':revision, 'bucket':spec.bucket, 'matching_events':total,
+                        'total_buckets':count, 'offset':spec.offset,
+                        'next_offset':spec.offset+len(rows) if spec.offset+len(rows)<count else None,
+                        'rows':[{'start_utc':at.isoformat()[:10], 'events':n, 'matched':yes, 'not_matched':no,
+                                 'unknown':unknown, 'no_linked_object':none}
+                                for at,n,yes,no,unknown,none in rows],
+                        'historical_source_completeness_verified':False, 'policy_compliance_verified':False}
             if witness:
-                selected = conn.execute('SELECT n_objects, status FROM st_result WHERE event_id=?' +
-                                        (' AND status=?' if spec.status else ''),
-                                        [spec.event_id, *([spec.status] if spec.status else [])]).fetchone()
+                selected = conn.execute('SELECT n_objects, status FROM st_result' +
+                                        (where + ' AND ' if where else ' WHERE ') + 'event_id=?',
+                                        [*args, spec.event_id]).fetchone()
                 if not selected:
                     raise workspace.EventLogWorkspaceError('event is not in the reviewed state-check result')
                 predicate = 'event_id=?' + (' AND object_id>?' if spec.after is not None else '')
