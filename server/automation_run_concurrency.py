@@ -4,6 +4,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 from shared import run_concurrency as core
+from shared import run_concurrency_bounds as bounds
 from . import automation_monitoring as m
 from . import automation_run_evidence as e
 
@@ -17,7 +18,7 @@ class Request(BaseModel):
     start_date: str=Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
     end_date: str=Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
     capacity: int=Field(ge=1,le=MAX_RUNS)
-    view: Literal["segments","runs","excluded"]="segments"
+    view: Literal["segments","runs","excluded","uncertainty"]="segments"
     offset: int=Field(default=0,ge=0,le=2*MAX_RUNS+1)
     limit: int=Field(default=50,ge=1,le=100)
     expected_review_sha256: str|None=Field(default=None,pattern=e.HASH_PATTERN)
@@ -50,6 +51,7 @@ def review(deployment_id,payload):
     if len(rows)>MAX_RUNS:
         raise m.MonitoringError("Retained interval population exceeds the review budget; narrow the window")
     interval_rows=[]
+    unresolved=[]
     excluded=[]
     pins=[]
     metadata={}
@@ -63,6 +65,7 @@ def review(deployment_id,payload):
         metadata[rid]=meta
         if status=="running" or b is None:
             excluded.append({**meta,"reason":"no_terminal_interval"})
+            unresolved.append((rid,micros(max(a,start)-start)))
         elif max(start,a)>=min(end,b):
             excluded.append({**meta,"reason":"no_positive_intersection"})
         else:
@@ -88,7 +91,14 @@ def review(deployment_id,payload):
         carry_in_intervals=carry_in,carry_out_intervals=carry_out)
     if summary["measured_intervals"]+summary["excluded_records"]!=len(rows):
         raise m.MonitoringError("Retained interval partition failed")
-    if s.view=="segments":
+    envelope=None
+    if s.view=="uncertainty":
+        try:
+            envelope=bounds.summarize(interval_rows,unresolved,micros(end-start),s.capacity)
+        except ValueError as exc:
+            raise m.MonitoringError(str(exc)) from None
+        population=envelope["segments"]
+    elif s.view=="segments":
         population=result["segments"]
     elif s.view=="runs":
         population=[{**metadata[x["run_id"]],**x} for x in result["runs"]]
@@ -98,12 +108,16 @@ def review(deployment_id,payload):
     return {"format":FORMAT,"review_sha256":pin,"deployment_id":deployment_id,
         "start_date":s.start_date,"end_date_exclusive":s.end_date,"reported_spec_sha256":s.reported_spec_sha256,
         "capacity":s.capacity,"view":s.view,"summary":summary,"histogram":result["histogram"],
+        **({"uncertainty_summary":envelope["summary"],"uncertainty_scope":"selected_retained_records_only"} if envelope is not None else {}),
         "offset":s.offset,"matching_rows":len(population),"rows":page,
         "next_offset":s.offset+len(page) if page and s.offset+len(page)<len(population) else None,
         "complete_bounded_retained_interval_population":True,"step_evidence_pinned":False,
         "live_concurrency_verified":False,"capacity_verified":False,**e.CLAIMS,
-        "interpretation":[
+        "interpretation":(([
+            "Conditional envelope over selected retained records only: measured terminal intervals are fixed, unresolved records may end immediately or remain active until window end. These extremes bound hypothetical completions under that model, not actual live activity or unretained runs.",
+            "Above means strictly greater than the declared capacity. Additional possible above-capacity time is disjoint from measured above-capacity time. Neither establishes actual capacity, staffing, utilization or service loss.",
+            "Records outside the selected population, including reports with a finish before the window, are not considered. The latest retained report is not a historical snapshot of what was known at the time."] if envelope is not None else []) + [
             "Retrospective concurrency of currently retained finished run reports with positive half-open intersection with the selected UTC window. Includes carry-in and carry-out clipped to the window. Runs without terminal timestamps and zero-duration or boundary-only records are excluded and counted.",
             "A zero measured count means no overlapping measured interval, not verified idle capacity or absence of other runs. Unfinished runs may overlap the window but are never assigned a duration. Unknown attribution may mix versions.",
             "Reported elapsed time is not CPU time, human effort, queue delay, or resource utilization. Capacity is a declared threshold only. Above-capacity time and excess run-microseconds are descriptive, not service loss or a staffing recommendation.",
-            "The review pins only interval records and settings, not step evidence, source completeness or historical reporting state. No runtime is contacted or changed."]}
+            "The review pins only interval records and settings, not step evidence, source completeness or historical reporting state. No runtime is contacted or changed."])}
